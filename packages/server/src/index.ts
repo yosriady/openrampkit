@@ -67,3 +67,4 @@ export function createOpenRamp(config: OpenRampConfig) {
 }
 
 export type OpenRamp = ReturnType<typeof createOpenRamp>
+export * from './redis-store.js'
