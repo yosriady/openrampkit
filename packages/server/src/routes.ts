@@ -12,6 +12,7 @@ import type { Runtime } from './runtime.js'
 import { createSession, loadAuthed } from './sessions.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
+import { checkAllowed, parseTarget, screenTarget, targetDestination } from './withdraw.js'
 
 const RETURN_PAGE =
   '<!doctype html><meta charset="utf-8"><title>Payment</title><body style="font-family:system-ui;padding:32px">You can close this tab and go back to the app.<script>setTimeout(()=>window.close(),800)</script>'
@@ -64,6 +65,8 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return json(result)
   }
 
+  if (action === 'target' && method === 'POST') return targetRoute(rt, req, rec)
+
   if (action === 'quotes' && method === 'POST') {
     if (rec.active && !isTerminal(rec.step.state)) return inProgress()
     const body = await readJson<QuotesBody>(req)
@@ -79,6 +82,31 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return withIdempotency(rt, rec.id, req, () => transitionRoute(rt, req, rec, decodeURIComponent(arg)))
   }
   return errorResponse(orkError('NOT_FOUND'), 404)
+}
+
+/**
+ * POST /sessions/:id/target (withdraw only): the user picks where the funds go.
+ * Body: `{ type: 'crypto', chain, token, address }` or `{ type: 'fiat', currency }`, plus the
+ * optional plan fields of `/plan` (`walletConnected`, `walletAddress`, `surfaces`).
+ * Checks the format, the app's `allowedTargets` and `screenAddress`, then returns the plan.
+ */
+async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
+  if (rec.direction !== 'withdraw') return errorResponse(orkError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
+  if (rec.active && !isTerminal(rec.step.state)) return inProgress()
+  if (rec.step.state === 'COMPLETED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
+  const body = await readJson<Record<string, unknown>>(req)
+  const target = parseTarget(body)
+  checkAllowed(rec, target)
+  await screenTarget(rt, target)
+  rec.destination = targetDestination(target)
+  rec.quotes = {}
+  if (typeof body.walletAddress === 'string') rec.walletAddress = body.walletAddress
+  const result = await plan(rt, rec, {
+    walletConnected: typeof body.walletConnected === 'boolean' ? body.walletConnected : !!rec.walletConnected,
+    ...(Array.isArray(body.surfaces) ? { surfaces: body.surfaces as SurfaceKind[] } : {}),
+  })
+  await saveSession(rt, rec)
+  return json(result)
 }
 
 async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
@@ -100,7 +128,9 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     if (rec.active && !isTerminal(rec.step.state) && rec.step.state !== 'PAYMENT') {
       return errorResponse(orkError('BAD_REQUEST', { message: 'This payment can no longer be changed.' }), 409)
     }
-    if (rec.step.state === 'COMPLETED') return errorResponse(orkError('BAD_REQUEST', { message: 'This deposit is complete.' }), 409)
+    if (rec.step.state === 'COMPLETED') {
+      return errorResponse(orkError('BAD_REQUEST', { message: rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.' }), 409)
+    }
     rec.active = undefined
     rec.status = 'open'
     rec.step = { sessionId: rec.id, state: 'SELECT_METHOD', transitions: [], expiresAt: new Date(rec.expiresAt).toISOString() }

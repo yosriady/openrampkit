@@ -1,11 +1,16 @@
 import type { Adapter, Logger } from '@openrampkit/adapter'
-import type { Destination, Direction, PollSpec, RegionPolicy, SurfaceKind } from '@openrampkit/core'
+import type { AllowedTargets, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource } from '@openrampkit/core'
 import type { SessionStore } from './store.js'
 
 export type CreateSessionInput = {
   userId: string
   direction?: Direction
-  destination: Destination
+  /** Deposit: where the money ends (required). Withdraw: leave it out; the user picks the target. */
+  destination?: Destination
+  /** Withdraw: the asset to send out and who holds it (required for withdraw) */
+  source?: WithdrawSource
+  /** Withdraw: limit the targets the user can pick. Default: any. */
+  allowedTargets?: AllowedTargets
   country?: string
   region?: string
   email?: string
@@ -48,6 +53,34 @@ export type OpenRampConfig = {
   fetch?: typeof fetch
   /** Timeouts in ms. Defaults: quote 9000, webhook delivery 4000. */
   timeouts?: { quote?: number; webhook?: number }
+  /**
+   * Withdraw: screen a crypto target address (sanctions, blocked lists) before the user can use it.
+   * Return false to refuse the address. An error also refuses it (fail closed).
+   */
+  screenAddress?: (address: string, chain: string) => Promise<boolean>
+  /**
+   * Withdraw with `custody: 'app'`: send transactions from the app's treasury wallet.
+   * The server calls it when a leg asks for a WALLET_TX, instead of asking the user.
+   * Without it, withdraw methods for app custody show as unavailable.
+   */
+  treasury?: TreasuryHook
+}
+
+export type TreasurySendInput = {
+  sessionId: string
+  userId: string
+  /** CAIP-2 chain id */
+  chain: string
+  txs: TxRequest[]
+  /** Stable for one leg step. Send at most once per key. */
+  idempotencyKey: string
+}
+
+export type TreasuryHook = {
+  /** Sender address, given to providers for exact quotes (e.g. Relay). Optional. */
+  address?: string
+  /** Sign and send `txs` in order; return the hash of the last one. */
+  send(input: TreasurySendInput): Promise<{ hash: string }>
 }
 
 export const consoleLogger: Logger = {

@@ -1,7 +1,10 @@
-// `DepositController` holds the modal state. UIs render `getSnapshot()` and call its actions.
+// `RampController` (exported also as `DepositController` and `WithdrawController`) holds the modal
+// state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
+// picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { USDC, cmp, isTerminal, orkError } from '@openrampkit/core'
+import { CHAINS, USDC, cmp, currencyForCountry, isTerminal, orkError } from '@openrampkit/core'
 import type {
+  Direction,
   MethodOption,
   OrkError,
   OrkEvent,
@@ -21,10 +24,16 @@ export type Tab = 'crypto' | 'cash'
 /** What an embedded provider page reported, via `notifySurface()`. */
 export type SurfaceSignal = 'completed' | 'failed' | 'closed'
 
-export type ScreenName = 'loading' | 'methods' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+/** `target` is the withdraw "To wallet" form (network, token, address). */
+export type ScreenName = 'loading' | 'target' | 'methods' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+
+/** Withdraw "To wallet" form state */
+export type TargetDraft = { chain: string; token: string; symbol: string; decimals: number; address: string }
 
 export type Snapshot = {
   screen: ScreenName
+  /** From the session once loaded. Undefined or 'deposit' means a deposit. */
+  direction?: Direction
   tab: Tab
   session?: PublicSession
   plan?: PlanResult
@@ -44,6 +53,10 @@ export type Snapshot = {
   source?: { chain: string; token: string; symbol?: string; decimals?: number }
   /** The provider page (IFRAME surface) said the user closed it. Cleared by `reopenSurface()` or a new step. */
   surfaceClosed: boolean
+  /** Withdraw: the "To wallet" form */
+  target?: TargetDraft
+  /** Withdraw: the currency paid out on the "To cash" tab */
+  cashCurrency?: string
 }
 
 export type ControllerOptions = {
@@ -53,11 +66,31 @@ export type ControllerOptions = {
   /** Surfaces this UI can render. Defaults to all built-in ones. */
   surfaces?: string[]
   onEvent?: (e: OrkEvent) => void
+  /** Refuse a session of the other direction (e.g. `openWithdraw()` with a deposit secret) */
+  expect?: Direction
+}
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
+
+/** Client-side format check for a withdraw address. The server checks again. */
+export function isValidTargetAddress(chain: string, address: string): boolean {
+  const a = address.trim()
+  if (chain.startsWith('eip155:')) return EVM_ADDRESS.test(a) && !/^0x0{40}$/.test(a)
+  if (chain.startsWith('solana:')) return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(a)
+  return a.length >= 8
+}
+
+/** Tokens a withdrawal can go out as on `chain`: USDC when known, and the native token. */
+export function withdrawTokens(chain: string): Array<{ token: string; symbol: string; decimals: number }> {
+  return [
+    ...(USDC[chain] ? [{ token: USDC[chain]!, symbol: 'USDC', decimals: 6 }] : []),
+    { token: 'native', symbol: CHAINS[chain]?.nativeSymbol ?? 'ETH', decimals: 18 },
+  ]
 }
 
 const CRYPTO_KINDS = new Set(['crypto', 'exchange'])
 
-export class DepositController {
+export class RampController {
   private snap: Snapshot
   private listeners = new Set<() => void>()
   private pollTimer: ReturnType<typeof setTimeout> | undefined
@@ -71,6 +104,7 @@ export class DepositController {
   constructor(private readonly opts: ControllerOptions) {
     this.snap = {
       screen: 'loading',
+      direction: opts.expect ?? 'deposit',
       tab: 'crypto',
       amount: '',
       amountSide: 'source',
@@ -132,12 +166,16 @@ export class DepositController {
       const accounts = this.opts.wallet ? await this.opts.wallet.getAccounts().catch(() => []) : []
       const walletAddress: string | undefined = accounts[0]?.address
       const session = await this.opts.client.getSession(this.opts.clientSecret)
-      this.set({ session, walletConnected: !!walletAddress, ...(walletAddress ? { walletAddress } : {}) })
+      if (this.opts.expect && session.direction !== this.opts.expect) {
+        throw orkError('BAD_REQUEST', { message: `This is not a ${this.opts.expect} session.` })
+      }
+      this.set({ session, direction: session.direction, walletConnected: !!walletAddress, ...(walletAddress ? { walletAddress } : {}) })
       if (session.step.state !== 'SELECT_METHOD') return this.applySession(session)
       if (walletAddress && this.opts.wallet?.getBalances) {
         const balances = await this.opts.wallet.getBalances(accounts).catch(() => [] as WalletBalance[])
         this.set({ balances: balances.filter((b) => cmp(b.amount, '0') > 0) })
       }
+      if (session.direction === 'withdraw') return this.startWithdraw(session)
       this.set({ source: this.defaultSource(session) })
       const plan = await this.opts.client.plan(this.opts.clientSecret, {
         walletConnected: !!walletAddress,
@@ -145,7 +183,7 @@ export class DepositController {
         ...(this.opts.surfaces ? { surfaces: this.opts.surfaces } : {}),
       })
       const hasCrypto = plan.methods.some((m) => CRYPTO_KINDS.has(m.kind) && m.group !== 'unavailable')
-      this.set({ plan, screen: 'methods', tab: session.destination.type === 'merchant' || !hasCrypto ? 'cash' : 'crypto' })
+      this.set({ plan, screen: 'methods', tab: session.destination?.type === 'merchant' || !hasCrypto ? 'cash' : 'crypto' })
     } catch (e) {
       const error = this.fail(e)
       this.set({ screen: 'error', error })
@@ -153,6 +191,7 @@ export class DepositController {
   }
 
   private async replan() {
+    if (this.snap.direction === 'withdraw') return this.setTab(this.snap.tab)
     this.set({ screen: 'loading' })
     try {
       const plan = await this.opts.client.plan(this.opts.clientSecret, {
@@ -173,6 +212,147 @@ export class DepositController {
 
   setTab(tab: Tab) {
     this.set({ tab })
+    if (this.snap.direction !== 'withdraw' || !this.snap.session) return
+    this.set({ error: undefined, method: undefined, quotes: [], quoteErrors: [], selectedQuoteId: undefined })
+    if (tab === 'crypto') {
+      this.targetSeq++ // drop a cash plan that is still loading
+      this.set({ screen: 'target' })
+    } else void this.loadCashMethods()
+  }
+
+  // ---------- withdraw ----------
+
+  /** Tabs the app allows for this withdrawal: `crypto` (To wallet) and `cash` (To cash). */
+  withdrawTabs(): Tab[] {
+    const allowed = this.snap.session?.allowedTargets
+    if (!allowed) return ['crypto', 'cash']
+    return [...(allowed.crypto ? (['crypto'] as const) : []), ...(allowed.fiat ? (['cash'] as const) : [])]
+  }
+
+  /** Networks the user may withdraw to: the allowed chains, else every chain with USDC plus the source chain. */
+  withdrawChains(): string[] {
+    const src = this.snap.session?.source
+    const allowed = this.snap.session?.allowedTargets?.crypto?.chains
+    if (allowed?.length) return allowed
+    const chains = Object.keys(USDC)
+    if (src && !chains.includes(src.chain)) chains.unshift(src.chain)
+    return chains
+  }
+
+  private startWithdraw(session: PublicSession) {
+    const src = session.source
+    const chains = this.withdrawChains()
+    const chain = src && chains.includes(src.chain) ? src.chain : chains[0] ?? 'eip155:8453'
+    const allowedCur = session.allowedTargets?.fiat?.currencies
+    const local = currencyForCountry(session.country)
+    const cashCurrency = !allowedCur?.length || allowedCur.includes(local) ? local : allowedCur[0]!
+    this.set({ target: { ...this.draftFor(chain, src), address: this.snap.walletAddress ?? '' }, cashCurrency })
+    const tabs = this.withdrawTabs()
+    if (!tabs.length) {
+      this.set({ screen: 'error', error: orkError('TARGET_NOT_ALLOWED') })
+      return
+    }
+    this.setTab(tabs[0]!)
+  }
+
+  /** Token for a chain: the source token when it is the source chain, else USDC, else native. */
+  private draftFor(chain: string, src?: PublicSession['source'], keep?: string): Omit<TargetDraft, 'address'> {
+    const opts = withdrawTokens(chain)
+    const fromSource = src && src.chain === chain ? { token: src.token, symbol: src.symbol ?? 'TOKEN', decimals: src.decimals ?? 18 } : undefined
+    const list = fromSource && !opts.some((o) => o.token === fromSource.token) ? [fromSource, ...opts] : opts
+    const pick = list.find((o) => o.token === keep) ?? (fromSource ? list.find((o) => o.token === fromSource.token) : undefined) ?? list[0]!
+    return { chain, ...pick }
+  }
+
+  /** Token choices for the "To wallet" form on `chain` */
+  targetTokens(chain: string = this.snap.target?.chain ?? ''): Array<{ token: string; symbol: string; decimals: number }> {
+    const src = this.snap.session?.source
+    const opts = withdrawTokens(chain)
+    if (src && src.chain === chain && !opts.some((o) => o.token === src.token)) {
+      return [{ token: src.token, symbol: src.symbol ?? 'TOKEN', decimals: src.decimals ?? 18 }, ...opts]
+    }
+    return opts
+  }
+
+  setTargetChain(chain: string) {
+    const cur = this.snap.target
+    const next = this.draftFor(chain, this.snap.session?.source, cur?.token === 'native' ? 'native' : undefined)
+    this.set({ target: { ...next, address: cur?.address ?? '' }, error: undefined })
+  }
+
+  setTargetToken(token: string) {
+    const cur = this.snap.target
+    if (!cur) return
+    const o = this.targetTokens(cur.chain).find((x) => x.token === token)
+    if (o) this.set({ target: { ...cur, ...o }, error: undefined })
+  }
+
+  setTargetAddress(address: string) {
+    const cur = this.snap.target
+    if (cur) this.set({ target: { ...cur, address: address.trim() }, error: undefined })
+  }
+
+  /** "To wallet": send the target to the server, then go to the amount screen. */
+  async submitTarget() {
+    const t = this.snap.target
+    if (!t) return
+    if (!isValidTargetAddress(t.chain, t.address)) {
+      this.set({ error: orkError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }) })
+      return
+    }
+    this.set({ busy: true, error: undefined })
+    try {
+      const plan = await this.opts.client.target(this.opts.clientSecret, {
+        type: 'crypto',
+        chain: t.chain,
+        token: t.token,
+        address: t.address,
+        symbol: t.symbol,
+        decimals: t.decimals,
+        ...this.planFields(),
+      })
+      this.emit('target.selected', { type: 'crypto', chain: t.chain, token: t.token })
+      this.set({ busy: false, plan })
+      const usable = plan.methods.filter((m) => m.group !== 'unavailable')
+      if (usable.length === 1) return this.selectMethod(usable[0]!.method)
+      this.set({ screen: 'methods' })
+    } catch (e) {
+      this.fail(e)
+    }
+  }
+
+  /** "To cash": set the fiat target and show the payout methods. */
+  private async loadCashMethods() {
+    const currency = this.snap.cashCurrency ?? currencyForCountry(this.snap.session?.country)
+    const seq = ++this.targetSeq
+    this.set({ screen: 'loading', plan: undefined })
+    try {
+      const plan = await this.opts.client.target(this.opts.clientSecret, { type: 'fiat', currency, ...this.planFields() })
+      if (seq !== this.targetSeq || this.destroyed) return
+      this.emit('target.selected', { type: 'fiat', currency })
+      this.set({ plan, screen: 'methods' })
+    } catch (e) {
+      if (seq !== this.targetSeq || this.destroyed) return
+      this.set({ screen: 'error', error: this.fail(e) })
+    }
+  }
+
+  /** Increments on every cash target request, to drop stale responses after a tab switch */
+  private targetSeq = 0
+
+  private planFields() {
+    return {
+      walletConnected: this.snap.walletConnected,
+      ...(this.snap.walletAddress ? { walletAddress: this.snap.walletAddress } : {}),
+      ...(this.opts.surfaces ? { surfaces: this.opts.surfaces } : {}),
+    }
+  }
+
+  /** Withdraw: the wallet balance of the session's source token, when the wallet reports it. */
+  sourceBalance(): WalletBalance | undefined {
+    const src = this.snap.session?.source
+    if (!src) return undefined
+    return this.snap.balances.find((b) => b.chain === src.chain && b.token.toLowerCase() === src.token.toLowerCase())
   }
 
   methodsForTab(tab: Tab = this.snap.tab): MethodOption[] {
@@ -197,7 +377,7 @@ export class DepositController {
   private defaultSource(session: PublicSession): Snapshot['source'] {
     const top = [...this.snap.balances].sort((a, b) => cmp(b.usd ?? b.amount, a.usd ?? a.amount))[0]
     if (top) return { chain: top.chain, token: top.token, symbol: top.symbol, decimals: top.decimals }
-    const destChain = session.destination.type === 'crypto' ? session.destination.chain : ''
+    const destChain = session.destination?.type === 'crypto' ? session.destination.chain : ''
     const chain = ['eip155:42161', 'eip155:8453', 'eip155:10'].find((c) => c !== destChain) ?? 'eip155:42161'
     return { chain, token: USDC[chain]!, symbol: 'USDC', decimals: 6 }
   }
@@ -235,7 +415,9 @@ export class DepositController {
         method: m.method,
         amount: this.snap.amount || '0',
         amountSide: this.snap.amountSide,
-        ...((m.method === 'wallet' || m.method === 'transfer') && this.snap.source ? { source: { chain: this.snap.source.chain, token: this.snap.source.token } } : {}),
+        ...(this.snap.direction === 'deposit' && (m.method === 'wallet' || m.method === 'transfer') && this.snap.source
+          ? { source: { chain: this.snap.source.chain, token: this.snap.source.token } }
+          : {}),
       })
       // Drop a response that a newer request, a new method or destroy() made stale.
       if (seq !== this.quoteSeq || this.destroyed || this.snap.method !== m) return
@@ -353,7 +535,10 @@ export class DepositController {
     const screen = this.snap.screen
     clearTimeout(this.quoteTimer)
     if (screen === 'quotes') this.set({ screen: this.snap.method?.method === 'transfer' ? 'methods' : 'amount', error: undefined })
-    else if (screen === 'amount') this.set({ screen: 'methods', error: undefined })
+    else if (screen === 'amount') {
+      const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto'
+      this.set({ screen: toTarget ? 'target' : 'methods', error: undefined })
+    }
     else if (screen === 'step' && this.snap.session?.step.state === 'PAYMENT') void this.restart()
   }
 

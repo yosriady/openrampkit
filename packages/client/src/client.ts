@@ -36,7 +36,7 @@ function httpError(status: number): OrkError {
   if (status === 401 || status === 403) return orkError('UNAUTHORIZED')
   if (status === 404) return orkError('NOT_FOUND')
   if (status === 429) return orkError('RATE_LIMITED')
-  if (status >= 500) return orkError('PROVIDER_UNAVAILABLE', { message: 'The deposit service is not available right now.' })
+  if (status >= 500) return orkError('PROVIDER_UNAVAILABLE', { message: 'The service is not available right now.' })
   return orkError('INTERNAL')
 }
 
@@ -73,6 +73,15 @@ export function createOpenRampClient(opts: ClientOptions) {
     getSession: (secret: string) => call<PublicSession>(secret, 'GET', `/sessions/${sessionId(secret)}`),
     plan: (secret: string, body: { walletConnected: boolean; walletAddress?: string; surfaces?: string[] }) =>
       call<PlanResult>(secret, 'POST', `/sessions/${sessionId(secret)}/plan`, body),
+    /** Withdraw: set the target the user picked, and get the plan for it */
+    target: (
+      secret: string,
+      body: ({ type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number } | { type: 'fiat'; currency: string }) & {
+        walletConnected?: boolean
+        walletAddress?: string
+        surfaces?: string[]
+      },
+    ) => call<PlanResult>(secret, 'POST', `/sessions/${sessionId(secret)}/target`, body),
     quotes: (secret: string, body: { method: string; amount: string; amountSide: 'source' | 'destination'; source?: { chain: string; token: string } }) =>
       call<{ quotes: Quote[]; errors: OrkError[] }>(secret, 'POST', `/sessions/${sessionId(secret)}/quotes`, body),
     select: (secret: string, body: { quoteId: string; walletAddress?: string }) =>

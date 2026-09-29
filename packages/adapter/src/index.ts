@@ -11,6 +11,8 @@ import type {
   LegStep,
   OrkError,
   PathwayLeg,
+  Surface,
+  Transition,
 } from '@openrampkit/core'
 
 export const ADAPTER_API_VERSION = 1
@@ -91,6 +93,14 @@ export type LegEvent = {
   output?: Amount
   txHash?: string
   error?: OrkError
+  /**
+   * Optional new surface for a non-terminal event, e.g. an offramp `payment_pending` webhook that
+   * carries the deposit address: `{ kind: 'WALLET_TX', ... }` with status `awaiting_user`.
+   * The server shows it instead of the current surface.
+   */
+  surface?: Surface
+  /** Transitions that go with `surface`. Default: an AWAIT poll. */
+  transitions?: Transition[]
 }
 
 export type CatalogInput = { country?: string; currency: string; direction: Direction }

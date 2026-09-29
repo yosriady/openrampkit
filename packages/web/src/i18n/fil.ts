@@ -124,4 +124,28 @@ export const fil: Messages = {
 
   errorTitle: 'May nangyaring mali',
   errorBody: 'Hindi namin ma-load ang deposit na ito.',
+
+  // withdraw
+  withdrawTitle: 'Mag-withdraw',
+  withdrawTabsLabel: 'I-withdraw sa',
+  tabToWallet: 'Sa wallet',
+  tabToCash: 'Sa cash',
+  walletAddress: 'Address ng wallet',
+  addressPlaceholder: 'I-paste ang address',
+  useMyWallet: 'Gamitin ang wallet ko',
+  invalidAddress: 'Maglagay ng valid na address para sa network na ito.',
+  toAddressOn: (address, chain) => `Sa ${address} sa ${chain}`,
+  withdrawAmountTitle: 'Halagang iwi-withdraw',
+  available: (amount) => `Available: ${amount}`,
+  noPayoutMethods: 'Walang available na paraan ng payout para sa withdrawal na ito.',
+  payoutIn: (currency) => `Ibabayad sa ${currency}`,
+  youSend: (amount) => `Ipapadala mo ang ${amount}`,
+  sending: 'Ipinapadala',
+  sendingBody: 'Ipinapadala na ang withdrawal mo. Maaaring tumagal ito nang ilang minuto.',
+  payoutDetailsTitle: 'Detalye ng payout',
+  confirmWithdrawalTitle: 'Kumpirmahin ang withdrawal',
+  withdrawSuccessTitle: 'Tapos na ang withdrawal',
+  withdrawSuccessBody: 'Papunta na ang pondo mo.',
+  withdrawFailedTitle: 'Hindi natuloy ang withdrawal',
+  withdrawErrorBody: 'Hindi namin ma-load ang withdrawal na ito.',
 }

@@ -1,7 +1,8 @@
 import { html, LitElement, nothing } from 'lit'
 import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
-import type { DepositController, Snapshot } from '@openrampkit/client'
+import { isValidTargetAddress } from '@openrampkit/client'
+import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
 import { methodName } from '@openrampkit/core'
 import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
@@ -400,8 +401,10 @@ export class OpenRampModal extends LitElement {
     switch (s.screen) {
       case 'loading':
         return this._renderLoading(m)
+      case 'target':
+        return this._renderTarget(m, s)
       case 'methods':
-        return this._renderMethods(m, s)
+        return s.direction === 'withdraw' ? this._renderWithdrawMethods(m, s) : this._renderMethods(m, s)
       case 'amount':
         return this._renderAmount(m, s)
       case 'quotes':
@@ -499,11 +502,135 @@ export class OpenRampModal extends LitElement {
     </button>`
   }
 
+  // ---------- withdraw: tabs, target and payout methods ----------
+
+  /** "To wallet" / "To cash" tabs, shown when the app allows both */
+  private _renderWithdrawTabs(m: Messages, s: Snapshot) {
+    const c = this.controller!
+    const tabs = c.withdrawTabs()
+    if (tabs.length < 2) return nothing
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      e.preventDefault()
+      c.setTab(s.tab === 'crypto' ? 'cash' : 'crypto')
+      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>('.tab[aria-selected="true"]')?.focus())
+    }
+    return html`<div class="tabs" role="tablist" aria-label=${m.withdrawTabsLabel} @keydown=${onKey}>
+      ${tabs.map(
+        (t: Tab) => html`<button
+          class="tab"
+          role="tab"
+          type="button"
+          id=${`ork-tab-${t}`}
+          aria-controls="ork-panel"
+          aria-selected=${s.tab === t ? 'true' : 'false'}
+          tabindex=${s.tab === t ? '0' : '-1'}
+          @click=${() => s.tab !== t && c.setTab(t)}
+        >
+          ${t === 'crypto' ? m.tabToWallet : m.tabToCash}
+        </button>`,
+      )}
+    </div>`
+  }
+
+  private _renderTarget(m: Messages, s: Snapshot) {
+    const c = this.controller!
+    const t = s.target
+    const tabs = c.withdrawTabs().length > 1
+    if (!t) return this._renderLoading(m)
+    const valid = isValidTargetAddress(t.chain, t.address)
+    const showInvalid = !!t.address && !valid
+    const own = s.walletAddress
+    const submit = () => {
+      if (valid && !s.busy) void c.submitTarget()
+    }
+    return html`
+      ${this._renderWithdrawTabs(m, s)}
+      <div id="ork-panel" role=${tabs ? 'tabpanel' : nothing} aria-labelledby=${tabs ? 'ork-tab-crypto' : nothing}>
+        ${this._renderTargetSelects(m, t)}
+        <label class="field-label" for="ork-address">${m.walletAddress}</label>
+        <input
+          class="input mono"
+          id="ork-address"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          enterkeyhint="done"
+          placeholder=${m.addressPlaceholder}
+          aria-invalid=${showInvalid ? 'true' : 'false'}
+          aria-describedby=${showInvalid ? 'ork-address-error' : nothing}
+          .value=${live(t.address)}
+          @input=${(e: Event) => c.setTargetAddress((e.target as HTMLInputElement).value)}
+          @keydown=${(e: KeyboardEvent) => e.key === 'Enter' && submit()}
+        />
+        ${showInvalid ? html`<div class="field-error" id="ork-address-error">${m.invalidAddress}</div>` : nothing}
+        ${own && own.toLowerCase() !== t.address.toLowerCase()
+          ? html`<div class="stack" style="margin-top:8px">
+              <button class="btn ghost" type="button" @click=${() => c.setTargetAddress(own)}>${m.useMyWallet} (${shortAddress(own)})</button>
+            </div>`
+          : nothing}
+      </div>
+      ${this._renderErrorNotice(s.error)}
+      <div class="stack">
+        <button class="btn" type="button" ?disabled=${!valid || s.busy} @click=${submit}>
+          ${s.busy ? html`<span class="spinner"></span>` : nothing}${m.continue}
+        </button>
+      </div>
+    `
+  }
+
+  /**
+   * Network and token pickers. Each select is its own template: the happy-dom 18 parser cannot
+   * handle two sibling bound selects in one template (see the transfer picker note in the tests).
+   */
+  private _renderTargetSelects(m: Messages, t: NonNullable<Snapshot['target']>) {
+    const c = this.controller!
+    const select = (label: string, onChange: (v: string) => void, options: Array<{ value: string; label: string }>, value: string) =>
+      html`<select class="input" aria-label=${label} @change=${(e: Event) => onChange((e.target as HTMLSelectElement).value)}>
+        ${options.map((o) => html`<option value=${o.value} ?selected=${o.value === value}>${o.label}</option>`)}
+      </select>`
+    const chains = c.withdrawChains().map((ch) => ({ value: ch, label: displayChain(ch) }))
+    const tokens = c.targetTokens(t.chain).map((o) => ({ value: o.token, label: o.symbol }))
+    return html`<div class="select-row">
+      ${select(m.network, (v) => c.setTargetChain(v), chains, t.chain)} ${select(m.token, (v) => c.setTargetToken(v), tokens, t.token)}
+    </div>`
+  }
+
+  private _renderWithdrawMethods(m: Messages, s: Snapshot) {
+    const list = s.plan?.methods ?? []
+    const tabs = this.controller!.withdrawTabs().length > 1
+    return html`
+      ${this._renderWithdrawTabs(m, s)}
+      <div id="ork-panel" role=${tabs ? 'tabpanel' : nothing} aria-labelledby=${tabs ? `ork-tab-${s.tab}` : nothing}>
+        ${s.tab === 'cash' && s.plan ? html`<div class="hint" style="margin:0 0 12px">${m.payoutIn(s.plan.currency)}</div>` : nothing}
+        ${list.length === 0 ? html`<div class="notice info">${m.noPayoutMethods}</div>` : nothing}
+        ${groupMethods(list).map(({ group, items }) => {
+          const label = groupLabel(group, m)
+          return html`<section class="group" aria-label=${label}>
+            <h3 class="group-label">${label}</h3>
+            <ul class="rows">
+              ${items.map((x) => html`<li>${this._renderMethodRow(m, s, x)}</li>`)}
+            </ul>
+          </section>`
+        })}
+      </div>
+      ${this._renderErrorNotice(s.error)}
+    `
+  }
+
   // ---------- amount ----------
 
   private _renderAmount(m: Messages, s: Snapshot) {
     const c = this.controller!
-    const { isWallet, currency, prefix, boundsText, balance, chips, valid, width } = amountModel(s, m)
+    const { isWallet, isWithdraw, overBalance, currency, prefix, boundsText, balance, chips, valid, width } = amountModel(s, m)
+    const t = s.target
+    const summary = !isWithdraw
+      ? ''
+      : s.tab === 'crypto' && t
+        ? m.toAddressOn(shortAddress(t.address), displayChain(t.chain))
+        : s.method && s.plan
+          ? `${s.method.name} · ${m.payoutIn(s.plan.currency)}`
+          : ''
 
     return html`
       <div class="amount-box">
@@ -526,7 +653,12 @@ export class OpenRampModal extends LitElement {
           ${prefix ? nothing : html`<span class="amount-suffix">${currency}</span>`}
         </label>
         ${boundsText ? html`<div class="hint">${boundsText}</div>` : nothing}
-        ${balance ? html`<div class="hint">${m.balance(formatToken(balance.amount, balance.symbol, m.locale))}</div>` : nothing}
+        ${balance
+          ? html`<div class="hint" style=${overBalance ? 'color:var(--ork-color-danger)' : nothing}>
+              ${(isWithdraw ? m.available : m.balance)(formatToken(balance.amount, balance.symbol, m.locale))}
+            </div>`
+          : nothing}
+        ${summary ? html`<div class="target-summary">${summary}</div>` : nothing}
       </div>
       ${chips.length
         ? html`<div class="chips">
@@ -666,7 +798,7 @@ export class OpenRampModal extends LitElement {
           ${q.badges?.includes('best_price') ? html`<span class="badge success">${m.bestPrice}</span>` : nothing}
           ${q.badges?.includes('fastest') ? html`<span class="badge">${m.fastest}</span>` : nothing}
         </span>
-        <span class="row-sub wrap">${quoteSubtitle(q, m)}</span>
+        <span class="row-sub wrap">${quoteSubtitle(q, m, s.direction)}</span>
       </span>
       <span class="row-end">
         ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output, m.locale)}</strong>` : nothing}
@@ -691,7 +823,7 @@ export class OpenRampModal extends LitElement {
     const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined]
 
     return html`
-      ${surface ? this._renderSurface(m, s, step, surface, submits[0]) : this._renderProcessing(m, step)}
+      ${surface ? this._renderSurface(m, s, step, surface, submits[0]) : this._renderProcessing(m, step, s.direction === 'withdraw')}
       ${extra.length
         ? html`<div class="stack">
             ${extra.map((t, i) =>
@@ -719,10 +851,11 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  private _renderProcessing(m: Messages, step: Step) {
+  private _renderProcessing(m: Messages, step: Step, withdraw = false) {
     return html`<div class="center">
       <span class="spinner large" aria-hidden="true"></span>
       <div class="secondary-text">${step.sub ? titleCase(step.sub.toLowerCase()) : m.stepTitle[step.state] ?? m.checkingStatus}</div>
+      ${withdraw && step.state === 'PROCESSING' ? html`<p class="secondary-text">${m.sendingBody}</p>` : nothing}
     </div>`
   }
 
@@ -948,11 +1081,12 @@ export class OpenRampModal extends LitElement {
     const c = this.controller!
     const step = s.session!.step
     const q = this._selectedQuote
+    const withdraw = s.direction === 'withdraw'
     if (step.state === 'COMPLETED') {
       return html`<div class="center">
           <span class="result-icon success" aria-hidden="true">${icons.check}</span>
-          <h3 class="result-title">${m.successTitle}</h3>
-          <p class="secondary-text">${q ? m.youReceived(formatAmount(q.output, m.locale)) : m.successBody}</p>
+          <h3 class="result-title">${withdraw ? m.withdrawSuccessTitle : m.successTitle}</h3>
+          <p class="secondary-text">${q ? m.youReceived(formatAmount(q.output, m.locale)) : withdraw ? m.withdrawSuccessBody : m.successBody}</p>
         </div>
         ${step.progress && step.progress.legs.length > 1 ? this._renderProgress(m, step) : nothing}
         <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>`
@@ -960,7 +1094,7 @@ export class OpenRampModal extends LitElement {
     const retry = step.state === 'FAILED' || step.state === 'BLOCKED'
     return html`<div class="center">
         <span class="result-icon failure" aria-hidden="true">${icons.x}</span>
-        <h3 class="result-title">${m.failedTitle[step.state] ?? m.failedBody}</h3>
+        <h3 class="result-title">${withdraw && step.state === 'FAILED' ? m.withdrawFailedTitle : m.failedTitle[step.state] ?? m.failedBody}</h3>
         <p class="secondary-text">${step.error?.message ?? m.failedBody}</p>
       </div>
       ${s.error && s.error.message !== step.error?.message ? this._renderErrorNotice(s.error) : nothing}
@@ -976,7 +1110,7 @@ export class OpenRampModal extends LitElement {
     return html`<div class="center">
         <span class="result-icon failure" aria-hidden="true">${icons.alert}</span>
         <h3 class="result-title">${m.errorTitle}</h3>
-        <p class="secondary-text">${error?.message ?? m.errorBody}</p>
+        <p class="secondary-text">${error?.message ?? (this._snap?.direction === 'withdraw' ? m.withdrawErrorBody : m.errorBody)}</p>
       </div>
       <div class="stack">
         ${canRetry && this.controller

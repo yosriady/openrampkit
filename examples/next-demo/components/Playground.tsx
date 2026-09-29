@@ -3,7 +3,7 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { createMockWallet } from '@openrampkit/client'
 import type { Destination, OrkEvent, WalletAdapter } from '@openrampkit/core'
-import { DepositButton, OpenRampEmbedded, OpenRampProvider, autoTheme, darkTheme, lightTheme } from '@openrampkit/react'
+import { DepositButton, OpenRampEmbedded, OpenRampProvider, WithdrawButton, autoTheme, darkTheme, lightTheme } from '@openrampkit/react'
 import { wagmiWallet } from '@openrampkit/wagmi'
 import { useEffect, useMemo, useState } from 'react'
 import { useAccount } from 'wagmi'
@@ -24,8 +24,12 @@ const DESTINATIONS: Record<string, { label: string; destination: Destination }> 
 const CURRENCY: Record<string, string> = { VN: 'VND', ID: 'IDR', TH: 'THB', PH: 'PHP', MY: 'MYR', SG: 'SGD', IN: 'INR', US: 'USD', DE: 'EUR' }
 
 type WalletMode = 'none' | 'mock' | 'wagmi'
+type Direction = 'deposit' | 'withdraw'
+type Custody = 'user_wallet' | 'app'
 
 export function Playground({ mock }: { mock: boolean }) {
+  const [direction, setDirection] = useState<Direction>('deposit')
+  const [custody, setCustody] = useState<Custody>('user_wallet')
   const [country, setCountry] = useState('VN')
   const [dest, setDest] = useState('base')
   const [mode, setMode] = useState<'light' | 'dark' | 'auto'>('light')
@@ -51,7 +55,10 @@ export function Playground({ mock }: { mock: boolean }) {
   }, [dest, country])
 
   const getClientSecret = async () => {
-    const r = await fetch('/api/deposit-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, destination }) })
+    const r =
+      direction === 'withdraw'
+        ? await fetch('/api/withdraw-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, custody }) })
+        : await fetch('/api/deposit-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, destination }) })
     const j = (await r.json()) as { clientSecret: string }
     return j.clientSecret
   }
@@ -66,7 +73,7 @@ export function Playground({ mock }: { mock: boolean }) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embedded, country, dest, walletMode, isConnected])
+  }, [embedded, direction, custody, country, dest, walletMode, isConnected])
 
   useEffect(() => {
     const t = setInterval(() => void fetch('/api/hooks').then((r) => r.json()).then(setHooks).catch(() => {}), 2000)
@@ -75,7 +82,20 @@ export function Playground({ mock }: { mock: boolean }) {
 
   const onEvent = (e: OrkEvent) => setEvents((xs) => [e, ...xs].slice(0, 30))
 
-  const code = `const { clientSecret } = await openramp.sessions.create({
+  const code =
+    direction === 'withdraw'
+      ? `const { clientSecret } = await openramp.sessions.create({
+  userId: user.id,
+  direction: 'withdraw',
+  country: '${country}',
+  source: { chain: 'eip155:8453', token: USDC_BASE, custody: '${custody}' },
+  allowedTargets: { crypto: { chains: [...] }, fiat: {} },
+})
+
+<OpenRampProvider baseUrl="/api/openramp" theme={${mode}Theme({ accent: '${accent}' })}>
+  <WithdrawButton getClientSecret={getClientSecret} />
+</OpenRampProvider>`
+      : `const { clientSecret } = await openramp.sessions.create({
   userId: user.id,
   country: '${country}',
   destination: ${JSON.stringify(destination, null, 2).replace(/\n/g, '\n  ')},
@@ -94,16 +114,34 @@ export function Playground({ mock }: { mock: boolean }) {
       <main className="grid">
         <section className="panel" aria-label="Setup">
           <h2>Setup</h2>
+          <label>Flow
+            <select id="direction" value={direction} onChange={(e) => setDirection(e.target.value as Direction)}>
+              <option value="deposit">Deposit</option>
+              <option value="withdraw">Withdraw</option>
+            </select>
+          </label>
           <label>User country
             <select id="country" value={country} onChange={(e) => setCountry(e.target.value)}>
               {COUNTRIES.map(([c, n]) => <option key={c} value={c}>{n} ({c})</option>)}
             </select>
           </label>
-          <label>Destination
-            <select id="destination" value={dest} onChange={(e) => setDest(e.target.value)}>
-              {Object.entries(DESTINATIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-            </select>
-          </label>
+          {direction === 'deposit' ? (
+            <label>Destination
+              <select id="destination" value={dest} onChange={(e) => setDest(e.target.value)}>
+                {Object.entries(DESTINATIONS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+              </select>
+            </label>
+          ) : (
+            <>
+              <p className="hint">Source: USDC on Base. The user picks the target: a wallet address or cash.</p>
+              <label>Who holds the funds
+                <select id="custody" value={custody} onChange={(e) => setCustody(e.target.value as Custody)}>
+                  <option value="user_wallet">User wallet (user signs)</option>
+                  <option value="app">App (demo treasury signs)</option>
+                </select>
+              </label>
+            </>
+          )}
           <label>Wallet
             <select id="wallet" value={walletMode} onChange={(e) => setWalletMode(e.target.value as WalletMode)}>
               <option value="none">No wallet</option>
@@ -130,6 +168,8 @@ export function Playground({ mock }: { mock: boolean }) {
             ) : (
               <p className="hint">Creating a session...</p>
             )
+          ) : direction === 'withdraw' ? (
+            <WithdrawButton getClientSecret={getClientSecret} label="Withdraw" />
           ) : (
             <DepositButton getClientSecret={getClientSecret} label="Deposit" />
           )}

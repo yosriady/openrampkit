@@ -124,4 +124,28 @@ export const th: Messages = {
 
   errorTitle: 'เกิดข้อผิดพลาด',
   errorBody: 'ไม่สามารถโหลดรายการฝากเงินนี้ได้',
+
+  // withdraw
+  withdrawTitle: 'ถอนเงิน',
+  withdrawTabsLabel: 'ถอนไปที่',
+  tabToWallet: 'ไปยังวอลเล็ต',
+  tabToCash: 'เป็นเงินสด',
+  walletAddress: 'ที่อยู่วอลเล็ต',
+  addressPlaceholder: 'วางที่อยู่',
+  useMyWallet: 'ใช้วอลเล็ตของฉัน',
+  invalidAddress: 'กรอกที่อยู่ที่ถูกต้องสำหรับเครือข่ายนี้',
+  toAddressOn: (address, chain) => `ไปยัง ${address} บน ${chain}`,
+  withdrawAmountTitle: 'จำนวนที่ถอน',
+  available: (amount) => `ถอนได้: ${amount}`,
+  noPayoutMethods: 'ไม่มีวิธีรับเงินสำหรับการถอนนี้',
+  payoutIn: (currency) => `รับเงินเป็น ${currency}`,
+  youSend: (amount) => `คุณส่ง ${amount}`,
+  sending: 'กำลังส่ง',
+  sendingBody: 'กำลังส่งเงินที่คุณถอน อาจใช้เวลาสักครู่',
+  payoutDetailsTitle: 'ข้อมูลการรับเงิน',
+  confirmWithdrawalTitle: 'ยืนยันการถอนเงิน',
+  withdrawSuccessTitle: 'ถอนเงินสำเร็จ',
+  withdrawSuccessBody: 'เงินของคุณกำลังส่งไป',
+  withdrawFailedTitle: 'ถอนเงินไม่สำเร็จ',
+  withdrawErrorBody: 'ไม่สามารถโหลดรายการถอนเงินนี้ได้',
 }

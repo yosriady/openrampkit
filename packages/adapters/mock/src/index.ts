@@ -3,8 +3,8 @@
 
 import { POLL as POLLS, awaitPoll, createAdapter } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { CHAINS, OrkException, USDC, bps, chainName, minorUnits, mulRatio, orkError, roundTo, sub } from '@openrampkit/core'
-import type { Amount, CryptoAsset, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
+import { CHAINS, OrkException, USDC, bps, chainName, evmChainId, fromScaled, minorUnits, mulRatio, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
+import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
   /** How long a mock payment or bridge takes to settle (ms). Default 3000. */
@@ -13,9 +13,18 @@ export type MockOptions = {
   crypto?: boolean
   /** Add a mock `bridge` leg for two-leg pathways (use when the real Relay adapter is not configured) */
   bridge?: boolean
+  /**
+   * Add a mock `offramp` leg (crypto_offramp) for withdraw to cash: USDC in, fiat out to the user's
+   * bank or e-wallet (bank_transfer, gcash, momo, promptpay). It asks for the payout account (FORM),
+   * then for a USDC transfer to a mock provider address (WALLET_TX), then settles after `settleMs`.
+   */
+  offramp?: boolean
   /** Name shown to users. Default "Test provider". */
   name?: string
 }
+
+/** Payout methods of the mock offramp leg */
+export const MOCK_PAYOUT_METHODS = ['bank_transfer', 'gcash', 'momo', 'promptpay']
 
 /** Rough FX to USD for quotes. Test data only. */
 const USD_PER_UNIT: Record<string, string> = {
@@ -36,7 +45,40 @@ const ORDER_TTL_SEC = 24 * 60 * 60
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 }
 const usdcChains = Object.fromEntries(Object.entries(USDC).map(([c, t]) => [c, [t]]))
 
-type MockOrder = { status: 'awaiting' | 'paid' | 'failed'; paidAt?: number; output: Amount; kind: string }
+type MockOrder = {
+  status: 'awaiting' | 'paid' | 'failed'
+  paidAt?: number
+  output: Amount
+  kind: string
+  /** Offramp: the payout method, the amount to send and where, and a masked payout account once given */
+  method?: string
+  input?: Amount
+  payTo?: string
+  account?: string
+}
+
+const WORK = 18
+/** Exact decimal division, `a / b` (test data only) */
+function div(a: string, b: string): string {
+  return fromScaled((toScaled(a, WORK) * 10n ** BigInt(WORK)) / toScaled(b, WORK), WORK)
+}
+
+/** ERC-20 `transfer(to, amount)` calldata */
+function erc20Transfer(to: string, amountBase: string): string {
+  return `0xa9059cbb${to.toLowerCase().replace(/^0x/, '').padStart(64, '0')}${BigInt(amountBase).toString(16).padStart(64, '0')}`
+}
+
+/** Payout account fields per method. Labels are the provider's own (English). */
+function payoutFields(method: string | undefined): FieldSpec[] {
+  const name: FieldSpec = { id: 'account_name', label: 'Account holder name', type: 'text', required: true }
+  if (!method || method === 'bank_transfer') {
+    return [name, { id: 'bank_name', label: 'Bank name', type: 'text', required: true }, { id: 'account_number', label: 'Account number', type: 'text', required: true }]
+  }
+  if (method === 'promptpay') return [name, { id: 'phone', label: 'PromptPay phone number or ID', type: 'tel', required: true }]
+  return [name, { id: 'phone', label: `${method === 'gcash' ? 'GCash' : method === 'momo' ? 'MoMo' : 'E-wallet'} phone number`, type: 'tel', required: true }]
+}
+
+const mask = (v: string) => (v.length <= 4 ? v : `${'*'.repeat(Math.min(6, v.length - 4))}${v.slice(-4)}`)
 
 export function mockAdapter(opts: MockOptions = {}) {
   const settleMs = opts.settleMs ?? 3000
@@ -114,6 +156,19 @@ export function mockAdapter(opts: MockOptions = {}) {
       surfaces: ['DEPOSIT_ADDRESS'],
     })
   }
+  if (opts.offramp) {
+    legs.push({
+      id: 'offramp',
+      kind: 'crypto_offramp',
+      methods: MOCK_PAYOUT_METHODS,
+      from: { asset: { kind: 'crypto', chains: usdcChains }, location: ['user_wallet', 'address'] },
+      to: { asset: { kind: 'fiat', currencies: Object.keys(USD_PER_UNIT) }, location: ['user_account'] },
+      regions: { allow: ['*'], deny: [] },
+      limits: { min: '5', max: '5000', currency: 'USD' },
+      eta: { min: 60, max: 900 },
+      surfaces: ['FORM', 'WALLET_TX'],
+    })
+  }
 
   const baseOf = (ctx: AdapterContext) => ctx.urls.webhookUrl.replace(/\/webhooks\/mock$/, '')
   const orderKey = (ref: string) => `order:${ref}`
@@ -141,6 +196,25 @@ export function mockAdapter(opts: MockOptions = {}) {
     return undefined
   }
 
+  /** The offramp's user step: the payout account form, then the USDC transfer to the provider. */
+  function offrampStep(ref: string, o: MockOrder): LegStep {
+    if (!o.account) {
+      return {
+        state: 'PAYMENT', sub: 'PAYOUT_ACCOUNT', status: 'awaiting_user', ref,
+        surface: { kind: 'FORM', fields: payoutFields(o.method) },
+        transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }],
+      }
+    }
+    const input = o.input ?? { amount: '0', asset: BASE_USDC }
+    const asset = input.asset.kind === 'crypto' ? input.asset : BASE_USDC
+    const tx: TxRequest = { to: asset.token, data: erc20Transfer(o.payTo ?? fakeAddress(ref), toBaseUnits(input.amount, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
+    return {
+      state: 'PAYMENT', sub: 'SEND_CRYPTO', status: 'awaiting_user', ref,
+      surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
+      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+    }
+  }
+
   return createAdapter({
     id: 'mock',
     name,
@@ -151,6 +225,23 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (!spec) throw unknownLeg(leg.legId)
       const now = Date.now()
       const expiresAt = new Date(now + 60_000).toISOString()
+      if (spec.kind === 'crypto_offramp') {
+        // USDC in, fiat out: 1 USDC = 1 USD, minus 1%.
+        const fiat = (leg.to.asset.kind === 'fiat' ? leg.to.asset.currency : ctx.destination.type === 'fiat' ? ctx.destination.currency : 'USD').toUpperCase()
+        const rate = USD_PER_UNIT[fiat]
+        if (!rate) throw new OrkException(orkError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
+        const inAsset: CryptoAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : leg.from.asset.kind === 'crypto' ? leg.from.asset : BASE_USDC
+        const usdc = amountIn ? amountIn.amount : roundTo(div(mulRatio(amountOut?.amount ?? '0', rate), '0.99'), 6)
+        const fee = roundTo(bps(usdc, 100), 6)
+        const out = roundTo(div(sub(usdc, fee), rate), minorUnits(fiat))
+        return {
+          adapterId: 'mock', legId: leg.legId,
+          input: { amount: usdc, asset: { ...inAsset, symbol: 'USDC', decimals: 6 } },
+          output: { amount: out.startsWith('-') ? '0' : out, asset: { kind: 'fiat', currency: fiat } },
+          fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: 'USDC' }],
+          eta: spec.eta, expiresAt,
+        }
+      }
       if (spec.kind === 'fiat_onramp' || spec.kind === 'fiat_payin') {
         const fiat = (amountIn?.asset.kind === 'fiat' ? amountIn.asset.currency : leg.from.asset.kind === 'fiat' ? leg.from.asset.currency : 'USD').toUpperCase()
         const rate = USD_PER_UNIT[fiat]
@@ -240,6 +331,11 @@ export function mockAdapter(opts: MockOptions = {}) {
             ],
           }
         }
+        case 'offramp': {
+          const offer: MockOrder = { ...order, ...(leg.method ? { method: leg.method } : {}), input: quote.input, payTo: fakeAddress(`offramp:${ref}`) }
+          await ctx.shared.put(orderKey(ref), offer, ORDER_TTL_SEC)
+          return offrampStep(ref, offer)
+        }
         case 'bridge': {
           // The previous leg delivers into the deposit address; treat it as paid now.
           await ctx.shared.put(orderKey(ref), { ...order, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
@@ -252,6 +348,22 @@ export function mockAdapter(opts: MockOptions = {}) {
     async transition({ ref, name: t, inputs }, ctx): Promise<LegStep> {
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))
       if (!o) throw new OrkException(orkError('NOT_FOUND', { message: 'Unknown mock order.' }), 404)
+      if (o.kind === 'offramp' && t === 'submit_details') {
+        if (o.status !== 'awaiting') throw new OrkException(orkError('BAD_REQUEST', { message: 'The payout account is already set.' }), 409)
+        const v = (id: string) => (typeof inputs?.[id] === 'string' ? (inputs[id] as string).trim() : '')
+        for (const f of payoutFields(o.method)) {
+          if (!v(f.id)) throw new OrkException(orkError('BAD_REQUEST', { message: `Enter the ${f.label.toLowerCase()}.` }), 400)
+        }
+        const acct = v('account_number') || v('phone')
+        if (v('phone') && !/^\+?[0-9 ()-]{7,20}$/.test(v('phone'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid phone number.' }), 400)
+        if (v('account_number') && !/^[0-9A-Za-z -]{4,34}$/.test(v('account_number'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid account number.' }), 400)
+        const next: MockOrder = { ...o, account: mask(acct.replace(/\D/g, '') || acct) }
+        await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
+        return offrampStep(ref, next)
+      }
+      if (o.kind === 'offramp' && t === 'submit_tx' && !o.account) {
+        throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
+      }
       if (t === 'simulate_payment' || t === 'simulate_deposit' || t === 'submit_tx') {
         await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
         return {
@@ -264,7 +376,11 @@ export function mockAdapter(opts: MockOptions = {}) {
     },
 
     async status({ ref }, ctx): Promise<LegStep> {
-      return (await settled(ref, ctx)) ?? { state: 'PAYMENT', status: 'awaiting_user', ref, transitions: [awaitPoll(POLL)] }
+      const done = await settled(ref, ctx)
+      if (done) return done
+      const o = await ctx.shared.get<MockOrder>(orderKey(ref))
+      if (o?.kind === 'offramp') return offrampStep(ref, o)
+      return { state: 'PAYMENT', status: 'awaiting_user', ref, transitions: [awaitPoll(POLL)] }
     },
 
     async routes(req, subpath, ctx) {

@@ -36,6 +36,42 @@ export type Destination =
       calls?: ContractCall[]
     }
   | { type: 'merchant'; currency: string; accountRef?: string }
+  /** Withdraw to cash: the user's own bank or e-wallet account, paid out in `currency` */
+  | { type: 'fiat'; currency: string }
+
+// ---------- Withdraw ----------
+
+/**
+ * Who holds the funds of a withdraw session.
+ * - `user_wallet`: the user's own wallet signs every transaction (the client shows WALLET_TX).
+ * - `app`: the app holds the funds. The server calls the app's `treasury.send()` hook instead of the user.
+ */
+export type Custody = 'user_wallet' | 'app'
+
+/** The asset a withdraw session sends out. The app sets it when it creates the session. */
+export type WithdrawSource = {
+  /** CAIP-2 chain id, e.g. `eip155:8453` */
+  chain: string
+  /** Token address, or `native` for the gas token */
+  token: string
+  symbol?: string
+  decimals?: number
+  custody: Custody
+}
+
+/**
+ * Where the user may send a withdrawal. Absent: any target. Present: only the listed types;
+ * inside a type, an absent list means "any" (any chain, any currency).
+ */
+export type AllowedTargets = {
+  crypto?: { chains?: string[] }
+  fiat?: { currencies?: string[] }
+}
+
+/** The target the user picks for a withdrawal (`POST /sessions/:id/target`). */
+export type WithdrawTarget =
+  | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number }
+  | { type: 'fiat'; currency: string }
 
 export type LegKind =
   | 'fiat_onramp'
@@ -114,7 +150,14 @@ export type LegQuote = {
   limits?: { min?: string; max?: string; currency: string }
 }
 
-export type PathwayLeg = { adapterId: string; legId: string; from: Endpoint; to: Endpoint }
+export type PathwayLeg = {
+  adapterId: string
+  legId: string
+  from: Endpoint
+  to: Endpoint
+  /** User-facing method of the pathway (set on the first leg), e.g. `gcash`, so a multi-method leg knows which one the user chose */
+  method?: string
+}
 
 export type PathwayGroup = 'connected' | 'recommended' | 'more' | 'unavailable'
 
@@ -159,6 +202,8 @@ export type OrkErrorCode =
   | 'CLIENT_UPGRADE_REQUIRED'
   | 'SESSION_EXPIRED'
   | 'UNAUTHORIZED'
+  | 'ADDRESS_REJECTED'
+  | 'TARGET_NOT_ALLOWED'
   | 'BAD_REQUEST'
   | 'NOT_FOUND'
   | 'INTERNAL'
@@ -296,7 +341,15 @@ export type SessionStatus = 'open' | 'processing' | 'completed' | 'failed' | 'ex
 export type PublicSession = {
   id: string
   direction: Direction
-  destination: Destination
+  /**
+   * Where the money ends. Deposit: set by the app at creation. Withdraw: the target the user
+   * picked with `POST /sessions/:id/target`; absent until then.
+   */
+  destination?: Destination
+  /** Withdraw only: the asset the session sends out, and who holds it */
+  source?: WithdrawSource
+  /** Withdraw only: the targets the app allows */
+  allowedTargets?: AllowedTargets
   status: SessionStatus
   country?: string
   currency?: string
@@ -317,6 +370,8 @@ export type OrkEventType =
   | 'session.expired'
   | 'leg.succeeded'
   | 'leg.failed'
+  | 'withdrawal.completed'
+  | 'withdrawal.failed'
   | 'step.changed'
   | 'modal.opened'
   | 'modal.closed'

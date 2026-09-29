@@ -173,3 +173,67 @@ describe('mock adapter', () => {
     expect(await a.routes!(new Request('https://app.test/pay'), 'pay', r.ctx)).toBeUndefined()
   })
 })
+
+describe('mock offramp (withdraw to cash)', () => {
+  const PHP = { asset: { kind: 'fiat' as const, currency: 'PHP' }, location: { kind: 'user_account' as const } }
+  const offrampLeg = (method?: string): PathwayLeg => ({ ...leg('offramp', { asset: BASE_USDC, location: { kind: 'user_wallet' } }, PHP), ...(method ? { method } : {}) })
+  const TX = `0x${'cd'.repeat(32)}`
+
+  it('is added on request and runs FORM, WALLET_TX, then COMPLETED', async () => {
+    const a = mockAdapter({ settleMs: 0, offramp: true })
+    expect(a.legs.map((l) => l.id)).toEqual(['card', 'local', 'payin', 'offramp'])
+    const report = await runAdapterConformance(a, {
+      fixtures: [
+        {
+          leg: offrampLeg('gcash'),
+          quote: { amountIn: { amount: '50', asset: BASE_USDC } },
+          transitions: [{ name: 'submit_details', inputs: { account_name: 'Juan', phone: '09171234567' } }, { name: 'submit_tx', inputs: { txHash: TX } }],
+          expect: { start: 'PAYMENT', status: 'COMPLETED' },
+        },
+      ],
+    })
+    expect(report.problems).toEqual([])
+    const [start, details, sent, done] = report.steps
+    expect(start).toMatchObject({ sub: 'PAYOUT_ACCOUNT', surface: { kind: 'FORM', fields: [{ id: 'account_name' }, { id: 'phone', label: 'GCash phone number' }] } })
+    expect(details).toMatchObject({ sub: 'SEND_CRYPTO', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: BASE_USDC.token, chainId: 8453 }] } })
+    expect(sent).toMatchObject({ state: 'PROCESSING', txHash: TX })
+    expect(done).toMatchObject({ state: 'COMPLETED', output: { asset: { kind: 'fiat', currency: 'PHP' } } })
+    expect(report.quotes[0]).toMatchObject({ input: { amount: '50' }, output: { amount: '2828.57', asset: { currency: 'PHP' } }, fees: [{ amount: '0.500000', currency: 'USDC' }] })
+  })
+
+  it('quotes an exact fiat output, rejects unknown currencies, and has fields per payout method', async () => {
+    const a = mockAdapter({ offramp: true })
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'fiat', currency: 'PHP' } })
+    const out = await a.quote({ leg: offrampLeg(), amountOut: { amount: '1000', asset: PHP.asset } }, ctx)
+    expect(out.input.amount).toBe('17.676768') // 1000 * 0.0175 / 0.99
+    const noRate = { ...offrampLeg(), to: { asset: { kind: 'fiat' as const, currency: 'XYZ' }, location: { kind: 'user_account' as const } } }
+    await expect(a.quote({ leg: noRate, amountIn: { amount: '1', asset: BASE_USDC } }, ctx)).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    const fields = async (method?: string) => {
+      const q = await a.quote({ leg: offrampLeg(method), amountIn: { amount: '10', asset: BASE_USDC } }, ctx)
+      const s = await a.start({ leg: offrampLeg(method), quote: q }, ctx)
+      return (s.surface as { fields: Array<{ id: string; label: string }> }).fields
+    }
+    expect((await fields()).map((f) => f.id)).toEqual(['account_name', 'bank_name', 'account_number'])
+    expect((await fields('promptpay'))[1]!.label).toMatch(/PromptPay/)
+    expect((await fields('momo'))[1]!.label).toBe('MoMo phone number')
+    expect((await fields('ovo'))[1]!.label).toBe('E-wallet phone number')
+  })
+
+  it('checks the payout form, keeps the step on status polls, and refuses a second form', async () => {
+    const a = mockAdapter({ offramp: true })
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
+    const l = offrampLeg('bank_transfer')
+    const q = await a.quote({ leg: l, amountIn: { amount: '10', asset: BASE_USDC } }, ctx)
+    const { ref } = await a.start({ leg: l, quote: q }, ctx)
+    const t = (name: string, inputs?: Record<string, unknown>) => a.transition!({ leg: l, ref: ref!, name, ...(inputs ? { inputs } : {}) }, ctx)
+    expect((await a.status!({ leg: l, ref: ref! }, ctx)).surface?.kind).toBe('FORM')
+    await expect(t('submit_tx', { txHash: TX })).rejects.toMatchObject({ status: 409 })
+    await expect(t('submit_details', { account_name: 'A', bank_name: 'B' })).rejects.toMatchObject({ error: { message: 'Enter the account number.' } })
+    await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '1!' })).rejects.toMatchObject({ error: { message: 'Enter a valid account number.' } })
+    await t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })
+    expect((await a.status!({ leg: l, ref: ref! }, ctx)).surface?.kind).toBe('WALLET_TX')
+    await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })).resolves.toMatchObject({ surface: { kind: 'WALLET_TX' } })
+    await t('submit_tx', { txHash: TX })
+    await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })).rejects.toMatchObject({ status: 409 })
+  })
+})

@@ -50,7 +50,13 @@ export function legStepFromEvent(ev: LegEvent | undefined, ref: string, poll: Po
     case undefined:
     case 'pending':
     case 'awaiting_user':
-      return { state: 'PAYMENT', status: 'awaiting_user', transitions: [awaitPoll(poll)], ref }
+      return {
+        state: 'PAYMENT',
+        status: 'awaiting_user',
+        transitions: ev?.surface && ev.transitions ? ev.transitions : [awaitPoll(poll)],
+        ref,
+        ...(ev?.surface ? { surface: ev.surface } : {}),
+      }
     case 'succeeded':
       return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra }
     case 'failed':

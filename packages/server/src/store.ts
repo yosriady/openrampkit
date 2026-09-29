@@ -1,5 +1,6 @@
 import type { ScopedKV } from '@openrampkit/adapter'
 import type {
+  AllowedTargets,
   Destination,
   Direction,
   LegQuote,
@@ -9,6 +10,7 @@ import type {
   Quote,
   SessionStatus,
   Step,
+  WithdrawSource,
 } from '@openrampkit/core'
 
 export type ActiveLeg = {
@@ -20,6 +22,8 @@ export type ActiveLeg = {
   step?: LegStep
   started: boolean
   lastCheckedAt?: number
+  /** Withdraw with app custody: idempotency keys of WALLET_TX steps already sent by the treasury */
+  treasurySent?: string[]
 }
 
 export type StoredQuote = {
@@ -34,7 +38,12 @@ export type SessionRecord = {
   version: number
   userId: string
   direction: Direction
-  destination: Destination
+  /** Deposit: set at creation. Withdraw: the target the user picked, absent until then. */
+  destination?: Destination
+  /** Withdraw only */
+  source?: WithdrawSource
+  /** Withdraw only */
+  allowedTargets?: AllowedTargets
   country?: string
   region?: string
   email?: string

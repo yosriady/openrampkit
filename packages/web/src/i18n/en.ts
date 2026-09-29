@@ -133,7 +133,30 @@ export const en = {
   // error
   errorTitle: 'Something went wrong',
   errorBody: 'We could not load this deposit.',
-}
 
+  // withdraw
+  withdrawTitle: 'Withdraw',
+  withdrawTabsLabel: 'Withdraw to',
+  tabToWallet: 'To wallet',
+  tabToCash: 'To cash',
+  walletAddress: 'Wallet address',
+  addressPlaceholder: 'Paste an address',
+  useMyWallet: 'Use my wallet',
+  invalidAddress: 'Enter a valid address for this network.',
+  toAddressOn: (address: string, chain: string) => `To ${address} on ${chain}`,
+  withdrawAmountTitle: 'Amount to withdraw',
+  available: (amount: string) => `Available: ${amount}`,
+  noPayoutMethods: 'No payout methods are available for this withdrawal.',
+  payoutIn: (currency: string) => `Paid out in ${currency}`,
+  youSend: (amount: string) => `You send ${amount}`,
+  sending: 'Sending',
+  sendingBody: 'Your withdrawal is on its way. This can take a few minutes.',
+  payoutDetailsTitle: 'Payout details',
+  confirmWithdrawalTitle: 'Confirm withdrawal',
+  withdrawSuccessTitle: 'Withdrawal complete',
+  withdrawSuccessBody: 'Your funds are on the way.',
+  withdrawFailedTitle: 'Withdrawal failed',
+  withdrawErrorBody: 'We could not load this withdrawal.',
+}
 /** Every user-facing string of the modal. Translations must define every key. */
 export type Messages = typeof en

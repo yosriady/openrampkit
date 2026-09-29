@@ -7,6 +7,7 @@ import type { MockOptions } from '@openrampkit/adapter-mock'
 import { USDC } from '@openrampkit/core'
 import type { Destination, MethodOption, OrkError, PlanResult, PublicSession, Quote, Step } from '@openrampkit/core'
 import { createOpenRamp } from '@openrampkit/server'
+import type { OpenRampConfig } from '@openrampkit/server'
 import { createOpenRampClient } from './client.js'
 import type { OpenRampClient } from './client.js'
 
@@ -14,6 +15,8 @@ export const BASE = 'http://localhost/api/openramp'
 export const SECRET = 'test-secret-test-secret-test-secret-123'
 export const BEEF = '0x000000000000000000000000000000000000beef'
 export const BASE_DEST: Destination = { type: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, address: BEEF }
+/** Withdraw source: USDC on Base in the user's wallet */
+export const BASE_SOURCE = { chain: 'eip155:8453', token: USDC['eip155:8453']!, custody: 'user_wallet' as const }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
@@ -108,12 +111,13 @@ export function fakeClient(over: Partial<{ [K in keyof OpenRampClient]: OpenRamp
 // ---------- real server ----------
 
 /** The real server handler with the mock adapter, reached through an in-process `fetch`. */
-export function setupServer(mock: MockOptions = { settleMs: 0, crypto: true, bridge: true }) {
+export function setupServer(mock: MockOptions = { settleMs: 0, crypto: true, bridge: true, offramp: true }, config: Partial<OpenRampConfig> = {}) {
   const ramp = createOpenRamp({
     secret: SECRET,
     baseUrl: BASE,
     adapters: [mockAdapter(mock)],
     logger: { debug() {}, info() {}, warn() {}, error() {} },
+    ...config,
   })
   const requests: Request[] = []
   const fetchToHandler: typeof fetch = async (input, init) => {

@@ -1,14 +1,15 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, isLegTerminal, isTerminal } from '@openrampkit/core'
+import { OrkException, isLegTerminal, isTerminal, orkError } from '@openrampkit/core'
 import type { LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
 import { DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
-import { hmacHex, randomHex } from './crypto.js'
+import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { adapterContext, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { ActiveLeg, SessionRecord, StoredQuote } from './store.js'
+import { withdrawSender } from './withdraw.js'
 
 const LEG_STATUS_TO_STATE: Record<LegStatus, StateName> = {
   pending: 'PROCESSING',
@@ -78,7 +79,52 @@ async function settleStatus(rt: Runtime, rec: SessionRecord) {
   rec.status = sessionStatusFor(rec.step.state, !!rec.active)
   if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded'].includes(rec.status)) {
     await notify(rt, rec, `session.${rec.status}`)
+    if (rec.direction === 'withdraw' && (rec.status === 'completed' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`)
   }
+}
+
+/**
+ * Withdraw with `custody: 'app'`: when the first leg asks for a WALLET_TX, the app's treasury signs
+ * it instead of the user, and the leg reports the hash at once. Returns the leg's next step, or
+ * undefined when this step is not for the treasury (or it already sent this step).
+ */
+async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
+  if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0) return undefined
+  if (ls.surface?.kind !== 'WALLET_TX' || ls.status !== 'awaiting_user') return undefined
+  const act = rec.active!
+  const leg = act.legs[i]!
+  const { chain, txs } = ls.surface
+  const key = `${rec.id}:${i}:${(await sha256Hex(`${leg.ref ?? ''}|${chain}|${JSON.stringify(txs)}`)).slice(0, 24)}`
+  if (leg.treasurySent?.includes(key)) return undefined
+  const failed = (message: string): LegStep => ({
+    state: 'FAILED',
+    status: 'failed',
+    transitions: [],
+    ...(ls.ref ? { ref: ls.ref } : {}),
+    error: orkError('PAYMENT_FAILED', { message, recovery: 'contact_support', legId: leg.legId }),
+  })
+  const treasury = rt.config.treasury
+  if (!treasury) return failed('Withdrawals are not set up for this app yet.')
+  // Mark before sending: at most one send per step from our side. The key lets the app dedupe retries.
+  leg.treasurySent = [...(leg.treasurySent ?? []), key]
+  let hash: string
+  try {
+    hash = (await treasury.send({ sessionId: rec.id, userId: rec.userId, chain, txs, idempotencyKey: key })).hash
+  } catch (e) {
+    rt.log.error('treasury send failed', { sessionId: rec.id, error: e instanceof Error ? e.message : String(e) })
+    return failed('The withdrawal could not be sent. Contact support.')
+  }
+  const t = ls.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'tx_hash')
+  const a = rt.adapter(leg.adapterId)
+  if (t && a.transition) {
+    return a.transition(
+      { leg: act.pathway.legs[i]!, ref: ls.ref ?? leg.ref ?? '', name: t.name, inputs: { txHash: hash } },
+      adapterContext(rt, rec, a, act.pathway, i),
+    )
+  }
+  // No transition to report the hash: wait for the provider to see the transfer.
+  const { surface: _sent, ...rest } = ls
+  return { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }], txHash: hash }
 }
 
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
@@ -91,6 +137,8 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)
   }
+  const sent = await treasuryStep(rt, rec, i, wrapped)
+  if (sent) return setLegStep(rt, rec, i, sent)
   if (wrapped.status === 'succeeded') await notify(rt, rec, 'leg.succeeded', { index: i, adapterId: leg.adapterId, legId: leg.legId })
   if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error })
   if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1) {
@@ -108,12 +156,20 @@ export async function startLeg(rt: Runtime, rec: SessionRecord, i: number): Prom
   const a = rt.adapter(leg.adapterId)
   leg.started = true
   const input = leg.quote.input.asset
+  const source =
+    i !== 0
+      ? undefined
+      : rec.direction === 'withdraw'
+        ? withdrawSender(rt, rec)
+        : rec.walletAddress && input.kind === 'crypto'
+          ? { chain: input.chain, token: input.token, address: rec.walletAddress }
+          : undefined
   const ls = await a.start(
     {
       leg: act.pathway.legs[i]!,
       quote: leg.quote,
       ...(leg.deliverTo ? { deliverTo: leg.deliverTo } : {}),
-      ...(i === 0 && rec.walletAddress && input.kind === 'crypto' ? { source: { chain: input.chain, token: input.token, address: rec.walletAddress } } : {}),
+      ...(source ? { source } : {}),
     },
     adapterContext(rt, rec, a, act.pathway, i),
   )
@@ -166,14 +222,20 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
   return false
 }
 
-/** Build the leg step for a provider event, keeping the current surface until the leg ends. */
+/**
+ * Build the leg step for a provider event, keeping the current surface until the leg ends.
+ * A non-terminal event may carry a new `surface` (and its `transitions`), e.g. an offramp that
+ * learns its deposit address from a webhook and now needs a WALLET_TX.
+ */
 export function legStepFromEvent(cur: LegStep | undefined, ev: LegEvent): LegStep {
   const terminal = isLegTerminal(ev.status)
+  const withSurface = !terminal && !!ev.surface
   const ls: LegStep = {
     ...(cur ?? { transitions: [] }),
     status: ev.status,
     state: LEG_STATUS_TO_STATE[ev.status],
-    transitions: terminal ? [] : [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }],
+    transitions: terminal ? [] : withSurface && ev.transitions ? ev.transitions : [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }],
+    ...(withSurface ? { surface: ev.surface } : {}),
     ...(ev.output ? { output: ev.output } : {}),
     ...(ev.txHash ? { txHash: ev.txHash } : {}),
     ...(ev.error ? { error: ev.error } : {}),

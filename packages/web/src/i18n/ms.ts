@@ -123,4 +123,28 @@ export const ms: Messages = {
 
   errorTitle: 'Berlaku ralat',
   errorBody: 'Kami tidak dapat memuatkan tambah nilai ini.',
+
+  // withdraw
+  withdrawTitle: 'Keluarkan wang',
+  withdrawTabsLabel: 'Keluarkan ke',
+  tabToWallet: 'Ke dompet',
+  tabToCash: 'Ke tunai',
+  walletAddress: 'Alamat dompet',
+  addressPlaceholder: 'Tampal alamat',
+  useMyWallet: 'Guna dompet saya',
+  invalidAddress: 'Masukkan alamat yang sah untuk rangkaian ini.',
+  toAddressOn: (address, chain) => `Ke ${address} di ${chain}`,
+  withdrawAmountTitle: 'Jumlah pengeluaran',
+  available: (amount) => `Tersedia: ${amount}`,
+  noPayoutMethods: 'Tiada kaedah pembayaran keluar tersedia untuk pengeluaran ini.',
+  payoutIn: (currency) => `Dibayar dalam ${currency}`,
+  youSend: (amount) => `Anda hantar ${amount}`,
+  sending: 'Menghantar',
+  sendingBody: 'Pengeluaran anda sedang dihantar. Ini mungkin mengambil masa beberapa minit.',
+  payoutDetailsTitle: 'Butiran pembayaran keluar',
+  confirmWithdrawalTitle: 'Sahkan pengeluaran',
+  withdrawSuccessTitle: 'Pengeluaran berjaya',
+  withdrawSuccessBody: 'Dana anda dalam perjalanan.',
+  withdrawFailedTitle: 'Pengeluaran gagal',
+  withdrawErrorBody: 'Kami tidak dapat memuatkan pengeluaran ini.',
 }

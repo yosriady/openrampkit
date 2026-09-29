@@ -485,6 +485,25 @@ export const styles = css`
   .input:focus {
     border-color: var(--ork-color-accent);
   }
+  .input.mono {
+    font-family: var(--ork-font-mono);
+    font-size: 14px;
+  }
+  .input[aria-invalid='true'] {
+    border-color: var(--ork-color-danger);
+  }
+  .field-error {
+    margin: 6px 0 0 4px;
+    font-size: 13px;
+    color: var(--ork-color-danger);
+  }
+  .target-summary {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--ork-color-text-muted);
+    text-align: center;
+    word-break: break-all;
+  }
   .form {
     display: flex;
     flex-direction: column;

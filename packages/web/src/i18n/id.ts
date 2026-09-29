@@ -123,4 +123,28 @@ export const id: Messages = {
 
   errorTitle: 'Terjadi kesalahan',
   errorBody: 'Kami tidak dapat memuat isi saldo ini.',
+
+  // withdraw
+  withdrawTitle: 'Tarik dana',
+  withdrawTabsLabel: 'Tarik ke',
+  tabToWallet: 'Ke dompet',
+  tabToCash: 'Ke uang tunai',
+  walletAddress: 'Alamat dompet',
+  addressPlaceholder: 'Tempel alamat',
+  useMyWallet: 'Pakai dompet saya',
+  invalidAddress: 'Masukkan alamat yang valid untuk jaringan ini.',
+  toAddressOn: (address, chain) => `Ke ${address} di ${chain}`,
+  withdrawAmountTitle: 'Jumlah penarikan',
+  available: (amount) => `Tersedia: ${amount}`,
+  noPayoutMethods: 'Tidak ada metode pencairan yang tersedia untuk penarikan ini.',
+  payoutIn: (currency) => `Dicairkan dalam ${currency}`,
+  youSend: (amount) => `Anda kirim ${amount}`,
+  sending: 'Mengirim',
+  sendingBody: 'Penarikan Anda sedang dikirim. Ini bisa memakan waktu beberapa menit.',
+  payoutDetailsTitle: 'Detail pencairan',
+  confirmWithdrawalTitle: 'Konfirmasi penarikan',
+  withdrawSuccessTitle: 'Penarikan berhasil',
+  withdrawSuccessBody: 'Dana Anda sedang dalam perjalanan.',
+  withdrawFailedTitle: 'Penarikan gagal',
+  withdrawErrorBody: 'Kami tidak dapat memuat penarikan ini.',
 }

@@ -28,15 +28,24 @@ export function screenOf(s: Snapshot | undefined, error: OrkError | undefined): 
 }
 
 export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: Appearance): string {
-  const base = appearance?.title ?? m.title
+  const withdraw = s?.direction === 'withdraw'
+  const base = appearance?.title ?? (withdraw ? m.withdrawTitle : m.title)
   if (!s) return base
   switch (s.screen) {
     case 'amount':
+      if (withdraw && s.tab === 'crypto') return m.withdrawAmountTitle
       return s.method?.name ?? base
     case 'quotes':
       return s.method?.method === 'transfer' ? m.transferTitle : m.quotesTitle
-    case 'step':
-      return (s.session && m.stepTitle[s.session.step.state]) || base
+    case 'step': {
+      const step = s.session?.step
+      if (withdraw && step) {
+        if (step.state === 'PAYMENT' && step.surface?.kind === 'FORM') return m.payoutDetailsTitle
+        if (step.state === 'PAYMENT' && step.surface?.kind === 'WALLET_TX') return m.confirmWithdrawalTitle
+        if (step.state === 'PROCESSING') return m.sending
+      }
+      return (step && m.stepTitle[step.state]) || base
+    }
     default:
       return base
   }
@@ -83,7 +92,12 @@ export function methodSubtitle(x: MethodOption, walletAddress: string | undefine
 }
 
 export type AmountModel = {
+  /** Deposit from a wallet: show the pay-with balance picker */
   isWallet: boolean
+  /** Withdraw: the amount is in the source token */
+  isWithdraw: boolean
+  /** Withdraw: the amount is above the wallet balance */
+  overBalance: boolean
   currency: string
   /** Currency symbol shown before the input, or '' */
   prefix: string
@@ -98,15 +112,23 @@ export type AmountModel = {
 /** Everything the amount screen shows, derived from the snapshot. */
 export function amountModel(s: Snapshot, m: Messages): AmountModel {
   const method = s.method
-  const isWallet = method?.method === 'wallet'
-  const currency = isWallet ? s.source?.symbol ?? 'USDC' : s.plan?.currency ?? s.session?.currency ?? 'USD'
-  const symbol = isWallet ? '' : currencySymbol(currency, m.locale)
+  const isWithdraw = s.direction === 'withdraw'
+  const isWallet = !isWithdraw && method?.method === 'wallet'
+  const src = s.session?.source
+  const tokenMode = isWallet || isWithdraw
+  const currency = isWithdraw ? src?.symbol ?? 'USDC' : isWallet ? s.source?.symbol ?? 'USDC' : s.plan?.currency ?? s.session?.currency ?? 'USD'
+  const symbol = tokenMode ? '' : currencySymbol(currency, m.locale)
   const prefix = !!symbol && symbol !== currency.toUpperCase() ? symbol : ''
-  const bounds = isWallet ? undefined : s.session?.amountBounds ?? method?.limits
+  const bounds = isWallet ? undefined : isWithdraw ? s.session?.amountBounds : s.session?.amountBounds ?? method?.limits
   const fmtBound = (v?: string) => (v && bounds ? formatFiat(v, bounds.currency, { compact: true, locale: m.locale }) : undefined)
   const boundsText = bounds ? m.minMax(fmtBound(bounds.min), fmtBound(bounds.max)) : ''
-  const balance = isWallet ? s.balances.find((b) => b.chain === s.source?.chain && b.token === s.source?.token) : undefined
-  const chips = isWallet
+  const balance = isWithdraw
+    ? src && s.balances.find((b) => b.chain === src.chain && b.token.toLowerCase() === src.token.toLowerCase())
+    : isWallet
+      ? s.balances.find((b) => b.chain === s.source?.chain && b.token === s.source?.token)
+      : undefined
+  const overBalance = isWithdraw && !!balance && !!s.amount && Number(s.amount) > Number(balance.amount)
+  const chips = tokenMode
     ? balance
       ? [
           { label: '25%', value: mulRatio(balance.amount, '0.25') },
@@ -117,21 +139,23 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
     : presetAmounts(currency).map((n) => ({ label: formatFiat(String(n), currency, { compact: true, locale: m.locale }), value: String(n) }))
   return {
     isWallet,
+    isWithdraw,
+    overBalance,
     currency,
     prefix,
     boundsText,
     balance,
     chips,
-    valid: !!s.amount && Number(s.amount) > 0,
+    valid: !!s.amount && Number(s.amount) > 0 && !overBalance,
     width: Math.max(1, s.amount.length || 1) + 0.3,
   }
 }
 
 /** Second line of a quote row: what the user pays and the fees. */
-export function quoteSubtitle(q: Quote, m: Messages): string {
+export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
-  if (Number(q.input.amount) > 0) sub.push(m.youPay(formatAmount(q.input, m.locale)))
+  if (Number(q.input.amount) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
   sub.push(fees ? m.fees(fees) : m.noFees)
   return sub.join(' · ')
 }

@@ -1,6 +1,6 @@
 import { createOpenRampClient, DepositController, toOrkError } from '@openrampkit/client'
 import { orkError } from '@openrampkit/core'
-import type { OrkError, OrkEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
+import type { Direction, OrkError, OrkEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
 import { defineOpenRampModal, OpenRampModal } from './element.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -8,7 +8,7 @@ import type { Appearance, Theme } from './theme.js'
 /** Surfaces this UI can draw. The planner hides pathways that need anything else. */
 export const SUPPORTED_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'OTP', 'FORM']
 
-/** Error code used when the user closes the modal before the deposit completes. */
+/** Error code used when the user closes the modal before the deposit or withdrawal completes. */
 export const CLOSED_CODE = 'CLOSED'
 
 export type ClientSecretSource = string | (() => Promise<string>)
@@ -21,9 +21,14 @@ export type CreateControllerOptions = {
   /** Custom fetch, for tests and demos */
   fetch?: typeof fetch
   surfaces?: string[]
+  /** Refuse a session of the other direction. Default: follow the session. */
+  expect?: Direction
 }
 
-/** Create a `DepositController` for one session. Call `start()` on it to load the methods. */
+/**
+ * Create a controller for one session. Call `start()` on it to load the methods.
+ * The session's direction picks the flow, so this works for deposit and withdraw sessions.
+ */
 export function createDepositController(opts: CreateControllerOptions): DepositController {
   const client = createOpenRampClient({ baseUrl: opts.baseUrl, ...(opts.fetch ? { fetch: opts.fetch } : {}) })
   return new DepositController({
@@ -32,7 +37,13 @@ export function createDepositController(opts: CreateControllerOptions): DepositC
     surfaces: opts.surfaces ?? SUPPORTED_SURFACES,
     ...(opts.wallet ? { wallet: opts.wallet } : {}),
     ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
+    ...(opts.expect ? { expect: opts.expect } : {}),
   })
+}
+
+/** Create a controller for one withdraw session. It refuses a deposit session. */
+export function createWithdrawController(opts: Omit<CreateControllerOptions, 'expect'>): DepositController {
+  return createDepositController({ ...opts, expect: 'withdraw' })
 }
 
 export async function resolveClientSecret(src: ClientSecretSource): Promise<string> {
@@ -76,8 +87,24 @@ export type DepositHandle = {
   close(): void
 }
 
+export type OpenWithdrawOptions = OpenDepositOptions
+export type WithdrawHandle = DepositHandle
+
 /** Mount `<openramp-modal>`, start a deposit session and return a handle. Browser only. */
 export function openDeposit(opts: OpenDepositOptions): DepositHandle {
+  return openSession(opts, 'deposit')
+}
+
+/**
+ * Mount `<openramp-modal>` for a withdraw session (create it on your server with
+ * `direction: 'withdraw'` and a `source`) and return a handle. Browser only.
+ * `done` resolves when the withdrawal completes and rejects when the modal closes first.
+ */
+export function openWithdraw(opts: OpenWithdrawOptions): WithdrawHandle {
+  return openSession(opts, 'withdraw')
+}
+
+function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
   defineOpenRampModal()
   const el = document.createElement('openramp-modal') as OpenRampModal
   if (opts.theme) el.theme = opts.theme
@@ -102,13 +129,14 @@ export function openDeposit(opts: OpenDepositOptions): DepositHandle {
 
   const ready = (async () => {
     const secret = await resolveClientSecret(opts.clientSecret)
-    if (finished) throw orkError(CLOSED_CODE, { message: 'The deposit was closed.' })
+    if (finished) throw orkError(CLOSED_CODE, { message: `The ${kind} was closed.` })
     const c = createDepositController({
       baseUrl: opts.baseUrl,
       clientSecret: secret,
       ...(opts.wallet ? { wallet: opts.wallet } : {}),
       ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
+      expect: kind,
     })
     controller = c
     unsub = c.subscribe(() => {
@@ -136,7 +164,7 @@ export function openDeposit(opts: OpenDepositOptions): DepositHandle {
     if (!settled) {
       settled = true
       rejectDone(
-        snap?.session?.step.error ?? snap?.error ?? el.error ?? orkError(CLOSED_CODE, { message: 'The deposit was closed before it finished.' }),
+        snap?.session?.step.error ?? snap?.error ?? el.error ?? orkError(CLOSED_CODE, { message: `The ${kind === 'withdraw' ? 'withdrawal' : 'deposit'} was closed before it finished.` }),
       )
     }
     opts.onClose?.(snap?.session)

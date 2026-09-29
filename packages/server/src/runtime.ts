@@ -62,7 +62,7 @@ export function adapterContext(rt: Runtime, rec: SessionRecord, a: Adapter, path
       ...(rec.region ? { region: rec.region } : {}),
       ...(rec.ip ? { ip: rec.ip } : {}),
     },
-    destination: rec.destination,
+    destination: destinationOf(rec),
     pathway: { legs: pathway.legs, index },
     urls: { returnUrl: rt.config.returnUrl ?? `${rt.base}/return`, webhookUrl: `${rt.base}/webhooks/${a.id}` },
     store: scopedKV(rt.store, `a:${a.id}:${rec.id}`),
@@ -90,7 +90,9 @@ export function publicSession(rec: SessionRecord): PublicSession {
   return {
     id: rec.id,
     direction: rec.direction,
-    destination: rec.destination,
+    ...(rec.destination ? { destination: rec.destination } : {}),
+    ...(rec.source ? { source: rec.source } : {}),
+    ...(rec.allowedTargets ? { allowedTargets: rec.allowedTargets } : {}),
     status: rec.status,
     ...(rec.country ? { country: rec.country } : {}),
     ...(rec.plan ? { currency: rec.plan.currency } : {}),
@@ -100,6 +102,12 @@ export function publicSession(rec: SessionRecord): PublicSession {
     expiresAt: new Date(rec.expiresAt).toISOString(),
     livemode: rec.livemode,
   }
+}
+
+/** The session destination. A withdraw session has one only after the user picks a target. */
+export function destinationOf(rec: SessionRecord): Destination {
+  if (!rec.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'Choose where to send the funds first.' }), 409)
+  return rec.destination
 }
 
 export function normalizeDestination(d: Destination): Destination {

@@ -17,6 +17,7 @@ import type {
   PathwayLeg,
   RegionPolicy,
   SurfaceKind,
+  WithdrawSource,
 } from './types.js'
 
 export type PlannerLeg = { adapterId: string; provider: string; spec: LegSpec }
@@ -36,6 +37,11 @@ export type PlannerInput = {
     /** Preferred hop assets for two-leg pathways, most preferred first */
     hopPreference?: CryptoAsset[]
   }
+  /**
+   * Withdraw only. `destination` is then the target the user picked. `treasury` tells whether the
+   * app can sign for `custody: 'app'` sources (the server's `treasury` hook is configured).
+   */
+  withdraw?: { source: WithdrawSource; treasury: boolean }
 }
 
 export type MethodOption = {
@@ -90,8 +96,26 @@ export function destinationEndpoint(d: Destination): Endpoint {
       location: { kind: 'address', address: d.address },
     }
   }
+  if (d.type === 'fiat') return { asset: { kind: 'fiat', currency: d.currency }, location: { kind: 'user_account' } }
   return { asset: { kind: 'fiat', currency: d.currency }, location: { kind: 'merchant_account', ...(d.accountRef ? { accountRef: d.accountRef } : {}) } }
 }
+
+/** The endpoint a withdrawal starts from: the source asset in the user's wallet, or at the app's address (custody `app`). */
+export function withdrawSourceEndpoint(src: WithdrawSource): Endpoint {
+  return {
+    asset: {
+      kind: 'crypto',
+      chain: src.chain,
+      token: src.token.toLowerCase(),
+      ...(src.symbol ? { symbol: src.symbol } : {}),
+      ...(src.decimals !== undefined ? { decimals: src.decimals } : {}),
+    },
+    location: src.custody === 'app' ? { kind: 'address', address: 'app' } : { kind: 'user_wallet' },
+  }
+}
+
+/** Leg kinds that can move funds out of a wallet for a withdrawal */
+const WITHDRAW_KINDS = new Set<string>(['bridge_swap', 'crypto_withdraw', 'crypto_offramp', 'wallet_transfer'])
 
 function sourceEndpoints(currency: string): Endpoint[] {
   return [
@@ -128,7 +152,7 @@ const DEFAULT_HOPS: CryptoAsset[] = [
 
 export function planPathways(input: PlannerInput): PlanResult {
   const { destination, user, policy = {} } = input
-  const currency = destination.type === 'merchant' ? destination.currency : currencyForCountry(user.country)
+  const currency = destination.type === 'crypto' ? currencyForCountry(user.country) : destination.currency
   const target = destinationEndpoint(destination)
   const sources = sourceEndpoints(currency)
   const maxLegs = policy.maxLegs ?? 2
@@ -140,12 +164,12 @@ export function planPathways(input: PlannerInput): PlanResult {
   type Candidate = { method: string; provider: string; legs: PathwayLeg[]; specs: LegSpec[]; reason?: OrkError }
   const candidates: Candidate[] = []
 
-  const legProblem = (l: PlannerLeg): OrkError | undefined => {
+  const legProblem = (l: PlannerLeg, walletCheck = true): OrkError | undefined => {
     if (!appAllowed(user.country, user.region) || !isRegionAllowed(l.spec.regions, user.country, user.region)) {
       return orkError('REGION_UNSUPPORTED')
     }
     if (surfaces && !l.spec.surfaces.some((s) => surfaces.has(s))) return orkError('CLIENT_UPGRADE_REQUIRED')
-    if (l.spec.requires?.includes('wallet') && !user.walletConnected) {
+    if (walletCheck && l.spec.requires?.includes('wallet') && !user.walletConnected) {
       return orkError('BAD_REQUEST', { message: 'Connect a wallet to use this method.', recovery: 'choose_other' })
     }
     return undefined
@@ -154,7 +178,39 @@ export function planPathways(input: PlannerInput): PlanResult {
   const methodsOf = (l: PlannerLeg) =>
     (l.spec.methods?.length ? l.spec.methods : [l.spec.kind]).filter((m) => methodAvailableIn(m, user.country))
 
-  const firstLegs = input.legs.filter((l) => sources.some((s) => sourceMatches(l.spec.from, s)))
+  const withdraw = input.direction === 'withdraw' ? input.withdraw : undefined
+  if (input.direction === 'withdraw' && !withdraw) throw new Error('planPathways: a withdraw plan needs `withdraw.source`')
+
+  // Withdraw: one leg from the source asset to the target. The funds leave with a signed
+  // transaction (WALLET_TX), by the user's wallet or by the app's treasury (custody 'app').
+  if (withdraw) {
+    const from = withdrawSourceEndpoint(withdraw.source)
+    const app = withdraw.source.custody === 'app'
+    const locations = app ? ['address', 'user_wallet'] : ['user_wallet']
+    for (const l of input.legs) {
+      if (!WITHDRAW_KINDS.has(l.spec.kind) || !l.spec.surfaces.includes('WALLET_TX')) continue
+      if (!l.spec.from.location.some((k) => locations.includes(k)) || !assetMatches(l.spec.from.asset, from.asset)) continue
+      if (!endpointMatches(l.spec.to, target)) continue
+      let reason = legProblem(l, false)
+      if (!reason && app && !withdraw.treasury) {
+        reason = orkError('PROVIDER_UNAVAILABLE', { message: 'Withdrawals are not set up for this app yet.', recovery: 'contact_support' })
+      }
+      if (!reason && !app && !user.walletConnected) {
+        reason = orkError('BAD_REQUEST', { message: 'Connect your wallet to withdraw.', recovery: 'choose_other' })
+      }
+      for (const method of methodsOf(l)) {
+        candidates.push({
+          method,
+          provider: l.provider,
+          legs: [{ adapterId: l.adapterId, legId: l.spec.id, from, to: target, method }],
+          specs: [l.spec],
+          ...(reason ? { reason } : {}),
+        })
+      }
+    }
+  }
+
+  const firstLegs = withdraw ? [] : input.legs.filter((l) => sources.some((s) => sourceMatches(l.spec.from, s)))
 
   for (const first of firstLegs) {
     const problem = legProblem(first)
@@ -166,7 +222,7 @@ export function planPathways(input: PlannerInput): PlanResult {
         candidates.push({
           method,
           provider: first.provider,
-          legs: [{ adapterId: first.adapterId, legId: first.spec.id, from: fromEndpoint, to: target }],
+          legs: [{ adapterId: first.adapterId, legId: first.spec.id, from: fromEndpoint, to: target, method }],
           specs: [first.spec],
           ...(problem ? { reason: problem } : {}),
         })
@@ -198,7 +254,7 @@ export function planPathways(input: PlannerInput): PlanResult {
             method,
             provider: first.provider,
             legs: [
-              { adapterId: first.adapterId, legId: first.spec.id, from: fromEndpoint, to: hopEndpoint },
+              { adapterId: first.adapterId, legId: first.spec.id, from: fromEndpoint, to: hopEndpoint, method },
               { adapterId: second.adapterId, legId: second.spec.id, from: hopEndpoint, to: target },
             ],
             specs: [first.spec, second.spec],
@@ -246,7 +302,7 @@ export function planPathways(input: PlannerInput): PlanResult {
     const available = list.filter((p) => !p.reason)
     let group: PathwayGroup = available.length ? 'more' : 'unavailable'
     if (available.length && method === 'wallet' && user.walletConnected) group = 'connected'
-    else if (available.length && (method === recommendedFiat || (method === 'transfer' && !user.walletConnected))) group = 'recommended'
+    else if (available.length && (method === recommendedFiat || (method === 'transfer' && !user.walletConnected) || (withdraw && method === 'wallet'))) group = 'recommended'
     for (const p of list) if (!p.reason) p.group = group
     const best = available[0] ?? list[0]!
     methods.push({

@@ -2,10 +2,11 @@ import { OrkException, currencyForCountry, orkError, planPathways, rankQuotes } 
 import type { Amount, Fee, LegQuote, OrkError, Pathway, PlanResult, Quote, SurfaceKind } from '@openrampkit/core'
 import { ALL_SURFACES, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
 import { randomHex } from './crypto.js'
-import { adapterContext, withTimeout } from './runtime.js'
+import { adapterContext, destinationOf, withTimeout } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord, StoredQuote } from './store.js'
+import { withdrawSender } from './withdraw.js'
 
 export type PlanBody = { walletConnected?: boolean; surfaces?: SurfaceKind[] }
 export type QuotesBody = { method: string; amount: string; amountSide?: 'source' | 'destination'; source?: { chain: string; token: string } }
@@ -13,7 +14,8 @@ type Source = { chain: string; token: string; address?: string }
 
 /** Collect leg specs (live catalogs when available), run the planner, apply the session's method allow list. */
 export async function plan(rt: Runtime, rec: SessionRecord, body: PlanBody): Promise<PlanResult> {
-  const currency = rec.destination.type === 'merchant' ? rec.destination.currency : currencyForCountry(rec.country)
+  const destination = destinationOf(rec)
+  const currency = destination.type === 'crypto' ? currencyForCountry(rec.country) : destination.currency
   const legs = []
   for (const a of rt.adapters.values()) {
     let specs = a.legs
@@ -31,7 +33,8 @@ export async function plan(rt: Runtime, rec: SessionRecord, body: PlanBody): Pro
   }
   const result = planPathways({
     direction: rec.direction,
-    destination: rec.destination,
+    destination,
+    ...(rec.direction === 'withdraw' && rec.source ? { withdraw: { source: rec.source, treasury: !!rt.config.treasury } } : {}),
     user: { ...(rec.country ? { country: rec.country } : {}), ...(rec.region ? { region: rec.region } : {}), walletConnected: !!body.walletConnected },
     legs,
     policy: { ...rt.config.policy, clientSurfaces: body.surfaces ?? ALL_SURFACES },
@@ -52,7 +55,7 @@ export async function plan(rt: Runtime, rec: SessionRecord, body: PlanBody): Pro
  */
 async function deliveryAddresses(rt: Runtime, rec: SessionRecord, p: Pathway): Promise<Array<{ address: string } | undefined>> {
   const deliverTo: Array<{ address: string } | undefined> = p.legs.map(() => undefined)
-  if (rec.destination.type === 'crypto') deliverTo[p.legs.length - 1] = { address: rec.destination.address }
+  if (rec.destination?.type === 'crypto') deliverTo[p.legs.length - 1] = { address: rec.destination.address }
   for (let i = p.legs.length - 1; i > 0; i--) {
     const a = rt.adapter(p.legs[i]!.adapterId)
     if (a.prepareDeposit) {
@@ -86,7 +89,13 @@ export async function quotePathway(rt: Runtime, rec: SessionRecord, p: Pathway, 
       const leg = p.legs[i]!
       const a = rt.adapter(leg.adapterId)
       const amountIn: Amount =
-        i === 0 ? { amount, asset: source && leg.from.asset.kind === 'crypto' ? { kind: 'crypto', chain: source.chain, token: source.token } : leg.from.asset } : nextIn!
+        i === 0
+          ? {
+              amount,
+              // An open-ended crypto source ('*', deposit from a wallet) takes the token the user picked.
+              asset: source && leg.from.asset.kind === 'crypto' && leg.from.asset.chain === '*' ? { kind: 'crypto', chain: source.chain, token: source.token } : leg.from.asset,
+            }
+          : nextIn!
       const q = await a.quote(
         { leg, amountIn, ...(deliverTo[i] ? { deliverTo: deliverTo[i]! } : {}), ...(i === 0 && source ? { source } : {}) },
         adapterContext(rt, rec, a, p, i),
@@ -123,7 +132,13 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
   if (!rec.plan) await plan(rt, rec, { walletConnected: rec.walletConnected ?? false })
   const candidates = rec.plan!.pathways.filter((p) => p.method === body.method && p.group !== 'unavailable')
   if (!candidates.length) throw new OrkException(orkError('NO_QUOTES'), 422)
-  const source = body.source ? { ...body.source, ...(rec.walletAddress ? { address: rec.walletAddress } : {}) } : undefined
+  // Withdraw: the source is fixed by the session. Deposit: the token the user picked in the client.
+  const source =
+    rec.direction === 'withdraw'
+      ? withdrawSender(rt, rec)
+      : body.source
+        ? { ...body.source, ...(rec.walletAddress ? { address: rec.walletAddress } : {}) }
+        : undefined
   const timeout = rt.config.timeouts?.quote ?? 9000
   const settled = await Promise.allSettled(
     candidates.slice(0, MAX_QUOTED_PATHWAYS).map((p) => withTimeout(quotePathway(rt, rec, p, body.amount, body.amountSide ?? 'source', source), timeout)),

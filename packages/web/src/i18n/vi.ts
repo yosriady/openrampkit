@@ -123,4 +123,28 @@ export const vi: Messages = {
 
   errorTitle: 'Đã xảy ra lỗi',
   errorBody: 'Không thể tải khoản nạp này.',
+
+  // withdraw
+  withdrawTitle: 'Rút tiền',
+  withdrawTabsLabel: 'Rút về',
+  tabToWallet: 'Về ví',
+  tabToCash: 'Về tiền mặt',
+  walletAddress: 'Địa chỉ ví',
+  addressPlaceholder: 'Dán địa chỉ',
+  useMyWallet: 'Dùng ví của tôi',
+  invalidAddress: 'Nhập địa chỉ hợp lệ cho mạng này.',
+  toAddressOn: (address, chain) => `Đến ${address} trên ${chain}`,
+  withdrawAmountTitle: 'Số tiền rút',
+  available: (amount) => `Có thể rút: ${amount}`,
+  noPayoutMethods: 'Không có phương thức nhận tiền nào cho khoản rút này.',
+  payoutIn: (currency) => `Nhận bằng ${currency}`,
+  youSend: (amount) => `Bạn gửi ${amount}`,
+  sending: 'Đang gửi',
+  sendingBody: 'Khoản rút của bạn đang được gửi. Việc này có thể mất vài phút.',
+  payoutDetailsTitle: 'Thông tin nhận tiền',
+  confirmWithdrawalTitle: 'Xác nhận rút tiền',
+  withdrawSuccessTitle: 'Rút tiền thành công',
+  withdrawSuccessBody: 'Tiền của bạn đang được chuyển đến.',
+  withdrawFailedTitle: 'Rút tiền thất bại',
+  withdrawErrorBody: 'Không thể tải khoản rút này.',
 }

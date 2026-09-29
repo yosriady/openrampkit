@@ -5,6 +5,7 @@ import { notify } from './notify.js'
 import { normalizeDestination, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
+import { normalizeSource } from './withdraw.js'
 
 export type CreatedSession = { id: string; clientSecret: string; expiresAt: string }
 
@@ -13,13 +14,21 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   const secret = randomHex(24)
   const now = Date.now()
   const expiresAt = now + (input.ttlMinutes ?? 30) * 60_000
+  const direction = input.direction ?? 'deposit'
+  if (direction !== 'deposit' && direction !== 'withdraw') throw new OrkException(orkError('BAD_REQUEST', { message: '`direction` must be "deposit" or "withdraw".' }), 400)
+  if (direction === 'deposit' && !input.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'A deposit session needs `destination`.' }), 400)
+  if (direction === 'withdraw' && input.destination) {
+    throw new OrkException(orkError('BAD_REQUEST', { message: 'A withdraw session takes `source`, not `destination`: the user picks the target.' }), 400)
+  }
   const rec: SessionRecord = {
     id,
     secretHash: await sha256Hex(secret),
     version: 1,
     userId: input.userId,
-    direction: input.direction ?? 'deposit',
-    destination: normalizeDestination(input.destination),
+    direction,
+    ...(input.destination ? { destination: normalizeDestination(input.destination) } : {}),
+    ...(direction === 'withdraw' ? { source: normalizeSource(input.source) } : {}),
+    ...(direction === 'withdraw' && input.allowedTargets ? { allowedTargets: input.allowedTargets } : {}),
     ...(input.country ? { country: input.country.toUpperCase() } : {}),
     ...(input.region ? { region: input.region.toUpperCase() } : {}),
     ...(input.email ? { email: input.email } : {}),
