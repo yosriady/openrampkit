@@ -13,7 +13,8 @@
     "docs:build": "pnpm --filter openrampkit-docs build",
     "changeset": "changeset",
     "release": "pnpm build && pnpm -r --filter \"./packages/**\" publish --access public",
-    "smoke": "bash scripts/smoke-packages.sh"
+    "smoke": "bash scripts/smoke-packages.sh",
+    "live:relay": "pnpm --filter @openrampkit/adapter --filter @openrampkit/adapter-relay --filter @openrampkit/core build >/dev/null && node scripts/live-relay.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",

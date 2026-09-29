@@ -18,7 +18,7 @@ export const openramp =
     // Mock mode: every pathway is simulated. Real mode: Relay moves real crypto; fiat is still mocked.
     adapters: [
       // `offramp: true` adds a mock withdraw-to-cash leg (bank transfer, GCash, MoMo, PromptPay payouts).
-      ...(MOCK ? [mockAdapter({ crypto: true, bridge: true, offramp: true, settleMs: 4000 })] : [relay(), mockAdapter({ offramp: true, settleMs: 4000 })]),
+      ...(MOCK ? [mockAdapter({ crypto: true, bridge: true, offramp: true, settleMs: 4000 })] : [relay({ ...(process.env.RELAY_API_KEY ? { apiKey: process.env.RELAY_API_KEY } : {}) }), mockAdapter({ offramp: true, settleMs: 4000 })]),
       // Real merchant pay-in (QRIS, QR Ph, PromptPay, e-wallets) when Xendit test keys are set.
       ...(process.env.XENDIT_SECRET_KEY && process.env.XENDIT_WEBHOOK_TOKEN
         ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]

@@ -20,6 +20,8 @@ type Env = {
   WEBHOOK_URL?: string
   WEBHOOK_SECRET?: string
   MOCK?: string
+  /** Relay API key (dashboard.relay.link): needed for deposit-address status after 2026-11-24 */
+  RELAY_API_KEY?: string
   /** Bearer token for POST /tasks/sweep and GET /health?deep=1 */
   TASKS_TOKEN?: string
 }
@@ -29,7 +31,7 @@ function build(env: Env) {
     secret: env.OPENRAMP_SECRET,
     baseUrl: env.PUBLIC_URL,
     store: durableObjectStore(env.OPENRAMP_STORE),
-    adapters: env.MOCK === '1' ? [mockAdapter({ crypto: true, bridge: true })] : [relay(), mockAdapter()],
+    adapters: env.MOCK === '1' ? [mockAdapter({ crypto: true, bridge: true })] : [relay({ ...(env.RELAY_API_KEY ? { apiKey: env.RELAY_API_KEY } : {}) }), mockAdapter()],
     cors: { origins: env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) },
     ...(env.WEBHOOK_URL && env.WEBHOOK_SECRET ? { webhooks: { url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET } } : {}),
     ...(env.TASKS_TOKEN ? { tasksToken: env.TASKS_TOKEN } : {}),
