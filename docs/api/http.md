@@ -12,6 +12,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `GET` | `/sessions/:id` | Bearer client secret | Read the session |
 | `GET` | `/sessions/:id/step` | Bearer | Read the session after a status check |
 | `POST` | `/sessions/:id/plan` | Bearer | Plan pathways and methods |
+| `POST` | `/sessions/:id/target` | Bearer | Withdraw: set the target the user picked, and plan |
 | `POST` | `/sessions/:id/quotes` | Bearer | Quote a method |
 | `POST` | `/sessions/:id/select` | Bearer, `Idempotency-Key` | Confirm a quote and start the first leg |
 | `POST` | `/sessions/:id/transitions/:name` | Bearer, `Idempotency-Key` | Fire a transition |
@@ -19,7 +20,8 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `GET` | `/return` | none | "You can close this tab" page |
 | `POST` | `/webhooks/:adapterId` | Adapter verifies | Provider webhooks |
 | any | `/adapters/:adapterId/*` | Adapter decides | Adapter routes |
-| `GET` | `/health` | none | Adapter health |
+| `GET` | `/health` | none (`?deep=1`: tasks token) | Quick check; deep check of each adapter |
+| `POST` | `/tasks/sweep` | Bearer `tasksToken` | Run the background sweep |
 | `OPTIONS` | any | none | CORS preflight: `204` |
 
 ## Authentication
@@ -44,17 +46,20 @@ Every error is JSON:
 
 | Status | When |
 |---|---|
-| `400` | Body is not JSON (`BAD_REQUEST`), or an adapter refused the input |
-| `401` | Bad client secret, bad start URL signature, bad webhook signature, or `authorize` returned `null` |
+| `400` | Body is not JSON (`BAD_REQUEST`), a target or source that is not valid, or an adapter refused the input |
+| `401` | Bad client secret, bad start URL signature, bad webhook signature, bad tasks token, or `authorize` returned `null` |
+| `403` | Withdraw target refused: `TARGET_NOT_ALLOWED` or `ADDRESS_REJECTED` |
 | `404` | Unknown route or adapter (`NOT_FOUND`) |
-| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; or a concurrent change (`The session changed. Try again.`) |
+| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; or a concurrent change (`CONFLICT`) |
 | `410` | Quote expired (`QUOTE_EXPIRED`), or start URL expired (plain text) |
-| `422` | No pathway for the method (`NO_QUOTES`), or an adapter error such as `AMOUNT_TOO_LOW` |
+| `422` | No pathway for the method (`NO_QUOTES`), an amount outside `amountBounds` (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`), or an adapter error |
 | `429` | Provider rate limit (`RATE_LIMITED`) |
 | `500` | Unexpected error (`INTERNAL`); the details are logged, not returned |
-| `502`, `504` | Provider unavailable or timed out (`PROVIDER_UNAVAILABLE`) |
+| `502`, `503`, `504` | Provider unavailable or timed out (`PROVIDER_UNAVAILABLE`). `503` also when `screenAddress` throws. |
 
-The concurrent-change `409` uses the code `RATE_LIMITED` with `retryable: true`.
+### CONFLICT
+
+Every save checks the session version. When two requests change the same session at the same time (for example a provider webhook and a browser action), one of them gets `409` with the code `CONFLICT`, the message "The session changed at the same time. Try again." and `retryable: true`. Send the request again. Provider webhooks retry a conflict on the server up to 3 times.
 
 ## POST /sessions
 
@@ -73,17 +78,22 @@ Response `200`: a `PublicSession`.
 type PublicSession = {
   id: string
   direction: 'deposit' | 'withdraw'
-  destination: Destination
+  destination?: Destination       // withdraw: absent until the user picks a target
+  source?: WithdrawSource         // withdraw only
+  allowedTargets?: AllowedTargets // withdraw only, when the app set them
   status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
   country?: string
   currency?: string             // set after the first plan
   locale?: string               // only when the app set one
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
+  result?: SessionResult        // once a payment started
   expiresAt: string
   livemode: boolean
 }
 ```
+
+See [`SessionResult`](./core.md#sessionresult).
 
 ## GET /sessions/:id/step
 
@@ -117,6 +127,42 @@ type MethodOption = {
 }
 ```
 
+## POST /sessions/:id/target
+
+Withdraw sessions only. It sets where the funds go, then plans like `/plan`.
+
+Body, "To wallet":
+
+```json
+{ "type": "crypto", "chain": "eip155:42161", "token": "0xaf88d065e77c8cc2239327c5edb3a432268e5831", "address": "0x2222...", "symbol": "USDC", "decimals": 6 }
+```
+
+Body, "To cash":
+
+```json
+{ "type": "fiat", "currency": "PHP" }
+```
+
+Both can also carry the `/plan` fields `walletConnected`, `walletAddress` and `surfaces`.
+
+The server:
+
+1. checks the format: a CAIP-2 `chain`, a token address or `native`, and an address that is valid for the chain; or an ISO 4217 `currency` (uppercased),
+2. checks the session's `allowedTargets`,
+3. calls `screenAddress(address, chain)` for a crypto target,
+4. stores the target as the session `destination`, clears the stored quotes, and plans.
+
+Response `200`: a `PlanResult`.
+
+| Status | When |
+|---|---|
+| `400` | The body is not valid (for example "Enter a valid address for this network.") |
+| `403` | `TARGET_NOT_ALLOWED` (not in `allowedTargets`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
+| `409` | Not a withdraw session; a payment is in progress; the withdrawal is complete or expired |
+| `503` | `screenAddress` threw (`PROVIDER_UNAVAILABLE`, "We could not check this address. Try again.") |
+
+On a withdraw session, `/plan` and `/quotes` answer `409` ("Choose where to send the funds first.") until a target is set.
+
 ## POST /sessions/:id/quotes
 
 Body:
@@ -134,7 +180,9 @@ Body:
 
 The server plans first if needed. It quotes up to 5 available pathways for the method in parallel.
 
-Response `200`: `{ "quotes": Quote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). Errors: `400` without `method` or `amount`; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
+For a withdraw session, the source is the session's `source`, and `body.source` is ignored.
+
+Response `200`: `{ "quotes": Quote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
 
 ## POST /sessions/:id/select
 
@@ -142,7 +190,7 @@ Headers: `Idempotency-Key: <random>` (recommended).
 
 Body: `{ "quoteId": "q_...", "walletAddress": "0x..." }` (`walletAddress` optional).
 
-The server starts the first leg and returns the `PublicSession` with the new step. A `REDIRECT` surface URL is replaced by a start URL. Errors: `410 QUOTE_EXPIRED` when the quote is unknown or expired; `409` while a payment is in progress. If the first leg fails to start, the active pathway is rolled back.
+The server checks `amountBounds` again, starts the first leg and returns the `PublicSession` with the new step. A `REDIRECT` surface URL is replaced by a start URL. Errors: `410 QUOTE_EXPIRED` when the quote is unknown or expired; `409` while a payment is in progress; `422 AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH` outside the bounds. If the first leg fails to start, the active pathway is rolled back.
 
 ## POST /sessions/:id/transitions/:name
 
@@ -177,13 +225,33 @@ Passed to the adapter's `routes(req, subpath, ctx)`. `404` when the adapter has 
 
 ## GET /health
 
-Calls each adapter's `health()` (adapters without it count as ok).
+By default, a quick check with no provider calls and no auth. Use it for uptime checks:
 
 ```json
-{ "ok": true, "adapters": [{ "id": "relay", "ok": true }, { "id": "swapped", "ok": false, "detail": "HTTP 401 from ..." }] }
+{ "ok": true, "adapters": ["relay", "swapped"] }
 ```
 
-Status `200` when all are ok, else `503`. This route has no auth and calls provider APIs. Consider blocking it at your edge in production.
+`GET /health?deep=1` also calls each adapter's `health()` (adapters without it count as ok). These call provider APIs, so the deep check needs `Authorization: Bearer {tasksToken}`. Without the token, or when `tasksToken` is not set, it answers `401`.
+
+```json
+{ "ok": false, "adapters": [{ "id": "relay", "ok": true }, { "id": "swapped", "ok": false, "detail": "HTTP 401 from ..." }] }
+```
+
+Status `200` when all are ok, else `503`.
+
+## POST /tasks/sweep
+
+Runs [`openramp.sweep()`](./server.md#background-sweep): it retries failed webhooks, refreshes open payments and expires idle sessions.
+
+- Header: `Authorization: Bearer {tasksToken}`. A wrong or missing token gets `401`.
+- Without `tasksToken` in the config, the route answers `404`.
+- Query: `?limit=50` (optional) caps the work per run.
+
+Response `200`: a `SweepResult`.
+
+```json
+{ "webhooks": { "retried": 1, "delivered": 1, "dropped": 0, "pending": 0 }, "sessions": { "checked": 3, "changed": 1, "expired": 1, "open": 1 } }
+```
 
 ## CORS
 

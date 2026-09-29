@@ -1,9 +1,9 @@
 # @openrampkit/web
 
-The `<openramp-modal>` web component (Lit, Shadow DOM), `openDeposit()`, themes and message catalogs.
+The `<openramp-modal>` web component (Lit, Shadow DOM), `openDeposit()`, `openWithdraw()`, themes and message catalogs.
 
 ```ts
-import { openDeposit, createDepositController, lightTheme, darkTheme, autoTheme, defaultMessages } from '@openrampkit/web'
+import { openDeposit, openWithdraw, createDepositController, lightTheme, darkTheme, autoTheme, defaultMessages } from '@openrampkit/web'
 import { lightTheme } from '@openrampkit/web/theme' // themes only, no Lit (safe on the server)
 ```
 
@@ -42,6 +42,19 @@ type DepositHandle = {
 
 When the modal closes before completion, `done` rejects with the step's error if there is one, else the controller's error, else an `OrkError` with code `CLOSED` (`CLOSED_CODE`). If the client secret function throws, the modal shows the error screen.
 
+## openWithdraw(options)
+
+Mounts `<openramp-modal>` for a withdraw session and returns a handle. Browser only. Create the session on your server with `direction: 'withdraw'` and a `source` (see [Withdrawals](../guide/withdraw.md)).
+
+```ts
+const handle = openWithdraw({ baseUrl: '/api/openramp', clientSecret: getClientSecret, wallet })
+handle.done.then((session) => refreshBalance(), (error) => console.log(error.code))
+```
+
+The options are the same as `openDeposit` (`OpenWithdrawOptions`), and it returns a `WithdrawHandle` (the same shape as `DepositHandle`). `done` resolves when the withdrawal completes and rejects when the modal closes first. The modal refuses a deposit session: it shows "This is not a withdraw session.".
+
+`wallet` is required when the source custody is `'user_wallet'`: the user signs the withdrawal with it. It also prefills the address and shows the source token balance.
+
 ## createDepositController(options)
 
 Builds a `DepositController` for one session, with `surfaces` defaulting to `SUPPORTED_SURFACES`. Call `start()` on it.
@@ -54,12 +67,15 @@ Builds a `DepositController` for one session, with `surfaces` defaulting to `SUP
 | `onEvent` | `(e) => void` | Optional |
 | `fetch` | `typeof fetch` | Optional |
 | `surfaces` | `string[]` | Default `SUPPORTED_SURFACES` |
+| `expect` | `'deposit' \| 'withdraw'` | Refuse a session of the other direction. Default: follow the session. |
+
+`createWithdrawController(options)` is the same with `expect: 'withdraw'`.
 
 `resolveClientSecret(src)` resolves a string or a function to a string.
 
 ## The element: `<openramp-modal>`
 
-The element renders a `DepositController` snapshot and calls its actions. It never talks to the server itself.
+The element renders a controller snapshot and calls its actions. It never talks to the server itself. For a withdraw session it shows the "Withdraw" title, the "To wallet" and "To cash" tabs, and the target form.
 
 ### Properties and attributes
 
@@ -134,6 +150,6 @@ Types: `Messages`, `CatalogLocale`, `LocaleSources`.
 | `TAG_NAME` | `'openramp-modal'` |
 | `OpenRampModal` | The element class |
 | `defineOpenRampModal()` | Registers the element if it is not registered |
-| `DepositController` | Re-exported from `@openrampkit/client` |
+| `DepositController`, `WithdrawController`, `RampController` | Re-exported from `@openrampkit/client` (one class) |
 
-Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `DepositHandle`, `CreateControllerOptions`, `ClientSecretSource`.
+Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.

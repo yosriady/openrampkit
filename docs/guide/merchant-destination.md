@@ -86,7 +86,7 @@ if (event.type === 'session.completed') {
 }
 ```
 
-The webhook does not carry the paid amount. Keep the expected amount on your order, or read the payment from the Xendit API or dashboard. See [Webhooks to your backend](./webhooks.md).
+`session.result` has the amounts. When Xendit reports the payment, `result.output` is its `request_amount` (the amount the user paid, before Xendit fees) and `result.outputConfirmed` is `true`. Compare it with the expected amount on your order. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
 
 ## Fees in quotes
 

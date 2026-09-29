@@ -102,7 +102,7 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 
 ## status() and transition()
 
-- `status({ leg, ref })` asks the provider for the current state. The server calls it when the browser polls (at most every 2 seconds per leg) and from `sessions.refresh()`.
+- `status({ leg, ref })` asks the provider for the current state. The server calls it when the browser polls (at most every 2 seconds per leg), from the background `sweep()`, and from `sessions.refresh()`.
 - `transition({ leg, ref, name, inputs })` handles SUBMIT and SURFACE_RESULT transitions that your steps offer, for example an OTP form or `submit_tx` with `{ txHash }`.
 
 ## webhook
@@ -112,10 +112,27 @@ webhook: {
   verify(req: Request, rawBody: string, ctx): Promise<boolean>
   parse(rawBody: string, ctx): Promise<LegEvent[]>
 }
-type LegEvent = { ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError }
+type LegEvent = {
+  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
+  transitions?: Transition[] // goes with surface; default: an AWAIT poll
+}
 ```
 
 The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events.
+
+## Withdraw legs
+
+A leg can serve [withdrawals](../guide/withdraw.md) when:
+
+- its kind is `bridge_swap`, `crypto_withdraw`, `crypto_offramp` or `wallet_transfer`,
+- it declares the `WALLET_TX` surface, and it takes the funds with a `WALLET_TX` step,
+- its `from` takes crypto at `user_wallet` (and at `address`, for apps that hold the funds),
+- its `to` is an `address` (to a wallet) or fiat at `user_account` (to cash).
+
+`catalog()` gets `direction`, so an adapter can return sell legs for withdrawals only. In `quote()` and `start()`, `source` is the session's source asset, with the sender address when it is known (the user's wallet, or the app's treasury).
+
+The `WALLET_TX` step needs a `SURFACE_RESULT` transition that expects `tx_hash`. The client fires it after the user's wallet sends. For `custody: 'app'`, the server sends the transactions through the app's treasury and fires the same transition itself. When a provider learns its deposit address later (for example in a webhook), return a `LegEvent` with `status: 'awaiting_user'`, the `WALLET_TX` `surface` and its `transitions`.
 
 ## prepareDeposit()
 

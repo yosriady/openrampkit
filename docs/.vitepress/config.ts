@@ -28,6 +28,7 @@ export default defineConfig({
             { text: 'Quick start (Next.js)', link: '/guide/quick-start-nextjs' },
             { text: 'Without React (web component)', link: '/guide/web-component' },
             { text: 'Merchant fiat destination', link: '/guide/merchant-destination' },
+            { text: 'Withdrawals', link: '/guide/withdraw' },
             { text: 'Theming', link: '/guide/theming' },
             { text: 'Webhooks to your backend', link: '/guide/webhooks' },
             { text: 'Testing with mocks', link: '/guide/testing' },

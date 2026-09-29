@@ -4,7 +4,7 @@ A thin React wrapper over `<openramp-modal>`. It is SSR-safe: `@openrampkit/web`
 
 ```tsx
 import {
-  OpenRampProvider, useOpenRamp, DepositButton, OpenRampEmbedded, useDepositController,
+  OpenRampProvider, useOpenRamp, DepositButton, WithdrawButton, OpenRampEmbedded, useDepositController,
   lightTheme, darkTheme, autoTheme,
 } from '@openrampkit/react'
 ```
@@ -35,7 +35,7 @@ Only one modal is open at a time: opening a new one closes the previous one. Unm
 ## useOpenRamp()
 
 ```ts
-const { beginDeposit, close, isOpen } = useOpenRamp()
+const { beginDeposit, beginWithdraw, close, isOpen } = useOpenRamp()
 
 const session = await beginDeposit({
   clientSecret: () => fetch('/api/deposit-session', { method: 'POST' }).then((r) => r.json()).then((j) => j.clientSecret),
@@ -46,6 +46,7 @@ const session = await beginDeposit({
 | Member | Type | Description |
 |---|---|---|
 | `beginDeposit({ clientSecret, onEvent? })` | `Promise<PublicSession>` | Opens the modal. Resolves when the deposit completes. Rejects (with an `OrkError`) when the modal closes first. Rejects in a non-browser environment. |
+| `beginWithdraw({ clientSecret, onEvent? })` | `Promise<PublicSession>` | The same for a withdraw session (created with `direction: 'withdraw'`). Resolves when the withdrawal completes. The modal refuses a deposit session. |
 | `close()` | `() => void` | Closes the modal |
 | `isOpen` | `boolean` | Whether the modal is open |
 
@@ -91,9 +92,29 @@ Your own markup, like RainbowKit's `ConnectButton.Custom`:
 
 Props are the same as `DepositButton` without `label`, `className` and `disabled`, plus `children: ({ open, isOpen }) => ReactNode`.
 
+## WithdrawButton
+
+A ready-made "Withdraw" button that calls `beginWithdraw`. `getClientSecret` must return the secret of a withdraw session. See [Withdrawals](../guide/withdraw.md).
+
+```tsx
+<WithdrawButton getClientSecret={getWithdrawSecret} onComplete={(session) => refreshBalance()} />
+```
+
+The props are the same as `DepositButton` (`WithdrawButtonProps`). The default label is "Withdraw". `onComplete` runs when the withdrawal completes.
+
+### WithdrawButton.Custom
+
+```tsx
+<WithdrawButton.Custom getClientSecret={getWithdrawSecret}>
+  {({ open, isOpen }) => <button onClick={open} disabled={isOpen}>Cash out</button>}
+</WithdrawButton.Custom>
+```
+
+Pass `wallet` to `OpenRampProvider` when the source custody is `'user_wallet'`: the user signs the withdrawal with it.
+
 ## OpenRampEmbedded
 
-Renders `<openramp-modal embedded>` inline, without an overlay.
+Renders `<openramp-modal embedded>` inline, without an overlay. It follows the session's direction, so it works for deposit and withdraw sessions.
 
 ```tsx
 <OpenRampEmbedded clientSecret={clientSecret} onComplete={(s) => router.push('/done')} style={{ maxWidth: 420 }} />
@@ -105,7 +126,7 @@ Renders `<openramp-modal embedded>` inline, without an overlay.
 | `baseUrl` | `string` | Default: the provider's `baseUrl`. Required when there is no provider. |
 | `wallet`, `theme`, `appearance`, `messages`, `locale` | | Default: the provider's values |
 | `onEvent` | `(e) => void` | Called after the provider's `onEvent` |
-| `onComplete` | `(session) => void` | The deposit completed |
+| `onComplete` | `(session) => void` | The deposit or withdrawal completed |
 | `onClose` | `(session?) => void` | The user pressed Close or Done on a result or error screen |
 | `onController` | `(controller) => void` | Receives the controller once it exists |
 | `className`, `style` | | For the element |
@@ -128,4 +149,4 @@ It returns `undefined` when `controller` is `undefined` or `null`.
 
 ## Re-exports
 
-Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `Snapshot`, `PublicSession`, `OrkError`, `OrkEvent`, `WalletAdapter`, and the props types `OpenRampProviderProps`, `BeginDepositOptions`, `OpenRampApi`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonRenderProps`, `OpenRampEmbeddedProps`.
+Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OrkError`, `OrkEvent`, `WalletAdapter`, and the props types `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `OpenRampApi`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonRenderProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonRenderProps`, `OpenRampEmbeddedProps`.

@@ -1,20 +1,52 @@
 {
   "name": "@openrampkit/adapter-swapped",
   "version": "0.0.1",
+  "description": "OpenRampKit Swapped adapter: card, wallets and SEA local methods; sell for offramp",
+  "keywords": [
+    "adapter",
+    "onramp",
+    "openrampkit",
+    "swapped"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/adapters/swapped.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/adapters/swapped"
+  },
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
-    ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "require": "./dist/index.cjs" }
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
   },
-  "files": ["dist"],
+  "files": [
+    "README.md",
+    "dist"
+  ],
   "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean",
     "typecheck": "tsc --noEmit -p ."
   },
-  "dependencies": {"@openrampkit/core":"workspace:*","@openrampkit/adapter":"workspace:*"},
+  "dependencies": {
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/adapter": "workspace:*"
+  },
   "peerDependencies": {}
 }

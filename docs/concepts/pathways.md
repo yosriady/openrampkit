@@ -10,6 +10,8 @@ Examples:
 | VietQR to a token on Monad | `swapped.vietqr` (VND -> USDC on Base), then `relay.bridge` (USDC on Base -> token on Monad) |
 | QRIS to your merchant account | `xendit.id-qris` (IDR -> your IDR balance) |
 | Pay from a wallet | `relay.wallet` (any token in the wallet -> destination token) |
+| Withdraw USDC on Base to an Arbitrum address | `relay.wallet` (USDC on Base -> USDC at the address on Arbitrum) |
+| Withdraw USDC to a bank account in EUR | `swapped.sell-bank-transfer` (USDC -> EUR in the user's account) |
 
 ## Assets, locations and endpoints
 
@@ -33,18 +35,20 @@ Money values are decimal strings everywhere (`'12.5'`), never floats. Chains are
 
 ## Destination
 
-Your backend sets the destination when it creates the session:
+For a deposit, your backend sets the destination when it creates the session. For a withdrawal, the user picks it (the target), and the server stores it as the destination.
 
 ```ts
 type Destination =
   | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number; calls?: ContractCall[] }
   | { type: 'merchant'; currency: string; accountRef?: string }
+  | { type: 'fiat'; currency: string } // withdraw to cash
 ```
 
 The planner turns it into the target endpoint:
 
 - crypto: `{ asset: { kind: 'crypto', chain, token }, location: { kind: 'address', address } }`
 - merchant: `{ asset: { kind: 'fiat', currency }, location: { kind: 'merchant_account' } }`
+- fiat: `{ asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } }`
 
 `calls` is reserved for contract calls after delivery. No adapter uses it yet.
 
@@ -80,9 +84,9 @@ An adapter may also have a live `catalog()`. The server calls it at plan time wi
 
 ## The planner algorithm
 
-`planPathways(input)` in `@openrampkit/core` is a pure function. The server calls it on `POST /sessions/:id/plan`.
+`planPathways(input)` in `@openrampkit/core` is a pure function. The server calls it on `POST /sessions/:id/plan` (and on `POST /sessions/:id/target` for a withdrawal). This section describes deposits. Withdrawals use a simpler rule: see [Withdraw planning](#withdraw-planning).
 
-1. **Currency.** For a merchant destination, the currency is the destination's currency. Otherwise it is the local currency of the user's country (`currencyForCountry`), or USD when the country is unknown.
+1. **Currency.** For a merchant or fiat destination, the currency is the destination's currency. Otherwise it is the local currency of the user's country (`currencyForCountry`), or USD when the country is unknown.
 2. **Sources.** The user can start from two places: fiat in `user_account` (in that currency), or any crypto in `user_wallet`.
 3. **First legs.** Every leg whose `from` matches a source is a candidate first leg.
 4. **One-leg pathways.** If the first leg's `to` matches the destination endpoint, it is a one-leg pathway, once per method.
@@ -100,9 +104,40 @@ Pathway ids look like `vietqr:swapped.vietqr>relay.bridge@eip155:8453`: the meth
 
 ### Hops
 
-The default hop preference is USDC on these chains, in order: Base, Arbitrum, Polygon, Optimism, Ethereum. `planPathways` takes `policy.hopPreference` to change it. (The server's `OpenRampConfig.policy` type does not list `hopPreference` yet.)
+The default hop preference is USDC on these chains, in order: Base, Arbitrum, Polygon, Optimism, Ethereum. Change it with `policy.hopPreference` in `createOpenRamp` (a list of `CryptoAsset`, most preferred first). The server passes it to `planPathways`.
+
+```ts
+createOpenRamp({
+  // ...
+  policy: {
+    hopPreference: [
+      { kind: 'crypto', chain: 'eip155:42161', token: '0xaf88d065e77c8cc2239327c5edb3a432268e5831' }, // USDC on Arbitrum
+      { kind: 'crypto', chain: 'eip155:8453', token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913' },  // USDC on Base
+    ],
+  },
+})
+```
 
 When the pathway has two legs, the server asks the second leg's adapter for a deposit address first (`prepareDeposit`). The first leg then delivers into that address. For example, Relay returns an open deposit address, Swapped sends the USDC there, and Relay moves it to the destination.
+
+## Withdraw planning
+
+A withdrawal has a fixed source (the session's `source`) and a target that the user picked. The planner builds **one-leg pathways only**. There is no hop.
+
+1. **Source.** The source endpoint is the source asset in the user's wallet (`user_wallet`) for `custody: 'user_wallet'`, or at the app's address (`address`) for `custody: 'app'`.
+2. **Legs.** A leg is a candidate when all of these are true:
+   - its kind is `bridge_swap`, `crypto_withdraw`, `crypto_offramp` or `wallet_transfer`,
+   - it declares the `WALLET_TX` surface (the funds leave with a signed transaction),
+   - its `from` location includes `user_wallet` (for `custody: 'user_wallet'`), or `address` or `user_wallet` (for `custody: 'app'`), and its `from` asset matches the source asset,
+   - its `to` matches the target endpoint.
+3. **Problems.** Region policies and client surfaces apply as for deposits. The leg's `requires: ['wallet']` is not checked. Instead:
+   - `custody: 'user_wallet'` without a connected wallet: `BAD_REQUEST`, "Connect your wallet to withdraw.",
+   - `custody: 'app'` without a `treasury` hook on the server: `PROVIDER_UNAVAILABLE`, "Withdrawals are not set up for this app yet.".
+4. **Currency.** For a fiat target, the currency is the target currency. For a crypto target, it is the local currency of the user's country.
+
+In the modal, "To wallet" shows methods of kind `crypto` or `exchange` (for example `wallet`), and "To cash" shows the others (payout methods such as `bank_transfer` or `gcash`). The `wallet` method is in the recommended group.
+
+A deposit-only leg does not show up in a withdrawal, and an offramp leg does not show up in a deposit: offramp legs start from crypto and end in a `user_account`.
 
 ## Grouping
 
@@ -111,7 +146,7 @@ The planner groups pathways by method and gives each method one group:
 | Group | Label in the modal | Rule |
 |---|---|---|
 | `connected` | Connected | The `wallet` method, when a wallet is connected |
-| `recommended` | Most popular | The first available fiat method in the country's priority list. Also `transfer`, when no wallet is connected. |
+| `recommended` | Most popular | The first available fiat method in the country's priority list. Also `transfer`, when no wallet is connected, and `wallet` in a withdrawal. |
 | `more` | Other options | Every other available method |
 | `unavailable` | Not available | Methods where every pathway has a problem. The row shows the reason. |
 
@@ -164,6 +199,8 @@ When the user enters an amount, the server quotes up to 5 available pathways for
 
 - Legs are quoted in order. The output of leg 1 is the input of leg 2.
 - An amount on the `destination` side works only for one-leg pathways. Multi-leg pathways treat the amount as the source amount.
+- For a withdrawal, the first leg's source is the session `source`, with the sender address: the user's wallet address, or `treasury.address` for `custody: 'app'`.
+- A quote whose input is outside the session's `amountBounds` is dropped with `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH` (see [Amount bounds](../api/server.md#amount-bounds)).
 - A failed pathway becomes an entry in `errors`, not an exception.
 - The combined quote sums fees and ETAs, and expires at the earliest leg expiry.
 

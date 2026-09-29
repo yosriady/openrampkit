@@ -1,6 +1,22 @@
 {
   "name": "@openrampkit/wagmi",
   "version": "0.0.1",
+  "description": "wagmi wallet adapter for OpenRampKit",
+  "keywords": [
+    "onramp",
+    "openrampkit",
+    "wagmi",
+    "wallet"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/adapters/wagmi.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/wagmi"
+  },
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -14,9 +30,16 @@
     }
   },
   "files": [
+    "README.md",
     "dist"
   ],
   "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "build": "tsup src/index.ts --format esm,cjs --dts --clean",
     "typecheck": "tsc --noEmit -p ."

@@ -10,6 +10,7 @@ createOpenRamp({
   webhooks: {
     url: 'https://app.example.com/api/hooks',
     secret: process.env.OPENRAMP_WEBHOOK_SECRET!,
+    maxAttempts: 8, // optional: attempts in all before the server drops an event
   },
 })
 ```
@@ -83,9 +84,11 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
 | `session.completed` | Every leg succeeded. **Credit here.** | |
 | `session.failed` | The step became `FAILED` or `BLOCKED` | |
 | `session.refunded` | The step became `REFUNDED` | |
-| `session.expired` | An open session passed its expiry and was loaded again | |
+| `session.expired` | An open session passed its expiry with no payment started | |
+| `withdrawal.completed` | Withdraw sessions: sent after `session.completed` | |
+| `withdrawal.failed` | Withdraw sessions: sent after `session.failed` | |
 
-`session.expired` is sent only when a request touches the expired session (the browser polls, or you call `sessions.retrieve`). There is no background timer.
+The [background sweep](../api/server.md#background-sweep) finds expired sessions and sends `session.expired`. A request that loads an expired session (for example a browser poll) also sends it. Without a scheduled sweep, a session that nobody loads again never sends `session.expired`.
 
 ## Event envelope
 
@@ -98,7 +101,21 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
   "sessionId": "ors_6a1f0c2b9d8e7f6a5b4c3d2e",
   "data": {
     "object": {
-      "session": { "id": "ors_...", "status": "completed", "destination": { "...": "..." }, "step": { "state": "COMPLETED", "progress": { "legs": [] } } },
+      "session": {
+        "id": "ors_...",
+        "status": "completed",
+        "destination": { "...": "..." },
+        "step": { "state": "COMPLETED", "progress": { "legs": [] } },
+        "result": {
+          "method": "vietqr",
+          "provider": "Swapped",
+          "input": { "amount": "500000", "asset": { "kind": "fiat", "currency": "VND" } },
+          "output": { "amount": "18.92", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
+          "outputConfirmed": true,
+          "fees": [{ "kind": "provider", "label": "Swapped fee", "amount": "9000", "currency": "VND" }],
+          "txHashes": ["0x..."]
+        }
+      },
       "userId": "user_123",
       "metadata": { "orderId": "o_42" }
     }
@@ -106,41 +123,49 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
 }
 ```
 
-`data.object.session` is a [`PublicSession`](../api/core.md#publicsession). `userId` and `metadata` are what you passed to `sessions.create()`. See [Events](../concepts/events.md) for the full types.
+`data.object.session` is a [`PublicSession`](../api/core.md#publicsession). Once a payment started, it has `result` (a [`SessionResult`](../api/core.md#sessionresult)): the method, the provider, what the user paid (`input`), what arrived (`output`), whether `output` is confirmed, the fees and the transaction hashes. `userId` and `metadata` are what you passed to `sessions.create()`. See [Events](../concepts/events.md) for the full types.
 
 ## Credit exactly once
 
 Follow these rules:
 
+Webhooks are delivered **at least once**. A retry after a timeout, or two sweeps at the same time, can send the same event twice. Follow these rules:
+
 1. **Credit only on `session.completed`.** `leg.succeeded` on the first leg of a two-leg pathway does not mean the funds arrived.
-2. **Deduplicate by session id.** Store the session id with a unique constraint when you credit. The server sends each event type at most once per session, but your handler may still run twice (a retry on your side, a manual replay, a race between instances).
+2. **Deduplicate by event id and by session id.** Store the event id (`openramp-id`, also `event.id`) and drop an event you already handled. Store the session id with a unique constraint when you credit, so a session is credited once.
 3. **Check the session state.** For extra safety, call `openramp.sessions.retrieve(event.sessionId)` and confirm `status === 'completed'` before you credit.
-4. **Use your own records for the amount.** The event does not carry the delivered amount. For crypto destinations, read the transfer on chain: `session.step.progress.legs[].txHash` has the transaction hashes the providers reported. For merchant destinations, read the payment from the provider, or keep the expected amount on your order.
+4. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with `result.txHashes`, or at the provider), or credit the amount you expected on your order. For merchant destinations, the provider's report is the source of truth.
 
 ```ts
 async function handle(event: { id: string; type: string; sessionId?: string; data: { object: any } }) {
   if (event.type !== 'session.completed' || !event.sessionId) return
-  const { userId, metadata } = event.data.object
+  const { userId, session } = event.data.object
+  const result = session.result
   await db.transaction(async (tx) => {
     // unique index on credits.session_id: a second insert fails and nothing is credited twice
     const inserted = await tx.credits.insertIfAbsent({ sessionId: event.sessionId, userId, eventId: event.id })
     if (!inserted) return
-    await tx.balances.increment(userId, await amountFor(event.sessionId, metadata))
+    const amount = result.outputConfirmed ? result.output.amount : await verifiedAmount(event.sessionId, result)
+    await tx.balances.increment(userId, amount)
   })
 }
 ```
 
-::: warning Direct wallet transfers are not verified on chain
-When the user pays with a connected wallet and the source token is the same as the destination token on the same chain, the Relay adapter sends a plain transfer and trusts the transaction hash that the browser reports. It does not check the chain. Before you credit such a deposit, confirm the transfer on chain (recipient, token and amount).
+For a withdrawal, `result.input` is what left, and `result.output` is what the user received (or the estimate). See [Withdrawals](./withdraw.md#events).
+
+::: warning Same-chain wallet transfers
+When the source token is the same as the destination token on the same chain, the Relay adapter sends a plain transfer without Relay. It checks the transaction receipt on chain: the transaction succeeded and paid the recipient at least the quoted amount. It does not check that the transaction is new or that the user sent it. Store `result.txHashes` with a unique constraint, so one transaction cannot complete two sessions.
 :::
 
 ## Delivery
 
-- The server sends each webhook once, with a 4 second timeout (`timeouts.webhook`). It does not retry. A failed delivery is logged as `webhook delivery failed` or `webhook delivery error`.
+- The server sends each webhook at once, with a 4 second timeout (`timeouts.webhook`). A failed delivery (no 2xx answer, or a timeout) is logged as `webhook delivery failed` or `webhook delivery error`, and goes to an outbox in the store.
+- The [background sweep](../api/server.md#background-sweep) retries the outbox. The wait starts at 30 seconds and doubles after each attempt, up to 1 hour. After `webhooks.maxAttempts` attempts in all (default 8), the server drops the event and logs `webhook dropped after retries`.
+- A retry sends the same body with the same `openramp-id`, and a new timestamp and signature.
 - A delivery problem never breaks the user's flow.
 - Return any 2xx status to acknowledge.
 
-Because there are no retries, reconcile in the background. For example, a cron job that lists your open sessions and calls `openramp.sessions.refresh(id)`. `refresh()` asks the active leg's adapter for status (like the browser's poll does) and sends any events that are due.
+Retries happen only when something runs the sweep. Schedule it: see [Cloudflare Workers](../deploy/cloudflare-workers.md#cron-trigger) or [Next.js / Vercel](../deploy/nextjs.md#background-sweep). The sweep also refreshes open payments, so a session still completes (and sends its webhooks) after the user closes the tab.
 
 ## Provider webhooks
 

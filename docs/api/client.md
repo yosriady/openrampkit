@@ -1,10 +1,12 @@
 # @openrampkit/client
 
-A framework-free client for the OpenRampKit server, and `DepositController`, the state machine behind the modal. Use it to build a custom UI, to test flows, or in React Native.
+A framework-free client for the OpenRampKit server, and `RampController`, the state machine behind the modal. Use it to build a custom UI, to test flows, or in React Native.
 
 ```ts
-import { createOpenRampClient, DepositController, createMockWallet, toOrkError, OrkClientError } from '@openrampkit/client'
+import { createOpenRampClient, DepositController, WithdrawController, createMockWallet, toOrkError, OrkClientError } from '@openrampkit/client'
 ```
+
+`RampController`, `DepositController` and `WithdrawController` are the same class. The session's `direction` picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
 ## createOpenRampClient(options)
 
@@ -21,6 +23,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 |---|---|---|
 | `getSession(secret)` | `GET /sessions/:id` | `PublicSession` |
 | `plan(secret, { walletConnected, walletAddress?, surfaces? })` | `POST /sessions/:id/plan` | `PlanResult` |
+| `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. |
 | `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: Quote[]; errors: OrkError[] }` |
 | `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
@@ -43,14 +46,17 @@ const controller = new DepositController({
   clientSecret,
   wallet,            // optional WalletAdapter
   surfaces,          // optional: surfaces your UI can draw (when unset, the server assumes every kind except PROVIDER_SDK)
-  onEvent: (e) => {} // optional: browser events
+  onEvent: (e) => {}, // optional: browser events
+  expect: 'withdraw', // optional: refuse a session of the other direction
 })
 
 const unsubscribe = controller.subscribe(() => render(controller.getSnapshot()))
 await controller.start()
 ```
 
-`createDepositController()` from `@openrampkit/web` builds one with `surfaces: SUPPORTED_SURFACES`.
+`createDepositController()` and `createWithdrawController()` from `@openrampkit/web` build one with `surfaces: SUPPORTED_SURFACES`.
+
+With `expect`, `start()` fails with `BAD_REQUEST` ("This is not a withdraw session.") when the session has the other direction.
 
 It works like an external store: `getSnapshot()` returns an immutable `Snapshot`, and `subscribe(fn)` calls `fn` on every change. In React, use `useDepositController(controller)`.
 
@@ -58,8 +64,8 @@ It works like an external store: `getSnapshot()` returns an immutable `Snapshot`
 
 | Method | Description |
 |---|---|
-| `start()` | Reads the wallet accounts and balances, loads the session, and plans. If the session is already past `SELECT_METHOD` (a reload during a payment), it goes straight to the step. Emits `modal.opened` the first time. |
-| `setTab(tab)` | `'crypto'` or `'cash'` |
+| `start()` | Reads the wallet accounts and balances, loads the session, and plans. For a withdraw session, it opens the first allowed tab instead (see [Withdraw](#withdraw)). If the session is already past `SELECT_METHOD` (a reload during a payment), it goes straight to the step. Emits `modal.opened` the first time. |
+| `setTab(tab)` | `'crypto'` or `'cash'`. In a withdraw session, `crypto` shows the target form and `cash` sets the fiat target and loads the payout methods. |
 | `methodsForTab(tab?)` | The plan's methods for a tab. Crypto: methods of kind `crypto` or `exchange`. |
 | `selectMethod(method)` | Picks a method (ignored when unavailable). For `transfer` it quotes at once; otherwise it moves to the amount screen. |
 | `setSource({ chain, token, symbol?, decimals? })` | The token the user pays with (`wallet`, `transfer`). Re-quotes on the transfer screen. |
@@ -74,10 +80,31 @@ It works like an external store: `getSnapshot()` returns an immutable `Snapshot`
 | `notifySurface(kind, detail?)` | For a UI that reads provider iframe messages: `'completed'`, `'failed'` or `'closed'`. Polls at once. `closed` sets `surfaceClosed`. Never sets the outcome. |
 | `reopenSurface()` | Clears `surfaceClosed` |
 | `restart()` | Fires the server `restart` transition (back to the methods) |
-| `back()` | Quotes to amount (or methods for transfer), amount to methods, and `PAYMENT` step to `restart()` |
+| `back()` | Quotes to amount (or methods for transfer), amount to methods (to the target form for a withdrawal to a wallet), and `PAYMENT` step to `restart()` |
 | `close()` | Emits `modal.closed`, rejects `done` unless completed, and destroys the controller |
 | `destroy()` | Stops timers and removes listeners |
 | `done` | `Promise<PublicSession>`: resolves on `COMPLETED`. Rejects on `close()` before completion. A failure does not settle it: the user may try again. |
+
+### Withdraw
+
+These methods serve withdraw sessions:
+
+| Method | Description |
+|---|---|
+| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedTargets.crypto` is set, `'cash'` ("To cash") when `allowedTargets.fiat` is set, both without `allowedTargets`. With no tab, `start()` shows `TARGET_NOT_ALLOWED`. |
+| `withdrawChains()` | The networks for "To wallet": `allowedTargets.crypto.chains`, else every chain with a known USDC address plus the source chain |
+| `targetTokens(chain?)` | Token choices for a chain: USDC when known, the native token, and the source token on the source chain |
+| `setTargetChain(chain)` | Picks a network. The token becomes the source token on the source chain, else USDC, else native. The native token stays native. |
+| `setTargetToken(token)` | Picks a token from `targetTokens()` |
+| `setTargetAddress(address)` | Sets the address (trimmed) |
+| `submitTarget()` | Checks the address format (`isValidTargetAddress`), sends the target to the server, and shows the methods. When only one method is available, it selects it and goes to the amount screen. Emits `target.selected`. |
+| `sourceBalance()` | The wallet balance of the session's source token, when the wallet reports it |
+
+The "To wallet" form starts on the source chain (when allowed), with the connected wallet address. The "To cash" tab pays out in the local currency of the session country, or the first allowed currency. The amount is always in the source token.
+
+`isValidTargetAddress(chain, address)` and `withdrawTokens(chain)` are also exported.
+
+![The To wallet form](../screenshots/withdraw-01-to-wallet.png)
 
 ### Polling
 
@@ -87,7 +114,8 @@ When the step has an `AWAIT` transition, the controller polls `GET /sessions/:id
 
 ```ts
 type Snapshot = {
-  screen: 'loading' | 'methods' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+  screen: 'loading' | 'target' | 'methods' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+  direction?: 'deposit' | 'withdraw' // from the session once loaded
   tab: 'crypto' | 'cash'
   session?: PublicSession
   plan?: PlanResult
@@ -105,12 +133,15 @@ type Snapshot = {
   balances: WalletBalance[]  // balances above zero
   source?: { chain: string; token: string; symbol?: string; decimals?: number }
   surfaceClosed: boolean     // the provider iframe said the user closed it
+  target?: { chain: string; token: string; symbol: string; decimals: number; address: string } // withdraw: the "To wallet" form
+  cashCurrency?: string      // withdraw: the payout currency of the "To cash" tab
 }
 ```
 
 | Screen | When |
 |---|---|
 | `loading` | Starting or re-planning |
+| `target` | Withdraw: the "To wallet" form (network, token, address) |
 | `methods` | The plan is ready. The tab is `cash` for merchant sessions or when no crypto method is available. |
 | `amount` | A method was picked |
 | `quotes` | Quotes are loading or shown |
@@ -137,4 +168,4 @@ The returned object also has `sent: Array<{ chain, txs, hash }>`.
 
 ## Re-exported types
 
-`MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`.
+`MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.

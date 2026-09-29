@@ -21,18 +21,20 @@ createOpenRamp({
 
 Each adapter id may appear once. The server refuses an adapter built for another API version.
 
+For withdrawals, three adapters have legs today: Relay (`wallet`, to any address), Swapped (`sell-*`, to cash) and Mock (`wallet` and `offramp`). See [Withdrawals](../guide/withdraw.md).
+
 ## Overview
 
 | Adapter | Package | Legs | Methods | Countries | Surfaces | Account | Status |
 |---|---|---|---|---|---|---|---|
 | [Relay](./relay.md) | `@openrampkit/adapter-relay` | `wallet`, `transfer`, `bridge` | wallet, transfer | All | `WALLET_TX`, `DEPOSIT_ADDRESS` | Optional API key | Working |
-| [Swapped](./swapped.md) | `@openrampkit/adapter-swapped` | One per Swapped payment group (live catalog) | card, Apple Pay, Google Pay, SEPA, VietQR, MoMo, GCash, GoPay, DANA, PromptPay, PIX, UPI and more | Per method, from the catalog; not US-TX | `IFRAME` | Yes | Working; status polling is TO VERIFY |
+| [Swapped](./swapped.md) | `@openrampkit/adapter-swapped` | One per Swapped payment group (live catalog); `sell-*` payout legs for withdrawals | card, Apple Pay, Google Pay, SEPA, VietQR, MoMo, GCash, GoPay, DANA, PromptPay, PIX, UPI and more; payouts: bank transfer, Skrill, PIX, Interac | Per method, from the catalog; not US-TX | `IFRAME` (sell: then `WALLET_TX`) | Yes | Working; status polling is TO VERIFY |
 | [Coinbase](./coinbase.md) | `@openrampkit/adapter-coinbase` | `card`, `apple_pay`, `google_pay` | card, Apple Pay, Google Pay | Where Coinbase operates, not JP | `REDIRECT` | Yes (CDP) | Working; several details TO VERIFY |
 | [Transak](./transak.md) | `@openrampkit/adapter-transak` | `card`, `apple_pay`, `google_pay`, `bank_transfer`, `upi` (live catalog) | card, Apple Pay, Google Pay, bank transfer, SEPA, UPI and more | Per fiat currency, from the catalog | `IFRAME` (or `REDIRECT`) | Yes | Working; several details TO VERIFY |
 | [MoonPay](./moonpay.md) | `@openrampkit/adapter-moonpay` | `card`, `apple_pay`, `google_pay`, `ach`, `sepa`, `gbp_bank`, `pix`, `paypal`, `venmo`, `revolut_pay`, `interac` | Same | Where MoonPay allows buying (live catalog) | `REDIRECT` (or `IFRAME`) | Yes | New; some details TO VERIFY |
 | [Stripe](./stripe.md) | `@openrampkit/adapter-stripe` | `card`, `apple_pay`, `google_pay`, `ach` | Same | US (not HI) and EU | `PROVIDER_SDK` (or `REDIRECT`) | Yes, with onramp approval | New; some details TO VERIFY |
 | [Xendit](./xendit.md) | `@openrampkit/adapter-xendit` | One per country and channel, e.g. `id-qris` | QRIS, DANA, OVO, ShopeePay, QR Ph, GCash, Maya, GrabPay, PromptPay, TrueMoney, Touch 'n Go, MoMo, ZaloPay, PayNow | ID, PH, TH, MY, VN, SG | `QR`, `REDIRECT`, `DEEPLINK` | Yes | Working (merchant destination only) |
-| [Mock](./mock.md) | `@openrampkit/adapter-mock` | `card`, `local`, `payin`, optional `wallet`, `transfer`, `bridge` | Every common method | All (local methods in SEA) | `REDIRECT`, `QR`, `WALLET_TX`, `DEPOSIT_ADDRESS` | No | For tests; moves no money |
+| [Mock](./mock.md) | `@openrampkit/adapter-mock` | `card`, `local`, `payin`, optional `wallet`, `transfer`, `bridge`, `offramp` | Every common method | All (local methods in SEA) | `REDIRECT`, `QR`, `WALLET_TX`, `DEPOSIT_ADDRESS`, `FORM` | No | For tests; moves no money |
 | [Meld](./meld.md) | `@openrampkit/adapter-meld` | One per payment method (live catalog) | card, Apple Pay, Google Pay, UPI, PIX, Binance Pay, SEPA, ACH and more | Per method and country | `REDIRECT` | Yes | New; in progress; some details TO VERIFY |
 | [Onramper](./onramper.md) | `@openrampkit/adapter-onramper` | One per payment type (live catalog) | card, Apple Pay, Google Pay, SEPA, ACH, PIX, UPI and more | Per method and country | `REDIRECT` | Yes (with a signing key) | New; in progress; some details TO VERIFY |
 | [Peer](./peer.md) | `@openrampkit/adapter-peer` | `venmo`, `cashapp`, `zelle`, `chime`, `paypal`, `revolut`, `wise` | Venmo, Cash App, Zelle, Chime, PayPal, Revolut, Wise | US; Revolut in GB and EEA; Wise everywhere | `REDIRECT` (or `IFRAME`) | Yes | New; opt-in P2P marketplace (read the warning) |
@@ -49,7 +51,7 @@ Adapters with a `webhook` handler receive provider callbacks at:
 
 For example `https://app.example.com/api/openramp/webhooks/swapped`. Register this URL in the provider's dashboard. The adapter verifies the signature and turns the payload into leg events. The server finds the session by the provider reference and updates it. Repeated webhooks are safe: a leg that already ended ignores later events.
 
-Adapters without webhooks (Relay) are driven by status checks: the browser's poll (`GET /sessions/:id/step`) and `openramp.sessions.refresh(id)`.
+Adapters without webhooks (Relay) are driven by status checks: the browser's poll (`GET /sessions/:id/step`), and the [background sweep](../api/server.md#background-sweep) (or `openramp.sessions.refresh(id)`) after the user leaves.
 
 ## Adapter routes
 

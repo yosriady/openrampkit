@@ -34,7 +34,7 @@ All flows run on mock providers in `examples/next-demo`. Recapture with `npx pla
 | `@openrampkit/react` | `OpenRampProvider`, `DepositButton`, `useOpenRamp`, headless hooks |
 | `@openrampkit/wagmi` | Wallet adapter for wagmi apps |
 | `@openrampkit/adapter-relay` | Wallet pay, transfer to a deposit address, and the bridge hop (Relay) |
-| `@openrampkit/adapter-swapped` | Card, Apple Pay, Google Pay and SEA local methods (Swapped) |
+| `@openrampkit/adapter-swapped` | Card, Apple Pay, Google Pay and SEA local methods (Swapped); payouts to bank transfer, Skrill, PIX and Interac for withdrawals |
 | `@openrampkit/adapter-coinbase` | Coinbase Onramp |
 | `@openrampkit/adapter-transak` | Transak |
 | `@openrampkit/adapter-mock` | Test provider with every surface type. Moves no money |
@@ -46,7 +46,7 @@ The browser cannot be trusted with provider secrets or with the destination addr
 1. holds provider secrets and signs provider URLs (Swapped, Coinbase, Transak),
 2. fixes the user, destination and amount limits when the session is created,
 3. receives provider webhooks and sends signed webhooks to your backend, so you credit balances from a trusted source,
-4. keeps checking status if the user closes the tab.
+4. runs a background sweep (`openramp.sweep()`, from a cron trigger or `POST /tasks/sweep`) that retries failed webhooks, checks the status of open payments after the user closes the tab, and expires idle sessions. Schedule it every minute; without a scheduled sweep, nothing runs after the user leaves.
 
 It is a single `Request -> Response` handler, so you can deploy it as a Cloudflare Worker or mount it in your existing app.
 

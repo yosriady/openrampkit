@@ -44,7 +44,7 @@ The `globalThis` cache keeps one instance per process during `next dev`, where m
 
 ## Vercel
 
-1. Add the environment variables in the Vercel project settings: `OPENRAMP_SECRET`, `OPENRAMP_WEBHOOK_SECRET`, `PUBLIC_URL`, the provider keys, and the store's credentials (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` for `Redis.fromEnv()`).
+1. Add the environment variables in the Vercel project settings: `OPENRAMP_SECRET`, `OPENRAMP_WEBHOOK_SECRET`, `PUBLIC_URL`, `CRON_SECRET`, the provider keys, and the store's credentials (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` for `Redis.fromEnv()`).
 2. Set `PUBLIC_URL` per environment. Preview deployments have their own URL; provider webhooks registered for production will not reach them.
 3. Use a shared store. Serverless functions do not share memory, so the default memory store loses sessions between invocations.
 
@@ -74,22 +74,37 @@ export async function POST(req: Request) {
 
 The server's default `geo` (used only by `POST /sessions` with `authorize`) reads the same headers.
 
-## Background reconciliation
+## Background sweep
 
-Users close tabs. Adapters with webhooks settle on their own, but Relay legs settle only when someone asks for status. Add a [Vercel Cron Job](https://vercel.com/docs/cron-jobs) that calls `openramp.sessions.refresh(id)` for sessions you know are still processing:
+Users close tabs, and webhook deliveries fail. Adapters with webhooks settle on their own, but Relay legs settle only when someone asks for status. Run [`openramp.sweep()`](../api/server.md#background-sweep) from a [Vercel Cron Job](https://vercel.com/docs/cron-jobs). It retries failed webhooks, refreshes open payments, and expires idle sessions.
 
 ```ts
-// app/api/cron/openramp/route.ts
+// app/api/cron/route.ts
 import { openramp } from '@/lib/openramp'
 
+export const dynamic = 'force-dynamic'
+
 export async function GET(req: Request) {
-  if (req.headers.get('authorization') !== `Bearer ${process.env.CRON_SECRET}`) return new Response('unauthorized', { status: 401 })
-  for (const id of await db.deposits.processingSessionIds()) await openramp.sessions.refresh(id)
-  return Response.json({ ok: true })
+  const secret = process.env.CRON_SECRET
+  if (!secret || req.headers.get('authorization') !== `Bearer ${secret}`) return new Response('unauthorized', { status: 401 })
+  return Response.json(await openramp.sweep())
 }
 ```
 
-Keep your own list of session ids (for example from `session.created` webhooks). The store has no "list sessions" call.
+```json
+// vercel.json
+{
+  "crons": [{ "path": "/api/cron", "schedule": "* * * * *" }]
+}
+```
+
+Set `CRON_SECRET` in the project's environment variables (at least 16 random characters). Vercel then sends it as `Authorization: Bearer {CRON_SECRET}` when it calls the cron path. Refuse the request when the secret is not set, so the route is never open.
+
+Vercel runs cron jobs only on production deployments. How often a job can run depends on your plan: check the [Vercel limits](https://vercel.com/docs/cron-jobs/usage-and-pricing) before you pick every minute.
+
+The server keeps its own list of open sessions, so you do not need to list session ids yourself.
+
+Another option: set `tasksToken` and let any scheduler call `POST {baseUrl}/tasks/sweep` with `Authorization: Bearer {tasksToken}`. It is served by the catch-all route. See [HTTP routes](../api/http.md#post-tasks-sweep).
 
 ## Other Next.js hosts
 

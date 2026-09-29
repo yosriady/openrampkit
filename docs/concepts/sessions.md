@@ -1,6 +1,6 @@
 # Sessions and security
 
-A **session** is one deposit attempt by one user to one destination. Your backend creates it. The browser works on it with a client secret.
+A **session** is one deposit or withdrawal attempt by one user. A deposit goes to one destination. A withdrawal sends one source asset (see [Withdrawals](../guide/withdraw.md)). Your backend creates it. The browser works on it with a client secret.
 
 ## Why a server
 
@@ -15,7 +15,7 @@ So the server:
 1. holds provider secrets and signs provider URLs,
 2. fixes the user, the destination and other inputs when the session is created,
 3. receives provider webhooks and sends signed webhooks to your backend,
-4. asks providers for status when the browser polls, or when you call `sessions.refresh()`.
+4. asks providers for status when the browser polls, and from the [background sweep](../api/server.md#background-sweep) after the user leaves.
 
 ## Creating a session
 
@@ -36,7 +36,7 @@ See [`CreateSessionInput`](../api/server.md#createsessioninput) for every field.
 - `destination` is normalized: crypto token addresses are lowercased, merchant currencies uppercased.
 - `country` and `region` are uppercased. They drive the currency, the methods and the region checks.
 - `allowedMethods` filters the plan: other methods are not shown and cannot be quoted.
-- `amountBounds` is shown to the user as a min and max hint on the amount screen. The server does not enforce it; provider limits still apply.
+- `amountBounds` is shown to the user as a min and max on the amount screen. The server enforces it on quotes and on select (see [Amount bounds](../api/server.md#amount-bounds)). Provider limits still apply.
 - `email` is passed to adapters that can prefill it (Swapped, Transak, MoonPay).
 - `locale` (BCP 47, such as `vi`) is sent to the modal as `PublicSession.locale`, where it picks the language unless the client sets one. Adapters get it as `ctx.session.locale` (`en` when not set).
 
@@ -71,7 +71,7 @@ Without `authorize`, `POST /sessions` returns 404. The route fills `country` and
 Two more guards:
 
 - A new `quotes` or `select` call while a payment is in progress returns `409` ("A payment is already in progress.").
-- Every save uses an optimistic version check. When two requests change the same session at once, one gets `409` and can retry.
+- Every save uses an optimistic version check. When two requests change the same session at once, one gets `409 CONFLICT` (`retryable: true`) and can send the request again.
 
 ## Popup-safe start URLs
 
@@ -89,7 +89,7 @@ When the provider is done, it sends the user to `returnUrl` (default `{baseUrl}/
 
 ## Expiry
 
-Sessions expire after `ttlMinutes` (default 30). When a request loads an **open** session after its expiry, the server moves it to `EXPIRED` with `SESSION_EXPIRED` and sends `session.expired`. A session that is already processing a payment does not expire this way: the provider decides the outcome.
+Sessions expire after `ttlMinutes` (default 30). When the background sweep or a request finds an **open** session after its expiry, the server moves it to `EXPIRED` with `SESSION_EXPIRED` and sends `session.expired`. A session that is already processing a payment does not expire this way: the provider decides the outcome.
 
 Quotes expire on their own schedule (`expiresAt`). Selecting an expired quote returns `410 QUOTE_EXPIRED`.
 

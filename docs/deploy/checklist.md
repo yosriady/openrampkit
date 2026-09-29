@@ -6,6 +6,7 @@ Go through this list before real money moves.
 
 - [ ] `secret` is at least 32 random characters (`openssl rand -hex 32`), unique per environment, and stored as a platform secret.
 - [ ] `webhooks.secret` is a different random value, shared only with your backend.
+- [ ] `tasksToken` (if you use `POST /tasks/sweep` or `GET /health?deep=1`) is another random value. `CRON_SECRET` on Vercel too.
 - [ ] Provider keys are server-side only. No adapter or server import reaches your client bundle.
 - [ ] You use live provider keys in production and sandbox keys elsewhere. Set `livemode: true` in production, so events carry `livemode` and adapters such as Coinbase leave sandbox mode.
 - [ ] You know how to rotate each secret. Rotating `secret` breaks start URLs made in the last 10 minutes; rotating `webhooks.secret` needs your backend updated at the same time.
@@ -16,6 +17,7 @@ Go through this list before real money moves.
 - [ ] Destination addresses come from your database, per user.
 - [ ] You pass `country` (and `region` in the US) so region rules apply. Providers still run their own checks.
 - [ ] `ttlMinutes` fits your flow (default 30).
+- [ ] `amountBounds` is set where you need limits. The server enforces it when its currency matches what the user pays (a fiat code, or a token symbol such as `USDC`).
 
 ## Store
 
@@ -28,7 +30,8 @@ Go through this list before real money moves.
 - [ ] If the browser calls another origin, `cors.origins` lists your app origins only. Avoid `'*'` in production.
 - [ ] Your proxy sets a trusted client IP header (`cf-connecting-ip`, `x-real-ip` or `x-forwarded-for`).
 - [ ] Request timeouts are above the 9 second quote timeout.
-- [ ] `GET /health` is blocked or rate-limited at the edge. It has no auth and calls provider APIs.
+- [ ] If you build your own client, it sends a request again after `409 CONFLICT` (`retryable: true`). The server returns it when two requests change a session at once.
+- [ ] Uptime checks use `GET /health` (quick, no provider calls). `GET /health?deep=1` calls provider APIs and needs the tasks token.
 
 ## Provider webhooks
 
@@ -36,19 +39,33 @@ Go through this list before real money moves.
 - [ ] You tested one webhook per provider in sandbox and saw the session move.
 - [ ] Transak: the adapter verifies webhooks with its cached access token. Make sure at least one quote or start ran on the instance (or the token is in the shared store) before webhooks arrive.
 
+## Background sweep
+
+- [ ] `openramp.sweep()` runs every minute or so: a [Cloudflare Cron Trigger](./cloudflare-workers.md#cron-trigger), a [Vercel Cron Job](./nextjs.md#background-sweep), or any scheduler calling `POST {baseUrl}/tasks/sweep` with `tasksToken`. Without it, failed webhooks are never retried, and sessions whose users left are not refreshed or expired.
+- [ ] The cron route refuses requests without the secret, and the secret is set in every environment that runs it.
+- [ ] You watch the logs for `webhook dropped after retries` (after `webhooks.maxAttempts`, default 8) and `sweep: session check failed`.
+- [ ] Each run has enough time: it retries up to `limit` (default 50) webhooks and checks up to `limit` open sessions, with provider calls for each.
+
 ## Your backend
 
 - [ ] Webhooks to your backend are verified with `openramp.webhooks.verify()` or `verifyWebhook()`, using the raw body.
-- [ ] You credit only on `session.completed`, once per session id (a unique constraint), after checking the session. See [Webhooks to your backend](../guide/webhooks.md).
-- [ ] You get the amount from your own records, the chain, or the provider. The webhook does not carry it.
-- [ ] Same-chain wallet payments through Relay are verified on chain before crediting (the adapter trusts the browser's transaction hash).
-- [ ] A background job reconciles sessions that are still processing (`openramp.sessions.refresh(id)`), because the server does not retry webhooks and Relay has no provider webhooks.
+- [ ] Your handler is idempotent: it drops an event id it already handled (webhooks are at-least-once), and credits once per session id (a unique constraint), only on `session.completed`, after checking the session. See [Webhooks to your backend](../guide/webhooks.md).
+- [ ] You credit `session.result.output` only when `outputConfirmed` is `true`. Otherwise you check the amount on chain (`result.txHashes`), at the provider, or on your order.
+- [ ] You store transaction hashes with a unique constraint, so one transaction cannot complete two sessions (same-chain Relay moves check the receipt, not who sent it).
 
 ## Geo and methods
 
 - [ ] `policy.regions` blocks the countries you must not serve.
 - [ ] `policy.disabledMethods` or per-session `allowedMethods` hide methods you do not want.
 - [ ] You checked the "Not available" group for your main countries.
+
+## Withdrawals
+
+- [ ] `screenAddress` calls your sanctions or blocklist check. It fails closed: an error refuses the address.
+- [ ] `allowedTargets` lists only the chains and currencies you support.
+- [ ] With `custody: 'app'`: `treasury.send()` checks and debits the user's balance once per `idempotencyKey`, checks the recipient and amount of each transaction, and throws to refuse. The server does not know the user's balance.
+- [ ] With `custody: 'app'` and Relay: `treasury.address` is set.
+- [ ] You handle `withdrawal.failed`: check `result.txHashes` and the provider before you return funds to the user.
 
 ## Adapters
 

@@ -44,7 +44,7 @@ interface Adapter {
 | `prepareDeposit` | Before quoting a pathway, for every leg after the first |
 | `start` | `POST /select` for the first leg; after a leg succeeds, for the next one |
 | `transition` | `POST /transitions/:name` for SUBMIT and SURFACE_RESULT transitions |
-| `status` | `GET /step` (at most every 2 s per leg) and `sessions.refresh()` |
+| `status` | `GET /step` (at most every 2 s per leg), `sweep()` and `sessions.refresh()` |
 | `webhook` | `POST /webhooks/:adapterId` |
 | `health` | `GET /health` |
 | `routes` | Any request to `/adapters/:adapterId/*` |
@@ -71,7 +71,11 @@ type StartInput = {
 
 type TransitionInput = { leg: PathwayLeg; ref: string; name: string; inputs?: Record<string, unknown> }
 
-type LegEvent = { ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError }
+type LegEvent = {
+  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
+  transitions?: Transition[] // goes with surface; default: an AWAIT poll
+}
 ```
 
 ## Context

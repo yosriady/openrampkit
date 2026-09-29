@@ -22,11 +22,12 @@ type OrkEvent<T = unknown> = {
 
 ## Browser events
 
-Receive them with `onEvent` on `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, `openDeposit()` or `DepositController`.
+Receive them with `onEvent` on `OpenRampProvider`, `DepositButton`, `WithdrawButton`, `OpenRampEmbedded`, `openDeposit()`, `openWithdraw()` or the controller.
 
 | Type | When | `data.object` |
 |---|---|---|
 | `modal.opened` | The controller starts for the first time | `{}` |
+| `target.selected` | Withdraw: the server accepted the target | `{ type: 'crypto', chain, token }` or `{ type: 'fiat', currency }` |
 | `method.selected` | The user picks a method | `{ method }` |
 | `quotes.shown` | Quotes arrived | `{ method, count }` |
 | `quote.selected` | The user confirms a quote | `{ quoteId }` |
@@ -56,7 +57,9 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 | `session.completed` | Every leg succeeded |
 | `session.failed` | The step became `FAILED` or `BLOCKED` |
 | `session.refunded` | The step became `REFUNDED` |
-| `session.expired` | An open session was loaded after its expiry |
+| `session.expired` | An open session passed its expiry with no payment started (found by the sweep, or by a request) |
+| `withdrawal.completed` | Withdraw sessions: sent after `session.completed` |
+| `withdrawal.failed` | Withdraw sessions: sent after `session.failed` |
 
 `data.object` for every webhook:
 
@@ -70,7 +73,9 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 }
 ```
 
-Each event type (with its extra fields) is sent at most once per session. The server records what it sent in the session.
+`data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started.
+
+Each event type (with its extra fields) is queued at most once per session. The server records what it sent in the session. A failed delivery is retried by the [sweep](../api/server.md#background-sweep), and a delivery can arrive more than once. Deduplicate by event id.
 
 ## Build your own events
 

@@ -16,6 +16,7 @@ The full definitions are in `packages/core/src/types.ts`. The concept pages expl
 | `OrkError`, `OrkErrorCode` | [Flow: errors as fields](../concepts/flow.md#errors-as-fields) |
 | `OrkEvent`, `OrkEventType` | [Events](../concepts/events.md) |
 | `WalletAdapter`, `WalletBalance` | [Wallets (wagmi)](../adapters/wagmi.md) |
+| `WithdrawSource`, `Custody`, `AllowedTargets`, `WithdrawTarget` | [Withdrawals](../guide/withdraw.md) |
 
 ### PublicSession
 
@@ -25,17 +26,55 @@ What the browser and your backend see of a session:
 type PublicSession = {
   id: string
   direction: 'deposit' | 'withdraw'
-  destination: Destination
+  destination?: Destination       // deposit: set by the app; withdraw: the target the user picked
+  source?: WithdrawSource         // withdraw only
+  allowedTargets?: AllowedTargets // withdraw only
   status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
   country?: string
   currency?: string
   locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
+  result?: SessionResult          // once a payment started
   expiresAt: string
   livemode: boolean
 }
 ```
+
+### SessionResult
+
+What was paid and delivered. It is present once a payment started, and final when `status` is `completed`.
+
+```ts
+type SessionResult = {
+  method: string          // e.g. 'vietqr'
+  provider: string        // display name of the first leg's provider
+  input: Amount           // what the user paid (the first leg's quoted input)
+  output: Amount          // what arrived: the last leg's reported output, else its quoted output
+  outputConfirmed: boolean // true when output comes from the provider or the chain; false when it is the quote
+  fees: Fee[]             // the fees of every leg's quote
+  txHashes: string[]      // transaction hashes the legs reported, in leg order
+}
+```
+
+### Withdraw types
+
+```ts
+type Custody = 'user_wallet' | 'app'
+
+type WithdrawSource = { chain: string; token: string; symbol?: string; decimals?: number; custody: Custody }
+
+type AllowedTargets = {
+  crypto?: { chains?: string[] }
+  fiat?: { currencies?: string[] }
+}
+
+type WithdrawTarget =
+  | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number }
+  | { type: 'fiat'; currency: string }
+```
+
+`Destination` also has a `{ type: 'fiat'; currency: string }` case: a withdrawal to the user's own bank or e-wallet account.
 
 ### Fee and Quote
 
@@ -100,6 +139,8 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 | `OrkException` | `new OrkException(error, status = 400)`: throw it across boundaries; the server turns it into a JSON error response |
 | `isOrkError(value)` | Type guard |
 
+Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED` and `TARGET_NOT_ALLOWED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
+
 ## Flow table
 
 | Export | Description |
@@ -116,6 +157,7 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 |---|---|
 | `planPathways(input: PlannerInput): PlanResult` | The pure planner. See [the algorithm](../concepts/pathways.md#the-planner-algorithm). |
 | `destinationEndpoint(destination)` | The target endpoint |
+| `withdrawSourceEndpoint(source)` | The endpoint a withdrawal starts from: the source asset in the user's wallet, or at the app's address |
 | `assetMatches(matcher, asset)`, `endpointMatches(matcher, endpoint)` | Matching helpers |
 | `rankQuotes(quotes)` | Most output first, then fastest; adds `best_price` and `fastest` badges |
 
@@ -133,6 +175,7 @@ type PlannerInput = {
     clientSurfaces?: SurfaceKind[]
     hopPreference?: CryptoAsset[]
   }
+  withdraw?: { source: WithdrawSource; treasury: boolean } // required when direction is 'withdraw'
 }
 ```
 

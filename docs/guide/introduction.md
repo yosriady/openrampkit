@@ -1,17 +1,17 @@
 # Introduction
 
-OpenRampKit is an open-source kit for deposits. It gives your app three things:
+OpenRampKit is an open-source kit for deposits and withdrawals. It gives your app three things:
 
 1. **A modal.** `<openramp-modal>` is a web component (Lit, Shadow DOM). It works in any framework. A thin React wrapper is included.
 2. **A server you host.** `@openrampkit/server` is a single `Request -> Response` handler. It holds your provider secrets, plans pathways, runs legs, takes provider webhooks and sends signed webhooks to your backend.
 3. **Adapters.** Each payment or crypto provider is an adapter, like a wagmi connector. You pass configured adapters to the server. Anyone can write one with `createAdapter()` and test it with the conformance kit.
 
-The money goes to a **destination** that your backend picks: a token on a chain (for crypto apps), or your own fiat account at a payment provider (for any app).
+A deposit goes to a **destination** that your backend picks: a token on a chain (for crypto apps), or your own fiat account at a payment provider (for any app). A withdrawal sends a **source** asset that your backend picks to a target that the user picks: a wallet address, or their own bank or e-wallet account. See [Withdrawals](./withdraw.md).
 
 ![The playground in the Next.js example](../screenshots/00-playground.png)
 
 ::: warning Prototype
-OpenRampKit is a prototype (phases 0 to 3 of the [spec](../design/spec.md)). APIs will change. This site documents deposits. Withdraw support (sessions with `direction: 'withdraw'`, and sell legs in the Swapped adapter) is being built and is not documented yet.
+OpenRampKit is a prototype (phases 0 to 3 of the [spec](../design/spec.md)). APIs will change.
 :::
 
 ## When to use it
@@ -49,9 +49,20 @@ The cost of self-hosting is real. You sign up with each provider, you keep their
 5. The server learns about progress from provider webhooks and status checks. When all legs succeed, the step is `COMPLETED`.
 6. The server sends `session.completed` to your backend. You credit the user.
 
+## How a withdrawal works
+
+1. Your backend creates a session with `direction: 'withdraw'` and a `source` (the asset, and who holds it). It returns `clientSecret` to the browser.
+2. The user picks a target: a network, a token and an address ("To wallet"), or a payout method ("To cash").
+3. The user enters an amount and confirms a quote. The server starts the leg.
+4. The funds leave with a wallet transaction. The user's wallet signs it, or your treasury hook sends it.
+5. The server sends `session.completed` and `withdrawal.completed` to your backend.
+
+A background sweep keeps each session moving after the user closes the tab. See [Background sweep](../api/server.md#background-sweep).
+
 ## Next steps
 
 - [Prerequisites](./prerequisites.md)
 - [Installation](./installation.md)
 - [Quick start (Next.js)](./quick-start-nextjs.md)
+- [Withdrawals](./withdraw.md)
 - [Architecture](../concepts/architecture.md)

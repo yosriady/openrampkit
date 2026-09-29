@@ -8,6 +8,7 @@ import { mockAdapter } from '@openrampkit/adapter-mock'
 mockAdapter()                                          // fiat legs only
 mockAdapter({ crypto: true, bridge: true })            // also wallet, transfer and bridge
 mockAdapter({ settleMs: 0, name: 'Sandbox provider' }) // instant, custom name
+mockAdapter({ crypto: true, offramp: true })           // also withdraw to a wallet and to cash
 ```
 
 ## Options
@@ -17,6 +18,7 @@ mockAdapter({ settleMs: 0, name: 'Sandbox provider' }) // instant, custom name
 | `settleMs` | `number` | `3000` | Time from "paid" to "completed" |
 | `crypto` | `boolean` | `false` | Add mock `wallet` and `transfer` legs. Use when the real Relay adapter is not configured. |
 | `bridge` | `boolean` | `false` | Add a mock `bridge` leg for two-leg pathways. Use when Relay is not configured. |
+| `offramp` | `boolean` | `false` | Add a mock `offramp` leg for withdrawals to cash. See [Offramp leg](#offramp-leg). |
 | `name` | `string` | `'Test provider'` | Name shown to users |
 
 Do not turn on `crypto` or `bridge` next to the real Relay adapter: both would offer the same methods.
@@ -31,8 +33,23 @@ Do not turn on `crypto` or `bridge` next to the real Relay adapter: both would o
 | `wallet` | `bridge_swap` | wallet | any crypto in a wallet | any crypto | all | `WALLET_TX` |
 | `transfer` | `bridge_swap` | transfer | any crypto in a wallet | any crypto | all | `DEPOSIT_ADDRESS` |
 | `bridge` | `bridge_swap` | (hop) | USDC on known chains | any crypto | all | none shown |
+| `offramp` | `crypto_offramp` | bank_transfer, gcash, momo, promptpay | USDC on known chains (wallet or app address) | fiat in the user's account | all | `FORM`, then `WALLET_TX` |
 
 Because the fiat legs deliver USDC on Base, a destination on another chain (for example Monad) gets a two-leg pathway through the `bridge` leg (or Relay).
+
+The `wallet` leg (with `crypto: true`) also serves withdrawals to a wallet: it asks for one mock transaction to the target address.
+
+## Offramp leg
+
+`offramp: true` adds a `crypto_offramp` leg for [withdrawals to cash](../guide/withdraw.md#to-cash). It moves no money.
+
+- Methods: `bank_transfer`, `gcash`, `momo`, `promptpay` (local methods only in their countries).
+- Currencies: the test FX currencies below. Limits: 5 to 5000 USD.
+- Quote: 1 USDC is 1 USD, minus a 1% fee in USDC, converted at the test FX rate.
+- Steps:
+  1. `FORM` (sub-state `PAYOUT_ACCOUNT`): the payout account. Bank transfer asks for the account holder name, the bank name and the account number. GCash, MoMo and PromptPay ask for the name and a phone number. Transition `submit_details`.
+  2. `WALLET_TX` (sub-state `SEND_CRYPTO`): an ERC-20 USDC `transfer` of the quoted amount to a fake provider address. Transition `submit_tx`. With `custody: 'app'`, the server's treasury hook sends it.
+  3. `PROCESSING` (`SETTLING`) for `settleMs`, then `COMPLETED` with the quoted payout as the output.
 
 ## Quotes
 
@@ -50,6 +67,7 @@ Because the fiat legs deliver USDC on Base, a destination on another chain (for 
 | `transfer` | Press **Simulate deposit (test mode)** (transition `simulate_deposit`) |
 | `wallet` | Send with a wallet adapter; the client fires `submit_tx` with the hash |
 | `bridge` | Nothing: it is paid when it starts and settles after `settleMs` |
+| `offramp` | Fill in the payout form (`submit_details`), then send with a wallet adapter or the treasury (`submit_tx`) |
 
 After "paid", the leg is `PROCESSING` (sub-state `SETTLING`) until `settleMs` has passed, then `COMPLETED` with a fake transaction hash.
 

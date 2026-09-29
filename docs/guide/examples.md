@@ -2,7 +2,7 @@
 
 ## Next.js playground
 
-[`examples/next-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/next-demo) is a Next.js App Router app with a playground. You pick the user's country, the destination, the wallet, the theme and the accent color, and the widget restarts with a new session. The page also shows the widget events and the webhooks your backend received.
+[`examples/next-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/next-demo) is a Next.js App Router app with a playground. You pick the flow (deposit or withdraw), the user's country, the destination, who holds the funds, the wallet, the theme and the accent color, and the widget restarts with a new session. The page also shows the widget events and the webhooks your backend received.
 
 ![Playground](../screenshots/00-playground.png)
 
@@ -24,12 +24,14 @@ What to look at:
 
 | File | Shows |
 |---|---|
-| `lib/openramp.ts` | `createOpenRamp` with mock, Relay and Xendit adapters, and webhooks |
+| `lib/openramp.ts` | `createOpenRamp` with mock (including `offramp: true`), Relay and Xendit adapters, webhooks, and the withdraw hooks `screenAddress` and `treasury` |
 | `app/api/openramp/[...path]/route.ts` | Mounting the handler with `nextHandlers()` |
 | `app/api/deposit-session/route.ts` | Creating a session in your backend |
+| `app/api/withdraw-session/route.ts` | Creating a withdraw session with `source`, `custody` and `allowedTargets` |
+| `app/api/cron/route.ts`, `vercel.json` | The background sweep as a Vercel Cron Job, checked with `CRON_SECRET` |
 | `app/api/hooks/route.ts` | Verifying webhooks with `openramp.webhooks.verify` |
-| `components/Playground.tsx` | `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, themes, `createMockWallet`, `wagmiWallet` |
-| `e2e/deposit.spec.ts` | Playwright flows on desktop, Android and iPhone |
+| `components/Playground.tsx` | `OpenRampProvider`, `DepositButton`, `WithdrawButton`, `OpenRampEmbedded`, themes, `createMockWallet`, `wagmiWallet` |
+| `e2e/deposit.spec.ts`, `e2e/withdraw.spec.ts` | Playwright flows on desktop, Android and iPhone |
 | `e2e/screens.spec.ts` | Screenshot capture |
 
 Flows to try:
@@ -42,6 +44,9 @@ Flows to try:
 | Germany, no wallet | Transfer crypto to a deposit address |
 | Indonesia, Merchant fiat account | QRIS pay-in, no crypto |
 | Philippines, embedded off | Modal mode; a bottom sheet on phones |
+| Withdraw, United States, mock wallet | To wallet: USDC on Base to an Arbitrum address |
+| Withdraw, Philippines, mock wallet | To cash: a GCash payout through the mock offramp |
+| Withdraw, app holds the funds | The demo treasury sends instead of the wallet |
 
 | Pay from wallet | Confirm in wallet | Transfer: pick a source | Deposit address |
 |---|---|---|---|
