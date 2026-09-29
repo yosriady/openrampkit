@@ -1,0 +1,81 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenRampKit Web Demo</title>
+    <style>
+      :root { color-scheme: light dark; font-family: ui-sans-serif, system-ui, sans-serif; }
+      body { margin: 0; padding: 24px 16px; background: #f3f4f7; color: #0f172a; }
+      @media (prefers-color-scheme: dark) { body { background: #0b0d12; color: #e6e8ec; } }
+      main { max-width: 960px; margin: 0 auto; display: grid; gap: 24px; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); }
+      @media (max-width: 760px) { main { grid-template-columns: 1fr; } }
+      fieldset { border: 1px solid rgba(127,127,127,.3); border-radius: 12px; padding: 12px 16px; margin: 0 0 12px; }
+      label { display: flex; justify-content: space-between; gap: 12px; align-items: center; margin: 8px 0; font-size: 14px; }
+      button.open { width: 100%; padding: 12px; font: inherit; font-weight: 600; border-radius: 12px; border: none; background: #2744c4; color: #fff; cursor: pointer; }
+      #log { font: 12px ui-monospace, monospace; white-space: pre-wrap; max-height: 200px; overflow: auto; opacity: .75; }
+      h1 { font-size: 20px; margin: 0 0 12px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section>
+        <h1>OpenRampKit</h1>
+        <fieldset>
+          <legend>Theme</legend>
+          <label>Mode <select id="mode"><option>light</option><option>dark</option><option>auto</option></select></label>
+          <label>Accent <input id="accent" type="color" value="#2744c4" /></label>
+          <label>Radius <select id="radius"><option>large</option><option>medium</option><option>small</option><option>none</option></select></label>
+        </fieldset>
+        <fieldset>
+          <legend>Session</legend>
+          <label>Country <select id="country"><option>US</option><option>PH</option><option>VN</option><option>ID</option><option>TH</option></select></label>
+          <label>Wallet connected <input id="wallet" type="checkbox" checked /></label>
+        </fieldset>
+        <button class="open" id="open">Deposit</button>
+        <p style="font-size:13px;opacity:.7">A fake server runs in this page. In the OTP step, use code 123456.</p>
+        <div id="log"></div>
+      </section>
+      <section>
+        <h2 style="font-size:16px;margin:0 0 12px">Embedded</h2>
+        <div id="embedded"></div>
+      </section>
+    </main>
+    <script type="module">
+      // Run with: pnpm --filter @openrampkit/web demo   (Vite serves src directly; core and client must be built)
+      import { openDeposit, lightTheme, darkTheme, autoTheme } from '../src/index.ts'
+      import { createMockWallet } from '@openrampkit/client'
+      import { createMockFetch } from './mock-server.js'
+
+      const $ = (id) => document.getElementById(id)
+      const log = (line) => ($('log').textContent = `${line}\n${$('log').textContent}`.slice(0, 4000))
+      const theme = () => {
+        const opts = { accent: $('accent').value, radius: $('radius').value }
+        return { light: lightTheme, dark: darkTheme, auto: autoTheme }[$('mode').value](opts)
+      }
+      const options = (extra = {}) => ({
+        baseUrl: '/api/openramp',
+        clientSecret: async () => 'ses_demo.secret',
+        fetch: createMockFetch({ country: $('country').value }),
+        ...($('wallet').checked ? { wallet: createMockWallet() } : {}),
+        theme: theme(),
+        onEvent: (e) => log(`${e.type} ${JSON.stringify(e.data.object)}`),
+        ...extra,
+      })
+
+      $('open').addEventListener('click', () => {
+        const h = openDeposit(options({ onClose: (s) => log(`closed at ${s?.step.state}`) }))
+        h.done.then((s) => log(`done: ${s.step.state}`)).catch((e) => log(`not completed: ${e.code}`))
+      })
+
+      let embedded
+      const mountEmbedded = () => {
+        embedded?.close()
+        embedded = openDeposit(options({ container: $('embedded'), embedded: true }))
+      }
+      for (const id of ['mode', 'accent', 'radius']) $(id).addEventListener('input', () => { if (embedded) embedded.element.theme = theme() })
+      for (const id of ['country', 'wallet']) $(id).addEventListener('change', mountEmbedded)
+      mountEmbedded()
+    </script>
+  </body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "name": "@openrampkit/wagmi",
+  "version": "0.0.1",
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@openrampkit/core": "workspace:*"
+  },
+  "peerDependencies": {
+    "@wagmi/core": "^2.0.0",
+    "viem": "^2.0.0"
+  },
+  "devDependencies": {
+    "@wagmi/core": "^2.17.0",
+    "viem": "^2.30.0"
+  }
+}

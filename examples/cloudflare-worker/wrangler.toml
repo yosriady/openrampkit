@@ -1,0 +1,14 @@
+name = "openramp-server"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Sessions live in KV. Create one with: npx wrangler kv namespace create SESSIONS
+[[kv_namespaces]]
+binding = "SESSIONS"
+id = "replace-with-your-kv-namespace-id"
+
+[vars]
+PUBLIC_URL = "http://localhost:8787"
+ALLOWED_ORIGINS = "http://localhost:3000"
+# Secrets (set with `wrangler secret put`): OPENRAMP_SECRET, APP_API_KEY, WEBHOOK_URL, WEBHOOK_SECRET

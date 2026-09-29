@@ -1,0 +1,56 @@
+// The flow transition table, stored as data. Server, client and the adapter test kit all read it.
+// Rule: terminality comes from this table, never from counting transitions.
+
+import type { LegStatus, StateName, Step } from './types.js'
+
+export type TableEntry = {
+  /** States a step in this state may move to */
+  next: StateName[]
+  terminal: boolean
+}
+
+export const TRANSITION_TABLE: Record<StateName, TableEntry> = {
+  SELECT_METHOD: { next: ['QUOTE', 'BLOCKED', 'EXPIRED'], terminal: false },
+  QUOTE: { next: ['SELECT_METHOD', 'AUTH', 'KYC', 'PAYMENT', 'PROCESSING', 'BLOCKED', 'EXPIRED'], terminal: false },
+  AUTH: { next: ['KYC', 'PAYMENT', 'FAILED', 'EXPIRED'], terminal: false },
+  KYC: { next: ['KYC', 'PAYMENT', 'FAILED', 'EXPIRED'], terminal: false },
+  PAYMENT: { next: ['PAYMENT', 'PROCESSING', 'COMPLETED', 'FAILED', 'EXPIRED', 'QUOTE'], terminal: false },
+  PROCESSING: { next: ['PROCESSING', 'PAYMENT', 'COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED'], terminal: false },
+  COMPLETED: { next: [], terminal: true },
+  FAILED: { next: ['SELECT_METHOD'], terminal: true },
+  EXPIRED: { next: [], terminal: true },
+  REFUNDED: { next: [], terminal: true },
+  BLOCKED: { next: ['SELECT_METHOD'], terminal: true },
+}
+
+export const TABLE_VERSION = 1
+
+export function isTerminal(state: StateName): boolean {
+  return TRANSITION_TABLE[state].terminal
+}
+
+export function isLegalMove(from: StateName, to: StateName): boolean {
+  return from === to || TRANSITION_TABLE[from].next.includes(to)
+}
+
+export const TERMINAL_LEG_STATUSES: LegStatus[] = ['succeeded', 'failed', 'refunded', 'expired']
+
+export function isLegTerminal(status: LegStatus): boolean {
+  return TERMINAL_LEG_STATUSES.includes(status)
+}
+
+/** Validate a step's shape against the table. Returns a list of problems (empty when valid). */
+export function validateStep(step: Pick<Step, 'state' | 'transitions'>): string[] {
+  const problems: string[] = []
+  const entry = TRANSITION_TABLE[step.state]
+  if (!entry) return [`Unknown state ${step.state}`]
+  if (entry.terminal && step.transitions.some((t) => t.kind === 'AWAIT')) {
+    problems.push(`Terminal state ${step.state} must not have AWAIT transitions`)
+  }
+  const names = new Set<string>()
+  for (const t of step.transitions) {
+    if (names.has(t.name)) problems.push(`Duplicate transition ${t.name}`)
+    names.add(t.name)
+  }
+  return problems
+}

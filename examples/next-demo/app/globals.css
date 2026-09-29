@@ -1,0 +1,17 @@
+:root { --bg:#f5f6f8; --panel:#fff; --ink:#141820; --muted:#667085; --line:#e3e6ec; --accent:#2744c4 }
+* { box-sizing: border-box }
+body { margin:0; background:var(--bg); color:var(--ink); font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif }
+.top { display:flex; justify-content:space-between; align-items:center; padding:12px 20px; border-bottom:1px solid var(--line); background:var(--panel) }
+.brand { font-weight:700; font-size:16px } .brand span { color:var(--accent) } .brand em { font-style:normal; color:var(--muted); font-weight:500; margin-left:6px }
+.pill { margin-left:10px; font-size:11px; font-weight:600; background:#fff4d6; color:#8a5a00; padding:2px 8px; border-radius:99px }
+.grid { display:grid; grid-template-columns: 260px minmax(0,1fr) 360px; gap:16px; padding:16px; min-height: calc(100vh - 60px) }
+.panel { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px; display:flex; flex-direction:column; gap:10px; min-width:0 }
+.panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:var(--muted); margin:8px 0 0 }
+.panel label { display:flex; flex-direction:column; gap:4px; font-weight:500 }
+.panel label.row { flex-direction:row; align-items:center; gap:8px }
+select, input[type=color] { padding:8px; border:1px solid var(--line); border-radius:8px; background:#fff; font:inherit }
+.stage { display:flex; align-items:flex-start; justify-content:center; padding-top:24px; min-width:0 }
+.code { background:#0f1218; color:#d8def0; padding:12px; border-radius:8px; font-size:12px; overflow-x:auto; margin:0 }
+.log { margin:0; padding-left:18px; max-height:180px; overflow:auto; font-size:12px }
+.hint { color:var(--muted); font-size:13px }
+@media (max-width: 1000px) { .grid { grid-template-columns: 1fr } }

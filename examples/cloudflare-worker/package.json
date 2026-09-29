@@ -1,0 +1,17 @@
+{
+  "name": "cloudflare-worker-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --port 8787",
+    "deploy": "wrangler deploy"
+  },
+  "dependencies": {
+    "@openrampkit/adapter-mock": "workspace:*",
+    "@openrampkit/adapter-relay": "workspace:*",
+    "@openrampkit/server": "workspace:*"
+  },
+  "devDependencies": {
+    "wrangler": "^4.40.0"
+  }
+}

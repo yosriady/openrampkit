@@ -1,0 +1,15 @@
+node_modules
+dist
+.next
+.turbo
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+coverage
+test-results
+playwright-report
+e2e/screens
+.wrangler
+.dev.vars
+.playwright-mcp

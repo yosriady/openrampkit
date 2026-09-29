@@ -1,0 +1,36 @@
+{
+  "name": "next-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "e2e": "playwright test"
+  },
+  "dependencies": {
+    "@openrampkit/adapter-mock": "workspace:*",
+    "@openrampkit/adapter-relay": "workspace:*",
+    "@openrampkit/client": "workspace:*",
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/react": "workspace:*",
+    "@openrampkit/server": "workspace:*",
+    "@openrampkit/wagmi": "workspace:*",
+    "@openrampkit/web": "workspace:*",
+    "@rainbow-me/rainbowkit": "^2.2.8",
+    "@tanstack/react-query": "^5.80.0",
+    "@wagmi/core": "^2.17.0",
+    "next": "^15.5.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "viem": "^2.30.0",
+    "wagmi": "^2.15.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "typescript": "^5.9.0"
+  }
+}
