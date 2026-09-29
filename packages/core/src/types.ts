@@ -33,6 +33,7 @@ export type Destination =
       address: string
       symbol?: string
       decimals?: number
+      /** Not supported yet (planned): contract calls after delivery. The server rejects sessions that set it. */
       calls?: ContractCall[]
     }
   | { type: 'merchant'; currency: string; accountRef?: string }

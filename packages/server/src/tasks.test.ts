@@ -123,3 +123,23 @@ describe('amount bounds and conflicts', () => {
     expect((await r.json()).error).toMatchObject({ code: 'CONFLICT', retryable: true })
   })
 })
+
+describe('limits', () => {
+  it('rate-limits provider calls per session and minute', async () => {
+    const { ramp, call } = make({ limits: { providerCallsPerMinute: 2 } })
+    const s = await ramp.sessions.create({ userId: 'u', country: 'VN', destination: DEST })
+    const plan = () => call(`/sessions/${s.id}/plan`, { method: 'POST', secret: s.clientSecret, body: '{}' })
+    expect((await plan()).status).toBe(200)
+    expect((await plan()).status).toBe(200)
+    const r = await plan()
+    expect(r.status).toBe(429)
+    expect((await r.json()).error.code).toBe('RATE_LIMITED')
+    // reading the session is not limited
+    expect((await call(`/sessions/${s.id}`, { secret: s.clientSecret })).status).toBe(200)
+  })
+
+  it('rejects contract calls on the destination (not supported yet)', async () => {
+    const { ramp } = make()
+    await expect(ramp.sessions.create({ userId: 'u', destination: { ...DEST, calls: [{ to: '0x1', data: '0x' }] } })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+  })
+})

@@ -64,6 +64,11 @@ export type OpenRampConfig = {
   /** Timeouts in ms. Defaults: quote 9000, webhook delivery 4000. */
   timeouts?: { quote?: number; webhook?: number }
   /**
+   * Per-session request limits for routes that call provider APIs (plan, quotes, target).
+   * Default 60 per minute. The counter lives in the store's KV space (best effort on non-atomic stores).
+   */
+  limits?: { providerCallsPerMinute?: number }
+  /**
    * Withdraw: screen a crypto target address (sanctions, blocked lists) before the user can use it.
    * Return false to refuse the address. An error also refuses it (fail closed).
    */

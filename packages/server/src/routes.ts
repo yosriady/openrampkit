@@ -59,6 +59,8 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return json(publicSession(rec))
   }
 
+  if ((action === 'plan' || action === 'quotes' || action === 'target') && method === 'POST') await checkRate(rt, rec.id)
+
   if (action === 'plan' && method === 'POST') {
     const body = await readJson<{ walletConnected?: boolean; walletAddress?: string; surfaces?: SurfaceKind[] }>(req, {})
     if (body.walletAddress) rec.walletAddress = body.walletAddress
@@ -227,4 +229,13 @@ async function healthRoute(rt: Runtime, req: Request): Promise<Response> {
     })),
   )
   return json({ ok: checks.every((c) => c.ok), adapters: checks }, checks.every((c) => c.ok) ? 200 : 503)
+}
+
+/** Cap requests that call provider APIs, per session and minute. */
+async function checkRate(rt: Runtime, sessionId: string): Promise<void> {
+  const max = rt.config.limits?.providerCallsPerMinute ?? 60
+  const key = `rl:${sessionId}:${Math.floor(Date.now() / 60_000)}`
+  const n = ((await rt.store.kv.get<number>(key)) ?? 0) + 1
+  await rt.store.kv.put(key, n, 120)
+  if (n > max) throw new OrkException(orkError('RATE_LIMITED'), 429)
 }

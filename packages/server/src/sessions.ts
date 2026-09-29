@@ -17,6 +17,9 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   const expiresAt = now + (input.ttlMinutes ?? 30) * 60_000
   const direction = input.direction ?? 'deposit'
   if (direction !== 'deposit' && direction !== 'withdraw') throw new OrkException(orkError('BAD_REQUEST', { message: '`direction` must be "deposit" or "withdraw".' }), 400)
+  if (input.destination?.type === 'crypto' && input.destination.calls?.length) {
+    throw new OrkException(orkError('BAD_REQUEST', { message: 'Contract calls after delivery (`destination.calls`) are not supported yet.' }), 400)
+  }
   if (direction === 'deposit' && !input.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'A deposit session needs `destination`.' }), 400)
   if (direction === 'withdraw' && input.destination) {
     throw new OrkException(orkError('BAD_REQUEST', { message: 'A withdraw session takes `source`, not `destination`: the user picks the target.' }), 400)
