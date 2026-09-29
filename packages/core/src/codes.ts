@@ -58,6 +58,15 @@ export const METHODS: Record<string, MethodInfo> = {
   interac: { id: 'interac', name: 'Interac', kind: 'bank' },
   truemoney: { id: 'truemoney', name: 'TrueMoney', kind: 'ewallet' },
   linkaja: { id: 'linkaja', name: 'LinkAja', kind: 'ewallet' },
+  // P2P payment apps (Peer) and more wallets (Meld, Onramper)
+  cash_app: { id: 'cash_app', name: 'Cash App', kind: 'wallet_pay' },
+  zelle: { id: 'zelle', name: 'Zelle', kind: 'bank' },
+  chime: { id: 'chime', name: 'Chime', kind: 'bank' },
+  paypal: { id: 'paypal', name: 'PayPal', kind: 'ewallet' },
+  wise: { id: 'wise', name: 'Wise', kind: 'bank' },
+  revolut: { id: 'revolut', name: 'Revolut', kind: 'ewallet' },
+  binance_pay: { id: 'binance_pay', name: 'Binance Pay', kind: 'ewallet' },
+  mercadopago: { id: 'mercadopago', name: 'Mercado Pago', kind: 'ewallet' },
 }
 
 const EU = ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK']
@@ -71,6 +80,8 @@ export const METHOD_COUNTRIES: Record<string, string[]> = {
   duitnow: ['MY'], touchngo: ['MY'], fpx: ['MY'], boost: ['MY'], grabpay: ['MY', 'SG', 'PH'],
   paynow: ['SG'],
   upi: ['IN'], pix: ['BR'], interac: ['CA'], ach: ['US'], venmo: ['US'],
+  cash_app: ['US'], zelle: ['US'], chime: ['US'],
+  mercadopago: ['AR', 'BR', 'CL', 'CO', 'MX', 'PE', 'UY'],
   sepa: [...EU, 'NO', 'IS', 'LI', 'CH'],
 }
 
@@ -93,9 +104,9 @@ export const DEFAULT_METHOD_PRIORITY: Record<string, string[]> = {
   PH: ['qrph', 'gcash', 'maya', 'instapay', 'card'],
   SG: ['paynow', 'card', 'apple_pay', 'google_pay'],
   IN: ['upi', 'card'],
-  BR: ['pix', 'card'],
+  BR: ['pix', 'card', 'mercadopago'],
   CA: ['interac', 'card', 'apple_pay'],
-  US: ['apple_pay', 'card', 'google_pay', 'ach'],
+  US: ['apple_pay', 'card', 'google_pay', 'ach', 'venmo', 'cash_app', 'zelle', 'paypal', 'chime'],
   '*': ['apple_pay', 'card', 'google_pay', 'sepa', 'bank_transfer'],
 }
 
