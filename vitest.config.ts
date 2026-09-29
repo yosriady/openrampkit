@@ -13,5 +13,11 @@ export default defineConfig({
   test: {
     include: ['packages/**/*.test.ts'],
     environment: 'node',
+    coverage: {
+      provider: 'v8',
+      include: ['packages/**/src/**'],
+      exclude: ['**/*.test.ts', '**/testctx.ts', '**/types.ts', '**/wallet.ts', '**/icons.ts', '**/styles.ts'],
+      reporter: ['text-summary', 'text'],
+    },
   },
 })

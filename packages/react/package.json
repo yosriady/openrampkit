@@ -22,8 +22,8 @@
     "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "@openrampkit/core": "workspace:*",
     "@openrampkit/client": "workspace:*",
+    "@openrampkit/core": "workspace:*",
     "@openrampkit/web": "workspace:*"
   },
   "peerDependencies": {
@@ -31,6 +31,8 @@
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
-    "react": "^19.0.0"
+    "@types/react-dom": "^19.3.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.3.0"
   }
 }
