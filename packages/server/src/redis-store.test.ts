@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fromNodeRedis, redisStore } from './redis-store.js'
+import { fromNodeRedis, fromNodeRedisV4, redisStore } from './redis-store.js'
 import type { RedisLike } from './redis-store.js'
 import { VersionConflictError } from './store.js'
 
@@ -70,5 +70,20 @@ describe('redisStore', () => {
     await r.set('k2', 'v')
     await r.eval('S', ['k'], ['1', '{}', '9'])
     expect(calls).toEqual([['get', 'k'], ['set', 'k', 'v', 'EX', 5], ['set', 'k2', 'v'], ['eval', 'S', 1, 'k', '1', '{}', '9']])
+  })
+
+  it('fromNodeRedisV4 maps node-redis v4 calls', async () => {
+    const calls: unknown[][] = []
+    const client = {
+      get: async (k: string) => (calls.push(['get', k]), null),
+      set: async (k: string, v: string, o?: { EX?: number }) => (calls.push(['set', k, v, o]), 'OK'),
+      eval: async (sc: string, o: { keys: string[]; arguments: string[] }) => (calls.push(['eval', sc, o]), 1),
+    }
+    const r = fromNodeRedisV4(client)
+    await r.get('k')
+    await r.set('k', 'v', { ex: 5 })
+    await r.set('k2', 'v')
+    await r.eval('S', ['k'], ['1'])
+    expect(calls).toEqual([['get', 'k'], ['set', 'k', 'v', { EX: 5 }], ['set', 'k2', 'v', undefined], ['eval', 'S', { keys: ['k'], arguments: ['1'] }]])
   })
 })

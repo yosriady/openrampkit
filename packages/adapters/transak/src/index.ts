@@ -376,8 +376,7 @@ export function transak(opts: TransakOptions) {
       try {
         const res = await fetchJson<{ data?: { widgetUrl?: string } }>(ctx.fetch, `${urls.gateway}/api/v2/auth/session`, {
           method: 'POST',
-          // TO VERIFY: `x-user-ip` (end-user IP) is marked required; AdapterContext has no client IP yet.
-          headers: { 'access-token': await accessToken(ctx), 'x-api-key': opts.apiKey },
+          headers: { 'access-token': await accessToken(ctx), 'x-api-key': opts.apiKey, ...(ctx.session.ip ? { 'x-user-ip': ctx.session.ip } : {}) },
           body: JSON.stringify({ widgetParams }),
         })
         widgetUrl = res.data?.widgetUrl
@@ -396,7 +395,8 @@ export function transak(opts: TransakOptions) {
         surface:
           surfaceKind === 'IFRAME'
             ? { kind: 'IFRAME', url: widgetUrl!, origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
-            : { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak' },
+            : // Transak checks the Referer against the partner domain, so keep it on the start redirect.
+              { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak', keepReferrer: true },
         transitions: [awaitPoll(POLL)],
         status: 'awaiting_user',
         ref,
@@ -412,8 +412,10 @@ export function transak(opts: TransakOptions) {
           return false
         }
         if (typeof body.data !== 'string') return false
-        // The server passes only `log` today. Use the in-memory token, or `shared` if a future server passes it.
-        const shared = (ctx as { shared?: ScopedKV }).shared
+        // Transak signs webhooks with the current access token. It is cached in `shared` (the session
+        // store), so every server instance can verify. We never fetch a new token here: a new token
+        // would cancel the one Transak used to sign.
+        const shared = ctx.shared
         const candidates = new Set<string>()
         if (memToken) candidates.add(memToken.token)
         const stored = shared ? await shared.get<TokenRecord>('accessToken') : undefined

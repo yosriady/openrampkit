@@ -59,18 +59,34 @@ export function redisStore(redis: RedisLike, opts: RedisStoreOptions = {}): Sess
   }
 }
 
-/** Minimal node-redis / ioredis shape */
+/** Minimal ioredis shape (positional arguments) */
 export type NodeRedisLike = {
   get(key: string): Promise<string | null>
   set(key: string, value: string, ...args: Array<string | number>): Promise<unknown>
   eval(script: string, numKeys: number, ...args: string[]): Promise<unknown>
 }
 
-/** Adapt an ioredis client (or anything with the same call style) to `RedisLike`. */
+/** Adapt an ioredis client (or anything with the same positional call style) to `RedisLike`. For node-redis v4+, use `fromNodeRedisV4`. */
 export function fromNodeRedis(client: NodeRedisLike): RedisLike {
   return {
     get: (k) => client.get(k),
     set: (k, v, o) => (o?.ex ? client.set(k, v, 'EX', o.ex) : client.set(k, v)),
     eval: (script, keys, args) => client.eval(script, keys.length, ...keys, ...args),
+  }
+}
+
+/** Minimal node-redis v4+ shape (options objects) */
+export type NodeRedisV4Like = {
+  get(key: string): Promise<string | null>
+  set(key: string, value: string, opts?: { EX?: number }): Promise<unknown>
+  eval(script: string, opts: { keys: string[]; arguments: string[] }): Promise<unknown>
+}
+
+/** Adapt a node-redis v4+ client (`createClient()` from `redis`) to `RedisLike`. */
+export function fromNodeRedisV4(client: NodeRedisV4Like): RedisLike {
+  return {
+    get: (k) => client.get(k),
+    set: (k, v, o) => (o?.ex ? client.set(k, v, { EX: o.ex }) : client.set(k, v)),
+    eval: (script, keys, args) => client.eval(script, { keys, arguments: args }),
   }
 }

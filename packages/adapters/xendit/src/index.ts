@@ -5,7 +5,7 @@
 
 import { createAdapter, fetchJson, timingSafeEqual } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, minorUnits, orkError, roundTo, sub, bps as applyBps, add } from '@openrampkit/core'
+import { OrkException, add, bps as applyBps, cmp, minorUnits, orkError, roundTo, sub } from '@openrampkit/core'
 import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
 
 export type XenditOptions = {
@@ -177,8 +177,8 @@ export function xendit(opts: XenditOptions) {
     async quote({ leg, amountIn }): Promise<LegQuote> {
       const c = channelFor(leg.legId)
       const amount = roundTo(amountIn?.amount ?? '0', minorUnits(c.currency))
-      if (Number(amount) < Number(c.min)) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${c.min} ${c.currency}.` }), 422)
-      if (Number(amount) > Number(c.max)) throw new OrkException(orkError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${c.max} ${c.currency}.` }), 422)
+      if (cmp(amount, c.min) < 0) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${c.min} ${c.currency}.` }), 422)
+      if (cmp(amount, c.max) > 0) throw new OrkException(orkError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${c.max} ${c.currency}.` }), 422)
       const fees = feesFor(c, amount)
       const net = fees.reduce((acc, f) => sub(acc, f.amount), amount)
       return {
@@ -190,6 +190,9 @@ export function xendit(opts: XenditOptions) {
         eta: legs.find((l) => l.id === leg.legId)!.eta,
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
         limits: { min: c.min, max: c.max, currency: c.currency },
+        // A new key per quote: "Try again" after a failure creates a new payment request,
+        // while a retried start for the same quote reuses the first one.
+        data: { nonce: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}` },
       }
     },
 
@@ -213,7 +216,7 @@ export function xendit(opts: XenditOptions) {
           description: 'Deposit',
           metadata: { openramp_session: ctx.session.id, user_id: ctx.session.userId },
         },
-        ctx.idempotencyKey(`xendit:${leg.legId}:start`),
+        ctx.idempotencyKey(`xendit:${leg.legId}:${String((quote.data as { nonce?: string } | undefined)?.nonce ?? 'start')}`),
       )
       await ctx.store.put('pr', { id: pr.payment_request_id, leg: leg.legId, amount })
       return toStep(pr, c, amount)
@@ -230,8 +233,15 @@ export function xendit(opts: XenditOptions) {
         const token = req.headers.get('x-callback-token') ?? ''
         return token.length > 0 && timingSafeEqual(token, opts.webhookToken)
       },
-      async parse(raw): Promise<LegEvent[]> {
-        const body = JSON.parse(raw) as { event?: string; data?: { payment_request_id?: string; status?: string; request_amount?: number; currency?: string; failure_code?: string } }
+      async parse(raw, ctx): Promise<LegEvent[]> {
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(raw)
+        } catch {
+          ctx.log.warn('xendit: webhook body is not JSON')
+          return []
+        }
+        const body = parsed as { event?: string; data?: { payment_request_id?: string; status?: string; request_amount?: number; currency?: string; failure_code?: string } }
         const d = body.data
         if (!d?.payment_request_id) return []
         if (body.event === 'payment.capture' || d.status === 'SUCCEEDED') {

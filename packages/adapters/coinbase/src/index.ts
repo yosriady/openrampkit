@@ -40,7 +40,7 @@ export type CoinbaseOptions = {
   defaultCountry?: string
   /**
    * US state used for quotes when the session has no region (Coinbase needs `subdivision` for US quotes).
-   * TO VERIFY: OpenRampKit's AdapterContext does not carry the session region yet.
+   * Used only when the session has no region (ISO 3166-2, from `CreateSessionInput.region` or geo headers).
    */
   defaultSubdivision?: string
   /** Use sandbox transactions (partnerUserRef prefixed with "sandbox-"). Default: !session.livemode */

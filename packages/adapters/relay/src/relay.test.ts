@@ -62,6 +62,8 @@ function expectConformant(q: LegQuote) {
   expect(checkLegQuote(q)).toEqual([])
 }
 
+const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+
 describe('relay adapter', () => {
   it('passes the shape check and plans wallet, transfer and hop pathways', () => {
     const a = relay()
@@ -164,10 +166,8 @@ describe('relay adapter', () => {
       txs: [{ to: BASE_USDC.token, data: erc20TransferData(DEST, '12500000'), chainId: 8453 }],
     })
     expect(erc20TransferData(DEST, '12500000')).toBe(`0xa9059cbb${'0'.repeat(24)}000000000000000000000000000000000000beef${'0'.repeat(58)}bebc20`)
-    // not verified on chain: succeeds once the wallet reports a hash
+    // no Relay call; the leg waits for the wallet's tx hash
     expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ status: 'awaiting_user' })
-    await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: `0x${'cd'.repeat(32)}` } }, ctx)
-    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', status: 'succeeded' })
     expect(calls).toHaveLength(0)
 
     // native token: value transfer
@@ -256,14 +256,65 @@ describe('relay adapter', () => {
     expect(v3.headers.get('x-api-key')).toBe('secret')
   })
 
-  it('transfer: same chain and token shows the destination address, no Relay call', async () => {
-    const { fetch, calls } = fakeFetch([])
+  it('wallet same chain: the tx hash is verified on chain (receipt status, recipient and amount)', async () => {
+    const TX = `0x${'cd'.repeat(32)}`
+    const transferLog = (to: string, amount: bigint) => ({ address: BASE_USDC.token, topics: [TRANSFER, `0x${'0'.repeat(24)}${'11'.repeat(20)}`, `0x${'0'.repeat(24)}${to.slice(2).toLowerCase()}`], data: `0x${amount.toString(16).padStart(64, '0')}` })
+    const run = async (receipt: unknown) => {
+      const { fetch, calls } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ jsonrpc: '2.0', id: 1, result: (c.body as { method: string }).method === 'eth_getTransactionReceipt' ? receipt : null }) }])
+      const a = relay()
+      const ctx = makeCtx({ fetch })
+      const q = await a.quote({ leg: walletLeg, amountIn: { amount: '12.5', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER }, deliverTo: { address: DEST } }, ctx)
+      const step = await a.start({ leg: walletLeg, quote: q }, ctx)
+      await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
+      return { status: await a.status!({ leg: walletLeg, ref: step.ref! }, ctx), calls }
+    }
+    const ok = await run({ status: '0x1', logs: [transferLog(DEST, 12_500_000n)] })
+    expect(ok.status).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: TX })
+    expect(ok.calls[0]!.body).toMatchObject({ method: 'eth_getTransactionReceipt', params: [TX] })
+    expect((await run(null)).status).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
+    expect((await run({ status: '0x0', logs: [] })).status).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
+    expect((await run({ status: '0x1', logs: [transferLog(USER, 12_500_000n)] })).status).toMatchObject({ state: 'FAILED' })
+    expect((await run({ status: '0x1', logs: [transferLog(DEST, 12_000_000n)] })).status).toMatchObject({ state: 'FAILED' })
+  })
+
+  it('wallet same chain, native: checks the tx recipient and value; a chain without an RPC is refused', async () => {
+    const TX = `0x${'ef'.repeat(32)}`
+    const nativeLeg: PathwayLeg = { ...walletLeg, to: { asset: { kind: 'crypto', chain: 'eip155:8453', token: 'native' }, location: { kind: 'address', address: DEST } } }
+    const { fetch } = fakeFetch([
+      { method: 'POST', match: 'custom-rpc', reply: (c) => ({ result: (c.body as { method: string }).method === 'eth_getTransactionReceipt' ? { status: '0x1', logs: [] } : { to: DEST, value: '0x2386f26fc10000' } }) },
+    ])
+    const a = relay({ rpcUrls: { 'eip155:8453': 'https://custom-rpc.test' } })
+    const ctx = makeCtx({ fetch, destination: { type: 'crypto', chain: 'eip155:8453', token: '0x0000000000000000000000000000000000000000', address: DEST } })
+    const q = await a.quote({ leg: nativeLeg, amountIn: { amount: '0.01', asset: { kind: 'crypto', chain: 'eip155:8453', token: 'native' } }, source: { chain: 'eip155:8453', token: 'native' } }, ctx)
+    const step = await a.start({ leg: nativeLeg, quote: q }, ctx)
+    await a.transition!({ leg: nativeLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
+    expect(await a.status!({ leg: nativeLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED' })
+    const noRpc = relay({ rpcUrls: {} })
+    const monad = { kind: 'crypto' as const, chain: 'eip155:143', token: MONAD_TOKEN, decimals: 6, symbol: 'USDC' }
+    const mctx = makeCtx({ fetch, destination: { type: 'crypto', chain: 'eip155:143', token: MONAD_TOKEN, address: DEST } })
+    const mleg: PathwayLeg = { ...walletLeg, to: { asset: monad, location: { kind: 'address', address: DEST } } }
+    const mq = await noRpc.quote({ leg: mleg, amountIn: { amount: '1', asset: monad }, source: { chain: monad.chain, token: monad.token } }, mctx)
+    const ms = await noRpc.start({ leg: mleg, quote: mq }, mctx)
+    await noRpc.transition!({ leg: mleg, ref: ms.ref!, name: 'submit_tx', inputs: { txHash: TX } }, mctx)
+    await expect(noRpc.status!({ leg: mleg, ref: ms.ref! }, mctx)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+  })
+
+  it('transfer: same chain and token shows the destination address and completes on a Transfer log', async () => {
+    let logs: unknown[] = []
+    const { fetch, calls } = fakeFetch([
+      { method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ result: (c.body as { method: string }).method === 'eth_blockNumber' ? '0x100' : logs }) },
+    ])
     const a = relay()
     const ctx = makeCtx({ fetch })
     const q = await a.quote({ leg: transferLeg, amountIn: { amount: '0', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, ctx)
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', address: DEST, chain: 'eip155:8453' })
-    expect(calls).toHaveLength(0)
+    expect(calls.every((c) => !c.url.includes('relay.link'))).toBe(true)
+    expect(await a.status!({ leg: transferLeg, ref: DEST }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    const getLogs = calls.find((c) => (c.body as { method?: string }).method === 'eth_getLogs')!
+    expect((getLogs.body as { params: Array<Record<string, unknown>> }).params[0]).toMatchObject({ fromBlock: '0x100', address: BASE_USDC.token, topics: [TRANSFER, null, `0x${'0'.repeat(24)}${DEST.slice(2).toLowerCase()}`] })
+    logs = [{ data: `0x${(5_000_000n).toString(16)}`, transactionHash: '0xaaa' }, { data: `0x${(2_500_000n).toString(16)}`, transactionHash: '0xbbb' }]
+    expect(await a.status!({ leg: transferLeg, ref: DEST }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: '0xbbb', output: { amount: '7.5' } })
   })
 
   it('bridge: prepareDeposit returns a cached open address, quote estimates, start waits in PROCESSING', async () => {
@@ -606,7 +657,7 @@ describe('relay deposit addresses', () => {
   })
 
   it('same chain and token: no Relay call; the destination is the address and status waits', async () => {
-    const { fetch, calls } = fakeFetch([])
+    const { fetch, calls } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ result: (c.body as { method: string }).method === 'eth_blockNumber' ? '0x1' : [] }) }])
     const a = relay()
     const ctx = makeCtx({ fetch })
     const sameBridge: PathwayLeg = { ...bridgeLeg, to: { asset: BASE_USDC, location: { kind: 'address', address: DEST } } }
@@ -620,8 +671,9 @@ describe('relay deposit addresses', () => {
     expect(q).toMatchObject({ output: { amount: '0.1', asset: { decimals: 18, symbol: 'ETH' } }, data: { direct: true, depositAddress: DEST } })
     const step = await a.start({ leg: transferLeg, quote: q }, nctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', address: DEST, symbol: 'ETH', warning: 'Send only ETH on Base. Other tokens or chains may be lost.' })
+    // native: no Transfer logs to watch, so the leg keeps waiting
     expect(await a.status!({ leg: transferLeg, ref: DEST }, nctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(calls).toHaveLength(0)
+    expect(calls.every((c) => !c.url.includes('relay.link'))).toBe(true)
   })
 
   it('Solana origin: native refund address, SOL symbol; explicit refundTo, no app fee at 0 bps', async () => {

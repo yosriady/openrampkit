@@ -74,7 +74,7 @@ describe('xendit adapter', () => {
     const h = new Headers(call.init.headers)
     expect(h.get('authorization')).toBe(`Basic ${btoa('xnd_development_abc:')}`)
     expect(h.get('api-version')).toBe('2024-11-11')
-    expect(h.get('idempotency-key')).toBe('ors_x:xendit:id-qris:start')
+    expect(h.get('idempotency-key')).toBe(`ors_x:xendit:id-qris:${(q.data as { nonce: string }).nonce}`)
     expect(JSON.parse(String(call.init.body))).toMatchObject({ type: 'PAY', country: 'ID', currency: 'IDR', request_amount: 150000, capture_method: 'AUTOMATIC', channel_code: 'QRIS' })
   })
 
@@ -121,6 +121,7 @@ describe('xendit adapter', () => {
     const fail = await a.webhook!.parse(JSON.stringify({ event: 'payment.failure', data: { payment_request_id: 'pr-1', status: 'FAILED', failure_code: 'X' } }), wctx)
     expect(fail[0]).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
     expect(await a.webhook!.parse(JSON.stringify({ event: 'other', data: {} }), wctx)).toEqual([])
+    expect(await a.webhook!.parse('<html>not json</html>', wctx)).toEqual([])
   })
 
   it('end to end through the server: QRIS into a merchant account, completed by webhook', async () => {

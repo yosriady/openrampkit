@@ -258,11 +258,13 @@ describe('transak errors and edge cases', () => {
     await shared.put('accessToken', { token: 'STORED', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
     const a = transak({ ...opts, surface: 'REDIRECT', env: 'staging' })
     expect(a.legs[0]!.surfaces).toEqual(['REDIRECT'])
-    const ctx = makeCtx({ fetch, shared, session: { email: undefined, country: undefined } })
+    const ctx = makeCtx({ fetch, shared, session: { email: undefined, country: undefined, ip: '203.0.113.7' } })
     const step = await a.start({ leg: { ...cardLeg, legId: 'bank_transfer' }, quote: { ...QUOTE, input: { amount: '100', asset: BASE_USDC } } }, ctx)
-    expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', popup: true, provider: 'Transak' })
+    // keepReferrer: Transak checks the Referer against the partner domain
+    expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', popup: true, provider: 'Transak', keepReferrer: true })
     const session = calls.find((c) => c.url.includes('/auth/session'))!
     expect(session.headers.get('access-token')).toBe('STORED')
+    expect(session.headers.get('x-user-ip')).toBe('203.0.113.7')
     const params = (session.body as { widgetParams: Record<string, unknown> }).widgetParams
     expect(params).toMatchObject({ fiatCurrency: 'USD', paymentMethod: 'pm_wire', network: 'base' })
     expect(params.email).toBeUndefined()

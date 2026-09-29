@@ -38,7 +38,25 @@ export type RelayOptions = {
    * automatic refund to the original sender. Or pass an explicit address.
    */
   refundTo?: 'origin' | string
+  /**
+   * JSON-RPC URLs per CAIP-2 chain, used to verify same-chain, same-token moves on chain
+   * (Relay is not involved there). Defaults to public RPCs for the main chains; set your own
+   * for production. A chain without an RPC URL cannot use same-chain moves.
+   */
+  rpcUrls?: Record<string, string>
 }
+
+/** Public RPCs for on-chain verification. Rate-limited: use your own in production. */
+export const DEFAULT_RPC_URLS: Record<string, string> = {
+  'eip155:1': 'https://ethereum-rpc.publicnode.com',
+  'eip155:8453': 'https://mainnet.base.org',
+  'eip155:42161': 'https://arb1.arbitrum.io/rpc',
+  'eip155:10': 'https://mainnet.optimism.io',
+  'eip155:137': 'https://polygon-rpc.com',
+}
+
+const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
+const topicAddress = (a: string) => `0x${a.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`
 
 export const RELAY_SOLANA_CHAIN_ID = 792703809
 const SOLANA_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
@@ -201,8 +219,8 @@ function requestIdOf(q: RelayQuoteResponse): string | undefined {
 
 // ---------------- stored state ----------------
 
-type WalletRecord = { mode: 'relay' | 'direct'; requestId?: string; txHash?: string; output?: Amount }
-type DepositRecord = { address: string; since: number; mode: 'relay' | 'direct'; output?: Amount }
+type WalletRecord = { mode: 'relay' | 'direct'; requestId?: string; txHash?: string; output?: Amount; chain?: string; token?: string; recipient?: string; amountBase?: string }
+type DepositRecord = { address: string; since: number; mode: 'relay' | 'direct'; output?: Amount; chain?: string; token?: string; fromBlock?: string }
 
 export function relay(opts: RelayOptions = {}) {
   const baseUrl = (opts.baseUrl ?? 'https://api.relay.link').replace(/\/+$/, '')
@@ -540,6 +558,65 @@ export function relay(opts: RelayOptions = {}) {
     }
   }
 
+  async function rpc<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, method: string, params: unknown[]): Promise<T> {
+    const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
+    if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
+    let res: { result?: T; error?: { message?: string } }
+    try {
+      res = await fetchJson(ctx.fetch, url, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
+    } catch (e) {
+      throw httpErrorToOrk(e, 'The chain RPC', { what: 'check this transfer', log: ctx.log })
+    }
+    if (res.error) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `RPC error: ${String(res.error.message ?? '').slice(0, 120)}` }), 502)
+    return res.result as T
+  }
+
+  type Receipt = { status?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
+
+  /** A same-chain wallet payment counts only when the receipt shows it paid the recipient at least the amount. */
+  async function verifyDirectWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
+    const chain = rec.chain!
+    const receipt = await rpc<Receipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
+    const extra = { ref, txHash: rec.txHash! }
+    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
+    if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
+    const need = BigInt(rec.amountBase ?? '0')
+    const recipient = (rec.recipient ?? '').toLowerCase()
+    let paid = 0n
+    if (isNative(chain, rec.token ?? '')) {
+      const tx = await rpc<{ to?: string; value?: string } | null>(ctx, chain, 'eth_getTransactionByHash', [rec.txHash])
+      if (tx?.to?.toLowerCase() === recipient) paid = BigInt(tx.value ?? '0x0')
+    } else {
+      for (const log of receipt.logs ?? []) {
+        if (log.address.toLowerCase() === (rec.token ?? '').toLowerCase() && log.topics[0] === TRANSFER_TOPIC && log.topics[2]?.toLowerCase() === topicAddress(recipient)) {
+          paid += BigInt(log.data)
+        }
+      }
+    }
+    if (paid < need) return fail('The transaction does not pay the destination the quoted amount.')
+    return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
+  }
+
+  /** Transfer to the destination itself (same chain and token): find ERC20 Transfer logs to it since the start block. */
+  async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
+    if (!rec.chain || !rec.token || !rec.fromBlock || isNative(rec.chain, rec.token)) return undefined
+    const logs = await rpc<Array<{ data: string; transactionHash: string }>>(ctx, rec.chain, 'eth_getLogs', [
+      { fromBlock: rec.fromBlock, toBlock: 'latest', address: rec.token, topics: [TRANSFER_TOPIC, null, topicAddress(rec.address)] },
+    ])
+    if (!logs?.length) return undefined
+    const total = logs.reduce((acc, l) => acc + BigInt(l.data), 0n)
+    const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
+    return {
+      state: 'COMPLETED',
+      status: 'succeeded',
+      transitions: [],
+      ref,
+      txHash: logs[logs.length - 1]!.transactionHash,
+      ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(total.toString(), decimals) } } : {}),
+    }
+  }
+
   async function startWallet(input: StartInput, ctx: AdapterContext): Promise<LegStep> {
     const data = (input.quote.data ?? {}) as Record<string, unknown>
     const origin = cryptoAsset(input.quote.input, 'input')
@@ -552,7 +629,11 @@ export function relay(opts: RelayOptions = {}) {
         ? { to: recipient, value: amountBase, chainId }
         : { to: origin.token, data: erc20TransferData(recipient, amountBase), chainId }
       const ref = `direct:${ctx.session.id}:${randomHex()}`
-      await ctx.store.put(`w:${ref}`, { mode: 'direct', output: input.quote.output } satisfies WalletRecord, RECORD_TTL_SEC)
+      await ctx.store.put(
+        `w:${ref}`,
+        { mode: 'direct', output: input.quote.output, chain: origin.chain, token: origin.token, recipient, amountBase } satisfies WalletRecord,
+        RECORD_TTL_SEC,
+      )
       return payStep(origin.chain, [tx], ref)
     }
 
@@ -601,7 +682,13 @@ export function relay(opts: RelayOptions = {}) {
     const key = `d:${address.toLowerCase()}`
     const prev = await ctx.store.get<DepositRecord>(key)
     const since = prev?.since ?? Date.now()
-    await ctx.store.put(key, { address, since, mode: data.direct ? 'direct' : 'relay', output: input.quote.output } satisfies DepositRecord, RECORD_TTL_SEC)
+    // Same chain and token: the address is the destination itself, so we watch Transfer logs from now on.
+    const fromBlock = data.direct ? (prev?.fromBlock ?? (await rpc<string>(ctx, origin.chain, 'eth_blockNumber', []))) : undefined
+    await ctx.store.put(
+      key,
+      { address, since, mode: data.direct ? 'direct' : 'relay', output: input.quote.output, chain: origin.chain, token: origin.token, ...(fromBlock ? { fromBlock } : {}) } satisfies DepositRecord,
+      RECORD_TTL_SEC,
+    )
 
     if (legId === 'bridge') {
       return { state: 'PROCESSING', sub: 'waiting_for_deposit', transitions: [POLL_TRANSITION], status: 'processing', ref: address }
@@ -685,9 +772,9 @@ export function relay(opts: RelayOptions = {}) {
       if (legId === 'wallet') {
         const rec = await ctx.store.get<WalletRecord>(`w:${input.ref}`)
         if (rec?.mode === 'direct') {
-          // Direct same-chain transfer: we trust the wallet's tx hash. It is NOT verified on chain.
-          if (rec.txHash) return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref: input.ref, txHash: rec.txHash, ...(rec.output ? { output: rec.output } : {}) }
-          return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
+          // Same-chain transfer: the wallet's tx hash is checked on chain before the leg counts.
+          if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
+          return verifyDirectWallet(ctx, input.ref, rec)
         }
         const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
           throw toOrk(e, ctx.log)
@@ -708,8 +795,8 @@ export function relay(opts: RelayOptions = {}) {
         legId === 'bridge'
           ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [POLL_TRANSITION], ref: input.ref }
           : { state: 'PAYMENT', status: 'awaiting_user', transitions: [POLL_TRANSITION], ref: input.ref }
-      // Same chain and token: the address is the destination itself; we cannot see deposits without a chain watcher.
-      if (rec?.mode === 'direct') return waiting
+      // Same chain and token: the address is the destination itself; look for Transfer logs to it.
+      if (rec?.mode === 'direct') return (await findDirectDeposit(ctx, input.ref, rec)) ?? waiting
       const found = await findRequest(ctx, input.ref, rec?.since ?? 0).catch((e) => {
         throw toOrk(e, ctx.log)
       })
