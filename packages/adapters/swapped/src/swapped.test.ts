@@ -47,10 +47,10 @@ const cardLeg: PathwayLeg = {
 }
 
 describe('swapped adapter', () => {
-  it('passes the shape check; static legs are card, Apple Pay and Google Pay', () => {
+  it('passes the shape check; static buy legs are card, Apple Pay and Google Pay', () => {
     const a = swapped({ publicKey: PK, secretKey: SK })
     expect(checkAdapterShape(a)).toEqual([])
-    expect(a.legs.map((l) => l.methods![0])).toEqual(['card', 'apple_pay', 'google_pay'])
+    expect(a.legs.filter((l) => l.kind === 'fiat_onramp').map((l) => l.methods![0])).toEqual(['card', 'apple_pay', 'google_pay'])
     expect(isRegionAllowed(a.legs[0]!.regions, 'US', 'US-TX')).toBe(false)
     expect(isRegionAllowed(a.legs[0]!.regions, 'US', 'US-CA')).toBe(true)
     expect(swappedMethodId('vietqr')).toBe('vietqr')

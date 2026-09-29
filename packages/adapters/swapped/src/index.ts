@@ -26,9 +26,9 @@ import {
   randomHex,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
+import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { OrkException, USDC, evmChainId, orkError, roundTo, toBaseUnits } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, Surface, Transition, TxRequest } from '@openrampkit/core'
 
 export type SwappedDeliverAsset = {
   /** CAIP-2 chain */
@@ -102,7 +102,8 @@ type SwappedPricing = {
 
 type SwappedNotification = {
   order_id?: string
-  order_status?: 'payment_pending' | 'order_completed' | 'order_broadcasted' | 'order_cancelled' | string
+  order_type?: 'buy' | 'sell' | string
+  order_status?: 'payment_pending' | 'payout_pending' | 'order_completed' | 'order_broadcasted' | 'order_cancelled' | string
   order_crypto?: string
   order_crypto_amount?: string | number
   order_crypto_address?: string
@@ -149,7 +150,20 @@ export const SWAPPED_METHOD_IDS: Record<string, string> = {
   touchngo: 'touchngo',
   pix: 'pix',
   upi: 'upi',
+  skrill: 'skrill',
+  interac: 'interac',
+  'interac-extra': 'interac',
 }
+
+/** Offramp payout methods from the docs (2026-09): used when the live payout catalog is not available. */
+export const SWAPPED_PAYOUT_METHODS: Array<{ slug: string; currencies: string[]; countries: string[] }> = [
+  { slug: 'bank-transfer', currencies: ['EUR', 'DKK', 'GBP'], countries: ['*'] },
+  { slug: 'skrill', currencies: ['EUR', 'DKK', 'GBP'], countries: ['*'] },
+  { slug: 'pix', currencies: ['BRL'], countries: ['BR'] },
+  { slug: 'interac-extra', currencies: ['CAD'], countries: ['CA'] },
+]
+
+const SELL_PREFIX = 'sell-'
 
 export function swappedMethodId(group: string): string {
   return SWAPPED_METHOD_IDS[group] ?? group
@@ -181,8 +195,26 @@ export function swapped(opts: SwappedOptions) {
     ...extra,
   })
 
+  /** Offramp leg: the user's USDC (in their wallet or the app's treasury) to a bank or e-wallet payout. */
+  const sellLeg = (slug: string, currencies: string[], countries: string[], extra: Partial<LegSpec> = {}): LegSpec => ({
+    id: `${SELL_PREFIX}${slug}`,
+    kind: 'crypto_offramp',
+    methods: [swappedMethodId(slug)],
+    from: { asset: { kind: 'crypto', chains: toChains }, location: ['user_wallet', 'address'] },
+    to: { asset: { kind: 'fiat', currencies }, location: ['user_account'] },
+    regions: { allow: countries, deny: REGIONS.deny },
+    limits: { min: '7', max: '100000', currency: 'EUR' },
+    eta: { min: 600, max: 3 * 24 * 3600 },
+    surfaces: ['IFRAME', 'WALLET_TX'],
+    requires: ['provider_account', 'provider_kyc'],
+    capabilities: ['webhooks'],
+    ...extra,
+  })
+
+  const staticSellLegs: LegSpec[] = SWAPPED_PAYOUT_METHODS.map((m) => sellLeg(m.slug, m.currencies, m.countries))
+
   /** Used when the live catalog is not available */
-  const staticLegs: LegSpec[] = [leg('creditcard'), leg('apple-pay'), leg('google-pay')]
+  const staticLegs: LegSpec[] = [leg('creditcard'), leg('apple-pay'), leg('google-pay'), ...staticSellLegs]
 
   function deliverAssetFor(asset: Amount['asset'] | undefined): SwappedDeliverAsset {
     if (asset?.kind === 'crypto' && asset.chain !== '*') {
@@ -214,12 +246,59 @@ export function swapped(opts: SwappedOptions) {
     return data
   }
 
-  async function signedWidgetUrl(params: Array<[string, string | undefined]>): Promise<string> {
+  async function signedWidgetUrl(params: Array<[string, string | undefined]>, path = '/'): Promise<string> {
     const q = new URLSearchParams()
     for (const [k, v] of params) if (v !== undefined && v !== '') q.append(k, v)
     const search = `?${q.toString()}`
     const signature = await hmacSha256(opts.secretKey, search, 'base64')
-    return `${widgetUrl}/${search}&signature=${encodeURIComponent(signature)}`
+    return `${widgetUrl}${path}${search}&signature=${encodeURIComponent(signature)}`
+  }
+
+  async function sellCatalog(input: { country?: string; currency: string }, ctx: Pick<AdapterContext, 'fetch' | 'shared' | 'log'>): Promise<LegSpec[]> {
+    type Payout = { slug: string; currency: string[]; disabled: boolean; min_amount?: number; max_amount?: number }
+    let byCountry = await ctx.shared.get<Record<string, Payout[]>>('payouts')
+    if (!byCountry) {
+      const res = await fetchJson<{ success?: boolean; data?: Record<string, Payout[]> | Payout[] }>(
+        ctx.fetch,
+        `${apiUrl}/api/v1/merchant/sell/get_payout_methods?api_key=${encodeURIComponent(opts.publicKey)}`,
+      )
+      if (res.success === false || !res.data) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Swapped returned no payout methods.' }), 502)
+      byCountry = Array.isArray(res.data) ? { '*': res.data } : res.data
+      await ctx.shared.put('payouts', byCountry, METHODS_TTL_SEC)
+    }
+    const currency = input.currency.toUpperCase()
+    const countries = input.country ? [input.country.toUpperCase(), '*'] : Object.keys(byCountry)
+    const out = new Map<string, LegSpec>()
+    for (const country of countries) {
+      for (const m of byCountry[country] ?? []) {
+        if (m.disabled || !m.currency?.map((c) => c.toUpperCase()).includes(currency) || out.has(m.slug)) continue
+        out.set(
+          m.slug,
+          sellLeg(m.slug, m.currency.map((c) => c.toUpperCase()), [country === '*' ? '*' : country], {
+            limits: { ...(m.min_amount !== undefined ? { min: dec(m.min_amount, 2) } : {}), ...(m.max_amount !== undefined ? { max: dec(m.max_amount, 2) } : {}), currency: 'EUR' },
+          }),
+        )
+      }
+    }
+    return [...out.values()]
+  }
+
+  /** ERC20 `transfer(to, amount)` calldata */
+  function erc20Transfer(to: string, amountBase: string): string {
+    return `0xa9059cbb${to.toLowerCase().replace(/^0x/, '').padStart(64, '0')}${BigInt(amountBase).toString(16).padStart(64, '0')}`
+  }
+
+  /** The step that asks the sender to pay Swapped's deposit address (from a sell `payment_pending`). */
+  function sendFundsStep(ref: string, n: SwappedNotification): { surface: Surface; transitions: Transition[] } | undefined {
+    const d = deliver.find((x) => x.currencyCode === n.order_crypto)
+    const chainId = d ? evmChainId(d.chain) : undefined
+    if (!d || !chainId || !n.order_crypto_address || n.order_crypto_amount === undefined) return undefined
+    const amount = toBaseUnits(dec(n.order_crypto_amount, d.decimals ?? 6), d.decimals ?? 6)
+    const tx: TxRequest = { to: d.token, data: erc20Transfer(n.order_crypto_address, amount), value: '0', chainId }
+    return {
+      surface: { kind: 'WALLET_TX', chain: d.chain, txs: [tx] },
+      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+    }
   }
 
   function assetByCode(code: string | undefined): CryptoAsset | undefined {
@@ -230,6 +309,7 @@ export function swapped(opts: SwappedOptions) {
   function eventFrom(n: SwappedNotification): LegEvent | undefined {
     const ref = n.external_customer_id ?? undefined
     if (!ref) return undefined
+    if (n.order_type === 'sell') return sellEventFrom(ref, n)
     const asset = assetByCode(n.order_crypto)
     const output = asset && n.order_crypto_amount !== undefined ? { amount: dec(n.order_crypto_amount, 8), asset } : undefined
     switch (n.order_status) {
@@ -246,12 +326,104 @@ export function swapped(opts: SwappedOptions) {
     }
   }
 
+  function sellEventFrom(ref: string, n: SwappedNotification): LegEvent | undefined {
+    switch (n.order_status) {
+      case 'payment_pending': {
+        // The user finished the widget; Swapped waits for the crypto at `order_crypto_address`.
+        const send = sendFundsStep(ref, n)
+        return send ? { ref, status: 'awaiting_user', ...send } : undefined
+      }
+      case 'payout_pending':
+        return { ref, status: 'processing', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
+      case 'order_completed':
+        return { ref, status: 'succeeded', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
+      case 'order_cancelled':
+        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The payout was cancelled.', recovery: 'contact_support' }) }
+      default:
+        return undefined
+    }
+  }
+
+  type SellPricing = { success: boolean; message?: string; data?: { crypto_amount: number; crypto_unit_price?: number; fiat_amount_incl_fees: number; fiat_amount_excl_fees: number; fiat_amount_excl_fees_local?: number; fiat_currency?: string; processing_fee?: number; markup_fiat_value?: number; network_fee?: number } }
+
+  async function sellPricing(ctx: Pick<AdapterContext, 'fetch' | 'log'>, body: Record<string, unknown>): Promise<NonNullable<SellPricing['data']>> {
+    let res: SellPricing
+    try {
+      res = await fetchJson<SellPricing>(ctx.fetch, `${apiUrl}/api/v1/merchant/sell/pricing`, { method: 'POST', body: JSON.stringify({ api_key: opts.publicKey, ...body }) })
+    } catch (e) {
+      throw httpErrorToOrk(e, 'Swapped', { what: 'price this payout', log: ctx.log })
+    }
+    if (!res.success || !res.data) throw new OrkException(orkError('NO_QUOTES', { message: res.message ? `Swapped: ${res.message}`.slice(0, 200) : 'Swapped could not price this payout.' }), 422)
+    return res.data
+  }
+
+  /**
+   * Sell quote. Swapped prices a sell by FIAT amount only, so for a crypto amount we price a probe
+   * amount to get the unit price and fee rate, then price the estimated fiat amount. The final
+   * amount is set inside the widget (the quote is an estimate).
+   */
+  async function sellQuote(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote> {
+    const slug = input.leg.legId.slice(SELL_PREFIX.length)
+    const src = input.amountIn?.asset.kind === 'crypto' ? input.amountIn.asset : input.leg.from.asset
+    const d = deliverAssetFor(src)
+    const fiat = (input.leg.to.asset.kind === 'fiat' ? input.leg.to.asset.currency : 'EUR').toUpperCase()
+    const cryptoAmount = input.amountIn?.amount ?? '0'
+    const probe = await sellPricing(ctx, { payout_method: slug, crypto_currency: d.currencyCode, fiat_amount: 100, fiat_currency: fiat })
+    const perCrypto = probe.crypto_amount > 0 ? probe.fiat_amount_incl_fees / probe.crypto_amount : 0
+    if (!(perCrypto > 0)) throw new OrkException(orkError('NO_QUOTES', { message: 'Swapped returned no sell price.' }), 422)
+    const grossFiat = Math.floor(Number(cryptoAmount) * perCrypto * 100) / 100
+    const p = await sellPricing(ctx, { payout_method: slug, crypto_currency: d.currencyCode, fiat_amount: grossFiat, fiat_currency: fiat })
+    const fees: Fee[] = []
+    if (p.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: dec(p.processing_fee, 2), currency: fiat })
+    if (p.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: dec(p.markup_fiat_value, 2), currency: fiat })
+    return {
+      adapterId: 'swapped',
+      legId: input.leg.legId,
+      input: { amount: cryptoAmount, asset: assetOf(d) },
+      output: { amount: dec(p.fiat_amount_excl_fees_local ?? p.fiat_amount_excl_fees, 2), asset: { kind: 'fiat', currency: fiat } },
+      fees,
+      eta: { min: 600, max: 3 * 24 * 3600 },
+      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      data: { slug, currencyCode: d.currencyCode, fiat, estimate: true },
+    }
+  }
+
+  async function sellStart(input: StartInput, ctx: AdapterContext): Promise<LegStep> {
+    const data = (input.quote.data ?? {}) as Record<string, string>
+    const d = deliverAssetFor(input.quote.input.asset)
+    const ref = `${ctx.session.userId}.${randomHex(6)}`
+    const url = await signedWidgetUrl(
+      [
+        ['apiKey', opts.publicKey],
+        ['method', data.slug ?? input.leg.legId.slice(SELL_PREFIX.length)],
+        ['userSendsFunds', 'false'],
+        ['cryptoCurrencyCode', data.currencyCode ?? d.currencyCode],
+        ['cryptoCurrencyAmount', dec(input.quote.input.amount, 6)],
+        ['fiatCurrencyCode', data.fiat ?? (input.quote.output.asset.kind === 'fiat' ? input.quote.output.asset.currency : 'EUR')],
+        ['externalCustomerId', ref],
+        ['email', ctx.session.email],
+        ['baseCountry', ctx.session.country],
+        ['responseUrl', ctx.urls.webhookUrl],
+      ],
+      '/sell',
+    )
+    await ctx.store.put(`o:${ref}`, { since: Date.now(), sell: true }, ORDER_TTL_SEC)
+    return {
+      state: 'PAYMENT',
+      surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 600, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
+      transitions: [awaitPoll(POLL)],
+      status: 'awaiting_user',
+      ref,
+    }
+  }
+
   return createAdapter({
     id: 'swapped',
     name: 'Swapped',
     legs: staticLegs,
 
     async catalog(input, ctx) {
+      if (input.direction === 'withdraw') return sellCatalog(input, ctx)
       const byCountry = await methodsByCountry(ctx)
       const currency = input.currency.toUpperCase()
       const groups = new Map<string, { countries: Set<string>; min?: number; max?: number }>()
@@ -276,6 +448,7 @@ export function swapped(opts: SwappedOptions) {
     },
 
     async quote(input, ctx) {
+      if (input.leg.legId.startsWith(SELL_PREFIX)) return sellQuote(input, ctx)
       const group = input.leg.legId
       const target = deliverAssetFor(input.leg.to.asset)
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
@@ -321,6 +494,7 @@ export function swapped(opts: SwappedOptions) {
     },
 
     async start(input, ctx) {
+      if (input.leg.legId.startsWith(SELL_PREFIX)) return sellStart(input, ctx)
       const data = (input.quote.data ?? {}) as Record<string, string>
       const target = deliverAssetFor(input.quote.output.asset)
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
@@ -379,6 +553,13 @@ export function swapped(opts: SwappedOptions) {
           },
         }
       : {}),
+
+    /** Sell: the user's wallet (or the app treasury) sent the USDC to Swapped. */
+    async transition(input) {
+      if (input.name !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown transition ${input.name}.` }), 409)
+      const txHash = typeof input.inputs?.txHash === 'string' ? input.inputs.txHash : undefined
+      return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref: input.ref, transitions: [awaitPoll(POLL)], ...(txHash ? { txHash } : {}) }
+    },
 
     webhook: {
       async verify(req, rawBody) {
