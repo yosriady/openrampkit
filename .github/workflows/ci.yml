@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, unit tests, build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm typecheck
+      - name: Unit and integration tests with coverage
+        run: pnpm coverage
+      - name: Typecheck examples
+        run: |
+          pnpm --filter next-demo exec tsc --noEmit -p .
+          pnpm --filter cloudflare-worker-example exec tsc --noEmit -p .
+      - name: Package smoke test (pack, install, ESM, CJS, SSR, TypeScript)
+        run: pnpm smoke
+      - name: Docs build
+        run: pnpm docs:build
+
+  e2e:
+    name: Browser tests (desktop, Android, iPhone)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: check
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Install Playwright browsers
+        run: pnpm --filter next-demo exec playwright install --with-deps chromium webkit
+      - name: Run browser tests
+        working-directory: examples/next-demo
+        env:
+          CI: '1'
+          OPENRAMP_MOCK: '1'
+          OPENRAMP_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
+          PUBLIC_URL: http://localhost:3000
+        run: pnpm exec playwright test e2e/deposit.spec.ts e2e/withdraw.spec.ts
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: examples/next-demo/playwright-report
+          retention-days: 7
