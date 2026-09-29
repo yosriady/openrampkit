@@ -24,3 +24,6 @@ export type { IframeMessages, MethodOption, PlanResult, PublicSession, Quote, St
 
 // Register the element when this module loads in a browser (no-op on the server).
 defineOpenRampModal()
+
+export { STRIPE_SCRIPTS, loadScript, stripeOnrampRenderer } from './provider-sdk.js'
+export type { ProviderRenderer, ProviderRendererContext, ProviderSdkSurface } from './provider-sdk.js'

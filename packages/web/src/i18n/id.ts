@@ -76,6 +76,7 @@ export const id: Messages = {
   iframeClosed: 'Jendela pembayaran ditutup',
   iframeClosedBody: 'Buka lagi untuk menyelesaikan pembayaran, atau pilih metode lain.',
   sdkUnsupported: (provider) => `Langkah ini memerlukan SDK ${provider}. Layar ini tidak dapat menampilkannya.`,
+  sdkFailed: (provider: string) => `${provider} tidak dapat dimuat. Coba lagi atau pilih metode lain.`,
   scanToPay: 'Pindai dengan aplikasi bank atau e-wallet Anda',
   reference: 'Referensi',
   expiresIn: (time) => `Kedaluwarsa dalam ${time}`,

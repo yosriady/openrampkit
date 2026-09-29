@@ -77,6 +77,7 @@ export const fil: Messages = {
   iframeClosed: 'Naisara ang payment window',
   iframeClosedBody: 'Buksan ulit para tapusin ang bayad, o pumili ng ibang paraan.',
   sdkUnsupported: (provider) => `Kailangan ng hakbang na ito ang ${provider} SDK. Hindi ito maipapakita ng screen na ito.`,
+  sdkFailed: (provider: string) => `Hindi ma-load ang ${provider}. Subukan ulit o pumili ng ibang paraan.`,
   scanToPay: 'I-scan gamit ang iyong banking o e-wallet app',
   reference: 'Reference no.',
   expiresIn: (time) => `Mag-e-expire sa loob ng ${time}`,

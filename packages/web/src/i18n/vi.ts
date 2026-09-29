@@ -76,6 +76,7 @@ export const vi: Messages = {
   iframeClosed: 'Cửa sổ thanh toán đã đóng',
   iframeClosedBody: 'Mở lại để hoàn tất thanh toán, hoặc chọn phương thức khác.',
   sdkUnsupported: (provider) => `Bước này cần SDK của ${provider}. Màn hình này không thể hiển thị bước đó.`,
+  sdkFailed: (provider: string) => `Không thể tải ${provider}. Hãy thử lại hoặc chọn phương thức khác.`,
   scanToPay: 'Quét mã bằng ứng dụng ngân hàng hoặc ví điện tử',
   reference: 'Mã tham chiếu',
   expiresIn: (time) => `Hết hạn sau ${time}`,

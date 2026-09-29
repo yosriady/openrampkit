@@ -76,6 +76,7 @@ export const ms: Messages = {
   iframeClosed: 'Tetingkap pembayaran ditutup',
   iframeClosedBody: 'Buka semula untuk melengkapkan pembayaran, atau pilih kaedah lain.',
   sdkUnsupported: (provider) => `Langkah ini memerlukan SDK ${provider}. Skrin ini tidak dapat memaparkannya.`,
+  sdkFailed: (provider: string) => `${provider} tidak dapat dimuatkan. Cuba lagi atau pilih kaedah lain.`,
   scanToPay: 'Imbas dengan aplikasi bank atau e-dompet anda',
   reference: 'Rujukan',
   expiresIn: (time) => `Tamat dalam ${time}`,

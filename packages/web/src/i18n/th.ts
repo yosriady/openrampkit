@@ -77,6 +77,7 @@ export const th: Messages = {
   iframeClosed: 'หน้าต่างชำระเงินถูกปิด',
   iframeClosedBody: 'เปิดอีกครั้งเพื่อชำระเงินให้เสร็จ หรือเลือกวิธีอื่น',
   sdkUnsupported: (provider) => `ขั้นตอนนี้ต้องใช้ SDK ของ ${provider} ซึ่งหน้าจอนี้แสดงไม่ได้`,
+  sdkFailed: (provider: string) => `โหลด ${provider} ไม่สำเร็จ ลองอีกครั้งหรือเลือกวิธีอื่น`,
   scanToPay: 'สแกนด้วยแอปธนาคารหรืออีวอลเล็ต',
   reference: 'เลขอ้างอิง',
   expiresIn: (time) => `หมดอายุใน ${time}`,

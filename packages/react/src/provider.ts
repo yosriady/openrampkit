@@ -2,7 +2,7 @@ import { createContext, createElement, useCallback, useContext, useEffect, useMe
 import type { ReactNode } from 'react'
 import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
-import type { DepositHandle, Messages } from '@openrampkit/web'
+import type { DepositHandle, Messages, ProviderRenderer } from '@openrampkit/web'
 import { loadWeb } from './load.js'
 
 export type OpenRampProviderProps = {
@@ -15,6 +15,8 @@ export type OpenRampProviderProps = {
   messages?: Partial<Messages>
   /** BCP 47 locale (`en`, `vi`, `id`, `th`, `ms`, `fil`, ...). Default: session locale, then browser language, then English. */
   locale?: string
+  /** Renderers for PROVIDER_SDK surfaces, e.g. `{ stripe: stripeOnrampRenderer() }` from `@openrampkit/web` */
+  providerRenderers?: Record<string, ProviderRenderer>
   onEvent?: (e: OrkEvent) => void
   children?: ReactNode
 }
@@ -75,6 +77,7 @@ export function OpenRampProvider(props: OpenRampProviderProps) {
       ...(c.appearance ? { appearance: c.appearance } : {}),
       ...(c.messages ? { messages: c.messages } : {}),
       ...(c.locale ? { locale: c.locale } : {}),
+      ...(c.providerRenderers ? { providerRenderers: c.providerRenderers } : {}),
     })
     handleRef.current = handle
     setOpen(true)

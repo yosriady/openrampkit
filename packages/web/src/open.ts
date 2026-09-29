@@ -1,3 +1,4 @@
+import type { ProviderRenderer } from './provider-sdk.js'
 import { createOpenRampClient, DepositController, toOrkError } from '@openrampkit/client'
 import { orkError } from '@openrampkit/core'
 import type { Direction, OrkError, OrkEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
@@ -67,6 +68,8 @@ export type OpenDepositOptions = {
   container?: HTMLElement
   /** Render inline in `container`, without the overlay */
   embedded?: boolean
+  /** Renderers for PROVIDER_SDK surfaces, e.g. `{ stripe: stripeOnrampRenderer() }` */
+  providerRenderers?: Record<string, ProviderRenderer>
   onEvent?: (e: OrkEvent) => void
   /** Called once when the modal closes, with the last session state */
   onClose?: (session: PublicSession | undefined) => void
@@ -111,6 +114,7 @@ function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
   if (opts.appearance) el.appearance = opts.appearance
   if (opts.messages) el.messages = opts.messages
   if (opts.locale) el.locale = opts.locale
+  if (opts.providerRenderers) el.providerRenderers = opts.providerRenderers
   el.embedded = !!opts.embedded
   el.open = true
   ;(opts.container ?? document.body).appendChild(el)
@@ -136,6 +140,8 @@ function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
       ...(opts.wallet ? { wallet: opts.wallet } : {}),
       ...(opts.onEvent ? { onEvent: opts.onEvent } : {}),
       ...(opts.fetch ? { fetch: opts.fetch } : {}),
+      // Offer PROVIDER_SDK methods (e.g. Stripe's onramp element) only when the app gave a renderer.
+      ...(opts.providerRenderers && Object.keys(opts.providerRenderers).length ? { surfaces: [...SUPPORTED_SURFACES, 'PROVIDER_SDK' as const] } : {}),
       expect: kind,
     })
     controller = c

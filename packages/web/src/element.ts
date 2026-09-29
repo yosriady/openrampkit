@@ -1,3 +1,4 @@
+import type { ProviderRenderer } from './provider-sdk.js'
 import { html, LitElement, nothing } from 'lit'
 import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
@@ -67,7 +68,9 @@ export class OpenRampModal extends LitElement {
     error: { attribute: false },
     open: { type: Boolean, reflect: true },
     embedded: { type: Boolean, reflect: true },
+    providerRenderers: { attribute: false },
     _snap: { state: true },
+    _sdkError: { state: true },
     _copied: { state: true },
     _now: { state: true },
     _openedUrl: { state: true },
@@ -88,6 +91,12 @@ export class OpenRampModal extends LitElement {
   declare error: OrkError | undefined
   declare open: boolean
   declare embedded: boolean
+  /**
+   * Renderers for PROVIDER_SDK surfaces, keyed by provider id (e.g. `{ stripe: stripeOnrampRenderer() }`).
+   * Without one, the modal uses the surface's `redirectUrl` when it has one.
+   */
+  declare providerRenderers: Record<string, ProviderRenderer> | undefined
+  declare private _sdkError: string | undefined
 
   declare private _snap: Snapshot | undefined
   declare private _copied: string | undefined
@@ -107,6 +116,8 @@ export class OpenRampModal extends LitElement {
   private _hadFocus = false
   private _returnFocus: HTMLElement | null = null
   private _listening = false
+  private _sdkMounted: string | undefined
+  private _sdkCleanup: (() => void) | undefined
 
   constructor() {
     super()
@@ -138,6 +149,7 @@ export class OpenRampModal extends LitElement {
     this._tick = undefined
     clearTimeout(this._copyTimer)
     this._syncMessageListener(false)
+    this._unmountSdk()
   }
 
   private _onMedia = (e: MediaQueryListEvent) => {
@@ -179,6 +191,7 @@ export class OpenRampModal extends LitElement {
 
   protected override updated(changed: PropertyValues): void {
     this._syncMessageListener(!!this._iframeSurface)
+    this._syncProviderSdk()
     if (!this._visible) return
     const screen = this._screen
     const openedNow = changed.has('open') && this.open
@@ -189,6 +202,50 @@ export class OpenRampModal extends LitElement {
       // Move focus to the new screen's heading so keyboard and screen reader users follow along.
       const root = this.renderRoot as ShadowRoot
       ;(root.querySelector<HTMLElement>('.title') ?? root.querySelector<HTMLElement>('.card'))?.focus({ preventScroll: true })
+    }
+  }
+
+  // ---------- provider SDK surfaces ----------
+
+  /** Mount the provider renderer once per step; unmount when the step changes. */
+  private _syncProviderSdk() {
+    const surface = this._snap?.session?.step.surface
+    const renderer = surface?.kind === 'PROVIDER_SDK' ? this.providerRenderers?.[surface.provider] : undefined
+    const key = surface?.kind === 'PROVIDER_SDK' && renderer ? `${this._stepKey}|${surface.provider}` : undefined
+    if (key === this._sdkMounted) return
+    this._unmountSdk()
+    if (!key || !renderer || surface?.kind !== 'PROVIDER_SDK') return
+    const container = (this.renderRoot as ShadowRoot).querySelector<HTMLElement>('.provider-sdk')
+    if (!container) return
+    this._sdkMounted = key
+    this._sdkError = undefined
+    const c = this.controller
+    const mode = this.theme?.mode === 'dark' || (this.theme?.mode === 'auto' && this._systemDark) ? 'dark' : 'light'
+    Promise.resolve(
+      renderer(container, {
+        surface,
+        mode,
+        completed: (detail) => c?.notifySurface('completed', detail),
+        failed: (detail) => c?.notifySurface('failed', detail),
+      }),
+    )
+      .then((cleanup) => {
+        if (this._sdkMounted === key && typeof cleanup === 'function') this._sdkCleanup = cleanup
+        else if (typeof cleanup === 'function') cleanup()
+      })
+      .catch((e: unknown) => {
+        if (this._sdkMounted === key) this._sdkError = e instanceof Error ? e.message : String(e)
+      })
+  }
+
+  private _unmountSdk() {
+    const cleanup = this._sdkCleanup
+    this._sdkCleanup = undefined
+    this._sdkMounted = undefined
+    try {
+      cleanup?.()
+    } catch {
+      /* provider cleanup errors must not break the modal */
     }
   }
 
@@ -956,8 +1013,19 @@ export class OpenRampModal extends LitElement {
           referrerpolicy="strict-origin-when-cross-origin"
           style=${`height:${surface.height ?? 560}px`}
         ></iframe>`
-      case 'PROVIDER_SDK':
-        return html`<div class="notice info">${m.sdkUnsupported(titleCase(surface.provider))}</div>`
+      case 'PROVIDER_SDK': {
+        const name = titleCase(surface.provider)
+        if (this.providerRenderers?.[surface.provider]) {
+          return html`<div class="provider-sdk" data-provider=${surface.provider}></div>
+            ${this._sdkError ? html`<div class="notice error" role="alert">${m.sdkFailed(name)}</div>` : nothing}`
+        }
+        const redirectUrl = typeof surface.params.redirectUrl === 'string' ? surface.params.redirectUrl : undefined
+        if (redirectUrl) {
+          return html`<p class="hint">${m.redirectHint(name)}</p>
+            <button class="btn" type="button" @click=${() => window.open(redirectUrl, '_blank')}>${m.continueTo(name)}</button>`
+        }
+        return html`<div class="notice info">${m.sdkUnsupported(name)}</div>`
+      }
       case 'QR': {
         const left = surface.expiresAt ? Date.parse(surface.expiresAt) - this._now : undefined
         const label = surface.method ? methodName(surface.method) : m.scanToPay

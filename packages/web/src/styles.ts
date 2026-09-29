@@ -637,6 +637,9 @@ export const styles = css`
     height: 16px;
     margin-top: 1px;
   }
+  .provider-sdk {
+    min-height: 420px;
+  }
   .notice.error {
     background: var(--ork-color-danger-soft);
     color: var(--ork-color-danger);

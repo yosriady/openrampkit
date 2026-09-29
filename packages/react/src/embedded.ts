@@ -55,6 +55,7 @@ export function OpenRampEmbedded(props: OpenRampEmbeddedProps) {
         baseUrl,
         clientSecret: secret,
         ...(wallet ? { wallet } : {}),
+        ...(ctx?.providerRenderers && Object.keys(ctx.providerRenderers).length ? { surfaces: [...web.SUPPORTED_SURFACES, 'PROVIDER_SDK' as const] } : {}),
         onEvent: (e) => {
           ctx?.onEvent?.(e)
           latest.current.onEvent?.(e)
@@ -86,8 +87,9 @@ export function OpenRampEmbedded(props: OpenRampEmbeddedProps) {
     el.appearance = appearance
     el.messages = messages
     el.locale = locale
+    el.providerRenderers = ctx?.providerRenderers
     el.embedded = true
-  }, [controller, theme, appearance, messages, locale])
+  }, [controller, theme, appearance, messages, locale, ctx?.providerRenderers])
 
   useEffect(() => {
     const el = ref.current

@@ -83,6 +83,7 @@ export const en = {
   iframeClosed: 'Payment window closed',
   iframeClosedBody: 'Open it again to finish paying, or choose another method.',
   sdkUnsupported: (provider: string) => `This step needs the ${provider} SDK. This screen cannot show it.`,
+  sdkFailed: (provider: string) => `${provider} could not load. Try again or choose another method.`,
   scanToPay: 'Scan with your banking or e-wallet app',
   reference: 'Reference',
   expiresIn: (time: string) => `Expires in ${time}`,
