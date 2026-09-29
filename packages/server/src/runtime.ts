@@ -94,6 +94,7 @@ export function publicSession(rec: SessionRecord): PublicSession {
     status: rec.status,
     ...(rec.country ? { country: rec.country } : {}),
     ...(rec.plan ? { currency: rec.plan.currency } : {}),
+    locale: rec.locale,
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     step: rec.step,
     expiresAt: new Date(rec.expiresAt).toISOString(),

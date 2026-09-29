@@ -142,3 +142,26 @@ describe('xendit adapter', () => {
     expect(done.status).toBe('completed')
   })
 })
+
+describe('xendit conformance (shared test kit)', () => {
+  it('passes runAdapterConformance for QRIS, GCash and a webhook', async () => {
+    const { runAdapterConformance, fakeFetch: kitFetch, makeCtx } = await import('@openrampkit/adapter/testing')
+    const a = xendit({ secretKey: 'k', webhookToken: 'tok' })
+    const { fetch: f } = kitFetch([
+      { match: /payment_requests\/pr-1$/, reply: () => pr({ status: 'SUCCEEDED' }) },
+      { match: '/v3/payment_requests', reply: () => pr() },
+    ])
+    const ctx = () => makeCtx({ fetch: f, destination: { type: 'merchant', currency: 'IDR' }, session: { country: 'ID' } })
+    const report = await runAdapterConformance(a, {
+      ctx,
+      fixtures: [
+        { leg: leg('id-qris', 'IDR'), quote: { amountIn: { amount: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
+      ],
+      webhooks: [
+        { request: () => new Request('https://app.test/w', { method: 'POST', headers: { 'x-callback-token': 'tok' } }), rawBody: JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED' } }), events: 1 },
+        { request: () => new Request('https://app.test/w', { method: 'POST', headers: { 'x-callback-token': 'nope' } }), rawBody: '{}', valid: false },
+      ],
+    })
+    expect(report.problems).toEqual([])
+  })
+})

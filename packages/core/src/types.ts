@@ -273,6 +273,8 @@ export type PublicSession = {
   status: SessionStatus
   country?: string
   currency?: string
+  /** BCP 47 locale set when the session was created, e.g. `vi` or `en-US` */
+  locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
   expiresAt: string
