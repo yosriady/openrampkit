@@ -14,4 +14,4 @@ curl -X POST http://localhost:8787/sessions -H 'x-app-key: dev-app-key' -H 'cont
 
 Give `clientSecret` to the browser and point the widget at this worker (`baseUrl: 'http://localhost:8787'`).
 
-Storage: `cloudflareKvStore` uses Workers KV. KV is eventually consistent, so use a Durable Object or Redis store for production traffic.
+Storage: `durableObjectStore` uses a Durable Object (built into Workers, strongly consistent). No extra service is needed.

@@ -3,10 +3,14 @@ main = "src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Sessions live in KV. Create one with: npx wrangler kv namespace create SESSIONS
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "replace-with-your-kv-namespace-id"
+# Sessions live in a Durable Object: strongly consistent and built into Workers (no extra service).
+[[durable_objects.bindings]]
+name = "OPENRAMP_STORE"
+class_name = "OpenRampStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OpenRampStore"]
 
 [triggers]
 crons = ["* * * * *"]

@@ -14,6 +14,7 @@ import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
 
 export * from './store.js'
+export * from './durable-object-store.js'
 export { verifyWebhook } from './crypto.js'
 export type { CreateSessionInput, OpenRampConfig, TreasuryHook, TreasurySendInput } from './config.js'
 export { isValidAddress } from './withdraw.js'

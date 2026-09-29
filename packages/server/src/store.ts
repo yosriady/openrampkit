@@ -121,7 +121,7 @@ export type KVNamespaceLike = {
 
 /**
  * Store on Cloudflare Workers KV. KV is eventually consistent, so the version check is best effort.
- * Use a Durable Object or Redis/Postgres store for production traffic.
+ * On Workers, prefer `durableObjectStore` (strongly consistent, also built in) for production traffic.
  */
 export function cloudflareKvStore(ns: KVNamespaceLike, opts: { sessionTtlSec?: number } = {}): SessionStore {
   const ttl = opts.sessionTtlSec ?? 60 * 60 * 24 * 7
