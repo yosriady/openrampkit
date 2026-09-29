@@ -13,3 +13,5 @@ e2e/screens
 .wrangler
 .dev.vars
 .playwright-mcp
+docs/.vitepress/cache
+docs/.vitepress/dist

@@ -1,6 +1,6 @@
 # OpenRampKit: technical spec and implementation plan
 
-Version 0.1 (draft), 2026-09-29. Read `docs/SCOPE.md` first for the why. This document is the how.
+Version 0.1 (draft), 2026-09-29. Read [the scope](./scope.md) first for the why. This document is the how.
 
 Conventions:
 - "MUST", "SHOULD" and "MAY" have their usual meaning.
@@ -529,7 +529,7 @@ openrampkit/
     next-crypto/     # deposit USDC to Base, with RainbowKit
     next-merchant/   # QRIS top-up into a merchant account, no wallet
     hono-server/     # server on Cloudflare Workers
-  docs/  SCOPE.md  SPEC.md  research/
+  docs/            # VitePress docs site (this site); design/ holds scope, spec, research
 ```
 
 - pnpm workspaces, Turborepo, TypeScript strict, tsup (ESM + CJS), Biome for lint and format, Changesets for releases, GitHub Actions CI.

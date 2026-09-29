@@ -8,7 +8,9 @@
     "test": "vitest run",
     "typecheck": "pnpm -r --filter './packages/**' typecheck",
     "dev:example": "pnpm --filter next-demo dev",
-    "coverage": "vitest run --coverage"
+    "coverage": "vitest run --coverage",
+    "docs:dev": "pnpm --filter openrampkit-docs dev",
+    "docs:build": "pnpm --filter openrampkit-docs build"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -2,11 +2,11 @@
 
 > RainbowKit for money movement. One open-source modal that lets users put money into your app and take it out again. Local payment methods are first-class. You bring your own provider accounts, and nobody takes a cut.
 
-Status: research done, scope set, spec written (`docs/SPEC.md`). No code yet. Decisions that are still open are at the end.
+Status: research done, scope set, spec written ([spec](./spec.md)). No code yet. Decisions that are still open are at the end.
 
 Related:
-- `docs/SPEC.md`: detailed spec and phased implementation plan
-- `docs/research/landscape.md`: market research and competitor teardowns
+- [Spec](./spec.md): detailed spec and phased implementation plan
+- [Landscape](./landscape.md): market research and competitor teardowns
 - Diagrams: https://claude.ai/artifact/YVe96tnDr1LhAyonwzdteV (private until shared)
 
 ---

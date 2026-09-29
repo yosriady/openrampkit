@@ -8,7 +8,7 @@ RainbowKit for money movement. An open-source deposit and withdraw kit: one moda
 - **Local rails first.** QRIS, PromptPay, QR Ph, DuitNow, VietQR, GCash, MoMo and more.
 - **Adapters like wagmi connectors.** `createAdapter()` plus a conformance test kit.
 
-> Status: prototype (phases 0 to 3 of `docs/SPEC.md`). APIs will change.
+> Status: prototype (phases 0 to 3 of the [spec](docs/design/spec.md)). APIs will change.
 
 ## Screenshots
 
@@ -95,4 +95,4 @@ pnpm test          # unit and end-to-end tests with the mock provider
 pnpm build
 ```
 
-See `docs/SCOPE.md` and `docs/SPEC.md` for the design, and `examples/` for runnable apps.
+Full documentation: `pnpm docs:dev` (VitePress in `docs/`). Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [landscape](docs/design/landscape.md).
