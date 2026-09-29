@@ -45,7 +45,13 @@ export type OpenDepositOptions = {
   wallet?: WalletAdapter
   theme?: Theme
   appearance?: Appearance
+  /** Partial message catalog. Overrides the locale catalog key by key. */
   messages?: Partial<Messages>
+  /**
+   * BCP 47 locale, e.g. `vi`, `id`, `th`, `ms`, `fil` or `en`. Picks the built-in catalog and the number format.
+   * Default: the session locale from the server, then the browser language, then English.
+   */
+  locale?: string
   /** Where to mount the element. Default: `document.body` */
   container?: HTMLElement
   /** Render inline in `container`, without the overlay */
@@ -77,6 +83,7 @@ export function openDeposit(opts: OpenDepositOptions): DepositHandle {
   if (opts.theme) el.theme = opts.theme
   if (opts.appearance) el.appearance = opts.appearance
   if (opts.messages) el.messages = opts.messages
+  if (opts.locale) el.locale = opts.locale
   el.embedded = !!opts.embedded
   el.open = true
   ;(opts.container ?? document.body).appendChild(el)

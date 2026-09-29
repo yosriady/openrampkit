@@ -1,138 +1,70 @@
-// All user-facing strings of the modal, in English.
-// Keep copy short and plain. Do not use em dashes or en dashes.
-// To translate, pass a partial `messages` object to the element (see `Messages`).
+// Message catalogs and locale resolution for the modal.
+// English (`i18n/en.ts`) defines every key. Each translation is typed `Messages`, so TypeScript
+// rejects a catalog that misses a key. Keep copy short and plain. Do not use em dashes or en dashes.
 
-export const en = {
-  title: 'Deposit',
-  close: 'Close',
-  back: 'Back',
-  loading: 'Loading',
-  poweredBy: 'Powered by OpenRampKit',
+import { en } from './i18n/en.js'
+import type { Messages } from './i18n/en.js'
+import { fil } from './i18n/fil.js'
+import { id } from './i18n/id.js'
+import { ms } from './i18n/ms.js'
+import { th } from './i18n/th.js'
+import { vi } from './i18n/vi.js'
 
-  // tabs
-  tabsLabel: 'Payment type',
-  tabCrypto: 'Use Crypto',
-  tabCash: 'Use Cash',
+export { en, vi, id, th, ms, fil }
+export type { Messages }
 
-  // method groups
-  groupConnected: 'Connected',
-  groupRecommended: 'Most popular',
-  groupMore: 'Other options',
-  groupUnavailable: 'Not available',
-  noMethods: 'No payment methods are available for this deposit.',
-  via: (providers: string) => `via ${providers}`,
-  limit: (amount: string) => `${amount} limit`,
-  etaInstant: 'Instant',
-  etaMinutes: (n: number) => `~${n} min`,
-  etaHours: (n: number) => (n === 1 ? '~1 hour' : `~${n} hours`),
-  etaHoursRange: (a: number, b: number) => `${a} to ${b} hours`,
-  etaDays: (n: number) => (n === 1 ? '~1 day' : `~${n} days`),
-  etaDaysRange: (a: number, b: number) => `${a} to ${b} days`,
+/** Built-in catalogs by language subtag. */
+export const catalogs = { en, vi, id, th, ms, fil } satisfies Record<string, Messages>
 
-  // amount
-  amountLabel: 'Amount',
-  amountPlaceholder: '0',
-  payWith: 'Pay with',
-  balance: (amount: string) => `Balance: ${amount}`,
-  max: 'Max',
-  minMax: (min?: string, max?: string) =>
-    min && max ? `Min ${min}, max ${max}` : min ? `Minimum ${min}` : max ? `Maximum ${max}` : '',
-  continue: 'Continue',
-  enterAmount: 'Enter an amount',
+export type CatalogLocale = keyof typeof catalogs
 
-  // quotes
-  quotesTitle: 'Choose a quote',
-  transferTitle: 'Transfer crypto',
-  sendFrom: 'Send from',
-  network: 'Network',
-  token: 'Token',
-  youGet: 'You get',
-  youPay: (amount: string) => `You pay ${amount}`,
-  fees: (amount: string) => `Fees ${amount}`,
-  noFees: 'No fees',
-  bestPrice: 'Best price',
-  fastest: 'Fastest',
-  gettingQuotes: 'Getting quotes',
-  noQuotes: 'No quotes are available for this amount.',
-  refresh: 'Refresh',
-  confirm: 'Confirm',
-  confirming: 'Confirming',
-  quotesLabel: 'Quotes',
+/** Older or alternative language codes that map to a built-in catalog. */
+const ALIASES: Record<string, CatalogLocale> = { tl: 'fil', in: 'id', zsm: 'ms' }
 
-  // step
-  stepTitle: {
-    SELECT_METHOD: 'Deposit',
-    QUOTE: 'Quote',
-    AUTH: 'Sign in',
-    KYC: 'Verify your identity',
-    PAYMENT: 'Complete payment',
-    PROCESSING: 'Processing',
-    COMPLETED: 'Complete',
-    FAILED: 'Payment failed',
-    EXPIRED: 'Expired',
-    REFUNDED: 'Refunded',
-    BLOCKED: 'Not available',
-  } as Record<string, string>,
-  provider: 'the provider',
-  continueTo: (provider: string) => `Continue to ${provider}`,
-  redirectHint: (provider: string) => `You will finish this step on ${provider}. Come back here when you are done.`,
-  redirectWaiting: (provider: string) => `Waiting for ${provider}. Keep this window open.`,
-  openAgain: 'Open again',
-  iframeTitle: (provider: string) => `${provider} checkout`,
-  sdkUnsupported: (provider: string) => `This step needs the ${provider} SDK. This screen cannot show it.`,
-  scanToPay: 'Scan with your banking or e-wallet app',
-  reference: 'Reference',
-  expiresIn: (time: string) => `Expires in ${time}`,
-  expired: 'Expired',
-  depositAddressHint: (symbol: string, chain: string) => `Send ${symbol} on ${chain} to this address`,
-  address: 'Address',
-  memo: 'Memo',
-  minDeposit: (amount: string) => `Minimum deposit: ${amount}`,
-  depositWarning: (symbol: string, chain: string) =>
-    `Send only ${symbol} on ${chain}. If you send another token or use another network, you can lose the funds.`,
-  walletTxHint: (count: number, chain: string) =>
-    count === 1 ? `Approve 1 transaction on ${chain}.` : `Approve ${count} transactions on ${chain}.`,
-  confirmInWallet: 'Confirm in wallet',
-  checkWallet: 'Check your wallet',
-  copy: 'Copy',
-  copied: 'Copied',
-  openApp: (app: string) => `Open ${app}`,
-  otpHint: (to: string) => `Enter the code we sent to ${to}`,
-  otpLabel: 'Code',
-  submit: 'Submit',
-  checkingStatus: 'Checking status',
-  chooseOther: 'Choose another method',
-  progressLabel: 'Progress',
-  legStatus: {
-    pending: 'waiting',
-    awaiting_user: 'needs your action',
-    processing: 'in progress',
-    succeeded: 'done',
-    failed: 'failed',
-    refunded: 'refunded',
-    expired: 'expired',
-  } as Record<string, string>,
-
-  // result
-  successTitle: 'Deposit complete',
-  successBody: 'Your funds are on the way to your account.',
-  youReceived: (amount: string) => `You get about ${amount}`,
-  failedTitle: {
-    FAILED: 'Payment failed',
-    EXPIRED: 'Session expired',
-    REFUNDED: 'Payment refunded',
-    BLOCKED: 'Not available',
-  } as Record<string, string>,
-  failedBody: 'The payment did not go through.',
-  done: 'Done',
-  tryAgain: 'Try again',
-
-  // error
-  errorTitle: 'Something went wrong',
-  errorBody: 'We could not load this deposit.',
+/** The built-in catalog for a BCP 47 tag, matched on the language subtag ("vi-VN" -> vi). */
+export function catalogFor(tag: string | undefined): CatalogLocale | undefined {
+  if (!tag) return undefined
+  const lang = tag.trim().toLowerCase().split(/[-_]/)[0] ?? ''
+  if (lang in catalogs) return lang as CatalogLocale
+  return ALIASES[lang]
 }
 
-export type Messages = typeof en
+export type LocaleSources = {
+  /** Explicit `locale` option of the element, `openDeposit()` or the React provider */
+  locale?: string | undefined
+  /** `PublicSession.locale` from the server */
+  sessionLocale?: string | undefined
+  /** Browser language. Default: `navigator.language` when there is a navigator */
+  navigatorLanguage?: string | undefined
+}
+
+/**
+ * Pick the catalog and the formatting tag.
+ * Order: explicit locale > session locale > browser language > English.
+ *
+ * - An explicit locale always sets the formatting tag, even without a built-in catalog
+ *   (for example `fr` together with French `messages` overrides). Its strings fall back to English.
+ * - A session or browser locale counts only when a built-in catalog matches it.
+ * - The server sends a session locale only when the app set one, so a session `en` is a real choice.
+ */
+export function resolveLocale(src: LocaleSources = {}): { catalog: CatalogLocale; tag: string } {
+  if (src.locale) return { catalog: catalogFor(src.locale) ?? 'en', tag: src.locale }
+  const nav = 'navigatorLanguage' in src ? src.navigatorLanguage : typeof navigator !== 'undefined' ? navigator.language : undefined
+  for (const tag of [src.sessionLocale, nav]) {
+    const catalog = catalogFor(tag)
+    if (catalog) return { catalog, tag: tag! }
+  }
+  return { catalog: 'en', tag: 'en' }
+}
+
+/**
+ * The messages to render: explicit `overrides` > the resolved locale catalog > English.
+ * `locale` in the result is the tag used for number and currency formatting.
+ */
+export function resolveMessages(src: LocaleSources & { messages?: Partial<Messages> | undefined } = {}): Messages {
+  const { catalog, tag } = resolveLocale(src)
+  return { ...catalogs[catalog], locale: tag, ...src.messages }
+}
 
 /** Merge a partial override (for example a translation) over the English catalog. */
 export function mergeMessages(overrides?: Partial<Messages>): Messages {

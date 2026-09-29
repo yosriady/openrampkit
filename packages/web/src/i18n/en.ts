@@ -1,0 +1,139 @@
+// English catalog: the source of truth for every key of `Messages`.
+// Keep copy short and plain. Do not use em dashes or en dashes.
+
+export const en = {
+  /** BCP 47 tag used for number and currency formatting */
+  locale: 'en',
+  title: 'Deposit',
+  close: 'Close',
+  back: 'Back',
+  loading: 'Loading',
+  poweredBy: 'Powered by OpenRampKit',
+
+  // tabs
+  tabsLabel: 'Payment type',
+  tabCrypto: 'Use Crypto',
+  tabCash: 'Use Cash',
+
+  // method groups
+  groupConnected: 'Connected',
+  groupRecommended: 'Most popular',
+  groupMore: 'Other options',
+  groupUnavailable: 'Not available',
+  noMethods: 'No payment methods are available for this deposit.',
+  via: (providers: string) => `via ${providers}`,
+  limit: (amount: string) => `${amount} limit`,
+  etaInstant: 'Instant',
+  etaMinutes: (n: number) => `~${n} min`,
+  etaHours: (n: number) => (n === 1 ? '~1 hour' : `~${n} hours`),
+  etaHoursRange: (a: number, b: number) => `${a} to ${b} hours`,
+  etaDays: (n: number) => (n === 1 ? '~1 day' : `~${n} days`),
+  etaDaysRange: (a: number, b: number) => `${a} to ${b} days`,
+
+  // amount
+  amountLabel: 'Amount',
+  amountPlaceholder: '0',
+  payWith: 'Pay with',
+  balance: (amount: string) => `Balance: ${amount}`,
+  max: 'Max',
+  minMax: (min?: string, max?: string) =>
+    min && max ? `Min ${min}, max ${max}` : min ? `Minimum ${min}` : max ? `Maximum ${max}` : '',
+  continue: 'Continue',
+  enterAmount: 'Enter an amount',
+
+  // quotes
+  quotesTitle: 'Choose a quote',
+  transferTitle: 'Transfer crypto',
+  sendFrom: 'Send from',
+  network: 'Network',
+  token: 'Token',
+  youGet: 'You get',
+  youPay: (amount: string) => `You pay ${amount}`,
+  fees: (amount: string) => `Fees ${amount}`,
+  noFees: 'No fees',
+  bestPrice: 'Best price',
+  fastest: 'Fastest',
+  gettingQuotes: 'Getting quotes',
+  noQuotes: 'No quotes are available for this amount.',
+  refresh: 'Refresh',
+  confirm: 'Confirm',
+  confirming: 'Confirming',
+  quotesLabel: 'Quotes',
+
+  // step
+  stepTitle: {
+    SELECT_METHOD: 'Deposit',
+    QUOTE: 'Quote',
+    AUTH: 'Sign in',
+    KYC: 'Verify your identity',
+    PAYMENT: 'Complete payment',
+    PROCESSING: 'Processing',
+    COMPLETED: 'Complete',
+    FAILED: 'Payment failed',
+    EXPIRED: 'Expired',
+    REFUNDED: 'Refunded',
+    BLOCKED: 'Not available',
+  } as Record<string, string>,
+  provider: 'the provider',
+  continueTo: (provider: string) => `Continue to ${provider}`,
+  redirectHint: (provider: string) => `You will finish this step on ${provider}. Come back here when you are done.`,
+  redirectWaiting: (provider: string) => `Waiting for ${provider}. Keep this window open.`,
+  openAgain: 'Open again',
+  iframeTitle: (provider: string) => `${provider} checkout`,
+  iframeClosed: 'Payment window closed',
+  iframeClosedBody: 'Open it again to finish paying, or choose another method.',
+  sdkUnsupported: (provider: string) => `This step needs the ${provider} SDK. This screen cannot show it.`,
+  scanToPay: 'Scan with your banking or e-wallet app',
+  reference: 'Reference',
+  expiresIn: (time: string) => `Expires in ${time}`,
+  expired: 'Expired',
+  depositAddressHint: (symbol: string, chain: string) => `Send ${symbol} on ${chain} to this address`,
+  address: 'Address',
+  memo: 'Memo',
+  minDeposit: (amount: string) => `Minimum deposit: ${amount}`,
+  depositWarning: (symbol: string, chain: string) =>
+    `Send only ${symbol} on ${chain}. If you send another token or use another network, you can lose the funds.`,
+  walletTxHint: (count: number, chain: string) =>
+    count === 1 ? `Approve 1 transaction on ${chain}.` : `Approve ${count} transactions on ${chain}.`,
+  confirmInWallet: 'Confirm in wallet',
+  checkWallet: 'Check your wallet',
+  copy: 'Copy',
+  copied: 'Copied',
+  openApp: (app: string) => `Open ${app}`,
+  otpHint: (to: string) => `Enter the code we sent to ${to}`,
+  otpLabel: 'Code',
+  submit: 'Submit',
+  checkingStatus: 'Checking status',
+  chooseOther: 'Choose another method',
+  progressLabel: 'Progress',
+  legStatus: {
+    pending: 'waiting',
+    awaiting_user: 'needs your action',
+    processing: 'in progress',
+    succeeded: 'done',
+    failed: 'failed',
+    refunded: 'refunded',
+    expired: 'expired',
+  } as Record<string, string>,
+
+  // result
+  successTitle: 'Deposit complete',
+  successBody: 'Your funds are on the way to your account.',
+  youReceived: (amount: string) => `You get about ${amount}`,
+  failedTitle: {
+    FAILED: 'Payment failed',
+    EXPIRED: 'Session expired',
+    REFUNDED: 'Payment refunded',
+    BLOCKED: 'Not available',
+  } as Record<string, string>,
+  failedBody: 'The payment did not go through.',
+  done: 'Done',
+  tryAgain: 'Try again',
+
+  // error
+  errorTitle: 'Something went wrong',
+  errorBody: 'We could not load this deposit.',
+}
+
+/** Every user-facing string of the modal. Translations must define every key. */
+export type Messages = typeof en

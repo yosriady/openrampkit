@@ -18,6 +18,9 @@ import type { OpenRampClient } from './client.js'
 
 export type Tab = 'crypto' | 'cash'
 
+/** What an embedded provider page reported, via `notifySurface()`. */
+export type SurfaceSignal = 'completed' | 'failed' | 'closed'
+
 export type ScreenName = 'loading' | 'methods' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
 
 export type Snapshot = {
@@ -39,6 +42,8 @@ export type Snapshot = {
   balances: WalletBalance[]
   /** Token the user pays with, for `wallet` and `transfer` */
   source?: { chain: string; token: string; symbol?: string; decimals?: number }
+  /** The provider page (IFRAME surface) said the user closed it. Cleared by `reopenSurface()` or a new step. */
+  surfaceClosed: boolean
 }
 
 export type ControllerOptions = {
@@ -75,6 +80,7 @@ export class DepositController {
       busy: false,
       walletConnected: false,
       balances: [],
+      surfaceClosed: false,
     }
     this.done = new Promise((res, rej) => {
       this.resolveDone = res
@@ -321,6 +327,28 @@ export class DepositController {
     }
   }
 
+  /**
+   * An embedded provider page (IFRAME surface) sent a message that the user completed, failed or
+   * closed the payment. The UI must check the message origin and source before it calls this.
+   *
+   * The message is only a hint to check now. It never sets the outcome: a page can send any
+   * message, so the result always comes from the server status (the next `step()` poll).
+   * This emits `surface.message`, polls the step at once (skipping the backoff wait) and, for
+   * `closed`, sets `surfaceClosed` so the UI can offer "Try again" or "Choose another method".
+   */
+  notifySurface(kind: SurfaceSignal, detail?: unknown) {
+    const step = this.snap.session?.step
+    if (this.destroyed || this.snap.screen !== 'step' || !step) return
+    this.emit('surface.message', { kind, ...(detail !== undefined ? { detail } : {}) })
+    if (kind === 'closed') this.set({ surfaceClosed: true })
+    void this.pollNow(step)
+  }
+
+  /** Show the provider page again after the user closed it. */
+  reopenSurface() {
+    if (this.snap.surfaceClosed) this.set({ surfaceClosed: false })
+  }
+
   back() {
     const screen = this.snap.screen
     clearTimeout(this.quoteTimer)
@@ -345,7 +373,8 @@ export class DepositController {
   private applySession(session: PublicSession) {
     this.sessionSeq++
     const prev = this.snap.session?.step
-    this.set({ session, error: session.step.error })
+    const sameStep = !!prev && prev.state === session.step.state && prev.sub === session.step.sub && prev.legIndex === session.step.legIndex
+    this.set({ session, error: session.step.error, ...(sameStep ? {} : { surfaceClosed: false }) })
     if (!prev || prev.state !== session.step.state || prev.sub !== session.step.sub) {
       this.emit('step.changed', { state: session.step.state, sub: session.step.sub })
     }
@@ -373,22 +402,39 @@ export class DepositController {
     if (!aw || this.destroyed) return
     const delay = Math.min(aw.poll.intervalMs * aw.poll.backoff ** attempt, aw.poll.maxIntervalMs)
     if (Date.now() - startedAt > aw.poll.giveUpAfterMs) return
-    this.pollTimer = setTimeout(async () => {
-      const seq = this.sessionSeq
-      try {
-        const s = await this.opts.client.step(this.opts.clientSecret)
-        if (this.destroyed) return
-        // A transition answered while this poll was in flight: its session is newer, so keep it.
-        if (seq !== this.sessionSeq) return
-        const changed = s.step.state !== this.snap.session?.step.state || s.step.sub !== this.snap.session?.step.sub ||
-          JSON.stringify(s.step.progress) !== JSON.stringify(this.snap.session?.step.progress)
-        if (changed) this.applySession(s)
-        else this.schedulePoll(step, attempt + 1, startedAt)
-      } catch {
-        if (this.destroyed || seq !== this.sessionSeq) return
-        this.schedulePoll(step, attempt + 1, startedAt)
-      }
-    }, delay)
+    this.pollTimer = setTimeout(() => void this.pollOnce(step, attempt, startedAt), delay)
+  }
+
+  /** True while a `pollNow()` request is in flight, so a burst of provider messages sends one request. */
+  private pollingNow = false
+
+  /** Poll now, then keep polling from the first backoff interval. */
+  private async pollNow(step: Step) {
+    if (this.pollingNow) return
+    this.pollingNow = true
+    clearTimeout(this.pollTimer)
+    try {
+      await this.pollOnce(step, -1, Date.now())
+    } finally {
+      this.pollingNow = false
+    }
+  }
+
+  private async pollOnce(step: Step, attempt: number, startedAt: number) {
+    const seq = this.sessionSeq
+    try {
+      const s = await this.opts.client.step(this.opts.clientSecret)
+      if (this.destroyed) return
+      // A transition answered while this poll was in flight: its session is newer, so keep it.
+      if (seq !== this.sessionSeq) return
+      const changed = s.step.state !== this.snap.session?.step.state || s.step.sub !== this.snap.session?.step.sub ||
+        JSON.stringify(s.step.progress) !== JSON.stringify(this.snap.session?.step.progress)
+      if (changed) this.applySession(s)
+      else this.schedulePoll(step, attempt + 1, startedAt)
+    } catch {
+      if (this.destroyed || seq !== this.sessionSeq) return
+      this.schedulePoll(step, attempt + 1, startedAt)
+    }
   }
 }
 

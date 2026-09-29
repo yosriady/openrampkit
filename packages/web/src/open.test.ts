@@ -44,6 +44,18 @@ describe('resolveClientSecret and createDepositController', () => {
 })
 
 describe('openDeposit', () => {
+  it('passes the locale option to the element', async () => {
+    const { fetch, secret } = await session()
+    const h = open({ baseUrl: BASE, clientSecret: secret, fetch, locale: 'vi' })
+    expect(h.element.locale).toBe('vi')
+    const c = await h.ready
+    await waitFor(() => c.getSnapshot().screen === 'methods')
+    await h.element.updateComplete
+    expect(h.element.shadowRoot!.querySelector('.title')!.textContent?.trim()).toBe('Nạp tiền')
+    const h2 = open({ baseUrl: BASE, clientSecret: secret, fetch })
+    expect(h2.element.locale).toBeUndefined()
+  })
+
   it('mounts on body with options, then resolves done when the deposit completes', async () => {
     const { fetch, secret } = await session()
     const events: string[] = []

@@ -16,6 +16,8 @@ export type OpenRampEmbeddedProps = {
   theme?: Theme
   appearance?: Appearance
   messages?: Partial<Messages>
+  /** BCP 47 locale. Defaults to the provider's `locale` */
+  locale?: string
   onEvent?: (e: OrkEvent) => void
   onComplete?: (session: PublicSession) => void
   /** Called when the user presses Close on a result or error screen */
@@ -38,6 +40,7 @@ export function OpenRampEmbedded(props: OpenRampEmbeddedProps) {
   const theme = props.theme ?? ctx?.theme
   const appearance = props.appearance ?? ctx?.appearance
   const messages = props.messages ?? ctx?.messages
+  const locale = props.locale ?? ctx?.locale
 
   // Create one controller per client secret.
   useEffect(() => {
@@ -82,8 +85,9 @@ export function OpenRampEmbedded(props: OpenRampEmbeddedProps) {
     el.theme = theme
     el.appearance = appearance
     el.messages = messages
+    el.locale = locale
     el.embedded = true
-  }, [controller, theme, appearance, messages])
+  }, [controller, theme, appearance, messages, locale])
 
   useEffect(() => {
     const el = ref.current

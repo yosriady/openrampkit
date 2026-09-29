@@ -39,7 +39,8 @@ export type SessionRecord = {
   region?: string
   email?: string
   ip?: string
-  locale: string
+  /** Set only when the app gave a locale; adapters get 'en' by default */
+  locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   allowedMethods?: string[]
   metadata?: Record<string, string>

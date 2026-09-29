@@ -2,7 +2,7 @@
 
 import type { Snapshot } from '@openrampkit/client'
 import { CHAINS, USDC, mulRatio } from '@openrampkit/core'
-import type { MethodOption, OrkError, PathwayGroup, Quote, Step, WalletBalance } from '@openrampkit/core'
+import type { IframeMessages, MethodOption, OrkError, PathwayGroup, Quote, Step, Surface, WalletBalance } from '@openrampkit/core'
 import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -100,10 +100,10 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
   const method = s.method
   const isWallet = method?.method === 'wallet'
   const currency = isWallet ? s.source?.symbol ?? 'USDC' : s.plan?.currency ?? s.session?.currency ?? 'USD'
-  const symbol = isWallet ? '' : currencySymbol(currency)
+  const symbol = isWallet ? '' : currencySymbol(currency, m.locale)
   const prefix = !!symbol && symbol !== currency.toUpperCase() ? symbol : ''
   const bounds = isWallet ? undefined : s.session?.amountBounds ?? method?.limits
-  const fmtBound = (v?: string) => (v && bounds ? formatFiat(v, bounds.currency, { compact: true }) : undefined)
+  const fmtBound = (v?: string) => (v && bounds ? formatFiat(v, bounds.currency, { compact: true, locale: m.locale }) : undefined)
   const boundsText = bounds ? m.minMax(fmtBound(bounds.min), fmtBound(bounds.max)) : ''
   const balance = isWallet ? s.balances.find((b) => b.chain === s.source?.chain && b.token === s.source?.token) : undefined
   const chips = isWallet
@@ -114,7 +114,7 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
           { label: m.max, value: balance.amount },
         ]
       : []
-    : presetAmounts(currency).map((n) => ({ label: formatFiat(String(n), currency, { compact: true }), value: String(n) }))
+    : presetAmounts(currency).map((n) => ({ label: formatFiat(String(n), currency, { compact: true, locale: m.locale }), value: String(n) }))
   return {
     isWallet,
     currency,
@@ -129,9 +129,9 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
 
 /** Second line of a quote row: what the user pays and the fees. */
 export function quoteSubtitle(q: Quote, m: Messages): string {
-  const fees = formatFees(q.fees)
+  const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
-  if (Number(q.input.amount) > 0) sub.push(m.youPay(formatAmount(q.input)))
+  if (Number(q.input.amount) > 0) sub.push(m.youPay(formatAmount(q.input, m.locale)))
   sub.push(fees ? m.fees(fees) : m.noFees)
   return sub.join(' · ')
 }
@@ -165,4 +165,50 @@ export function sourceForChain(chain: string, wasNative: boolean): TokenOption &
   const opts = transferTokens(chain)
   const next = (wasNative ? opts.find((o) => o.token === 'native') : opts[0]) ?? opts[0]!
   return { chain, ...next }
+}
+
+// ---------- provider iframe messages ----------
+
+export type IframeSignal = 'completed' | 'failed' | 'closed'
+
+/** `source` of the generic OpenRampKit embed protocol (the same shape D0 uses). */
+export const EMBED_SOURCE = 'openramp-embed'
+const EMBED_TYPES: Record<string, IframeSignal> = { 'payment.completed': 'completed', 'payment.failed': 'failed', closed: 'closed' }
+
+/** Exact origin (scheme, host and port) that may post messages for an IFRAME surface, or undefined when it is not valid. */
+export function iframeOrigin(surface: Extract<Surface, { kind: 'IFRAME' }>): string | undefined {
+  const raw = surface.messages?.origin ?? surface.origin
+  try {
+    const o = new URL(raw).origin
+    return o && o !== 'null' ? o : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Map a provider `postMessage` payload to a signal, or undefined to ignore it.
+ * Reads `data[typeField]` against the surface's `completed`, `failed` and `closed` lists, and also
+ * accepts the generic `{ source: 'openramp-embed', type: 'payment.completed' | 'payment.failed' | 'closed' }`.
+ * A JSON string payload is parsed first. The caller must check the origin and the source window.
+ */
+export function classifyIframeMessage(data: unknown, cfg: IframeMessages | undefined): IframeSignal | undefined {
+  let d = data
+  if (typeof d === 'string' && d.startsWith('{')) {
+    try {
+      d = JSON.parse(d)
+    } catch {
+      return undefined
+    }
+  }
+  if (!d || typeof d !== 'object') return undefined
+  const rec = d as Record<string, unknown>
+  if (rec.source === EMBED_SOURCE && typeof rec.type === 'string' && EMBED_TYPES[rec.type]) return EMBED_TYPES[rec.type]
+  if (!cfg) return undefined
+  const type = rec[cfg.typeField ?? 'type']
+  if (typeof type !== 'string') return undefined
+  if (cfg.completed?.includes(type)) return 'completed'
+  if (cfg.failed?.includes(type)) return 'failed'
+  if (cfg.closed?.includes(type)) return 'closed'
+  return undefined
 }

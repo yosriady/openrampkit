@@ -24,7 +24,8 @@ export function isFiatCurrency(code: string): boolean {
   return !CRYPTO_TICKERS.has(cur)
 }
 
-export function formatFiat(amount: string, currency: string, opts: { compact?: boolean; locale?: string } = {}): string {
+/** Fiat amount with the currency's minor units (VND and IDR have none), formatted for `opts.locale`. */
+export function formatFiat(amount: string, currency: string, opts: { compact?: boolean; locale?: string | undefined } = {}): string {
   const n = Number(amount)
   if (!Number.isFinite(n)) return `${amount} ${currency}`
   const cur = currency.toUpperCase()
@@ -41,7 +42,7 @@ export function formatFiat(amount: string, currency: string, opts: { compact?: b
       // Unknown currency code: fall through
     }
   }
-  return formatToken(amount, currency)
+  return formatToken(amount, currency, opts.locale)
 }
 
 export function formatToken(amount: string, symbol?: string, locale?: string): string {
@@ -51,9 +52,10 @@ export function formatToken(amount: string, symbol?: string, locale?: string): s
   return symbol ? `${s} ${symbol}` : s
 }
 
-export function formatAmount(a: Amount): string {
-  if (a.asset.kind === 'fiat') return formatFiat(a.amount, a.asset.currency)
-  return formatToken(a.amount, a.asset.symbol ?? '')
+/** `locale` is a BCP 47 tag (for example `m.locale`). Undefined uses the runtime default. */
+export function formatAmount(a: Amount, locale?: string): string {
+  if (a.asset.kind === 'fiat') return formatFiat(a.amount, a.asset.currency, locale ? { locale } : {})
+  return formatToken(a.amount, a.asset.symbol ?? '', locale)
 }
 
 /** Currency symbol for an ISO code, e.g. USD -> $, PHP -> ₱. Falls back to the code. */
@@ -69,14 +71,14 @@ export function currencySymbol(currency: string, locale?: string): string {
 }
 
 /** Sum fees per currency, e.g. "$1.20 + 0.0001 ETH". */
-export function formatFees(fees: Fee[]): string | undefined {
+export function formatFees(fees: Fee[], locale?: string): string | undefined {
   const byCur = new Map<string, string>()
   for (const f of fees) {
     if (!f.amount || Number(f.amount) === 0) continue
     byCur.set(f.currency, add(byCur.get(f.currency) ?? '0', f.amount))
   }
   if (!byCur.size) return undefined
-  return [...byCur].map(([cur, amt]) => formatFiat(amt, cur)).join(' + ')
+  return [...byCur].map(([cur, amt]) => formatFiat(amt, cur, locale ? { locale } : {})).join(' + ')
 }
 
 export function formatEta(eta: { min: number; max: number }, m: Messages): string {
@@ -96,7 +98,7 @@ export function formatEta(eta: { min: number; max: number }, m: Messages): strin
 
 export function formatLimit(limits: { max?: string; currency: string } | undefined, m: Messages): string | undefined {
   if (!limits?.max) return undefined
-  return m.limit(formatFiat(limits.max, limits.currency, { compact: true }))
+  return m.limit(formatFiat(limits.max, limits.currency, { compact: true, locale: m.locale }))
 }
 
 export function shortAddress(addr: string): string {

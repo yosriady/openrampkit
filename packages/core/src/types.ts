@@ -198,9 +198,36 @@ export type FieldSpec = {
   options?: Array<{ value: string; label: string }>
 }
 
+/** How to read `postMessage` events from an IFRAME surface. */
+export type IframeMessages = {
+  /** Allowed sender origin. Default: the surface `origin` */
+  origin?: string
+  /** Event types that mean the user finished paying */
+  completed?: string[]
+  /** Event types that mean the payment failed */
+  failed?: string[]
+  /** Event types that mean the user closed the provider page */
+  closed?: string[]
+  /** Field of `event.data` that holds the type. Default: `type` */
+  typeField?: string
+}
+
 export type Surface =
   | { kind: 'REDIRECT'; url: string; popup: boolean; provider?: string; /** Keep the Referer header on the start redirect (some providers check it) */ keepReferrer?: boolean }
-  | { kind: 'IFRAME'; url: string; origin: string; allow?: string; height?: number; provider?: string }
+  | {
+      kind: 'IFRAME'
+      url: string
+      origin: string
+      allow?: string
+      height?: number
+      provider?: string
+      /**
+       * `postMessage` events from the provider page that end the user's part of the step.
+       * The UI only uses them to check the status at once (or to show a "closed" notice).
+       * It never takes the outcome from a message: the server status is the source of truth.
+       */
+      messages?: IframeMessages
+    }
   | { kind: 'PROVIDER_SDK'; provider: string; params: Record<string, unknown> }
   | { kind: 'QR'; payload: string; amount: string; currency: string; reference?: string; method?: string; expiresAt?: string }
   | { kind: 'DEEPLINK'; url: string; appName: string }

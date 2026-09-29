@@ -820,3 +820,186 @@ describe('controller swaps, theme and messages', () => {
     expect(h.$('[aria-live]')!.textContent).toBe('Enter an amount.')
   })
 })
+
+describe('provider iframe messages', () => {
+  const ORIGIN = 'https://p.example'
+  const iframe = (extra: Partial<Extract<Surface, { kind: 'IFRAME' }>> = {}): Surface => ({
+    kind: 'IFRAME',
+    url: 'about:blank',
+    origin: ORIGIN,
+    provider: 'Prov',
+    messages: { completed: ['ORDER_DONE'], failed: ['ORDER_FAILED'], closed: ['CLOSED'] },
+    ...extra,
+  })
+
+  /** An element on an IFRAME step. `step()` returns the same PAYMENT step unless `stepFn` says otherwise. */
+  async function mountIframe(surface: Surface, stepFn?: ReturnType<typeof vi.fn>) {
+    const pay = session(step({ state: 'PAYMENT', surface }))
+    const client = fakeClient({ select: vi.fn(async () => pay), step: stepFn ?? vi.fn(async () => pay) })
+    const events: string[] = []
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e.type) })
+    const el = document.createElement(TAG_NAME) as OpenRampModal
+    mounted.push(el)
+    el.open = true
+    el.controller = c
+    document.body.appendChild(el)
+    await c.start()
+    await c.selectMethod('card')
+    c.setAmount('100')
+    await c.submitAmount()
+    await c.confirm()
+    await settle(el)
+    const h = helpers(el)
+    const frame = () => h.$<HTMLIFrameElement>('iframe.provider')
+    const post = async (data: unknown, init: { origin?: string; source?: MessageEventSource | null } = {}) => {
+      const source = 'source' in init ? init.source : frame()!.contentWindow
+      window.dispatchEvent(new MessageEvent('message', { data, origin: init.origin ?? ORIGIN, source }))
+      await settle(el)
+    }
+    return { el, c, client, events, frame, post, ...h }
+  }
+
+  it('ignores a wrong origin, a wrong source window and unknown types', async () => {
+    const h = await mountIframe(iframe())
+    await h.post({ type: 'ORDER_DONE' }, { origin: 'https://evil.example' })
+    await h.post({ type: 'ORDER_DONE' }, { origin: 'https://p.example:8443' })
+    await h.post({ type: 'ORDER_DONE' }, { origin: 'http://p.example' })
+    await h.post({ type: 'ORDER_DONE' }, { source: window })
+    await h.post({ type: 'ORDER_DONE' }, { source: null })
+    const other = document.createElement('iframe')
+    document.body.appendChild(other)
+    await h.post({ type: 'ORDER_DONE' }, { source: other.contentWindow })
+    other.remove()
+    await h.post({ type: 'SOMETHING_ELSE' })
+    await h.post('not json')
+    await h.post('{broken')
+    await h.post(null)
+    expect(h.client.step).not.toHaveBeenCalled()
+    expect(h.events).not.toContain('surface.message')
+  })
+
+  it('a completed message polls the step at once; the server status sets the result', async () => {
+    const stepFn = vi.fn(async () => session(step({ state: 'COMPLETED' })))
+    const h = await mountIframe(iframe(), stepFn)
+    await h.post({ type: 'ORDER_DONE', data: { orderId: 'o1' } })
+    await h.until(() => h.$('.result-icon.success') !== null)
+    expect(stepFn).toHaveBeenCalledTimes(1)
+    expect(h.events).toContain('surface.message')
+    expect(h.text()).toContain('Deposit complete')
+  })
+
+  it('a completed message does not complete the deposit when the server still says PAYMENT', async () => {
+    const h = await mountIframe(iframe())
+    await h.post({ type: 'ORDER_DONE' })
+    await h.until(() => h.client.step.mock.calls.length === 1)
+    expect(h.c.getSnapshot().screen).toBe('step')
+    expect(h.frame()).not.toBeNull()
+  })
+
+  it('uses messages.origin, a custom typeField and JSON string payloads', async () => {
+    const h = await mountIframe(iframe({ messages: { origin: 'https://widget.p.example/', typeField: 'event', failed: ['x.failed'] } }))
+    await h.post({ event: 'x.failed' }) // surface.origin is not allowed any more
+    expect(h.client.step).not.toHaveBeenCalled()
+    await h.post(JSON.stringify({ event: 'x.failed' }), { origin: 'https://widget.p.example' })
+    await h.until(() => h.client.step.mock.calls.length === 1)
+  })
+
+  it('accepts the generic openramp-embed protocol from the allowed origin', async () => {
+    const h = await mountIframe(iframe({ messages: undefined }))
+    await h.post({ source: 'openramp-embed', type: 'payment.completed' }, { origin: 'https://evil.example' })
+    await h.post({ source: 'other', type: 'payment.completed' })
+    expect(h.client.step).not.toHaveBeenCalled()
+    await h.post({ source: 'openramp-embed', type: 'payment.failed' })
+    await h.until(() => h.client.step.mock.calls.length === 1)
+    await h.post({ source: 'openramp-embed', type: 'closed' })
+    expect(h.text()).toContain('Payment window closed')
+  })
+
+  it('closed shows a notice with Try again and Choose another method, and stops listening', async () => {
+    const h = await mountIframe(iframe())
+    await h.post({ type: 'CLOSED' })
+    expect(h.frame()).toBeNull()
+    expect(h.text()).toContain('Payment window closed')
+    expect(h.text()).toContain('Open it again to finish paying, or choose another method.')
+    expect(h.$$('button').filter((b) => b.textContent?.includes('Choose another method'))).toHaveLength(1)
+    await h.until(() => h.client.step.mock.calls.length === 1)
+    // While the notice shows there is no frame, so messages are not read.
+    await h.post({ type: 'ORDER_DONE' }, { source: window })
+    expect(h.client.step).toHaveBeenCalledTimes(1)
+    // Try again brings back a new frame and listens again.
+    await h.click(h.button('Try again'))
+    expect(h.frame()).not.toBeNull()
+    await h.post({ type: 'ORDER_DONE' })
+    await h.until(() => h.client.step.mock.calls.length === 2)
+    await h.post({ type: 'CLOSED' })
+    await h.click(h.button('Choose another method'))
+    expect(h.client.transition).toHaveBeenCalledWith('ors_1.sig', 'restart', undefined)
+  })
+
+  it('adds the window listener only while the frame shows, and removes it on disconnect', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    const remove = vi.spyOn(window, 'removeEventListener')
+    const h = await mountIframe(iframe())
+    expect(add.mock.calls.filter(([t]) => t === 'message')).toHaveLength(1)
+    h.el.remove()
+    expect(remove.mock.calls.filter(([t]) => t === 'message')).toHaveLength(1)
+  })
+
+  it('a non-IFRAME step does not listen', async () => {
+    const add = vi.spyOn(window, 'addEventListener')
+    await mountStep({ kind: 'BANK_FIELDS', fields: [] })
+    expect(add.mock.calls.filter(([t]) => t === 'message')).toHaveLength(0)
+  })
+})
+
+describe('locale', () => {
+  const VN_DEST: Destination = { type: 'merchant', currency: 'VND' }
+
+  it('renders Vietnamese tab labels, title and amounts with locale "vi"', async () => {
+    const h = await mount({ start: false })
+    h.el.locale = 'vi'
+    await h.c.start()
+    await settle(h.el)
+    expect(h.title()).toBe('Nạp tiền')
+    expect(h.$$('.tab').map((t) => t.textContent?.trim())).toEqual(['Dùng tiền mã hóa', 'Dùng tiền mặt'])
+    expect(h.$('.footer')!.textContent).toBe('Cung cấp bởi OpenRampKit')
+  })
+
+  it('formats VND amount chips for Vietnamese without decimals', async () => {
+    const h = await mount({ country: 'VN', destination: VN_DEST })
+    h.el.locale = 'vi-VN'
+    await settle(h.el)
+    await h.click(h.$('[data-method="vietqr"]')!)
+    const chips = h.$$('.chip').map((c) => c.textContent?.trim().replace(/\s/g, ' '))
+    expect(chips[0]).toBe('200.000 ₫')
+    expect(h.button('Nhập số tiền')).toBeTruthy()
+  })
+
+  it('explicit messages override the locale catalog', async () => {
+    const h = await mount()
+    h.el.locale = 'th'
+    h.el.messages = { title: 'เติมเงิน' }
+    await settle(h.el)
+    expect(h.title()).toBe('เติมเงิน')
+    expect(h.$('.tab')!.textContent?.trim()).toBe('ใช้คริปโต')
+  })
+
+  it('uses the session locale from the server when no locale is set', async () => {
+    const client = fakeClient({ getSession: vi.fn(async () => session('SELECT_METHOD', { locale: 'id-ID' })) })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    const el = document.createElement(TAG_NAME) as OpenRampModal
+    mounted.push(el)
+    el.open = true
+    el.controller = c
+    document.body.appendChild(el)
+    await c.start()
+    await settle(el)
+    const h = helpers(el)
+    expect(h.title()).toBe('Isi saldo')
+    expect(h.$$('.tab').map((t) => t.textContent?.trim())).toEqual(['Pakai kripto', 'Pakai uang tunai'])
+    // The explicit property wins over the session locale
+    el.locale = 'fil'
+    await settle(el)
+    expect(h.title()).toBe('Mag-deposit')
+  })
+})

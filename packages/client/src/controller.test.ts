@@ -782,3 +782,112 @@ describe('terminal states and done', () => {
     expect(c.getSnapshot().screen).toBe('methods')
   })
 })
+
+describe('notifySurface (provider iframe messages)', () => {
+  const iframe = { kind: 'IFRAME' as const, url: 'https://p.example/w', origin: 'https://p.example' }
+  const payment = (sub?: string) =>
+    session(step({ state: 'PAYMENT', surface: iframe, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ...(sub ? { sub } : {}) }))
+
+  async function atIframe(stepFn = vi.fn(async () => payment())) {
+    const client = fakeClient({ select: vi.fn(async () => payment()), step: stepFn })
+    const h = await atQuotes({}, client)
+    await h.c.confirm()
+    return h
+  }
+
+  it('completed polls at once, skipping the backoff wait, and emits surface.message', async () => {
+    vi.useFakeTimers()
+    const done = session(step({ state: 'COMPLETED' }))
+    const { c, client, events } = await atIframe(vi.fn(async () => done))
+    expect(client.step).not.toHaveBeenCalled()
+    c.notifySurface('completed', { origin: 'https://p.example' })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.step).toHaveBeenCalledTimes(1)
+    expect(c.getSnapshot().screen).toBe('result')
+    expect(c.getSnapshot().session?.step.state).toBe('COMPLETED')
+    const ev = events.find((e) => e.type === 'surface.message')!
+    expect(ev.data.object).toEqual({ kind: 'completed', detail: { origin: 'https://p.example' } })
+    c.destroy()
+  })
+
+  it('never takes the outcome from the message: the server status decides', async () => {
+    vi.useFakeTimers()
+    const { c, client } = await atIframe()
+    c.notifySurface('completed')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.step).toHaveBeenCalledTimes(1)
+    // The server still says PAYMENT, so the step stays and polling goes on from the first interval.
+    expect(c.getSnapshot().screen).toBe('step')
+    expect(c.getSnapshot().session?.step.state).toBe('PAYMENT')
+    await vi.advanceTimersByTimeAsync(999)
+    expect(client.step).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1)
+    expect(client.step).toHaveBeenCalledTimes(2)
+    c.destroy()
+  })
+
+  it('failed also only polls; a burst of messages sends one request', async () => {
+    vi.useFakeTimers()
+    let release!: () => void
+    const stepFn = vi.fn(() => new Promise<PublicSession>((r) => (release = () => r(payment()))))
+    const { c, client, types } = await atIframe(stepFn)
+    c.notifySurface('failed')
+    c.notifySurface('failed')
+    c.notifySurface('completed')
+    expect(client.step).toHaveBeenCalledTimes(1)
+    expect(types().filter((t) => t === 'surface.message')).toHaveLength(3)
+    release()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(c.getSnapshot().error).toBeUndefined()
+    expect(c.getSnapshot().surfaceClosed).toBe(false)
+    c.destroy()
+  })
+
+  it('closed sets surfaceClosed and polls; reopenSurface clears it; a new step clears it', async () => {
+    vi.useFakeTimers()
+    const stepFn = vi.fn(async () => payment())
+    const { c, client } = await atIframe(stepFn)
+    c.notifySurface('closed')
+    expect(c.getSnapshot().surfaceClosed).toBe(true)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.step).toHaveBeenCalledTimes(1)
+    expect(c.getSnapshot().surfaceClosed).toBe(true)
+    c.reopenSurface()
+    expect(c.getSnapshot().surfaceClosed).toBe(false)
+    c.reopenSurface() // no-op
+    c.notifySurface('closed')
+    await vi.advanceTimersByTimeAsync(0)
+    stepFn.mockResolvedValue(payment('RETRY'))
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(c.getSnapshot().session?.step.sub).toBe('RETRY')
+    expect(c.getSnapshot().surfaceClosed).toBe(false)
+    c.destroy()
+  })
+
+  it('a failed immediate poll keeps polling with backoff', async () => {
+    vi.useFakeTimers()
+    const stepFn = vi.fn().mockRejectedValueOnce(new Error('offline')).mockResolvedValue(payment())
+    const { c, client } = await atIframe(stepFn as never)
+    c.notifySurface('completed')
+    await vi.advanceTimersByTimeAsync(0)
+    expect(client.step).toHaveBeenCalledTimes(1)
+    await vi.advanceTimersByTimeAsync(1000)
+    expect(client.step).toHaveBeenCalledTimes(2)
+    expect(c.getSnapshot().error).toBeUndefined()
+    c.destroy()
+  })
+
+  it('is ignored outside a step screen and after destroy', async () => {
+    const { c, client, types } = make()
+    c.notifySurface('completed') // no session yet
+    await c.start()
+    c.notifySurface('closed') // methods screen
+    expect(client.step).not.toHaveBeenCalled()
+    expect(c.getSnapshot().surfaceClosed).toBe(false)
+    expect(types()).not.toContain('surface.message')
+    const h = await atIframe()
+    h.c.destroy()
+    h.c.notifySurface('completed')
+    expect(h.client.step).not.toHaveBeenCalled()
+  })
+})

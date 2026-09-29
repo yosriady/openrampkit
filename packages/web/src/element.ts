@@ -6,7 +6,7 @@ import { methodName } from '@openrampkit/core'
 import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
-import { mergeMessages } from './messages.js'
+import { resolveMessages } from './messages.js'
 import type { Messages } from './messages.js'
 import { qrPath } from './qr.js'
 import { styles } from './styles.js'
@@ -14,7 +14,9 @@ import { themeVariables } from './theme.js'
 import type { Appearance, Theme } from './theme.js'
 import {
   amountModel,
+  classifyIframeMessage,
   groupLabel,
+  iframeOrigin,
   groupMethods,
   liveText,
   methodSubtitle,
@@ -60,6 +62,7 @@ export class OpenRampModal extends LitElement {
     theme: { attribute: false },
     appearance: { attribute: false },
     messages: { attribute: false },
+    locale: { type: String },
     error: { attribute: false },
     open: { type: Boolean, reflect: true },
     embedded: { type: Boolean, reflect: true },
@@ -73,8 +76,13 @@ export class OpenRampModal extends LitElement {
   declare controller: DepositController | undefined
   declare theme: Theme | undefined
   declare appearance: Appearance | undefined
-  /** Partial message catalog, for translations */
+  /** Partial message catalog. Overrides the locale catalog key by key. */
   declare messages: Partial<Messages> | undefined
+  /**
+   * BCP 47 locale, e.g. `vi` or `th-TH`. Picks the built-in catalog (en, vi, id, th, ms, fil) and the
+   * number format. Default: the session locale, then the browser language, then English.
+   */
+  declare locale: string | undefined
   /** Error shown when there is no controller (for example the client secret could not load) */
   declare error: OrkError | undefined
   declare open: boolean
@@ -97,6 +105,7 @@ export class OpenRampModal extends LitElement {
   private _lastScreen = ''
   private _hadFocus = false
   private _returnFocus: HTMLElement | null = null
+  private _listening = false
 
   constructor() {
     super()
@@ -127,6 +136,7 @@ export class OpenRampModal extends LitElement {
     clearInterval(this._tick)
     this._tick = undefined
     clearTimeout(this._copyTimer)
+    this._syncMessageListener(false)
   }
 
   private _onMedia = (e: MediaQueryListEvent) => {
@@ -167,6 +177,7 @@ export class OpenRampModal extends LitElement {
   }
 
   protected override updated(changed: PropertyValues): void {
+    this._syncMessageListener(!!this._iframeSurface)
     if (!this._visible) return
     const screen = this._screen
     const openedNow = changed.has('open') && this.open
@@ -178,6 +189,40 @@ export class OpenRampModal extends LitElement {
       const root = this.renderRoot as ShadowRoot
       ;(root.querySelector<HTMLElement>('.title') ?? root.querySelector<HTMLElement>('.card'))?.focus({ preventScroll: true })
     }
+  }
+
+  // ---------- provider iframe messages ----------
+
+  /** The IFRAME surface on screen, if any. Messages are only read while it is shown. */
+  private get _iframeSurface(): Extract<Surface, { kind: 'IFRAME' }> | undefined {
+    const s = this._snap
+    const surface = s?.session?.step.surface
+    if (!this._visible || !this.isConnected || s?.screen !== 'step' || s.surfaceClosed || surface?.kind !== 'IFRAME') return undefined
+    return surface
+  }
+
+  private _syncMessageListener(on: boolean) {
+    if (typeof window === 'undefined' || on === this._listening) return
+    this._listening = on
+    if (on) window.addEventListener('message', this._onMessage)
+    else window.removeEventListener('message', this._onMessage)
+  }
+
+  /**
+   * A `message` event from the provider iframe. Security rules:
+   * - `event.origin` must equal the allowed origin exactly (`surface.messages.origin`, else `surface.origin`).
+   * - `event.source` must be this element's iframe window, so other frames on the page cannot pretend.
+   * - A message never decides the outcome. It only asks the controller to check the server status now.
+   */
+  private _onMessage = (e: MessageEvent) => {
+    const surface = this._iframeSurface
+    if (!surface) return
+    const origin = iframeOrigin(surface)
+    if (!origin || e.origin !== origin) return
+    const frame = this.renderRoot.querySelector<HTMLIFrameElement>('iframe.provider')
+    if (!frame?.contentWindow || e.source !== frame.contentWindow) return
+    const kind = classifyIframeMessage(e.data, surface.messages)
+    if (kind) this.controller?.notifySurface(kind, { origin })
   }
 
   private _applyTheme() {
@@ -220,7 +265,7 @@ export class OpenRampModal extends LitElement {
   // ---------- helpers ----------
 
   private get _m(): Messages {
-    return mergeMessages(this.messages)
+    return resolveMessages({ locale: this.locale, sessionLocale: this._snap?.session?.locale, messages: this.messages })
   }
 
   private get _visible() {
@@ -481,7 +526,7 @@ export class OpenRampModal extends LitElement {
           ${prefix ? nothing : html`<span class="amount-suffix">${currency}</span>`}
         </label>
         ${boundsText ? html`<div class="hint">${boundsText}</div>` : nothing}
-        ${balance ? html`<div class="hint">${m.balance(formatToken(balance.amount, balance.symbol))}</div>` : nothing}
+        ${balance ? html`<div class="hint">${m.balance(formatToken(balance.amount, balance.symbol, m.locale))}</div>` : nothing}
       </div>
       ${chips.length
         ? html`<div class="chips">
@@ -527,8 +572,8 @@ export class OpenRampModal extends LitElement {
               <span class="row-sub">${displayChain(b.chain)}</span>
             </span>
             <span class="row-end">
-              <strong>${formatToken(b.amount)}</strong>
-              ${b.usd ? formatFiat(b.usd, 'USD') : nothing}
+              <strong>${formatToken(b.amount, undefined, m.locale)}</strong>
+              ${b.usd ? formatFiat(b.usd, 'USD', { locale: m.locale }) : nothing}
             </span>
           </button>`
         })}
@@ -624,7 +669,7 @@ export class OpenRampModal extends LitElement {
         <span class="row-sub wrap">${quoteSubtitle(q, m)}</span>
       </span>
       <span class="row-end">
-        ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output)}</strong>` : nothing}
+        ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output, m.locale)}</strong>` : nothing}
         ${formatEta(q.eta, m)}
       </span>
     </button>`
@@ -666,7 +711,7 @@ export class OpenRampModal extends LitElement {
       ${errors.map((e) => this._renderErrorNotice(e))}
       ${showProgress ? this._renderProgress(m, step) : nothing}
       ${awaiting && surface ? html`<div class="status-line"><span class="spinner"></span>${m.checkingStatus}</div>` : nothing}
-      ${step.state === 'PAYMENT'
+      ${step.state === 'PAYMENT' && !(s.surfaceClosed && surface?.kind === 'IFRAME')
         ? html`<div class="stack">
             <button class="btn ghost" type="button" ?disabled=${s.busy} @click=${() => void c.fire('restart')}>${m.chooseOther}</button>
           </div>`
@@ -762,6 +807,13 @@ export class OpenRampModal extends LitElement {
           </div>`
       }
       case 'IFRAME':
+        if (s.surfaceClosed) {
+          return html`<div class="notice info" role="status">${icons.alert}<span><strong>${m.iframeClosed}</strong><br />${m.iframeClosedBody}</span></div>
+            <div class="stack">
+              <button class="btn" type="button" @click=${() => c.reopenSurface()}>${m.tryAgain}</button>
+              <button class="btn secondary" type="button" ?disabled=${s.busy} @click=${() => void c.fire('restart')}>${m.chooseOther}</button>
+            </div>`
+        }
         return html`<iframe
           class="provider"
           src=${surface.url}
@@ -777,7 +829,7 @@ export class OpenRampModal extends LitElement {
         const left = surface.expiresAt ? Date.parse(surface.expiresAt) - this._now : undefined
         const label = surface.method ? methodName(surface.method) : m.scanToPay
         return html`
-          <div class="big-amount">${formatFiat(surface.amount, surface.currency)}</div>
+          <div class="big-amount">${formatFiat(surface.amount, surface.currency, { locale: m.locale })}</div>
           <div class="hint">${surface.method ? `${methodName(surface.method)}. ${m.scanToPay}` : m.scanToPay}</div>
           ${this._qr(surface.payload, label)}
           ${left !== undefined
@@ -799,7 +851,7 @@ export class OpenRampModal extends LitElement {
               ${this._copyRow(m, 'net', m.network, chain, { copy: false })} ${this._copyRow(m, 'tok', m.token, symbol, { copy: false })}
             </div>
           </div>
-          ${surface.min ? html`<div class="hint">${m.minDeposit(formatToken(surface.min, symbol))}</div>` : nothing}
+          ${surface.min ? html`<div class="hint">${m.minDeposit(formatToken(surface.min, symbol, m.locale))}</div>` : nothing}
           <div class="notice warning">${icons.alert}<span>${surface.warning ?? m.depositWarning(symbol, chain)}</span></div>
         `
       }
@@ -900,7 +952,7 @@ export class OpenRampModal extends LitElement {
       return html`<div class="center">
           <span class="result-icon success" aria-hidden="true">${icons.check}</span>
           <h3 class="result-title">${m.successTitle}</h3>
-          <p class="secondary-text">${q ? m.youReceived(formatAmount(q.output)) : m.successBody}</p>
+          <p class="secondary-text">${q ? m.youReceived(formatAmount(q.output, m.locale)) : m.successBody}</p>
         </div>
         ${step.progress && step.progress.legs.length > 1 ? this._renderProgress(m, step) : nothing}
         <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>`

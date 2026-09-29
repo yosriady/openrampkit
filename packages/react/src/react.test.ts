@@ -152,6 +152,23 @@ describe('OpenRampProvider and useOpenRamp', () => {
     fresh()
   })
 
+  it('passes locale to the modal and keeps it live while open', async () => {
+    let api!: OpenRampApi
+    const tree = (locale: string) => createElement(OpenRampProvider, { baseUrl: BASE, locale }, createElement(Capture, { onApi: (a) => (api = a) }))
+    await render(tree('vi'))
+    await act(async () => {
+      void api.beginDeposit({ clientSecret: await newSecret() }).catch(() => {})
+    })
+    await until(() => !!modal()?.controller && modal()!.controller!.getSnapshot().screen === 'methods')
+    expect(modal()!.locale).toBe('vi')
+    await modal()!.updateComplete
+    expect(modal()!.shadowRoot!.querySelector('.title')!.textContent?.trim()).toBe('Nạp tiền')
+    await render(tree('th'))
+    expect(modal()!.locale).toBe('th')
+    await modal()!.updateComplete
+    expect(modal()!.shadowRoot!.querySelector('.title')!.textContent?.trim()).toBe('ฝากเงิน')
+  })
+
   it('useOpenRamp outside a provider throws', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {})
     await expect(render(createElement(Capture, { onApi: () => {} }))).rejects.toThrow('wrap your app in <OpenRampProvider>')
@@ -219,6 +236,18 @@ describe('DepositButton', () => {
 })
 
 describe('OpenRampEmbedded', () => {
+  it('embedded takes locale from its prop, else from the provider', async () => {
+    const secret = await newSecret()
+    const tree = (locale?: string) =>
+      createElement(OpenRampProvider, { baseUrl: BASE, locale: 'ms' }, createElement(OpenRampEmbedded, { clientSecret: secret, ...(locale ? { locale } : {}) }))
+    await render(tree())
+    const el = container.querySelector<OpenRampModal>('openramp-modal')!
+    await until(() => !!el.controller)
+    expect(el.locale).toBe('ms')
+    await render(tree('fil'))
+    expect(el.locale).toBe('fil')
+  })
+
   it('mounts <openramp-modal embedded> with a controller and calls onComplete', async () => {
     const secret = await newSecret()
     const onComplete = vi.fn()
@@ -256,6 +285,7 @@ describe('OpenRampEmbedded', () => {
     const el = container.querySelector<OpenRampModal>('openramp-modal')!
     await until(() => !!el.controller)
     expect(el.messages?.title).toBe('Nạp')
+    expect(el.locale).toBeUndefined()
     el.dispatchEvent(new CustomEvent('openramp-close', { detail: { session: { id: 's' } } }))
     expect(onClose).toHaveBeenCalledWith({ id: 's' })
     el.dispatchEvent(new CustomEvent('openramp-close'))

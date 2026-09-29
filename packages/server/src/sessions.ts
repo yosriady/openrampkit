@@ -23,7 +23,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     ...(input.country ? { country: input.country.toUpperCase() } : {}),
     ...(input.region ? { region: input.region.toUpperCase() } : {}),
     ...(input.email ? { email: input.email } : {}),
-    locale: input.locale ?? 'en',
+    ...(input.locale ? { locale: input.locale } : {}),
     ...(input.amountBounds ? { amountBounds: input.amountBounds } : {}),
     ...(input.allowedMethods ? { allowedMethods: input.allowedMethods } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),

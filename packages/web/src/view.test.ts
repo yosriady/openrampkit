@@ -22,7 +22,7 @@ import {
 } from './view.js'
 
 function snap(p: Partial<Snapshot> = {}): Snapshot {
-  return { screen: 'methods', tab: 'crypto', amount: '', amountSide: 'source', quotes: [], quoteErrors: [], quotesLoading: false, busy: false, walletConnected: false, balances: [], ...p }
+  return { screen: 'methods', tab: 'crypto', amount: '', amountSide: 'source', quotes: [], quoteErrors: [], quotesLoading: false, busy: false, walletConnected: false, balances: [], surfaceClosed: false, ...p }
 }
 
 describe('mode, keys and screens', () => {

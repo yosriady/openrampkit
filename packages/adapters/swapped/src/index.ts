@@ -345,7 +345,7 @@ export function swapped(opts: SwappedOptions) {
       await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode }, ORDER_TTL_SEC)
       return {
         state: 'PAYMENT',
-        surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped' },
+        surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
         transitions: [awaitPoll(POLL)],
         status: 'awaiting_user',
         ref,

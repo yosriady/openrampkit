@@ -11,7 +11,10 @@ export type OpenRampProviderProps = {
   wallet?: WalletAdapter
   theme?: Theme
   appearance?: Appearance
+  /** Partial message catalog. Overrides the locale catalog key by key. */
   messages?: Partial<Messages>
+  /** BCP 47 locale (`en`, `vi`, `id`, `th`, `ms`, `fil`, ...). Default: session locale, then browser language, then English. */
+  locale?: string
   onEvent?: (e: OrkEvent) => void
   children?: ReactNode
 }
@@ -64,6 +67,7 @@ export function OpenRampProvider(props: OpenRampProviderProps) {
       ...(c.theme ? { theme: c.theme } : {}),
       ...(c.appearance ? { appearance: c.appearance } : {}),
       ...(c.messages ? { messages: c.messages } : {}),
+      ...(c.locale ? { locale: c.locale } : {}),
     })
     handleRef.current = handle
     setOpen(true)
@@ -79,9 +83,10 @@ export function OpenRampProvider(props: OpenRampProviderProps) {
     if (!el) return
     el.theme = config.theme
     el.appearance = config.appearance
-  }, [config.theme, config.appearance, isOpen])
+    el.locale = config.locale
+  }, [config.theme, config.appearance, config.locale, isOpen])
 
-  const value = useMemo<Ctx>(() => ({ ...config, beginDeposit, close, isOpen }), [config.baseUrl, config.wallet, config.theme, config.appearance, config.messages, config.onEvent, beginDeposit, close, isOpen])
+  const value = useMemo<Ctx>(() => ({ ...config, beginDeposit, close, isOpen }), [config.baseUrl, config.wallet, config.theme, config.appearance, config.messages, config.locale, config.onEvent, beginDeposit, close, isOpen])
   return createElement(OpenRampContext.Provider, { value }, children)
 }
 
