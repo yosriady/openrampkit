@@ -19,21 +19,29 @@ type Env = {
   MOCK?: string
 }
 
+function build(env: Env) {
+  return createOpenRamp({
+    secret: env.OPENRAMP_SECRET,
+    baseUrl: env.PUBLIC_URL,
+    store: cloudflareKvStore(env.SESSIONS),
+    adapters: env.MOCK === '1' ? [mockAdapter({ crypto: true, bridge: true })] : [relay(), mockAdapter()],
+    cors: { origins: env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) },
+    ...(env.WEBHOOK_URL && env.WEBHOOK_SECRET ? { webhooks: { url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET } } : {}),
+    // Only the app backend (holding APP_API_KEY) may create sessions and choose the destination.
+    authorize: async (r, body) => {
+      if (r.headers.get('x-app-key') !== env.APP_API_KEY) return null
+      return body as CreateSessionInput
+    },
+  })
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
-    const ramp = createOpenRamp({
-      secret: env.OPENRAMP_SECRET,
-      baseUrl: env.PUBLIC_URL,
-      store: cloudflareKvStore(env.SESSIONS),
-      adapters: env.MOCK === '1' ? [mockAdapter({ crypto: true, bridge: true })] : [relay(), mockAdapter()],
-      cors: { origins: env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) },
-      ...(env.WEBHOOK_URL && env.WEBHOOK_SECRET ? { webhooks: { url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET } } : {}),
-      // Only the app backend (holding APP_API_KEY) may create sessions and choose the destination.
-      authorize: async (r, body) => {
-        if (r.headers.get('x-app-key') !== env.APP_API_KEY) return null
-        return body as CreateSessionInput
-      },
-    })
-    return ramp.handle(req)
+    return build(env).handle(req)
+  },
+  // Cron Trigger (wrangler.toml [triggers]): retry webhooks, refresh open payments, expire sessions.
+  async scheduled(_event: unknown, env: Env): Promise<void> {
+    const r = await build(env).sweep()
+    console.log('openramp sweep', JSON.stringify(r))
   },
 }

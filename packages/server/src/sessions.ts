@@ -2,6 +2,7 @@ import { OrkException, isTerminal, orkError } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
+import { trackOpenSession } from './tasks.js'
 import { normalizeDestination, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
@@ -46,6 +47,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     notified: [],
   }
   await rt.store.put(rec)
+  await trackOpenSession(rt, rec.id)
   await notify(rt, rec, 'session.created')
   return { id, clientSecret: `${id}.${secret}`, expiresAt: new Date(expiresAt).toISOString() }
 }

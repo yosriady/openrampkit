@@ -1,4 +1,4 @@
-import { OrkException, currencyForCountry, orkError, planPathways, rankQuotes } from '@openrampkit/core'
+import { OrkException, currencyForCountry, orkError, planPathways, rankQuotes, cmp } from '@openrampkit/core'
 import type { Amount, Fee, LegQuote, OrkError, Pathway, PlanResult, Quote, SurfaceKind } from '@openrampkit/core'
 import { ALL_SURFACES, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
 import { randomHex } from './crypto.js'
@@ -147,6 +147,11 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
   const errors: OrkError[] = []
   for (const s of settled) {
     if (s.status === 'fulfilled') {
+      const bounds = boundsError(rec, s.value.stored.quote.input)
+      if (bounds) {
+        errors.push(bounds)
+        continue
+      }
       out.push(s.value.stored.quote)
       rec.quotes[s.value.stored.quote.id] = s.value.stored
     } else {
@@ -163,4 +168,18 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
 function pruneQuotes(rec: SessionRecord) {
   const keys = Object.keys(rec.quotes)
   for (const k of keys.slice(0, Math.max(0, keys.length - MAX_STORED_QUOTES))) delete rec.quotes[k]
+}
+
+/**
+ * Enforce the session's `amountBounds` on what the user pays. Checked when the bounds currency
+ * matches the input: a fiat currency code, or a token symbol (e.g. USDC). Other inputs pass.
+ */
+export function boundsError(rec: SessionRecord, input: Amount): OrkError | undefined {
+  const b = rec.amountBounds
+  if (!b) return undefined
+  const code = input.asset.kind === 'fiat' ? input.asset.currency : input.asset.symbol
+  if (!code || code.toUpperCase() !== b.currency.toUpperCase() || cmp(input.amount, '0') <= 0) return undefined
+  if (b.min && cmp(input.amount, b.min) < 0) return orkError('AMOUNT_TOO_LOW', { message: `The minimum is ${b.min} ${b.currency}.`, recovery: 'requote' })
+  if (b.max && cmp(input.amount, b.max) > 0) return orkError('AMOUNT_TOO_HIGH', { message: `The maximum is ${b.max} ${b.currency}.`, recovery: 'requote' })
+  return undefined
 }

@@ -5,11 +5,12 @@ import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
 import { clientIp, errorResponse, geoOf, json, readJson, withIdempotency } from './http.js'
 import { applyEvent, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
-import { plan, quotes } from './planning.js'
+import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
 import { adapterContext, publicSession, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { createSession, loadAuthed } from './sessions.js'
+import { sweep } from './tasks.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
 import { checkAllowed, parseTarget, screenTarget, targetDestination } from './withdraw.js'
@@ -32,7 +33,8 @@ export async function route(rt: Runtime, req: Request): Promise<Response> {
   if (head === 'return' && method === 'GET') return new Response(RETURN_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } })
   if (head === 'webhooks' && id && method === 'POST') return webhookRoute(rt, req, id)
   if (head === 'adapters' && id) return adapterRoute(rt, req, id, parts.slice(2).join('/'))
-  if (head === 'health' && method === 'GET') return healthRoute(rt)
+  if (head === 'health' && method === 'GET') return healthRoute(rt, req)
+  if (head === 'tasks' && id === 'sweep' && method === 'POST') return sweepRoute(rt, req)
   return errorResponse(orkError('NOT_FOUND'), 404)
 }
 
@@ -115,6 +117,8 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (!stored) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (stored.quote.expiresAt && Date.parse(stored.quote.expiresAt) < Date.now()) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
+  const bounds = boundsError(rec, stored.quote.input)
+  if (bounds) return errorResponse(bounds, 422)
   if (body.walletAddress) rec.walletAddress = body.walletAddress
   await beginPayment(rt, rec, body.quoteId, stored)
   await saveSession(rt, rec)
@@ -193,7 +197,29 @@ async function adapterRoute(rt: Runtime, req: Request, adapterId: string, subpat
   return res ?? errorResponse(orkError('NOT_FOUND'), 404)
 }
 
-async function healthRoute(rt: Runtime): Promise<Response> {
+/** Bearer check for operational routes. False when no `tasksToken` is configured. */
+async function hasTasksToken(rt: Runtime, req: Request): Promise<boolean> {
+  const token = rt.config.tasksToken
+  const auth = req.headers.get('authorization') ?? ''
+  return !!token && auth.startsWith('Bearer ') && safeEqual(auth.slice(7), token)
+}
+
+/** POST /tasks/sweep: retry webhooks, refresh open payments, expire sessions. Needs `tasksToken`. */
+async function sweepRoute(rt: Runtime, req: Request): Promise<Response> {
+  if (!rt.config.tasksToken) return errorResponse(orkError('NOT_FOUND'), 404)
+  if (!(await hasTasksToken(rt, req))) return errorResponse(orkError('UNAUTHORIZED'), 401)
+  const limit = Number(new URL(req.url).searchParams.get('limit') ?? '') || undefined
+  return json(await sweep(rt, limit ? { limit } : {}))
+}
+
+/**
+ * GET /health: a quick check with no provider calls. `?deep=1` with the tasks token also asks
+ * every adapter's `health()` (these call provider APIs, so they are not public).
+ */
+async function healthRoute(rt: Runtime, req: Request): Promise<Response> {
+  const deep = new URL(req.url).searchParams.get('deep') === '1'
+  if (!deep) return json({ ok: true, adapters: [...rt.adapters.keys()] })
+  if (!(await hasTasksToken(rt, req))) return errorResponse(orkError('UNAUTHORIZED'), 401)
   const checks = await Promise.all(
     [...rt.adapters.values()].map(async (a) => ({
       id: a.id,

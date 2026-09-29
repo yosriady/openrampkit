@@ -15,6 +15,7 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
   CLIENT_UPGRADE_REQUIRED: 'Update the app to use this method.',
   SESSION_EXPIRED: 'This session expired. Start a new deposit.',
   UNAUTHORIZED: 'This session is not valid.',
+  CONFLICT: 'The session changed at the same time. Try again.',
   ADDRESS_REJECTED: 'This address cannot receive withdrawals. Use another address.',
   TARGET_NOT_ALLOWED: 'This app does not allow withdrawals to this target.',
   BAD_REQUEST: 'The request is not valid.',
@@ -23,6 +24,7 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
 }
 
 const RETRYABLE: Partial<Record<OrkErrorCode, boolean>> = {
+  CONFLICT: true,
   QUOTE_EXPIRED: true,
   NO_QUOTES: true,
   PAYMENT_FAILED: true,

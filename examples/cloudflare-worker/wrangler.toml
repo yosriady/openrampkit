@@ -8,6 +8,9 @@ compatibility_flags = ["nodejs_compat"]
 binding = "SESSIONS"
 id = "replace-with-your-kv-namespace-id"
 
+[triggers]
+crons = ["* * * * *"]
+
 [vars]
 PUBLIC_URL = "http://localhost:8787"
 ALLOWED_ORIGINS = "http://localhost:3000"

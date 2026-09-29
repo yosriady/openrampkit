@@ -10,6 +10,7 @@ import { refreshActive } from './legs.js'
 import { route } from './routes.js'
 import { createRuntime, publicSession, saveSession } from './runtime.js'
 import { createSession } from './sessions.js'
+import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
 
 export * from './store.js'
@@ -17,6 +18,7 @@ export { verifyWebhook } from './crypto.js'
 export type { CreateSessionInput, OpenRampConfig, TreasuryHook, TreasurySendInput } from './config.js'
 export { isValidAddress } from './withdraw.js'
 export type { CreatedSession } from './sessions.js'
+export type { SweepResult } from './tasks.js'
 
 export function createOpenRamp(config: OpenRampConfig) {
   const rt = createRuntime(config)
@@ -60,6 +62,11 @@ export function createOpenRamp(config: OpenRampConfig) {
         return publicSession(rec)
       },
     },
+    /**
+     * Retry failed webhooks, refresh open payments and expire old sessions. Run it every minute or so
+     * (Cloudflare Cron Trigger, Vercel Cron, or any scheduler), or call `POST {baseUrl}/tasks/sweep`.
+     */
+    sweep: (opts?: { limit?: number }) => sweep(rt, opts),
     webhooks: {
       /** Verify an OpenRampKit webhook your backend received */
       verify: (req: Request, body: string) => (config.webhooks ? verifyWebhook(config.webhooks.secret, req.headers, body) : Promise.resolve(false)),

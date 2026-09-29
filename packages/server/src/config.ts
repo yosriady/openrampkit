@@ -1,5 +1,5 @@
 import type { Adapter, Logger } from '@openrampkit/adapter'
-import type { AllowedTargets, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource } from '@openrampkit/core'
+import type { AllowedTargets, CryptoAsset, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource } from '@openrampkit/core'
 import type { SessionStore } from './store.js'
 
 export type CreateSessionInput = {
@@ -35,9 +35,19 @@ export type OpenRampConfig = {
     regions?: RegionPolicy
     methodPriority?: Record<string, string[]>
     disabledMethods?: string[]
+    /** Preferred hop assets for two-leg pathways, most preferred first (default: USDC on Base, Arbitrum, Polygon, Optimism, Ethereum) */
+    hopPreference?: CryptoAsset[]
   }
-  /** Signed webhooks to the app backend */
-  webhooks?: { url: string; secret: string }
+  /**
+   * Signed webhooks to the app backend. Failed deliveries are kept in an outbox and retried by
+   * `sweep()` with backoff (30 s doubling, max 1 h), up to `maxAttempts` (default 8).
+   */
+  webhooks?: { url: string; secret: string; maxAttempts?: number }
+  /**
+   * Bearer token for operational routes: `POST {baseUrl}/tasks/sweep` and `GET {baseUrl}/health?deep=1`.
+   * Without it, those routes are off (health answers a quick check only).
+   */
+  tasksToken?: string
   /** Resolve the user's country. Defaults to Cloudflare / Vercel geo headers. */
   geo?: (req: Request) => { country?: string; region?: string } | undefined
   /**

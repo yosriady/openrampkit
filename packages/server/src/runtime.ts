@@ -1,7 +1,7 @@
 import { ADAPTER_API_VERSION } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
 import { OrkException, orkError } from '@openrampkit/core'
-import type { Destination, Pathway, PublicSession } from '@openrampkit/core'
+import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
 import type { OpenRampConfig } from './config.js'
 import { memoryStore, scopedKV, VersionConflictError } from './store.js'
@@ -81,7 +81,7 @@ export async function saveSession(rt: Runtime, rec: SessionRecord): Promise<void
     await rt.store.put(rec, expected)
   } catch (e) {
     rec.version -= 1
-    if (e instanceof VersionConflictError) throw new OrkException(orkError('RATE_LIMITED', { message: 'The session changed. Try again.' }), 409)
+    if (e instanceof VersionConflictError) throw new OrkException(orkError('CONFLICT'), 409)
     throw e
   }
 }
@@ -99,8 +99,26 @@ export function publicSession(rec: SessionRecord): PublicSession {
     ...(rec.locale ? { locale: rec.locale } : {}),
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     step: rec.step,
+    ...(rec.active ? { result: sessionResult(rec) } : {}),
     expiresAt: new Date(rec.expiresAt).toISOString(),
     livemode: rec.livemode,
+  }
+}
+
+/** What was paid and delivered so far, from the active pathway's quotes and leg steps. */
+export function sessionResult(rec: SessionRecord): SessionResult {
+  const act = rec.active!
+  const first = act.legs[0]!
+  const last = act.legs[act.legs.length - 1]!
+  const reported = last.step?.output
+  return {
+    method: act.pathway.method,
+    provider: act.pathway.provider,
+    input: first.quote.input,
+    output: reported ?? last.quote.output,
+    outputConfirmed: !!reported,
+    fees: act.legs.flatMap((l) => l.quote.fees),
+    txHashes: act.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h),
   }
 }
 

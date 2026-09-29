@@ -51,14 +51,17 @@ describe('routing and HTTP', () => {
     const { call } = make()
     const r = await call('/return')
     expect(r.headers.get('content-type')).toContain('text/html')
-    const h = await (await call('/health')).json()
-    expect(h).toEqual({ ok: true, adapters: [{ id: 'mock', ok: true }] })
+    // quick check: no provider calls, no auth
+    expect(await (await call('/health')).json()).toEqual({ ok: true, adapters: ['mock'] })
+    // deep check needs the tasks token
+    expect((await call('/health?deep=1')).status).toBe(401)
   })
 
   it('health is 503 when an adapter check fails', async () => {
     const failing = createAdapter({ ...mockAdapter(), id: 'bad', health: async () => { throw new Error('down') } })
-    const { call } = make({}, [failing])
-    const r = await call('/health')
+    const { call } = make({ tasksToken: 't'.repeat(32) }, [failing])
+    expect((await call('/health?deep=1', { headers: { authorization: 'Bearer wrong' } })).status).toBe(401)
+    const r = await call('/health?deep=1', { headers: { authorization: `Bearer ${'t'.repeat(32)}` } })
     expect(r.status).toBe(503)
     expect((await r.json()).adapters[0]).toMatchObject({ id: 'bad', ok: false })
   })

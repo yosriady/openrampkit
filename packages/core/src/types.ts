@@ -202,6 +202,7 @@ export type OrkErrorCode =
   | 'CLIENT_UPGRADE_REQUIRED'
   | 'SESSION_EXPIRED'
   | 'UNAUTHORIZED'
+  | 'CONFLICT'
   | 'ADDRESS_REJECTED'
   | 'TARGET_NOT_ALLOWED'
   | 'BAD_REQUEST'
@@ -357,8 +358,23 @@ export type PublicSession = {
   locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
+  /** What was paid and delivered, once a payment started. Final when `status` is `completed`. */
+  result?: SessionResult
   expiresAt: string
   livemode: boolean
+}
+
+export type SessionResult = {
+  method: string
+  provider: string
+  /** What the user paid (first leg input) */
+  input: Amount
+  /** What arrived: the last leg's reported output, else its quoted output */
+  output: Amount
+  /** True when `output` comes from the provider or chain, false when it is the quote */
+  outputConfirmed: boolean
+  fees: Fee[]
+  txHashes: string[]
 }
 
 // ---------- Events ----------
