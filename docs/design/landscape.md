@@ -87,3 +87,35 @@ From "The Deposit Stack, Explained for Founders" (Harry Alford, Monad Foundation
 ## Open-source kits and names
 - No open-source, provider-neutral onramp modal with real traction exists. Small projects: `@cinaconnect/onramp-sdk`, `humanperzeus/cyrusgate`, `xelis-project/xelis-fiat-onramp`.
 - `openrampkit` is free on npm and GitHub. `github.com/openramp` is an inactive 2022 organization ("A decentralized P2P ramp for Web3"). "RampKit" is used by an onboarding SaaS and by Stellar LATAM packages.
+
+## Update 2026-09-29: recent news (about 2026-06-15 to 2026-09-29)
+
+"Yes" means seen in code or a primary page; "partly" means a secondary or social source only.
+
+| Who | When | Change | Verified |
+|---|---|---|---|
+| fun.xyz | Jul 2 | Cash App method; BTC Lightning deposits via Cash App (US, up to $10K) | Yes (funkit CHANGELOG 10.0/10.1) |
+| fun.xyz | Aug 17 on | Headless fiat onramp: KYC state machine, provider routing, MoonPay adapter | Yes (`@fun-xyz/fiat-contract` 0.2 to 0.22) |
+| fun.xyz | Sep 17 | Coinbase exchange deposit via Swapped Connect (next to Bybit); Gemini removed | Yes (CHANGELOG 12.7.0) |
+| fun.xyz | Aug 3 | "100% of Polymarket deposits and withdrawals, over $3B a month" | Partly (interview mirror) |
+| Unifold | Jun to Jul | Stripe Link headless onramp, Apple Pay, bank transfer | Yes (`@unifold/core` diffs) |
+| Unifold | Aug | Google Pay (Coinbase guest), UPI via Meld, Binance Pay via Meld | Yes |
+| Unifold | Sep 21 | Headless Interac (Canada); SEPA, wire, ACH, RTP, SWIFT, FedNow payouts; locked quotes | Yes |
+| D0 | Sep 4 | Indonesia QRIS next to QR Ph, PromptPay, DuitNow ("SetlPay QR"); fiat withdrawals | Yes |
+| Swapped | Jul 1 | New EEA sign-ups stopped in 30 countries; EEA users go to "Swapped Ramp by Northstake" (card, Apple Pay, Google Pay only) | Yes (help.swapped.com) |
+| Onramper | Aug to Sep | No-code widget builder; "Onramper ID" KYC; QRIS and DANA routing; about 10 offramps | Partly |
+| Relay | Jun to Sep | TON added, Sui removed; Robinhood Chain; dashboard with app fees and sponsorship; Arc | Yes |
+| Peer | Sep 4 | iOS and Android app with a P2P orderbook | Partly |
+
+## Peer (formerly ZKP2P): P2P rails for Venmo, Cash App, Zelle, Wise
+
+- Model: a seller escrows USDC on Base; the buyer pays fiat in a payment app; a TEE attestation (V3) proves the payment and releases the USDC.
+- Peer Pay (pay.peer.xyz) is a hosted merchant checkout: the server creates an order (`POST /api/v1/orders`), the user pays on a hosted page (redirect or iframe), signed webhooks report `ORDER_FULFILLED`. Settlement is USDC on Base to a `destinationAddress`.
+- Rails with liquidity on 2026-09-29 (live orderbook): USD on Venmo (~$33K), Wise, Revolut, PayPal, Zelle, Chime, Cash App; EUR and GBP on Wise and Revolut. Thin: Wise in INR, IDR, PHP, MXN, SGD, MYR, THB, VND. None: PIX, SEA QR rails.
+- Fees: 2.95% (Base plan) to 4.95% (Pro plan, no buyer install needed), plus the seller's spread. Monthly caps on the lower plans.
+- Risks: thin liquidity (gate every order on an availability check), P2P with no KYC provider in the middle, chargebacks on Venmo and PayPal fall on stake, payment-app terms.
+- Decision: add an opt-in `peer` adapter on Peer Pay (fiat_onramp to USDC on Base, then Relay), off by default. Add the `@zkp2p/cash` offramp leg later (phase 5).
+
+## Adapter priority after this research
+
+1. MoonPay (used by fun.xyz, Privy, Relay). 2. Coinbase guest Apple Pay / Google Pay (headless). 3. Stripe Link onramp. 4. Meld (UPI, Binance Pay, many card providers). 5. Peer (US P2P rails, opt-in). 6. Onramper (aggregator). 7. More SEA pay-in PSPs next to Xendit. 8. A new "exchange connect" leg type (Coinbase, Bybit, Binance Pay). 9. Bank payout rails (phase 5).
