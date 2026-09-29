@@ -1,5 +1,6 @@
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import { relay } from '@openrampkit/adapter-relay'
+import { xendit } from '@openrampkit/adapter-xendit'
 import { createOpenRamp } from '@openrampkit/server'
 
 const PUBLIC_URL = process.env.PUBLIC_URL ?? 'http://localhost:3000'
@@ -14,7 +15,13 @@ export const openramp =
     secret: process.env.OPENRAMP_SECRET ?? 'dev-secret-change-me-dev-secret-change-me',
     baseUrl: `${PUBLIC_URL}/api/openramp`,
     // Mock mode: every pathway is simulated. Real mode: Relay moves real crypto; fiat is still mocked.
-    adapters: MOCK ? [mockAdapter({ crypto: true, bridge: true, settleMs: 4000 })] : [relay(), mockAdapter({ settleMs: 4000 })],
+    adapters: [
+      ...(MOCK ? [mockAdapter({ crypto: true, bridge: true, settleMs: 4000 })] : [relay(), mockAdapter({ settleMs: 4000 })]),
+      // Real merchant pay-in (QRIS, QR Ph, PromptPay, e-wallets) when Xendit test keys are set.
+      ...(process.env.XENDIT_SECRET_KEY && process.env.XENDIT_WEBHOOK_TOKEN
+        ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]
+        : []),
+    ],
     webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_dev' },
   }))
 

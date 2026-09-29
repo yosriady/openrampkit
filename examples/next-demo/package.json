@@ -24,7 +24,8 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "viem": "^2.30.0",
-    "wagmi": "^2.15.0"
+    "wagmi": "^2.15.0",
+    "@openrampkit/adapter-xendit": "workspace:*"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

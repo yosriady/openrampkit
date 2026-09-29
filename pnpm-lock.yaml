@@ -51,6 +51,9 @@ importers:
       '@openrampkit/adapter-relay':
         specifier: workspace:*
         version: link:../../packages/adapters/relay
+      '@openrampkit/adapter-xendit':
+        specifier: workspace:*
+        version: link:../../packages/adapters/xendit
       '@openrampkit/client':
         specifier: workspace:*
         version: link:../../packages/client
@@ -153,6 +156,15 @@ importers:
         version: link:../../core
 
   packages/adapters/transak:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
+  packages/adapters/xendit:
     dependencies:
       '@openrampkit/adapter':
         specifier: workspace:*

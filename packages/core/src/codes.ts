@@ -56,6 +56,8 @@ export const METHODS: Record<string, MethodInfo> = {
   revolut_pay: { id: 'revolut_pay', name: 'Revolut Pay', kind: 'wallet_pay' },
   venmo: { id: 'venmo', name: 'Venmo', kind: 'wallet_pay' },
   interac: { id: 'interac', name: 'Interac', kind: 'bank' },
+  truemoney: { id: 'truemoney', name: 'TrueMoney', kind: 'ewallet' },
+  linkaja: { id: 'linkaja', name: 'LinkAja', kind: 'ewallet' },
 }
 
 const EU = ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK']
@@ -65,7 +67,7 @@ export const METHOD_COUNTRIES: Record<string, string[]> = {
   vietqr: ['VN'], momo: ['VN'], zalopay: ['VN'],
   qris: ['ID'], gopay: ['ID'], dana: ['ID'], ovo: ['ID'], shopeepay: ['ID', 'MY', 'PH', 'TH', 'VN', 'SG'],
   qrph: ['PH'], gcash: ['PH'], maya: ['PH'], instapay: ['PH'],
-  promptpay: ['TH'],
+  promptpay: ['TH'], truemoney: ['TH'], linkaja: ['ID'],
   duitnow: ['MY'], touchngo: ['MY'], fpx: ['MY'], boost: ['MY'], grabpay: ['MY', 'SG', 'PH'],
   paynow: ['SG'],
   upi: ['IN'], pix: ['BR'], interac: ['CA'], ach: ['US'], venmo: ['US'],
@@ -86,7 +88,7 @@ export function methodName(id: string): string {
 export const DEFAULT_METHOD_PRIORITY: Record<string, string[]> = {
   ID: ['qris', 'gopay', 'dana', 'ovo', 'shopeepay', 'bank_transfer', 'card'],
   VN: ['vietqr', 'momo', 'zalopay', 'bank_transfer', 'card'],
-  TH: ['promptpay', 'bank_transfer', 'card'],
+  TH: ['promptpay', 'truemoney', 'bank_transfer', 'card'],
   MY: ['duitnow', 'touchngo', 'fpx', 'grabpay', 'card'],
   PH: ['qrph', 'gcash', 'maya', 'instapay', 'card'],
   SG: ['paynow', 'card', 'apple_pay', 'google_pay'],
