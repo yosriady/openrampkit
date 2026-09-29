@@ -185,14 +185,14 @@ interface AdapterContext {
 - Naming: first-party packages are `@openrampkit/adapter-<id>`. Community packages SHOULD be `openrampkit-adapter-<id>`.
 - Versioning: `apiVersion` is checked at startup. The server refuses an adapter whose `apiVersion` it does not support, with a clear error.
 
-### 4.5 Test kit (`@openrampkit/adapter-testkit`)
+### 4.5 Test kit (`@openrampkit/adapter/testing`)
 
 Any adapter can run `runAdapterConformance(adapter, fixtures)` in its own test suite. It checks:
 - Leg specs are valid and do not overlap in id.
 - `quote()` output matches the schema, money strings are exact, fees add up to the stated total.
 - Every `LegStep` the adapter returns is a legal state from the flow table (§6), and terminal states are marked from the table.
 - Webhook replay gives the same result (idempotency).
-- A recorded fixture run (HTTP recorded with MSW) passes from start to a terminal state.
+- A fixture run with `fakeFetch` passes from start to a terminal state (`runAdapterConformance`).
 
 ### 4.6 Wallet adapter
 

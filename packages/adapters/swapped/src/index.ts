@@ -14,10 +14,21 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { createAdapter, fetchJson, hmacSha256, timingSafeEqual } from '@openrampkit/adapter'
+import {
+  POLL as POLLS,
+  awaitPoll,
+  createAdapter,
+  decimalFrom,
+  fetchJson,
+  hmacSha256,
+  httpErrorToOrk,
+  legStepFromEvent,
+  randomHex,
+  timingSafeEqual,
+} from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 
 export type SwappedDeliverAsset = {
   /** CAIP-2 chain */
@@ -100,7 +111,8 @@ type SwappedNotification = {
   network?: string
 }
 
-const POLL: PollSpec = { intervalMs: 4000, backoff: 1.2, maxIntervalMs: 15_000, giveUpAfterMs: 60 * 60_000 }
+const POLL: PollSpec = POLLS.checkout
+const ORDER_TTL_SEC = 7 * 24 * 60 * 60
 const METHODS_TTL_SEC = 60 * 60
 const IFRAME_ALLOW = 'accelerometer; autoplay; camera; encrypted-media; gyroscope; payment; clipboard-read; clipboard-write'
 /** Swapped: "Due to regulatory reasons, users from Texas won't be able to use stablecoins." */
@@ -143,20 +155,7 @@ export function swappedMethodId(group: string): string {
   return SWAPPED_METHOD_IDS[group] ?? group
 }
 
-/** JSON number -> exact decimal string (no exponent notation) */
-function dec(n: number | string | undefined | null, digits = 8): string {
-  if (n === undefined || n === null) return '0'
-  if (typeof n === 'string') return isDecimal(n) ? n : dec(Number(n), digits)
-  if (!Number.isFinite(n)) return '0'
-  const s = n.toFixed(digits)
-  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s
-}
-
-function randomId(bytes = 6): string {
-  const b = new Uint8Array(bytes)
-  crypto.getRandomValues(b)
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
-}
+const dec = decimalFrom
 
 export function swapped(opts: SwappedOptions) {
   const env = opts.env ?? 'production'
@@ -200,12 +199,17 @@ export function swapped(opts: SwappedOptions) {
   async function methodsByCountry(ctx: Pick<AdapterContext, 'fetch' | 'shared'>): Promise<Record<string, SwappedMethod[]>> {
     const cached = await ctx.shared.get<Record<string, SwappedMethod[]>>('methods')
     if (cached) return cached
-    const res = await fetchJson<{ success?: boolean; data?: Record<string, SwappedMethod[]> | SwappedMethod[] }>(
+    const res = await fetchJson<{ success?: boolean; message?: string; data?: Record<string, SwappedMethod[]> | SwappedMethod[] }>(
       ctx.fetch,
       `${apiUrl}/api/v1/merchant/get_payment_methods?apiKey=${encodeURIComponent(opts.publicKey)}`,
     )
+    // A refused or empty answer is a failure, not "no methods": throw (the server then uses the
+    // static legs) and do not cache it.
+    if (res.success === false || !res.data || typeof res.data !== 'object') {
+      throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `Swapped returned no payment methods${res.message ? `: ${res.message}` : ''}.`.slice(0, 200) }), 502)
+    }
     // The live API returns { data: { [country]: Method[] } }. The docs show a flat list; accept both.
-    const data = Array.isArray(res.data) ? { '*': res.data } : res.data ?? {}
+    const data = Array.isArray(res.data) ? { '*': res.data } : res.data
     await ctx.shared.put('methods', data, METHODS_TTL_SEC)
     return data
   }
@@ -291,9 +295,7 @@ export function swapped(opts: SwappedOptions) {
       try {
         res = await fetchJson<SwappedPricing>(ctx.fetch, `${apiUrl}/api/v1/merchant/pricing`, { method: 'POST', body: JSON.stringify(body) })
       } catch (e) {
-        const status = (e as { status?: number }).status
-        if (status === 429) throw new OrkException(orkError('RATE_LIMITED'), 429)
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Swapped could not price this amount right now.' }), 502)
+        throw httpErrorToOrk(e, 'Swapped', { what: 'price this amount', log: ctx.log })
       }
       const d = res.data
       if (!res.success || !d) {
@@ -324,7 +326,7 @@ export function swapped(opts: SwappedOptions) {
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
       if (!walletAddress) throw new OrkException(orkError('BAD_REQUEST', { message: 'Swapped needs a wallet address to deliver to.' }))
       const fiat = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : data.fiat
-      const ref = `${ctx.session.userId}.${randomId()}`
+      const ref = `${ctx.session.userId}.${randomHex(6)}`
       const url = await signedWidgetUrl([
         ['apiKey', opts.publicKey],
         ['currencyCode', data.currencyCode ?? target.currencyCode],
@@ -340,11 +342,11 @@ export function swapped(opts: SwappedOptions) {
         ['responseUrl', ctx.urls.webhookUrl],
         ['markup', opts.markup !== undefined ? String(opts.markup) : undefined],
       ])
-      await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode }, 7 * 24 * 60 * 60)
+      await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode }, ORDER_TTL_SEC)
       return {
         state: 'PAYMENT',
         surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped' },
-        transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }],
+        transitions: [awaitPoll(POLL)],
         status: 'awaiting_user',
         ref,
       }
@@ -354,7 +356,7 @@ export function swapped(opts: SwappedOptions) {
       ? {
           // TO VERIFY: get_transactions signature = base64 HMAC-SHA256(secretKey, JSON body without `signature`),
           // per the docs assistant. Not tested against the live API (the sandbox key was rejected).
-          async status(input: { ref: string }, ctx: AdapterContext) {
+          async status(input: { ref: string }, ctx: AdapterContext): Promise<LegStep> {
             const rec = await ctx.store.get<{ since: number }>(`o:${input.ref}`)
             const body: Record<string, unknown> = {
               apiKey: opts.publicKey,
@@ -363,21 +365,17 @@ export function swapped(opts: SwappedOptions) {
               ...(rec ? { start_date: new Date(rec.since - 60_000).toISOString() } : {}),
             }
             const signature = await hmacSha256(opts.secretKey, JSON.stringify(body), 'base64')
-            const res = await fetchJson<{ data?: { orders?: Array<SwappedNotification & { order_status: string }> } }>(
-              ctx.fetch,
-              `${apiUrl}/api/v1/merchant/get_transactions`,
-              { method: 'POST', body: JSON.stringify({ ...body, signature }) },
-            )
+            let res: { data?: { orders?: Array<SwappedNotification & { order_status: string }> } }
+            try {
+              res = await fetchJson(ctx.fetch, `${apiUrl}/api/v1/merchant/get_transactions`, { method: 'POST', body: JSON.stringify({ ...body, signature }) })
+            } catch (e) {
+              throw httpErrorToOrk(e, 'Swapped', { what: 'find this order', log: ctx.log })
+            }
             const order = res.data?.orders?.find((o) => o.external_customer_id === input.ref)
-            const waiting = { state: 'PAYMENT' as const, status: 'awaiting_user' as const, transitions: [{ name: 'poll', kind: 'AWAIT' as const, poll: POLL }], ref: input.ref }
-            if (!order) return waiting
+            if (!order) return legStepFromEvent(undefined, input.ref, POLL)
             // get_transactions has no `order_broadcasted`; a set transaction_id means it was broadcast.
             const status = order.order_status === 'order_completed' && order.transaction_id ? 'order_broadcasted' : order.order_status
-            const ev = eventFrom({ ...order, order_status: status, external_customer_id: input.ref })
-            if (!ev) return waiting
-            if (ev.status === 'succeeded') return { state: 'COMPLETED' as const, status: 'succeeded' as const, transitions: [], ref: input.ref, ...(ev.txHash ? { txHash: ev.txHash } : {}), ...(ev.output ? { output: ev.output } : {}) }
-            if (ev.status === 'failed') return { state: 'FAILED' as const, status: 'failed' as const, transitions: [], ref: input.ref, ...(ev.error ? { error: ev.error } : {}) }
-            return { state: 'PROCESSING' as const, status: 'processing' as const, transitions: [{ name: 'poll', kind: 'AWAIT' as const, poll: POLL }], ref: input.ref }
+            return legStepFromEvent(eventFrom({ ...order, order_status: status, external_customer_id: input.ref }), input.ref, POLL)
           },
         }
       : {}),

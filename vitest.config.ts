@@ -6,6 +6,8 @@ const r = (p: string) => fileURLToPath(new URL(p, import.meta.url))
 export default defineConfig({
   resolve: {
     alias: [
+      { find: /^@openrampkit\/adapter\/testing$/, replacement: r('./packages/adapter/src/testing.ts') },
+      { find: /^@openrampkit\/web\/theme$/, replacement: r('./packages/web/src/theme.ts') },
       { find: /^@openrampkit\/adapter-(.*)$/, replacement: r('./packages/adapters/$1/src/index.ts') },
       { find: /^@openrampkit\/(core|adapter|server|client|web|react|wagmi)$/, replacement: r('./packages/$1/src/index.ts') },
     ],

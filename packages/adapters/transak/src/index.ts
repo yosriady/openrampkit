@@ -16,9 +16,9 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { createAdapter, fetchJson, timingSafeEqual } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, fetchJson, httpErrorToOrk, randomHex, timingSafeEqual } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, ScopedKV } from '@openrampkit/adapter'
-import { OrkException, USDC, isDecimal, orkError } from '@openrampkit/core'
+import { OrkException, USDC, orkError } from '@openrampkit/core'
 import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type TransakOptions = {
@@ -40,7 +40,7 @@ const URLS: Record<'staging' | 'production', Urls> = {
   production: { api: 'https://api.transak.com', gateway: 'https://api-gateway.transak.com', widget: 'https://global.transak.com' },
 }
 
-const POLL: PollSpec = { intervalMs: 4000, backoff: 1.2, maxIntervalMs: 15_000, giveUpAfterMs: 60 * 60_000 }
+const POLL: PollSpec = POLLS.checkout
 const SOLANA = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
 const SOLANA_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
@@ -119,19 +119,7 @@ type WebhookOrder = {
   transactionHash?: string
 }
 
-function dec(n: number | string | undefined, digits = 8): string {
-  if (n === undefined || n === null) return '0'
-  if (typeof n === 'string') return isDecimal(n) ? n : dec(Number(n), digits)
-  if (!Number.isFinite(n)) return '0'
-  const s = n.toFixed(digits)
-  return s.includes('.') ? s.replace(/0+$/, '').replace(/\.$/, '') : s
-}
-
-function randomHex(bytes = 8): string {
-  const b = new Uint8Array(bytes)
-  crypto.getRandomValues(b)
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
-}
+const dec = decimalFrom
 
 function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)
@@ -162,7 +150,8 @@ export async function verifyHs256(token: string, secret: string): Promise<Record
   const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${h}.${p}`)))
   if (!timingSafeEqual(bytesToB64url(sig), s)) return undefined
-  const claims = JSON.parse(new TextDecoder().decode(b64urlToBytes(p))) as Record<string, unknown>
+  const claims = decodeClaims(token)
+  if (!claims) return undefined
   if (typeof claims.exp === 'number' && claims.exp * 1000 < Date.now() - 60_000) return undefined
   return claims
 }
@@ -170,7 +159,8 @@ export async function verifyHs256(token: string, secret: string): Promise<Record
 /** Decode JWT claims without verifying (only after verifyHs256 passed). */
 function decodeClaims(token: string): Record<string, unknown> | undefined {
   try {
-    return JSON.parse(new TextDecoder().decode(b64urlToBytes(token.split('.')[1] ?? '')))
+    const claims: unknown = JSON.parse(new TextDecoder().decode(b64urlToBytes(token.split('.')[1] ?? '')))
+    return claims && typeof claims === 'object' ? (claims as Record<string, unknown>) : undefined
   } catch {
     return undefined
   }
@@ -283,7 +273,9 @@ export function transak(opts: TransakOptions) {
       let list = await ctx.shared.get<FiatCurrency[]>('fiat')
       if (!list) {
         const res = await fetchJson<{ response?: FiatCurrency[] }>(ctx.fetch, `${urls.api}/fiat/public/v1/currencies/fiat-currencies`)
-        list = res.response ?? []
+        // A missing list is a failure, not "no methods": throw (the server then uses the static legs) and do not cache it.
+        if (!Array.isArray(res?.response)) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak returned no fiat currency list.' }), 502)
+        list = res.response
         await ctx.shared.put('fiat', list, 60 * 60)
       }
       const cur = list.find((c) => c.symbol.toUpperCase() === input.currency.toUpperCase() && c.isAllowed !== false)
@@ -331,12 +323,7 @@ export function transak(opts: TransakOptions) {
       try {
         res = await fetchJson<PriceResponse>(ctx.fetch, `${urls.api}/api/v1/pricing/public/quotes?${q}`, { headers: { 'x-api-key': opts.apiKey } })
       } catch (e) {
-        const status = (e as { status?: number }).status
-        const msg = (e as { body?: { error?: { message?: string }; message?: string } }).body
-        const text = msg?.error?.message ?? msg?.message
-        if (status === 429) throw new OrkException(orkError('RATE_LIMITED'), 429)
-        if (status && status < 500) throw new OrkException(orkError('NO_QUOTES', { message: text ? `Transak: ${text}`.slice(0, 200) : 'Transak cannot price this amount.' }), 422)
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak is not available right now.' }), 502)
+        throw httpErrorToOrk(e, 'Transak', { what: 'price this amount', log: ctx.log })
       }
       const r = res.response
       if (!r) throw new OrkException(orkError('NO_QUOTES', { message: 'Transak did not return a quote.' }), 422)
@@ -398,14 +385,19 @@ export function transak(opts: TransakOptions) {
         ctx.log.warn('transak: create widget URL failed', { error: String((e as Error)?.message ?? e).slice(0, 300) })
         throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak could not start the checkout.' }), 502)
       }
-      if (!widgetUrl) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
+      let origin: string
+      try {
+        origin = new URL(widgetUrl ?? '').origin
+      } catch {
+        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
+      }
       return {
         state: 'PAYMENT',
         surface:
           surfaceKind === 'IFRAME'
-            ? { kind: 'IFRAME', url: widgetUrl, origin: new URL(widgetUrl).origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
-            : { kind: 'REDIRECT', url: widgetUrl, popup: true, provider: 'Transak' },
-        transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }],
+            ? { kind: 'IFRAME', url: widgetUrl!, origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
+            : { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak' },
+        transitions: [awaitPoll(POLL)],
         status: 'awaiting_user',
         ref,
       }
@@ -433,9 +425,15 @@ export function transak(opts: TransakOptions) {
         for (const token of candidates) if (await verifyHs256(body.data, token)) return true
         return false
       },
-      async parse(rawBody) {
-        const body = JSON.parse(rawBody) as { data?: string }
-        const claims = typeof body.data === 'string' ? decodeClaims(body.data) : undefined
+      async parse(rawBody, ctx) {
+        let body: { data?: unknown }
+        try {
+          body = JSON.parse(rawBody)
+        } catch {
+          ctx.log.warn('transak: webhook body is not JSON')
+          return []
+        }
+        const claims = typeof body?.data === 'string' ? decodeClaims(body.data) : undefined
         const ev = claims ? eventFrom(claims) : undefined
         return ev ? [ev] : []
       },

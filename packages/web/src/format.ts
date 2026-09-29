@@ -5,12 +5,30 @@ import type { Amount, Fee } from '@openrampkit/core'
 import type { Messages } from './messages.js'
 
 const ISO_CURRENCY = /^[A-Z]{3}$/
+/** Common 3-letter crypto tickers, for runtimes without `Intl.supportedValuesOf` */
+const CRYPTO_TICKERS = new Set(['ETH', 'BTC', 'SOL', 'BNB', 'POL', 'MON', 'ARB', 'DAI', 'OKB', 'TRX', 'XRP', 'ADA', 'TON', 'APT', 'SUI', 'AVAX'])
+let supported: Set<string> | undefined
+
+/**
+ * True for a real ISO 4217 currency code. `Intl.NumberFormat` accepts any well-formed 3-letter code,
+ * so without this check "ETH" would format as a fiat amount with 2 decimals ("ETH 0.00").
+ */
+export function isFiatCurrency(code: string): boolean {
+  const cur = code.toUpperCase()
+  if (!ISO_CURRENCY.test(cur)) return false
+  const list = (Intl as { supportedValuesOf?: (key: string) => string[] }).supportedValuesOf
+  if (list) {
+    supported ??= new Set(list('currency'))
+    return supported.has(cur)
+  }
+  return !CRYPTO_TICKERS.has(cur)
+}
 
 export function formatFiat(amount: string, currency: string, opts: { compact?: boolean; locale?: string } = {}): string {
   const n = Number(amount)
   if (!Number.isFinite(n)) return `${amount} ${currency}`
   const cur = currency.toUpperCase()
-  if (ISO_CURRENCY.test(cur)) {
+  if (isFiatCurrency(cur)) {
     try {
       const digits = opts.compact && Number.isInteger(n) ? 0 : minorUnits(cur)
       return new Intl.NumberFormat(opts.locale, {
@@ -41,7 +59,7 @@ export function formatAmount(a: Amount): string {
 /** Currency symbol for an ISO code, e.g. USD -> $, PHP -> ₱. Falls back to the code. */
 export function currencySymbol(currency: string, locale?: string): string {
   const cur = currency.toUpperCase()
-  if (!ISO_CURRENCY.test(cur)) return cur
+  if (!isFiatCurrency(cur)) return cur
   try {
     const parts = new Intl.NumberFormat(locale, { style: 'currency', currency: cur, currencyDisplay: 'narrowSymbol' }).formatToParts(0)
     return parts.find((p) => p.type === 'currency')?.value ?? cur

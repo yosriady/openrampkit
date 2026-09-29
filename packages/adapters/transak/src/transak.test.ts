@@ -1,10 +1,10 @@
 import { createHmac } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC } from '@openrampkit/core'
+import { USDC, isRegionAllowed } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { transak, verifyHs256 } from './index.js'
-import { fakeFetch, makeCtx, memoryKV, silentLog } from './testctx.js'
+import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 
 const DEST = '0x000000000000000000000000000000000000beef'
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
@@ -161,5 +161,208 @@ describe('transak adapter', () => {
     expect(await verifyHs256(t, 'x')).toBeUndefined()
     const none = `${b64url(JSON.stringify({ alg: 'none' }))}.${b64url('{}')}.`
     expect(await verifyHs256(none, 'k')).toBeUndefined()
+  })
+})
+
+
+const eur = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
+const opts = { apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test' }
+const TOKEN_ROUTE = { method: 'POST', match: '/partners/api/v2/refresh-token', reply: () => ({ data: { accessToken: 'ACCESS_TOKEN_1', expiresAt: Math.floor(Date.now() / 1000) + 7 * 86400 } }) }
+const QUOTE = { adapterId: 'transak', legId: 'card', input: eur('100'), output: { amount: '100', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+
+describe('transak conformance', () => {
+  it('card leg and HS256 webhooks pass runAdapterConformance', async () => {
+    const { fetch } = routes()
+    const good = JSON.stringify({ data: hs256({ webhookData: { partnerOrderId: 'ork_1', status: 'COMPLETED', network: 'base', cryptoAmount: '5' } }, 'ACCESS_TOKEN_1') })
+    const forged = JSON.stringify({ data: hs256({ webhookData: { partnerOrderId: 'ork_1', status: 'COMPLETED' } }, 'guess') })
+    const req = (body: string) => () => new Request('https://x', { method: 'POST', body })
+    const report = await runAdapterConformance(transak(opts), {
+      fetch,
+      fixtures: [{ leg: cardLeg, quote: { amountIn: eur('100') }, start: { deliverTo: { address: DEST } }, expect: { start: 'PAYMENT' } }],
+      webhooks: [
+        { name: 'signed', rawBody: good, request: req(good), events: 1 },
+        { name: 'forged', rawBody: forged, request: req(forged), valid: false },
+        { name: 'not json', rawBody: 'x', request: req('x'), valid: false },
+        { name: 'data not a string', rawBody: '{"data":{"a":1}}', request: req('{"data":{"a":1}}'), valid: false },
+      ],
+    })
+    expect(report.problems).toEqual([])
+  })
+})
+
+describe('transak errors and edge cases', () => {
+  afterEach(() => vi.useRealTimers())
+
+  it('regions: UPI only in India', () => {
+    const upi = transak(opts).legs.find((l) => l.id === 'upi')!
+    expect(isRegionAllowed(upi.regions, 'IN')).toBe(true)
+    expect(isRegionAllowed(upi.regions, 'US')).toBe(false)
+  })
+
+  it('quote: maps 429, 4xx with a message, 401 and 5xx; an empty answer is NO_QUOTES', async () => {
+    const a = transak(opts)
+    const q = (route: object) => a.quote({ leg: cardLeg, amountIn: eur('10') }, makeCtx({ fetch: fakeFetch([{ method: 'GET', match: '/pricing/public/quotes', ...route }]).fetch }))
+    await expect(q({ status: 429, reply: () => ({}) })).rejects.toMatchObject({ status: 429, error: { code: 'RATE_LIMITED' } })
+    await expect(q({ status: 400, reply: () => ({ error: { message: 'Minimum is 30 EUR' } }) })).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Transak: Minimum is 30 EUR' } })
+    await expect(q({ status: 400, reply: () => ({}) })).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Transak could not price this amount.' } })
+    await expect(q({ status: 401, reply: () => ({ message: 'Invalid API key' }) })).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    await expect(q({ status: 502, reply: () => ({}) })).rejects.toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', message: 'Transak is not available right now.' } })
+    await expect(q({ reply: () => ({}) })).rejects.toMatchObject({ status: 422, error: { code: 'NO_QUOTES', message: 'Transak did not return a quote.' } })
+    await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+  })
+
+  it('quote: payment method per leg and currency, exact output, country, zero fees dropped', async () => {
+    const { fetch, calls } = fakeFetch([{ method: 'GET', match: '/pricing/public/quotes', reply: () => ({ response: { ...PRICE.response, feeBreakdown: [{ name: 'Zero', value: 0, id: 'x' }] } }) }])
+    const a = transak({ ...opts, defaultCountry: 'gb' })
+    const params = () => Object.fromEntries(new URL(calls.at(-1)!.url).searchParams)
+    const leg = (legId: string, currency: string): PathwayLeg => ({ ...cardLeg, legId, from: { asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } } })
+    for (const [legId, currency, pm] of [
+      ['bank_transfer', 'EUR', 'sepa_bank_transfer'],
+      ['bank_transfer', 'GBP', 'gbp_bank_transfer'],
+      ['bank_transfer', 'USD', 'pm_wire'],
+      ['bank_transfer', 'CHF', 'sepa_bank_transfer'],
+      ['upi', 'INR', 'inr_upi'],
+      ['pm_gcash', 'PHP', 'pm_gcash'],
+    ] as const) {
+      const q = await a.quote({ leg: leg(legId, currency), amountOut: { amount: '20', asset: BASE_USDC } }, makeCtx({ fetch, session: { country: undefined } }))
+      expect(params()).toMatchObject({ paymentMethod: pm, fiatCurrency: currency, cryptoAmount: '20', quoteCountryCode: 'GB' })
+      expect(params().fiatAmount).toBeUndefined()
+      expect(q.fees).toEqual([])
+      expect(q.eta).toEqual(legId === 'bank_transfer' ? { min: 600, max: 259200 } : { min: 120, max: 1800 })
+    }
+    await transak(opts).quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:137', token: USDC['eip155:137']! }, location: { kind: 'address', address: DEST } } } }, makeCtx({ fetch, session: { country: undefined } }))
+    expect(params().quoteCountryCode).toBeUndefined()
+    expect(params().network).toBe('polygon')
+    expect(params().fiatAmount).toBeUndefined()
+    expect(params().cryptoAmount).toBeUndefined()
+  })
+
+  it('start: needs a wallet; token and widget failures are PROVIDER_UNAVAILABLE and logged', async () => {
+    const a = transak(opts)
+    await expect(a.start({ leg: cardLeg, quote: QUOTE }, makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', merchantId: 'm', currency: 'EUR' } as never }))).rejects.toMatchObject({
+      error: { message: 'Transak needs a wallet address to deliver to.' },
+    })
+    const start = (routes: Parameters<typeof fakeFetch>[0], log = recordingLog()) => transak(opts).start({ leg: cardLeg, quote: QUOTE }, makeCtx({ fetch: fakeFetch(routes).fetch, log }))
+    const log = recordingLog()
+    await expect(start([{ method: 'POST', match: 'refresh-token', status: 401, reply: () => ({}) }], log)).rejects.toMatchObject({ status: 502, error: { message: 'Transak could not start the checkout.' } })
+    expect(log.warnings).toEqual(['transak: create widget URL failed'])
+    await expect(start([{ method: 'POST', match: 'refresh-token', reply: () => ({ data: {} }) }])).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    await expect(start([TOKEN_ROUTE, { method: 'POST', match: '/auth/session', status: 500, reply: () => ({}) }])).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    await expect(start([TOKEN_ROUTE, { method: 'POST', match: '/auth/session', reply: () => ({ data: {} }) }])).rejects.toMatchObject({ error: { message: 'Transak did not return a widget URL.' } })
+    await expect(start([TOKEN_ROUTE, { method: 'POST', match: '/auth/session', reply: () => ({ data: { widgetUrl: 'not a url' } }) }])).rejects.toMatchObject({ error: { message: 'Transak did not return a widget URL.' } })
+  })
+
+  it('start: REDIRECT surface; quote data missing uses the leg method; token from shared KV; refresh near expiry', async () => {
+    const { fetch, calls } = routes()
+    const shared = memoryKV()
+    await shared.put('accessToken', { token: 'STORED', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
+    const a = transak({ ...opts, surface: 'REDIRECT', env: 'staging' })
+    expect(a.legs[0]!.surfaces).toEqual(['REDIRECT'])
+    const ctx = makeCtx({ fetch, shared, session: { email: undefined, country: undefined } })
+    const step = await a.start({ leg: { ...cardLeg, legId: 'bank_transfer' }, quote: { ...QUOTE, input: { amount: '100', asset: BASE_USDC } } }, ctx)
+    expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', popup: true, provider: 'Transak' })
+    const session = calls.find((c) => c.url.includes('/auth/session'))!
+    expect(session.headers.get('access-token')).toBe('STORED')
+    const params = (session.body as { widgetParams: Record<string, unknown> }).widgetParams
+    expect(params).toMatchObject({ fiatCurrency: 'USD', paymentMethod: 'pm_wire', network: 'base' })
+    expect(params.email).toBeUndefined()
+    expect(params.countryCode).toBeUndefined()
+    expect(calls.some((c) => c.url.includes('refresh-token'))).toBe(false)
+
+    // a token that expires within the hour is refreshed; two parallel starts refresh once
+    const soon = memoryKV()
+    await soon.put('accessToken', { token: 'OLD', expiresAt: Math.floor(Date.now() / 1000) + 600 })
+    const b = transak(opts)
+    const r2 = routes()
+    const c2 = makeCtx({ fetch: r2.fetch, shared: soon })
+    await Promise.all([b.start({ leg: cardLeg, quote: QUOTE }, c2), b.start({ leg: cardLeg, quote: QUOTE }, c2)])
+    expect(r2.calls.filter((c) => c.url.includes('refresh-token'))).toHaveLength(1)
+    expect(await soon.get('accessToken')).toMatchObject({ token: 'ACCESS_TOKEN_1' })
+    // a token without expiresAt is kept for 6 days
+    const noExp = fakeFetch([{ method: 'POST', match: 'refresh-token', reply: () => ({ data: { accessToken: 'T2' } }) }, { method: 'POST', match: '/auth/session', reply: () => ({ data: { widgetUrl: 'https://global.transak.com/?s=1' } }) }])
+    const kv = memoryKV()
+    await transak(opts).start({ leg: cardLeg, quote: QUOTE }, makeCtx({ fetch: noExp.fetch, shared: kv }))
+    const rec = await kv.get<{ expiresAt: number }>('accessToken')
+    expect(rec!.expiresAt).toBeGreaterThan(Date.now() / 1000 + 5 * 86400)
+  })
+
+  it('catalog: a missing list throws and is not cached; unknown or blocked currencies give no legs', async () => {
+    const a = transak(opts)
+    const shared = memoryKV()
+    await expect(a.catalog!({ currency: 'EUR', direction: 'deposit' }, { fetch: fakeFetch([{ match: 'fiat-currencies', reply: () => ({}) }]).fetch, log: silentLog, shared })).rejects.toMatchObject({
+      error: { code: 'PROVIDER_UNAVAILABLE' },
+    })
+    await expect(a.catalog!({ currency: 'EUR', direction: 'deposit' }, { fetch: fakeFetch([{ match: 'fiat-currencies', status: 503, reply: () => ({}) }]).fetch, log: silentLog, shared })).rejects.toMatchObject({ status: 503 })
+    expect(shared.data.size).toBe(0)
+    const list = {
+      response: [
+        { symbol: 'GBP', isAllowed: false, paymentOptions: [{ id: 'credit_debit_card' }] },
+        {
+          symbol: 'eur',
+          paymentOptions: [{ id: 'sepa_bank_transfer', minAmount: 20 }, { id: 'gbp_bank_transfer' }, { id: 'pm_open_banking' }, { id: 'pm_something_new', maxAmount: 99 }],
+        },
+      ],
+    }
+    const { fetch, calls } = fakeFetch([{ match: 'fiat-currencies', reply: () => list }])
+    const legs = await a.catalog!({ currency: 'EUR', direction: 'deposit' }, { fetch, log: silentLog, shared })
+    expect(legs.map((l) => [l.id, l.methods![0], l.limits])).toEqual([
+      ['bank_transfer', 'sepa', { min: '20', currency: 'EUR' }],
+      ['pm_open_banking', 'bank_transfer', { currency: 'EUR' }],
+      ['pm_something_new', 'something_new', { max: '99', currency: 'EUR' }],
+    ])
+    expect(legs[0]!.regions.allow).toEqual(['*'])
+    expect(await a.catalog!({ currency: 'GBP', direction: 'deposit' }, { fetch, log: silentLog, shared })).toEqual([])
+    expect(await a.catalog!({ currency: 'JPY', direction: 'deposit' }, { fetch, log: silentLog, shared })).toEqual([])
+    expect(calls).toHaveLength(1) // cached
+    // a currency with no payment options at all
+    const bare = fakeFetch([{ match: 'fiat-currencies', reply: () => ({ response: [{ symbol: 'EUR' }] }) }])
+    expect(await a.catalog!({ currency: 'EUR', direction: 'deposit' }, { fetch: bare.fetch, log: silentLog, shared: memoryKV() })).toEqual([])
+  })
+
+  it('webhook: token from shared KV; expired JWTs; parse edge cases', async () => {
+    const shared = memoryKV()
+    await shared.put('accessToken', { token: 'KV_TOKEN', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
+    const a = transak(opts)
+    const ctx = makeWebhookCtx({ shared })
+    const body = (claims: object, secret = 'KV_TOKEN') => JSON.stringify({ data: hs256(claims, secret) })
+    const ok = body({ partnerOrderId: 'ork_9', status: 'ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK', network: 'unknown-net', cryptoAmount: 1 })
+    expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: ok }), ok, ctx)).toBe(true)
+    // flat claims (no webhookData), unknown network: no output
+    expect(await a.webhook!.parse(ok, ctx)).toEqual([{ ref: 'ork_9', status: 'processing' }])
+    const expired = body({ webhookData: { partnerOrderId: 'x' }, exp: Math.floor(Date.now() / 1000) - 3600 })
+    expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: expired }), expired, ctx)).toBe(false)
+    // no token anywhere: rejected and logged
+    const log = recordingLog()
+    expect(await transak(opts).webhook!.verify(new Request('https://x', { method: 'POST', body: ok }), ok, makeWebhookCtx({ log }))).toBe(false)
+    expect(log.warnings).toHaveLength(1)
+    // parse
+    const plog = recordingLog()
+    expect(await a.webhook!.parse('not json', makeWebhookCtx({ log: plog }))).toEqual([])
+    expect(plog.warnings).toEqual(['transak: webhook body is not JSON'])
+    expect(await a.webhook!.parse('{"data":5}', ctx)).toEqual([])
+    expect(await a.webhook!.parse(body({ webhookData: { status: 'COMPLETED' } }), ctx)).toEqual([])
+    expect(await a.webhook!.parse(JSON.stringify({ data: 'a.!!!.c' }), ctx)).toEqual([])
+    expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'PAYMENT_DONE_MARKED_BY_USER' } }), ctx)).toEqual([{ ref: 'o', status: 'processing' }])
+    expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'COMPLETED', network: 'polygon', cryptoAmount: '7.25' } }), ctx)).toMatchObject([{ status: 'succeeded', output: { amount: '7.25', asset: { chain: 'eip155:137' } } }])
+  })
+
+  it('verifyHs256: malformed tokens and payloads', async () => {
+    expect(await verifyHs256('a.b', 'k')).toBeUndefined()
+    expect(await verifyHs256('!!!.e30.x', 'k')).toBeUndefined()
+    // a correct signature over a payload that is not JSON
+    const h = b64url(JSON.stringify({ alg: 'HS256' }))
+    const p = b64url('not json')
+    const sig = createHmac('sha256', 'k').update(`${h}.${p}`).digest('base64url')
+    expect(await verifyHs256(`${h}.${p}.${sig}`, 'k')).toBeUndefined()
+    const fresh = hs256({ exp: Math.floor(Date.now() / 1000) + 60 }, 'k')
+    expect(await verifyHs256(fresh, 'k')).toMatchObject({ exp: expect.any(Number) })
+  })
+
+  it('health: ok, unexpected shape, down', async () => {
+    const a = transak(opts)
+    expect(await a.health!({ fetch: fakeFetch([{ match: 'fiat-currencies', reply: () => ({ response: [] }) }]).fetch, log: silentLog })).toEqual({ ok: true })
+    expect(await a.health!({ fetch: fakeFetch([{ match: 'fiat-currencies', reply: () => ({}) }]).fetch, log: silentLog })).toEqual({ ok: false })
+    const down = await a.health!({ fetch: fakeFetch([{ match: 'fiat-currencies', status: 500, reply: () => ({}) }]).fetch, log: silentLog })
+    expect(down).toMatchObject({ ok: false, detail: expect.stringMatching(/HTTP 500/) })
   })
 })

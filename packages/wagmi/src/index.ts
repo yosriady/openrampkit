@@ -70,7 +70,11 @@ export function wagmiWallet(config: Config, opts: WagmiWalletOptions = {}): Wall
           })),
         )
         const tokens = [...(USDC[chain] ? [{ address: USDC[chain]!, symbol: 'USDC', decimals: 6 }] : []), ...(opts.tokens?.[chain] ?? [])]
+        // An extra token that repeats USDC (or another entry) is read once.
+        const seen = new Set<string>()
         for (const t of tokens) {
+          if (seen.has(t.address.toLowerCase())) continue
+          seen.add(t.address.toLowerCase())
           jobs.push(
             readContract(config, { address: t.address as Hex, abi: erc20BalanceOf, functionName: 'balanceOf', args: [address as Hex], chainId: id }).then((v) => ({
               chain,

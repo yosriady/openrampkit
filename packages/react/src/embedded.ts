@@ -1,6 +1,7 @@
 import { createElement, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { OrkError, OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import { toOrkError } from '@openrampkit/client'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal } from '@openrampkit/web'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
@@ -62,8 +63,7 @@ export function OpenRampEmbedded(props: OpenRampEmbeddedProps) {
       void ctl.start()
     })().catch((e: unknown) => {
       if (cancelled || !ref.current) return
-      const err = e as { error?: OrkError; message?: string }
-      ref.current.error = err.error ?? { code: 'INTERNAL', message: err.message ?? String(e), retryable: false }
+      ref.current.error = toOrkError(e)
     })
     return () => {
       cancelled = true

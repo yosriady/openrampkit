@@ -2,22 +2,9 @@ import { html, LitElement, nothing } from 'lit'
 import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
 import type { DepositController, Snapshot } from '@openrampkit/client'
-import { CHAINS, USDC, methodName, mulRatio } from '@openrampkit/core'
-import type { FieldSpec, MethodOption, OrkError, PathwayGroup, Quote, Step, Surface, Transition } from '@openrampkit/core'
-import {
-  currencySymbol,
-  displayChain,
-  formatAmount,
-  formatCountdown,
-  formatEta,
-  formatFees,
-  formatFiat,
-  formatLimit,
-  formatToken,
-  presetAmounts,
-  shortAddress,
-  titleCase,
-} from './format.js'
+import { methodName } from '@openrampkit/core'
+import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
+import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
 import { mergeMessages } from './messages.js'
 import type { Messages } from './messages.js'
@@ -25,10 +12,25 @@ import { qrPath } from './qr.js'
 import { styles } from './styles.js'
 import { themeVariables } from './theme.js'
 import type { Appearance, Theme } from './theme.js'
+import {
+  amountModel,
+  groupLabel,
+  groupMethods,
+  liveText,
+  methodSubtitle,
+  methodTabs,
+  nextQuoteId,
+  quoteSubtitle,
+  resolveMode,
+  screenOf,
+  screenTitle,
+  sourceForChain,
+  stepKey,
+  transferChains,
+  transferTokens,
+} from './view.js'
 
 export const TAG_NAME = 'openramp-modal'
-
-const GROUP_ORDER: PathwayGroup[] = ['connected', 'recommended', 'more', 'unavailable']
 
 const FOCUSABLE =
   'button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), iframe, a[href], [tabindex]:not([tabindex="-1"])'
@@ -152,7 +154,7 @@ export class OpenRampModal extends LitElement {
       this._returnFocus = active instanceof HTMLElement && active !== this ? active : null
     }
     const step = this._snap?.session?.step
-    const key = step ? `${step.state}|${step.sub ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
+    const key = stepKey(step)
     if (key !== this._stepKey) {
       this._stepKey = key
       this._form = {}
@@ -179,10 +181,9 @@ export class OpenRampModal extends LitElement {
   }
 
   private _applyTheme() {
-    const t = this.theme
-    const mode: 'light' | 'dark' = t?.mode === 'dark' ? 'dark' : t?.mode === 'auto' ? (this._systemDark ? 'dark' : 'light') : 'light'
+    const mode = resolveMode(this.theme, this._systemDark)
     this.setAttribute('data-mode', mode)
-    const vars = themeVariables(t, this.appearance, mode)
+    const vars = themeVariables(this.theme, this.appearance, mode)
     for (const [k, v] of Object.entries(vars)) this.style.setProperty(k, v)
   }
 
@@ -227,8 +228,7 @@ export class OpenRampModal extends LitElement {
   }
 
   private get _screen(): string {
-    if (this._snap) return this._snap.screen
-    return this.error ? 'error' : 'loading'
+    return screenOf(this._snap, this.error)
   }
 
   private get _selectedQuote(): Quote | undefined {
@@ -319,40 +319,11 @@ export class OpenRampModal extends LitElement {
         ${this._renderHeader(m)}
         <div class="body" part="body">${this._renderScreen(m)}</div>
         ${a?.hideFooter ? nothing : html`<div class="footer" part="footer">${m.poweredBy}</div>`}
-        <div class="sr-only" aria-live="polite">${this._liveText(m)}</div>
+        <div class="sr-only" aria-live="polite">${liveText(this._snap, this.error, m)}</div>
       </div>
     `
     if (this.embedded) return card
     return html`<div class="overlay" part="overlay" @click=${this._onOverlayClick}>${card}</div>`
-  }
-
-  private _liveText(m: Messages): string {
-    const s = this._snap
-    if (!s) return this.error ? this.error.message : m.loading
-    if (s.quotesLoading) return m.gettingQuotes
-    if (s.error) return s.error.message
-    if (s.screen === 'step' && s.session) {
-      const step = s.session.step
-      const legs = step.progress?.legs.map((l, i) => `${i + 1}. ${l.provider ?? titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
-      return [m.stepTitle[step.state] ?? '', ...legs].join('. ')
-    }
-    return ''
-  }
-
-  private _title(m: Messages): string {
-    const s = this._snap
-    const base = this.appearance?.title ?? m.title
-    if (!s) return base
-    switch (s.screen) {
-      case 'amount':
-        return s.method?.name ?? base
-      case 'quotes':
-        return s.method?.method === 'transfer' ? m.transferTitle : m.quotesTitle
-      case 'step':
-        return (s.session && m.stepTitle[s.session.step.state]) || base
-      default:
-        return base
-    }
   }
 
   private _renderHeader(m: Messages) {
@@ -369,7 +340,7 @@ export class OpenRampModal extends LitElement {
           : html`<span></span>`}
         <div class="title-wrap">
           ${showLogo ? html`<img class="logo" src=${a!.logoUrl!} alt=${a?.merchantName ?? ''} />` : nothing}
-          <h2 class="title" id="ork-title" tabindex="-1">${this._title(m)}</h2>
+          <h2 class="title" id="ork-title" tabindex="-1">${screenTitle(this._snap, m, a)}</h2>
         </div>
         ${this.embedded
           ? html`<span></span>`
@@ -422,17 +393,7 @@ export class OpenRampModal extends LitElement {
 
   private _renderMethods(m: Messages, s: Snapshot) {
     const c = this.controller!
-    const crypto = c.methodsForTab('crypto')
-    const cash = c.methodsForTab('cash')
-    const showTabs = crypto.length > 0 && cash.length > 0
-    const tab = showTabs ? s.tab : crypto.length ? 'crypto' : 'cash'
-    const list = tab === 'crypto' ? crypto : cash
-    const groupLabel: Record<PathwayGroup, string> = {
-      connected: m.groupConnected,
-      recommended: m.groupRecommended,
-      more: m.groupMore,
-      unavailable: m.groupUnavailable,
-    }
+    const { showTabs, tab, list } = methodTabs(c.methodsForTab('crypto'), c.methodsForTab('cash'), s.tab)
     const onTabKey = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
       e.preventDefault()
@@ -460,11 +421,10 @@ export class OpenRampModal extends LitElement {
         : nothing}
       <div id="ork-methods" role=${showTabs ? 'tabpanel' : nothing} aria-labelledby=${showTabs ? `ork-tab-${tab}` : nothing}>
         ${list.length === 0 ? html`<div class="notice info">${m.noMethods}</div>` : nothing}
-        ${GROUP_ORDER.map((g) => {
-          const items = list.filter((x) => x.group === g)
-          if (!items.length) return nothing
-          return html`<section class="group" aria-label=${groupLabel[g]}>
-            <h3 class="group-label">${groupLabel[g]}</h3>
+        ${groupMethods(list).map(({ group, items }) => {
+          const label = groupLabel(group, m)
+          return html`<section class="group" aria-label=${label}>
+            <h3 class="group-label">${label}</h3>
             <ul class="rows">
               ${items.map((x) => html`<li>${this._renderMethodRow(m, s, x)}</li>`)}
             </ul>
@@ -477,12 +437,7 @@ export class OpenRampModal extends LitElement {
 
   private _renderMethodRow(m: Messages, s: Snapshot, x: MethodOption) {
     const unavailable = x.group === 'unavailable'
-    const limit = formatLimit(x.limits, m)
-    const parts: string[] = []
-    if (x.method === 'wallet' && s.walletAddress) parts.push(shortAddress(s.walletAddress))
-    if (x.providers.length) parts.push(m.via(x.providers.join(', ')))
-    if (limit) parts.push(limit)
-    const sub = unavailable ? x.reason?.message ?? '' : parts.join(' · ')
+    const sub = methodSubtitle(x, s.walletAddress, m)
     return html`<button
       class="row"
       type="button"
@@ -503,32 +458,12 @@ export class OpenRampModal extends LitElement {
 
   private _renderAmount(m: Messages, s: Snapshot) {
     const c = this.controller!
-    const method = s.method
-    const isWallet = method?.method === 'wallet'
-    const currency = isWallet ? s.source?.symbol ?? 'USDC' : s.plan?.currency ?? s.session?.currency ?? 'USD'
-    const symbol = isWallet ? '' : currencySymbol(currency)
-    const hasPrefix = !!symbol && symbol !== currency.toUpperCase()
-    const bounds = isWallet ? undefined : s.session?.amountBounds ?? method?.limits
-    const fmtBound = (v?: string) => (v && bounds ? formatFiat(v, bounds.currency, { compact: true }) : undefined)
-    const boundsText = bounds ? m.minMax(fmtBound(bounds.min), fmtBound(bounds.max)) : ''
-    const balance = isWallet ? s.balances.find((b) => b.chain === s.source?.chain && b.token === s.source?.token) : undefined
-    const width = Math.max(1, s.amount.length || 1) + 0.3
-    const valid = !!s.amount && Number(s.amount) > 0
-
-    const chips: Array<{ label: string; value: string }> = isWallet
-      ? balance
-        ? [
-            { label: '25%', value: mulRatio(balance.amount, '0.25') },
-            { label: '50%', value: mulRatio(balance.amount, '0.5') },
-            { label: m.max, value: balance.amount },
-          ]
-        : []
-      : presetAmounts(currency).map((n) => ({ label: formatFiat(String(n), currency, { compact: true }), value: String(n) }))
+    const { isWallet, currency, prefix, boundsText, balance, chips, valid, width } = amountModel(s, m)
 
     return html`
       <div class="amount-box">
         <label class="amount-input-wrap amount-wrap-focus">
-          ${hasPrefix ? html`<span class="amount-prefix" aria-hidden="true">${symbol}</span>` : nothing}
+          ${prefix ? html`<span class="amount-prefix" aria-hidden="true">${prefix}</span>` : nothing}
           <input
             class="amount-input"
             inputmode="decimal"
@@ -543,7 +478,7 @@ export class OpenRampModal extends LitElement {
               if (e.key === 'Enter' && valid && !s.busy) void c.submitAmount()
             }}
           />
-          ${hasPrefix ? nothing : html`<span class="amount-suffix">${currency}</span>`}
+          ${prefix ? nothing : html`<span class="amount-suffix">${currency}</span>`}
         </label>
         ${boundsText ? html`<div class="hint">${boundsText}</div>` : nothing}
         ${balance ? html`<div class="hint">${m.balance(formatToken(balance.amount, balance.symbol))}</div>` : nothing}
@@ -606,22 +541,12 @@ export class OpenRampModal extends LitElement {
   private _renderTransferSource(m: Messages, s: Snapshot) {
     const c = this.controller!
     const src = s.source
-    const chains = Object.keys(USDC)
-    if (src && !chains.includes(src.chain)) chains.push(src.chain)
-    const isNative = src?.token === 'native'
-    const tokenOptions = (chain: string) => [
-      ...(USDC[chain] ? [{ token: USDC[chain]!, symbol: 'USDC', decimals: 6 }] : []),
-      { token: 'native', symbol: CHAINS[chain]?.nativeSymbol ?? 'ETH', decimals: 18 },
-    ]
-    const setChain = (chain: string) => {
-      const opts = tokenOptions(chain)
-      const next = (isNative ? opts.find((o) => o.token === 'native') : opts[0]) ?? opts[0]!
-      c.setSource({ chain, token: next.token, symbol: next.symbol, decimals: next.decimals })
-    }
+    const chains = transferChains(src?.chain)
+    const setChain = (chain: string) => c.setSource(sourceForChain(chain, src?.token === 'native'))
     const setToken = (token: string) => {
       if (!src) return
-      const o = tokenOptions(src.chain).find((x) => x.token === token)
-      if (o) c.setSource({ chain: src.chain, token: o.token, symbol: o.symbol, decimals: o.decimals })
+      const o = transferTokens(src.chain).find((x) => x.token === token)
+      if (o) c.setSource({ chain: src.chain, ...o })
     }
     return html`
       <span class="field-label">${m.sendFrom}</span>
@@ -631,7 +556,7 @@ export class OpenRampModal extends LitElement {
         </select>
         <select class="input" aria-label=${m.token} @change=${(e: Event) => setToken((e.target as HTMLSelectElement).value)}>
           ${src
-            ? tokenOptions(src.chain).map((o) => html`<option value=${o.token} ?selected=${src.token === o.token}>${o.symbol}</option>`)
+            ? transferTokens(src.chain).map((o) => html`<option value=${o.token} ?selected=${src.token === o.token}>${o.symbol}</option>`)
             : nothing}
         </select>
       </div>
@@ -645,11 +570,10 @@ export class OpenRampModal extends LitElement {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
       e.preventDefault()
-      const i = s.quotes.findIndex((q) => q.id === s.selectedQuoteId)
-      const next = s.quotes[(i + (e.key === 'ArrowDown' ? 1 : -1) + s.quotes.length) % s.quotes.length]
+      const next = nextQuoteId(s.quotes, s.selectedQuoteId, e.key === 'ArrowDown' ? 1 : -1)
       if (!next) return
-      c.selectQuote(next.id)
-      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>(`[data-quote="${CSS.escape(next.id)}"]`)?.focus())
+      c.selectQuote(next)
+      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>(`[data-quote="${CSS.escape(next)}"]`)?.focus())
     }
     let list: unknown
     if (s.quotesLoading && !s.quotes.length) {
@@ -681,10 +605,6 @@ export class OpenRampModal extends LitElement {
 
   private _renderQuoteRow(m: Messages, s: Snapshot, q: Quote) {
     const selected = q.id === s.selectedQuoteId
-    const fees = formatFees(q.fees)
-    const sub: string[] = []
-    if (Number(q.input.amount) > 0) sub.push(m.youPay(formatAmount(q.input)))
-    sub.push(fees ? m.fees(fees) : m.noFees)
     return html`<button
       class="row"
       type="button"
@@ -701,7 +621,7 @@ export class OpenRampModal extends LitElement {
           ${q.badges?.includes('best_price') ? html`<span class="badge success">${m.bestPrice}</span>` : nothing}
           ${q.badges?.includes('fastest') ? html`<span class="badge">${m.fastest}</span>` : nothing}
         </span>
-        <span class="row-sub wrap">${sub.join(' · ')}</span>
+        <span class="row-sub wrap">${quoteSubtitle(q, m)}</span>
       </span>
       <span class="row-end">
         ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output)}</strong>` : nothing}

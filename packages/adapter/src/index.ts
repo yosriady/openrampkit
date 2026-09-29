@@ -163,23 +163,6 @@ export function timingSafeEqual(a: string, b: string): boolean {
   return r === 0
 }
 
-export async function fetchJson<T>(f: typeof fetch, url: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<T> {
-  const ctrl = new AbortController()
-  const timer = setTimeout(() => ctrl.abort(), init.timeoutMs ?? 8000)
-  try {
-    const res = await f(url, { ...init, signal: ctrl.signal, headers: { accept: 'application/json', ...(init.body ? { 'content-type': 'application/json' } : {}), ...(init.headers ?? {}) } })
-    const text = await res.text()
-    const body = text ? JSON.parse(text) : undefined
-    if (!res.ok) {
-      const err = new Error(`HTTP ${res.status} from ${new URL(url).host}: ${text.slice(0, 300)}`) as Error & { status?: number; body?: unknown }
-      err.status = res.status
-      err.body = body
-      throw err
-    }
-    return body as T
-  } finally {
-    clearTimeout(timer)
-  }
-}
-
+export * from './http.js'
+export * from './util.js'
 export * from './testkit.js'

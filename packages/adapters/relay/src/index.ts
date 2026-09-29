@@ -8,8 +8,8 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { createAdapter, fetchJson } from '@openrampkit/adapter'
-import type { AdapterContext, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { POLL, awaitPoll, createAdapter, fetchJson, httpErrorToOrk, randomHex } from '@openrampkit/adapter'
+import type { AdapterContext, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
   OrkException,
@@ -50,7 +50,8 @@ const DEPOSIT_ADDRESS_TTL_SEC = 24 * 60 * 60
 const WALLET_QUOTE_REUSE_MS = 20_000
 const WALLET_QUOTE_TTL_MS = 60_000
 
-export const RELAY_POLL: PollSpec = { intervalMs: 2500, backoff: 1.2, maxIntervalMs: 10_000, giveUpAfterMs: 30 * 60_000 }
+export const RELAY_POLL: PollSpec = POLL.onchain
+const RECORD_TTL_SEC = 7 * 24 * 60 * 60
 
 const HOP_CHAINS = ['eip155:8453', 'eip155:42161', 'eip155:10', 'eip155:137', 'eip155:1'] as const
 
@@ -158,12 +159,6 @@ function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: number }) 
   return { min: Math.max(1, Math.round(t)), max: Math.max(fallback.max, Math.round(t * 4)) }
 }
 
-function randomNonce(): string {
-  const b = new Uint8Array(8)
-  crypto.getRandomValues(b)
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
-}
-
 /** ERC-20 transfer(address,uint256) calldata */
 export function erc20TransferData(to: string, amountBase: string): string {
   const addr = to.toLowerCase().replace(/^0x/, '').padStart(64, '0')
@@ -171,26 +166,37 @@ export function erc20TransferData(to: string, amountBase: string): string {
   return `0xa9059cbb${addr}${amt}`
 }
 
-function httpStatus(e: unknown): number | undefined {
-  return (e as { status?: number })?.status
-}
-
-function relayMessage(e: unknown): string | undefined {
-  const body = (e as { body?: { message?: string } })?.body
-  return typeof body?.message === 'string' ? body.message : undefined
-}
-
 /** Map a failed Relay HTTP call to an OrkException with a safe message. */
-function toOrk(e: unknown): OrkException {
-  if (e instanceof OrkException) return e
-  const status = httpStatus(e)
-  const msg = relayMessage(e)
-  if (status === 429) return new OrkException(orkError('RATE_LIMITED'), 429)
-  if (status && status >= 400 && status < 500) {
-    return new OrkException(orkError('NO_QUOTES', { message: msg ? `Relay: ${msg}`.slice(0, 200) : 'Relay has no route for this pair right now.' }), 422)
+function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
+  return httpErrorToOrk(e, 'Relay', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
+}
+
+const POLL_TRANSITION = awaitPoll(RELAY_POLL)
+const SUBMIT_TX = { name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' } as const
+
+/** Terminal LegStep for a Relay request or intent status, or undefined while it is still running */
+function terminalStep(status: string, extra: { ref: string; txHash?: string; output?: Amount }): LegStep | undefined {
+  switch (status) {
+    case 'success':
+      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra }
+    case 'failure':
+      return {
+        state: 'FAILED',
+        status: 'failed',
+        transitions: [],
+        error: orkError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }),
+        ...extra,
+      }
+    case 'refund':
+      return { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra }
+    default:
+      return undefined
   }
-  console.warn('[relay] request failed', e)
-  return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Relay is not available right now.' }), 502)
+}
+
+/** Relay's request id from a quote response (top level or on a step) */
+function requestIdOf(q: RelayQuoteResponse): string | undefined {
+  return q.requestId ?? q.steps?.find((s) => s.requestId)?.requestId
 }
 
 // ---------------- stored state ----------------
@@ -296,7 +302,7 @@ export function relay(opts: RelayOptions = {}) {
     const address = cached ?? fresh
     if (!address) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Relay did not return a deposit address.' }), 502)
     if (!cached) await ctx.shared.put(key, address, DEPOSIT_ADDRESS_TTL_SEC)
-    const requestId = q.steps?.find((s) => s.requestId)?.requestId ?? q.requestId
+    const requestId = requestIdOf(q)
     return { q, address, ...(requestId ? { requestId } : {}) }
   }
 
@@ -355,22 +361,7 @@ export function relay(opts: RelayOptions = {}) {
     const txHash = requestTxHash(r)
     const output = requestOutput(r)
     const extra = { ref, ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
-    switch (r.status) {
-      case 'success':
-        return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra }
-      case 'failure':
-        return {
-          state: 'FAILED',
-          status: 'failed',
-          transitions: [],
-          error: orkError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }),
-          ...extra,
-        }
-      case 'refund':
-        return { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra }
-      default:
-        return { state: 'PROCESSING', sub: r.status, status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }], ...extra }
-    }
+    return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
   }
 
   // ---------- leg specs ----------
@@ -454,7 +445,7 @@ export function relay(opts: RelayOptions = {}) {
       tradeType: exactOut ? 'EXACT_OUTPUT' : 'EXACT_INPUT',
     }
     const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', body).catch((e) => {
-      throw toOrk(e)
+      throw toOrk(e, ctx.log)
     })
     const cin = q.details?.currencyIn
     const cout = q.details?.currencyOut
@@ -467,7 +458,7 @@ export function relay(opts: RelayOptions = {}) {
       fees: feesFrom(q),
       eta: etaFrom(q, legEta),
       expiresAt: new Date(Date.now() + WALLET_QUOTE_TTL_MS).toISOString(),
-      data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps, requestId: q.requestId ?? q.steps.find((s) => s.requestId)?.requestId },
+      data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps ?? [], requestId: requestIdOf(q) },
     }
   }
 
@@ -516,12 +507,13 @@ export function relay(opts: RelayOptions = {}) {
 
   // ---------- start per leg ----------
 
-  function walletTxsFrom(steps: RelayStep[]): { txs: TxRequest[]; signature: boolean } {
+  /** Wallet transactions from Relay steps. `unsupported` names the first step kind we cannot run (e.g. `signature`). */
+  function walletTxsFrom(steps: RelayStep[]): { txs: TxRequest[]; unsupported?: string } {
     const txs: TxRequest[] = []
-    let signature = false
+    let unsupported: string | undefined
     for (const s of steps) {
       if (s.kind !== 'transaction') {
-        signature = true
+        unsupported ??= s.kind || 'unknown'
         continue
       }
       for (const it of s.items ?? []) {
@@ -535,14 +527,14 @@ export function relay(opts: RelayOptions = {}) {
         })
       }
     }
-    return { txs, signature }
+    return { txs, ...(unsupported ? { unsupported } : {}) }
   }
 
   function payStep(chain: string, txs: TxRequest[], ref: string): LegStep {
     return {
       state: 'PAYMENT',
       surface: { kind: 'WALLET_TX', chain, txs },
-      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+      transitions: [SUBMIT_TX],
       status: 'awaiting_user',
       ref,
     }
@@ -559,8 +551,8 @@ export function relay(opts: RelayOptions = {}) {
       const tx: TxRequest = isNative(origin.chain, origin.token)
         ? { to: recipient, value: amountBase, chainId }
         : { to: origin.token, data: erc20TransferData(recipient, amountBase), chainId }
-      const ref = `direct:${ctx.session.id}:${randomNonce()}`
-      await ctx.store.put(`w:${ref}`, { mode: 'direct', output: input.quote.output } satisfies WalletRecord, 7 * 24 * 60 * 60)
+      const ref = `direct:${ctx.session.id}:${randomHex()}`
+      await ctx.store.put(`w:${ref}`, { mode: 'direct', output: input.quote.output } satisfies WalletRecord, RECORD_TTL_SEC)
       return payStep(origin.chain, [tx], ref)
     }
 
@@ -573,26 +565,28 @@ export function relay(opts: RelayOptions = {}) {
       if (!data.body) throw new OrkException(orkError('QUOTE_EXPIRED'), 410)
       const body = { ...(data.body as Record<string, unknown>), ...(user ? { user } : {}) }
       const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', body).catch((e) => {
-        throw toOrk(e)
+        throw toOrk(e, ctx.log)
       })
-      steps = q.steps
-      requestId = q.requestId ?? q.steps.find((s) => s.requestId)?.requestId
+      steps = q.steps ?? []
+      requestId = requestIdOf(q)
     }
-    const { txs, signature } = walletTxsFrom(steps)
-    const ref = requestId ?? `relay:${ctx.session.id}:${randomNonce()}`
-    if (signature || !txs.length) {
+    const { txs, unsupported } = walletTxsFrom(steps)
+    const ref = requestId ?? `relay:${ctx.session.id}:${randomHex()}`
+    if (unsupported || !txs.length) {
       return {
         state: 'FAILED',
         status: 'failed',
         transitions: [],
         ref,
         error: orkError('PROVIDER_DECLINED', {
-          message: signature ? 'This route needs a signature step, which is not supported yet. Try another token or "Transfer crypto".' : 'Relay returned no transactions for this route.',
+          message: unsupported
+            ? `This route needs a ${unsupported} step, which is not supported yet. Try another token or "Transfer crypto".`
+            : 'Relay returned no transactions for this route.',
           recovery: 'choose_other',
         }),
       }
     }
-    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref } satisfies WalletRecord, 7 * 24 * 60 * 60)
+    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref } satisfies WalletRecord, RECORD_TTL_SEC)
     return payStep(caip2FromRelay(txs[0]!.chainId), txs, ref)
   }
 
@@ -607,10 +601,10 @@ export function relay(opts: RelayOptions = {}) {
     const key = `d:${address.toLowerCase()}`
     const prev = await ctx.store.get<DepositRecord>(key)
     const since = prev?.since ?? Date.now()
-    await ctx.store.put(key, { address, since, mode: data.direct ? 'direct' : 'relay', output: input.quote.output } satisfies DepositRecord, 7 * 24 * 60 * 60)
+    await ctx.store.put(key, { address, since, mode: data.direct ? 'direct' : 'relay', output: input.quote.output } satisfies DepositRecord, RECORD_TTL_SEC)
 
     if (legId === 'bridge') {
-      return { state: 'PROCESSING', sub: 'waiting_for_deposit', transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }], status: 'processing', ref: address }
+      return { state: 'PROCESSING', sub: 'waiting_for_deposit', transitions: [POLL_TRANSITION], status: 'processing', ref: address }
     }
     const symbol = origin.symbol ?? knownSymbol(origin.chain, origin.token) ?? 'the token'
     const name = chainName(origin.chain)
@@ -625,7 +619,7 @@ export function relay(opts: RelayOptions = {}) {
         address,
         warning: `Send only ${symbol} on ${name}. Other tokens or chains may be lost.`,
       },
-      transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }],
+      transitions: [POLL_TRANSITION],
       status: 'awaiting_user',
       ref: address,
     }
@@ -657,7 +651,7 @@ export function relay(opts: RelayOptions = {}) {
       // Remember when this session first used the address, so status ignores older deposits.
       const key = `d:${address.toLowerCase()}`
       if (!(await ctx.store.get(key))) {
-        await ctx.store.put(key, { address, since: Date.now(), mode: address === recipient ? 'direct' : 'relay' } satisfies DepositRecord, 7 * 24 * 60 * 60)
+        await ctx.store.put(key, { address, since: Date.now(), mode: address === recipient ? 'direct' : 'relay' } satisfies DepositRecord, RECORD_TTL_SEC)
       }
       return { address, ref: address }
     },
@@ -682,8 +676,8 @@ export function relay(opts: RelayOptions = {}) {
       const txHash = String(input.inputs?.txHash ?? input.inputs?.hash ?? '')
       if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
       const rec = (await ctx.store.get<WalletRecord>(`w:${input.ref}`)) ?? { mode: 'relay' as const, requestId: input.ref }
-      await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, 7 * 24 * 60 * 60)
-      return { state: 'PROCESSING', transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }], status: 'processing', ref: input.ref, txHash }
+      await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
+      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash }
     },
 
     async status(input, ctx) {
@@ -693,35 +687,32 @@ export function relay(opts: RelayOptions = {}) {
         if (rec?.mode === 'direct') {
           // Direct same-chain transfer: we trust the wallet's tx hash. It is NOT verified on chain.
           if (rec.txHash) return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref: input.ref, txHash: rec.txHash, ...(rec.output ? { output: rec.output } : {}) }
-          return { state: 'PAYMENT', transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }], status: 'awaiting_user', ref: input.ref }
+          return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
         }
-        const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`)
-        const txHash = s.txHashes?.[0]
-        const extra = { ref: input.ref, ...(txHash ? { txHash } : rec?.txHash ? { txHash: rec.txHash } : {}) }
-        switch (s.status) {
-          case 'success':
-            return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra }
-          case 'failure':
-            return { state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }), ...extra }
-          case 'refund':
-            return { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra }
-          default:
-            if (!rec?.txHash && !s.inTxHashes?.length) {
-              return { state: 'PAYMENT', transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }], status: 'awaiting_user', ref: input.ref }
-            }
-            return { state: 'PROCESSING', sub: s.status, status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }], ...extra }
+        const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
+          throw toOrk(e, ctx.log)
+        })
+        const txHash = s.txHashes?.[0] ?? rec?.txHash
+        const extra = { ref: input.ref, ...(txHash ? { txHash } : {}) }
+        const done = terminalStep(s.status, extra)
+        if (done) return done
+        if (!rec?.txHash && !s.inTxHashes?.length) {
+          return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
         }
+        return { state: 'PROCESSING', sub: s.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
       }
 
       // transfer / bridge: look for deposits into the address
       const rec = await ctx.store.get<DepositRecord>(`d:${input.ref.toLowerCase()}`)
       const waiting: LegStep =
         legId === 'bridge'
-          ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }], ref: input.ref }
-          : { state: 'PAYMENT', status: 'awaiting_user', transitions: [{ name: 'poll', kind: 'AWAIT', poll: RELAY_POLL }], ref: input.ref }
+          ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [POLL_TRANSITION], ref: input.ref }
+          : { state: 'PAYMENT', status: 'awaiting_user', transitions: [POLL_TRANSITION], ref: input.ref }
       // Same chain and token: the address is the destination itself; we cannot see deposits without a chain watcher.
       if (rec?.mode === 'direct') return waiting
-      const found = await findRequest(ctx, input.ref, rec?.since ?? 0)
+      const found = await findRequest(ctx, input.ref, rec?.since ?? 0).catch((e) => {
+        throw toOrk(e, ctx.log)
+      })
       return found ? mapRequest(found, input.ref) : waiting
     },
 

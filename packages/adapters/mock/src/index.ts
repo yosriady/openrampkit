@@ -1,9 +1,9 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { createAdapter } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { USDC, bps, chainName, minorUnits, mulRatio, orkError, roundTo, sub } from '@openrampkit/core'
+import { CHAINS, OrkException, USDC, bps, chainName, minorUnits, mulRatio, orkError, roundTo, sub } from '@openrampkit/core'
 import type { Amount, CryptoAsset, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 
 export type MockOptions = {
@@ -23,7 +23,16 @@ const USD_PER_UNIT: Record<string, string> = {
   VND: '0.0000395', INR: '0.012', BRL: '0.18', AUD: '0.66', CAD: '0.73', JPY: '0.0067', KRW: '0.00073',
 }
 
-const POLL: PollSpec = { intervalMs: 1500, backoff: 1.1, maxIntervalMs: 5000, giveUpAfterMs: 15 * 60_000 }
+/** Best-effort symbol for a token when the caller did not give one (test data only). */
+function symbolOf(a: { chain: string; token: string; symbol?: string }): string {
+  if (a.symbol) return a.symbol
+  const t = a.token.toLowerCase()
+  if (t === 'native' || t === '0x0000000000000000000000000000000000000000' || t === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') return CHAINS[a.chain]?.nativeSymbol ?? 'ETH'
+  return USDC[a.chain] === t ? 'USDC' : 'TOKEN'
+}
+
+const POLL: PollSpec = POLLS.dev
+const ORDER_TTL_SEC = 24 * 60 * 60
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 }
 const usdcChains = Object.fromEntries(Object.entries(USDC).map(([c, t]) => [c, [t]]))
 
@@ -128,7 +137,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     if (o.status === 'paid' && o.paidAt && Date.now() - o.paidAt >= settleMs) {
       return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: `0x${ref.replace(/[^0-9a-f]/g, '').padEnd(64, '0').slice(0, 64)}` }
     }
-    if (o.status === 'paid') return { state: 'PROCESSING', sub: 'SETTLING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ref }
+    if (o.status === 'paid') return { state: 'PROCESSING', sub: 'SETTLING', status: 'processing', transitions: [awaitPoll(POLL)], ref }
     return undefined
   }
 
@@ -138,13 +147,14 @@ export function mockAdapter(opts: MockOptions = {}) {
     legs,
 
     async quote({ leg, amountIn, amountOut }, ctx): Promise<LegQuote> {
-      const spec = legs.find((l) => l.id === leg.legId)!
+      const spec = legs.find((l) => l.id === leg.legId)
+      if (!spec) throw unknownLeg(leg.legId)
       const now = Date.now()
       const expiresAt = new Date(now + 60_000).toISOString()
       if (spec.kind === 'fiat_onramp' || spec.kind === 'fiat_payin') {
         const fiat = (amountIn?.asset.kind === 'fiat' ? amountIn.asset.currency : leg.from.asset.kind === 'fiat' ? leg.from.asset.currency : 'USD').toUpperCase()
         const rate = USD_PER_UNIT[fiat]
-        if (!rate) throw Object.assign(new Error(`Mock has no rate for ${fiat}`), { code: 'PROVIDER_UNAVAILABLE' })
+        if (!rate) throw new OrkException(orkError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
         const input = amountIn?.amount ?? '0'
         const feePct = spec.id === 'card' ? 250 : 100 // bps
         if (spec.kind === 'fiat_payin') {
@@ -174,7 +184,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       const inAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : BASE_USDC
       return {
         adapterId: 'mock', legId: leg.legId,
-        input: { amount: input, asset: { ...inAsset, symbol: inAsset.symbol ?? 'USDC', decimals: inAsset.decimals ?? 6 } },
+        input: { amount: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : 18) } },
         output: { amount: roundTo(sub(input, fee), 6), asset: destAsset(ctx) },
         fees: [{ kind: 'network', label: 'Network and bridge', amount: roundTo(fee, 6), currency: 'USDC' }],
         eta: spec.eta, expiresAt,
@@ -189,14 +199,14 @@ export function mockAdapter(opts: MockOptions = {}) {
     async start({ leg, quote, deliverTo }, ctx): Promise<LegStep> {
       const ref = `mock_${ctx.session.id.slice(4, 14)}_${leg.legId}_${Date.now().toString(36)}`
       const order: MockOrder = { status: 'awaiting', output: quote.output, kind: leg.legId }
-      await ctx.shared.put(orderKey(ref), order, 60 * 60 * 24)
+      await ctx.shared.put(orderKey(ref), order, ORDER_TTL_SEC)
       const base = baseOf(ctx)
       switch (leg.legId) {
         case 'card':
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
             surface: { kind: 'REDIRECT', url: `${base}/adapters/mock/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.amount}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
-            transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }],
+            transitions: [awaitPoll(POLL)],
           }
         case 'local':
         case 'payin': {
@@ -206,7 +216,7 @@ export function mockAdapter(opts: MockOptions = {}) {
             surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.amount}|${cur}`, amount: quote.input.amount, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
             transitions: [
               { name: 'simulate_payment', kind: 'SUBMIT', label: 'Simulate payment (test mode)' },
-              { name: 'poll', kind: 'AWAIT', poll: POLL },
+              awaitPoll(POLL),
             ],
           }
         }
@@ -223,38 +233,38 @@ export function mockAdapter(opts: MockOptions = {}) {
           const address = fakeAddress(`${ctx.session.userId}:${src.chain}:${src.token}`)
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
-            surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: src.symbol ?? 'USDC', address, min: '1', warning: `Send only ${src.symbol ?? 'USDC'} on ${chainName(src.chain)}. This is a test address.` },
+            surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning: `Send only ${symbolOf(src)} on ${chainName(src.chain)}. This is a test address.` },
             transitions: [
               { name: 'simulate_deposit', kind: 'SUBMIT', label: 'Simulate deposit (test mode)' },
-              { name: 'poll', kind: 'AWAIT', poll: POLL },
+              awaitPoll(POLL),
             ],
           }
         }
         case 'bridge': {
           // The previous leg delivers into the deposit address; treat it as paid now.
-          await ctx.shared.put(orderKey(ref), { ...order, status: 'paid', paidAt: Date.now() }, 60 * 60 * 24)
-          return { state: 'PROCESSING', sub: 'BRIDGING', status: 'processing', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }
+          await ctx.shared.put(orderKey(ref), { ...order, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
+          return { state: 'PROCESSING', sub: 'BRIDGING', status: 'processing', ref, transitions: [awaitPoll(POLL)] }
         }
       }
-      throw new Error(`Unknown mock leg ${leg.legId}`)
+      throw unknownLeg(leg.legId)
     },
 
     async transition({ ref, name: t, inputs }, ctx): Promise<LegStep> {
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))
-      if (!o) throw new Error('Unknown mock order')
+      if (!o) throw new OrkException(orkError('NOT_FOUND', { message: 'Unknown mock order.' }), 404)
       if (t === 'simulate_payment' || t === 'simulate_deposit' || t === 'submit_tx') {
-        await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, 60 * 60 * 24)
+        await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
         return {
           state: 'PROCESSING', sub: 'SETTLING', status: 'processing', ref,
-          transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }],
+          transitions: [awaitPoll(POLL)],
           ...(typeof inputs?.txHash === 'string' ? { txHash: inputs.txHash } : {}),
         }
       }
-      throw new Error(`Unknown transition ${t}`)
+      throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
     },
 
     async status({ ref }, ctx): Promise<LegStep> {
-      return (await settled(ref, ctx)) ?? { state: 'PAYMENT', status: 'awaiting_user', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }
+      return (await settled(ref, ctx)) ?? { state: 'PAYMENT', status: 'awaiting_user', ref, transitions: [awaitPoll(POLL)] }
     },
 
     async routes(req, subpath, ctx) {
@@ -272,10 +282,10 @@ export function mockAdapter(opts: MockOptions = {}) {
         const o = await ctx.shared.get<MockOrder>(orderKey(r))
         if (!o) return new Response('Unknown order', { status: 404 })
         if (outcome === 'fail') {
-          await ctx.shared.put(orderKey(r), { ...o, status: 'failed' }, 86400)
+          await ctx.shared.put(orderKey(r), { ...o, status: 'failed' }, ORDER_TTL_SEC)
           await ctx.applyEvent({ ref: r, status: 'failed', error: orkError('PAYMENT_FAILED') } satisfies LegEvent)
         } else {
-          await ctx.shared.put(orderKey(r), { ...o, status: 'paid', paidAt: Date.now() }, 86400)
+          await ctx.shared.put(orderKey(r), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
           await ctx.applyEvent({ ref: r, status: 'processing' })
         }
         return new Response(donePage(outcome !== 'fail'), { headers: { 'content-type': 'text/html; charset=utf-8' } })
@@ -283,6 +293,10 @@ export function mockAdapter(opts: MockOptions = {}) {
       return undefined
     },
   })
+}
+
+function unknownLeg(legId: string) {
+  return new OrkException(orkError('NOT_FOUND', { message: `Unknown mock leg ${legId}` }), 404)
 }
 
 function escapeHtml(s: string) {

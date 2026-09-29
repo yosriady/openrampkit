@@ -14,10 +14,10 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { createAdapter, fetchJson, hmacSha256, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, timingSafeEqual } from '@openrampkit/adapter'
+import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
+import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
 import type { CdpKey } from './jwt.js'
 
@@ -47,7 +47,7 @@ export type CoinbaseOptions = {
   sandbox?: boolean
 }
 
-const POLL: PollSpec = { intervalMs: 4000, backoff: 1.2, maxIntervalMs: 15_000, giveUpAfterMs: 60 * 60_000 }
+const POLL: PollSpec = POLLS.checkout
 /** Reuse the URL made at quote time only while its session token is fresh (tokens last 5 minutes). */
 const URL_REUSE_MS = 4 * 60_000
 
@@ -89,7 +89,7 @@ type CbTransaction = {
   eventType?: string
 }
 type CbSessionResponse = {
-  session: { onrampUrl: string }
+  session?: { onrampUrl?: string }
   quote?: {
     paymentTotal: string
     paymentSubtotal: string
@@ -100,12 +100,6 @@ type CbSessionResponse = {
     fees: Array<{ type: string; amount: string; currency: string }>
     exchangeRate: string
   }
-}
-
-function randomHex(bytes = 8): string {
-  const b = new Uint8Array(bytes)
-  crypto.getRandomValues(b)
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
 function amountValue(a: CbAmount | string | undefined): string | undefined {
@@ -129,13 +123,9 @@ export function coinbase(opts: CoinbaseOptions) {
     })
   }
 
-  function toOrk(e: unknown, what: string): OrkException {
-    const status = (e as { status?: number }).status
-    const body = (e as { body?: { errorMessage?: string; message?: string } }).body
-    const msg = body?.errorMessage ?? body?.message
-    if (status === 429) return new OrkException(orkError('RATE_LIMITED'), 429)
-    if (status === 400 || status === 422) return new OrkException(orkError('NO_QUOTES', { message: msg ? `Coinbase: ${msg}`.slice(0, 200) : `Coinbase could not ${what}.` }), 422)
-    return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Coinbase is not available right now.' }), 502)
+  /** 400 and 422 mean "not for this request"; 401, 403 and 404 mean our key or setup is wrong. */
+  function toOrk(e: unknown, what: string, log?: Pick<Logger, 'warn'>): OrkException {
+    return httpErrorToOrk(e, 'Coinbase', { what, noQuoteStatuses: [400, 422], ...(log ? { log } : {}) })
   }
 
   const toChains: Record<string, string[]> = Object.fromEntries(
@@ -169,7 +159,7 @@ export function coinbase(opts: CoinbaseOptions) {
   }
 
   function subdivision(ctx: AdapterContext, country: string): string | undefined {
-    const region = (ctx.session as { region?: string }).region
+    const region = ctx.session.region
     if (region?.toUpperCase().startsWith(`${country}-`)) return region.slice(country.length + 1).toUpperCase()
     return country === 'US' ? opts.defaultSubdivision : undefined
   }
@@ -213,14 +203,6 @@ export function coinbase(opts: CoinbaseOptions) {
     return a
   }
 
-  function stepFromTx(tx: CbTransaction | undefined, ref: string): LegStep {
-    if (!tx) return { state: 'PAYMENT', status: 'awaiting_user', transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ref }
-    const ev = eventFrom(tx, ref)
-    if (ev?.status === 'succeeded') return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref, ...(ev.txHash ? { txHash: ev.txHash } : {}), ...(ev.output ? { output: ev.output } : {}) }
-    if (ev?.status === 'failed') return { state: 'FAILED', status: 'failed', transitions: [], ref, ...(ev.error ? { error: ev.error } : {}) }
-    return { state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ref }
-  }
-
   function eventFrom(tx: CbTransaction, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? tx.partnerUserRef ?? tx.partner_user_ref
     if (!ref) return undefined
@@ -255,12 +237,15 @@ export function coinbase(opts: CoinbaseOptions) {
         await ctx.shared.put('config', cfg, 24 * 60 * 60)
       }
       const countries = cfg.countries ?? []
-      if (!countries.length) return legs
-      return legs.map((l) => {
+      const allowFor = (l: LegSpec) => {
         const pm = PAYMENT_METHOD[l.id]!
-        const allow = countries.filter((c) => (c.payment_methods ?? []).some((m) => m.id.toUpperCase() === pm)).map((c) => c.id.toUpperCase())
-        return { ...l, regions: { allow: allow.length ? allow : ['*'], deny: l.regions.deny } }
-      })
+        return countries.filter((c) => (c.payment_methods ?? []).some((m) => m.id?.toUpperCase() === pm)).map((c) => c.id.toUpperCase())
+      }
+      const refined = legs.map((l) => ({ ...l, regions: { allow: allowFor(l), deny: l.regions.deny } }))
+      // No country lists any of our methods: the config format is not what we expect, so keep the static legs.
+      if (!refined.some((l) => l.regions.allow.length)) return legs
+      // A method no country supports is not offered at all.
+      return refined.filter((l) => l.regions.allow.length)
     },
 
     async quote(input, ctx) {
@@ -268,6 +253,7 @@ export function coinbase(opts: CoinbaseOptions) {
       if (fiat.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase quotes need a fiat amount.' }))
       const t = target(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
+      const sub = subdivision(ctx, country)
       const ref = partnerUserRef(ctx)
       const paymentMethod = PAYMENT_METHOD[input.leg.legId] ?? 'CARD'
       let res: CbSessionResponse
@@ -279,11 +265,11 @@ export function coinbase(opts: CoinbaseOptions) {
           ...(input.amountIn ? { paymentAmount: input.amountIn.amount } : { purchaseAmount: input.amountOut?.amount ?? '0' }),
           paymentMethod,
           country,
-          ...(subdivision(ctx, country) ? { subdivision: subdivision(ctx, country)! } : {}),
+          ...(sub ? { subdivision: sub } : {}),
           ref,
         })
       } catch (e) {
-        throw toOrk(e, 'price this amount')
+        throw toOrk(e, 'price this amount', ctx.log)
       }
       const q = res.quote
       if (!q) throw new OrkException(orkError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
@@ -300,12 +286,20 @@ export function coinbase(opts: CoinbaseOptions) {
         output: { amount: q.purchaseAmount, asset: t.asset },
         fees,
         eta: legs[0]!.eta,
-        data: { ref, onrampUrl: res.session.onrampUrl, createdAt: Date.now(), network: t.network, paymentMethod, country },
+        data: { ref, onrampUrl: res.session?.onrampUrl, createdAt: Date.now(), network: t.network, paymentMethod, country, ...(sub ? { subdivision: sub } : {}) },
       }
     },
 
     async start(input, ctx) {
-      const data = (input.quote.data ?? {}) as { ref?: string; onrampUrl?: string; createdAt?: number; network?: string; paymentMethod?: string; country?: string }
+      const data = (input.quote.data ?? {}) as {
+        ref?: string
+        onrampUrl?: string
+        createdAt?: number
+        network?: string
+        paymentMethod?: string
+        country?: string
+        subdivision?: string
+      }
       let ref = data.ref
       let url = data.onrampUrl
       // The quote's URL is single-use and its session token expires after 5 minutes: make a new one when stale.
@@ -314,22 +308,27 @@ export function coinbase(opts: CoinbaseOptions) {
         const t = target(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
         const fiat = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD'
         try {
+          // Keep the quoted method and location, so the new URL opens on the method the user chose.
           const res = await createSession(ctx, {
             network: data.network ?? t.network,
             address: deliverAddress(ctx, input.deliverTo),
             paymentCurrency: fiat,
             paymentAmount: input.quote.input.amount,
+            ...(data.paymentMethod ? { paymentMethod: data.paymentMethod } : {}),
+            ...(data.country ? { country: data.country } : {}),
+            ...(data.subdivision ? { subdivision: data.subdivision } : {}),
             ref,
           })
-          url = res.session.onrampUrl
+          url = res.session?.onrampUrl
         } catch (e) {
-          throw toOrk(e, 'start the purchase')
+          throw toOrk(e, 'start the purchase', ctx.log)
         }
+        if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a checkout URL.' }), 502)
       }
       return {
         state: 'PAYMENT',
         surface: { kind: 'REDIRECT', url, popup: true, provider: 'Coinbase' },
-        transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }],
+        transitions: [awaitPoll(POLL)],
         status: 'awaiting_user',
         ref,
       }
@@ -338,8 +337,14 @@ export function coinbase(opts: CoinbaseOptions) {
     async status(input, ctx) {
       // TO VERIFY: query parameter casing (the API spec says pageSize; the guide says page_size).
       const path = `/onramp/v1/buy/user/${encodeURIComponent(input.ref)}/transactions`
-      const res = await cdp<{ transactions?: CbTransaction[] }>(ctx, onrampApi, 'GET', path, '?pageSize=1')
-      return stepFromTx(res.transactions?.[0], input.ref)
+      let res: { transactions?: CbTransaction[] }
+      try {
+        res = await cdp(ctx, onrampApi, 'GET', path, '?pageSize=1')
+      } catch (e) {
+        throw toOrk(e, 'find this purchase', ctx.log)
+      }
+      const tx = res.transactions?.[0]
+      return legStepFromEvent(tx ? eventFrom(tx, input.ref) : undefined, input.ref, POLL)
     },
 
     webhook: {

@@ -1,4 +1,4 @@
-import { createOpenRampClient, DepositController } from '@openrampkit/client'
+import { createOpenRampClient, DepositController, toOrkError } from '@openrampkit/client'
 import { orkError } from '@openrampkit/core'
 import type { OrkError, OrkEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
 import { defineOpenRampModal, OpenRampModal } from './element.js'
@@ -68,11 +68,6 @@ export type DepositHandle = {
    */
   done: Promise<PublicSession>
   close(): void
-}
-
-function toOrkError(e: unknown): OrkError {
-  if (e && typeof e === 'object' && 'error' in e && e.error && typeof e.error === 'object' && 'code' in e.error) return e.error as OrkError
-  return orkError('INTERNAL', { message: e instanceof Error ? e.message : String(e) })
 }
 
 /** Mount `<openramp-modal>`, start a deposit session and return a handle. Browser only. */
