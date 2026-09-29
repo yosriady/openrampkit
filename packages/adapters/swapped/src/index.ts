@@ -336,6 +336,7 @@ export function swapped(opts: SwappedOptions) {
       case 'payout_pending':
         return { ref, status: 'processing', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
       case 'order_completed':
+      case 'order_broadcasted': // status polling reports a completed order with a transaction id this way
         return { ref, status: 'succeeded', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
       case 'order_cancelled':
         return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The payout was cancelled.', recovery: 'contact_support' }) }

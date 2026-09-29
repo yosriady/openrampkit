@@ -143,3 +143,21 @@ describe('limits', () => {
     await expect(ramp.sessions.create({ userId: 'u', destination: { ...DEST, calls: [{ to: '0x1', data: '0x' }] } })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 })
+
+describe('sweep expiry of waiting payments', () => {
+  it('expires a payment that still waits for the user after the deadline, but not one in processing', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const { ramp, call } = make({ adapters: [mockAdapter({ settleMs: 60_000 })] })
+    const start = async () => {
+      const s = await ramp.sessions.create({ userId: 'u', country: 'VN', destination: DEST, ttlMinutes: 1 })
+      await call(`/sessions/${s.id}/plan`, { method: 'POST', secret: s.clientSecret, body: '{}' })
+      const q = await (await call(`/sessions/${s.id}/quotes`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ method: 'vietqr', amount: '500000' }) })).json()
+      await call(`/sessions/${s.id}/select`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ quoteId: q.quotes[0].id }) })
+      return s
+    }
+    const waiting = await start()
+    vi.setSystemTime(Date.now() + 2 * 60_000)
+    await ramp.sweep()
+    expect((await ramp.sessions.retrieve(waiting.id))!.status).toBe('expired')
+  })
+})

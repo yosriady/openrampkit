@@ -7,9 +7,39 @@ Because all state is in the store, any server instance can serve any request.
 | Store | Use for | Atomic version check |
 |---|---|---|
 | `memoryStore()` | Local development, tests | Yes, in one process |
-| `cloudflareKvStore(ns)` | Demos and low traffic on Workers | Best effort (KV is eventually consistent) |
-| `redisStore(redis)` | Production | Yes (Lua script) |
-| Your own | Postgres, DynamoDB, Durable Objects | You decide |
+| `durableObjectStore(ns)` | **Production on Cloudflare Workers** (built in, no extra service) | Yes (one Durable Object per key) |
+| `redisStore(redis)` | Production on Node, Vercel, Bun, Deno | Yes (Lua script) |
+| `cloudflareKvStore(ns)` | Demos only | Best effort (KV is eventually consistent) |
+| Your own | Postgres, DynamoDB | You decide |
+
+::: tip Fewest moving parts
+On Cloudflare, use `durableObjectStore`: the Worker and its Durable Object binding are the whole stack. On Vercel or a Node host, use Redis only when you run more than one instance; one process can use `memoryStore` for a demo, but it loses sessions on restart.
+:::
+
+## Durable Objects (Cloudflare)
+
+Strongly consistent and part of Workers. The store uses one small Durable Object per key (`s:{sessionId}` for sessions, `k:{key}` for the rest). A Durable Object handles one request at a time, so the version check and the write are atomic. Values with a TTL are checked on read and deleted by a Durable Object alarm.
+
+```ts
+// src/index.ts: export the class from your Worker entry
+export { OpenRampStore } from '@openrampkit/server'
+import { createOpenRamp, durableObjectStore } from '@openrampkit/server'
+
+createOpenRamp({ store: durableObjectStore(env.OPENRAMP_STORE), ... })
+```
+
+```toml
+# wrangler.toml
+[[durable_objects.bindings]]
+name = "OPENRAMP_STORE"
+class_name = "OpenRampStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OpenRampStore"]
+```
+
+The class uses the plain `fetch` protocol of Durable Objects and has no `cloudflare:*` imports, so the server package still builds for other runtimes. `wrangler dev` runs Durable Objects locally.
 
 ## Memory
 
@@ -46,7 +76,7 @@ Keys: `{prefix}s:{id}` for sessions, `{prefix}k:{key}` for the rest.
 
 ::: code-group
 
-```ts [Upstash (HTTP, Workers and Edge)]
+```ts [Upstash (HTTP, e.g. Vercel Edge)]
 import { Redis } from '@upstash/redis'
 import { redisStore } from '@openrampkit/server'
 

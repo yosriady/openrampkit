@@ -163,7 +163,6 @@ export function xendit(opts: XenditOptions) {
       ref: pr.payment_request_id,
       ...(surface ? { surface } : {}),
       transitions: m.status === 'awaiting_user' || m.status === 'processing' ? [{ name: 'poll', kind: 'AWAIT', poll: POLL }] : [],
-      ...(m.status === 'succeeded' ? { output: { amount: String(pr.request_amount), asset: { kind: 'fiat' as const, currency: pr.currency } } } : {}),
       ...(m.status === 'failed' ? { error: orkError('PAYMENT_FAILED', { ...(pr.failure_code ? { message: `The payment failed (${pr.failure_code}).` } : {}) }) } : {}),
       ...(m.status === 'expired' ? { error: orkError('QUOTE_EXPIRED', { message: 'The payment expired. Start again.' }) } : {}),
     }
@@ -245,7 +244,8 @@ export function xendit(opts: XenditOptions) {
         const d = body.data
         if (!d?.payment_request_id) return []
         if (body.event === 'payment.capture' || d.status === 'SUCCEEDED') {
-          return [{ ref: d.payment_request_id, status: 'succeeded', ...(d.request_amount !== undefined && d.currency ? { output: { amount: String(d.request_amount), asset: { kind: 'fiat', currency: d.currency } } } : {}) }]
+          // No output: Xendit reports the gross request amount, while the quote's output is net of fees.
+          return [{ ref: d.payment_request_id, status: 'succeeded' }]
         }
         if (body.event === 'payment.failure' || d.status === 'FAILED') {
           return [{ ref: d.payment_request_id, status: 'failed', error: orkError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]

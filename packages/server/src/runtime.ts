@@ -30,6 +30,9 @@ export function createRuntime(config: OpenRampConfig): Runtime {
     if (ids.has(a.id)) throw new Error(`OpenRamp: adapter id ${a.id} is configured twice`)
     ids.add(a.id)
   }
+  if (config.treasury && !config.treasury.address) {
+    ;(config.logger ?? consoleLogger).warn('treasury has no `address`: quotes for app-custody withdrawals use a placeholder sender. Set treasury.address.')
+  }
   const base = config.baseUrl.replace(/\/$/, '')
   const adapters = new Map(config.adapters.map((a) => [a.id, a]))
   return {

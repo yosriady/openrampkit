@@ -15,11 +15,14 @@ Browser --(client secret)--> Worker (OpenRampKit) <--(x-app-key)-- Your backend
 ```ts
 // src/index.ts
 import { relay } from '@openrampkit/adapter-relay'
-import { cloudflareKvStore, createOpenRamp } from '@openrampkit/server'
-import type { CreateSessionInput, KVNamespaceLike } from '@openrampkit/server'
+import { createOpenRamp, durableObjectStore } from '@openrampkit/server'
+import type { CreateSessionInput, DurableObjectNamespaceLike } from '@openrampkit/server'
+
+// The store's Durable Object class must be exported from the Worker entry.
+export { OpenRampStore } from '@openrampkit/server'
 
 type Env = {
-  SESSIONS: KVNamespaceLike
+  OPENRAMP_STORE: DurableObjectNamespaceLike
   PUBLIC_URL: string
   ALLOWED_ORIGINS: string
   OPENRAMP_SECRET: string
@@ -34,7 +37,7 @@ function build(env: Env) {
   return createOpenRamp({
     secret: env.OPENRAMP_SECRET,
     baseUrl: env.PUBLIC_URL, // the Worker's own URL; the handler is mounted at the root
-    store: cloudflareKvStore(env.SESSIONS),
+    store: durableObjectStore(env.OPENRAMP_STORE),
     adapters: [relay({ apiKey: env.RELAY_API_KEY })],
     cors: { origins: env.ALLOWED_ORIGINS.split(',').map((s) => s.trim()) },
     ...(env.WEBHOOK_URL && env.WEBHOOK_SECRET ? { webhooks: { url: env.WEBHOOK_URL, secret: env.WEBHOOK_SECRET } } : {}),
@@ -69,9 +72,14 @@ main = "src/index.ts"
 compatibility_date = "2026-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-[[kv_namespaces]]
-binding = "SESSIONS"
-id = "replace-with-your-kv-namespace-id"
+# Sessions live in a Durable Object: strongly consistent, built into Workers, no extra service.
+[[durable_objects.bindings]]
+name = "OPENRAMP_STORE"
+class_name = "OpenRampStore"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["OpenRampStore"]
 
 [triggers]
 crons = ["* * * * *"]
@@ -81,11 +89,7 @@ PUBLIC_URL = "https://openramp-server.your-account.workers.dev"
 ALLOWED_ORIGINS = "https://app.example.com"
 ```
 
-Create the KV namespace and put its id in `wrangler.toml`:
-
-```bash
-npx wrangler kv namespace create SESSIONS
-```
+Nothing else to create: Wrangler creates the Durable Object class on the first deploy.
 
 ## Secrets
 
@@ -137,21 +141,17 @@ The cron needs no token: Cloudflare calls `scheduled()` directly. Check the runs
 
 If you prefer HTTP (for example an external scheduler), set `tasksToken` and call `POST {PUBLIC_URL}/tasks/sweep` with `Authorization: Bearer {tasksToken}`. See [HTTP routes](../api/http.md#post-tasks-sweep).
 
-::: warning Sweeps on KV
-The sweep keeps its outbox and its list of open sessions in KV. KV writes are not atomic, so an overlapping run can send a webhook twice. Your backend must deduplicate by event id.
+::: tip Sweeps on Durable Objects
+The outbox and the open-session list are single keys, each in its own Durable Object, so one sweep's reads and writes of a list are consistent. Two sweeps at the same time can still deliver a webhook twice (webhooks are at-least-once): your backend must deduplicate by event id.
 :::
 
 ## Provider webhooks
 
 Register `https://openramp-server.your-account.workers.dev/webhooks/{adapterId}` with each provider. Webhook calls carry no `Origin` header, so CORS does not affect them.
 
-## KV caveat
+## Why not Workers KV
 
-::: warning Workers KV is eventually consistent
-`cloudflareKvStore` checks the session version before each write, but KV reads can be stale for up to about 60 seconds across locations, and there is no atomic compare-and-set. Two requests that change the same session at nearly the same time (a webhook and a browser poll) can overwrite each other. KV also has a minimum TTL of 60 seconds, which the store respects.
-
-KV is fine for demos and low traffic. For production, use a store with an atomic version check: [Redis through Upstash](./stores.md#redis) works on Workers over HTTP. A Durable Object store is another option (not built in yet).
-:::
+`cloudflareKvStore` exists for demos. KV reads can be stale for up to about 60 seconds across locations and KV has no atomic compare-and-set, so a webhook and a browser poll that change the same session at nearly the same time can overwrite each other. Durable Objects are strongly consistent and are part of Workers too, so there is no reason to use KV in production.
 
 ## Custom domain
 

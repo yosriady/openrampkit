@@ -751,3 +751,22 @@ describe('relay live API', () => {
     expect(await a.health!({ fetch: globalThis.fetch, log: silentLog })).toEqual({ ok: true })
   }, 30_000)
 })
+
+describe('relay same-chain tx reuse', () => {
+  it('one transaction hash completes one payment only', async () => {
+    const TX = `0x${'ab'.repeat(32)}`
+    const log = { address: USDC['eip155:8453']!, topics: [TRANSFER, `0x${'0'.repeat(64)}`, `0x${'0'.repeat(24)}${DEST.slice(2).toLowerCase()}`], data: `0x${(12_500_000n).toString(16).padStart(64, '0')}` }
+    const { fetch } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: () => ({ result: { status: '0x1', logs: [log] } }) }])
+    const shared = memoryKV()
+    const a = relay()
+    const pay = async () => {
+      const ctx = makeCtx({ fetch, shared })
+      const q = await a.quote({ leg: walletLeg, amountIn: { amount: '12.5', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER }, deliverTo: { address: DEST } }, ctx)
+      const step = await a.start({ leg: walletLeg, quote: q }, ctx)
+      await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
+      return a.status!({ leg: walletLeg, ref: step.ref! }, ctx)
+    }
+    expect(await pay()).toMatchObject({ state: 'COMPLETED' })
+    expect(await pay()).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+  })
+})

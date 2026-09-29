@@ -595,6 +595,11 @@ export function relay(opts: RelayOptions = {}) {
       }
     }
     if (paid < need) return fail('The transaction does not pay the destination the quoted amount.')
+    // One transaction can complete one payment only: an old hash must not be reused for a new session.
+    const usedKey = `txused:${chain}:${rec.txHash!.toLowerCase()}`
+    const usedBy = await ctx.shared.get<string>(usedKey)
+    if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
+    if (!usedBy) await ctx.shared.put(usedKey, ref, 90 * 24 * 3600)
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
   }
 

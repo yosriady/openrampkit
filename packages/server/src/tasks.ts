@@ -16,6 +16,7 @@ import type { SessionRecord } from './store.js'
 const OUTBOX = 'outbox'
 const OPEN = 'open-sessions'
 const LIST_TTL_SEC = 60 * 60 * 24 * 14
+const MAX_LIST = 5000
 const RETRY_BASE_MS = 30_000
 const RETRY_MAX_MS = 60 * 60_000
 
@@ -31,7 +32,9 @@ async function readList(rt: Runtime, key: string): Promise<string[]> {
 }
 
 async function writeList(rt: Runtime, key: string, ids: string[]): Promise<void> {
-  await rt.store.kv.put(key, [...new Set(ids)].slice(-1000), LIST_TTL_SEC)
+  const unique = [...new Set(ids)]
+  if (unique.length > MAX_LIST) rt.log.warn(`${key} list is full; the oldest ${unique.length - MAX_LIST} ids are dropped (run the sweep more often)`)
+  await rt.store.kv.put(key, unique.slice(-MAX_LIST), LIST_TTL_SEC)
 }
 
 export async function trackOpenSession(rt: Runtime, id: string): Promise<void> {
@@ -121,7 +124,9 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
     }
     result.sessions.checked++
     try {
-      if (Date.now() > rec.expiresAt && !rec.active) {
+      // Expire when nothing started, or when the payment still waits for the user past the deadline.
+      const waitingForUser = rec.active?.legs[rec.active.index]?.step?.status === 'awaiting_user'
+      if (Date.now() > rec.expiresAt && (!rec.active || waitingForUser)) {
         expire(rec)
         await saveSession(rt, rec)
         await notify(rt, rec, 'session.expired')

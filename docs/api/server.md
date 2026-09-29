@@ -154,19 +154,22 @@ Use it in a service that does not have the `openramp` instance. See [Webhooks to
 ## Stores
 
 ```ts
-import { memoryStore, cloudflareKvStore, redisStore, fromNodeRedis, scopedKV, VersionConflictError } from '@openrampkit/server'
+import { memoryStore, durableObjectStore, OpenRampStore, cloudflareKvStore, redisStore, fromNodeRedis, fromNodeRedisV4, scopedKV, VersionConflictError } from '@openrampkit/server'
 ```
 
 | Export | Description |
 |---|---|
 | `memoryStore()` | In memory. Development and tests only. |
-| `cloudflareKvStore(ns, { sessionTtlSec? })` | Workers KV. Eventually consistent: the version check is best effort. |
+| `durableObjectStore(ns, { sessionTtlSec? })` | Cloudflare Durable Objects. Strongly consistent; the production choice on Workers. |
+| `OpenRampStore` | The Durable Object class for `durableObjectStore`. Export it from your Worker entry. |
+| `cloudflareKvStore(ns, { sessionTtlSec? })` | Workers KV, for demos. Eventually consistent: the version check is best effort. |
 | `redisStore(redis, { prefix?, sessionTtlSec? })` | Redis with an atomic version check (Lua). Works with `@upstash/redis` directly. |
-| `fromNodeRedis(client)` | Wraps an ioredis-style client for `redisStore` |
+| `fromNodeRedis(client)` | Wraps an ioredis client for `redisStore` |
+| `fromNodeRedisV4(client)` | Wraps a node-redis v4+ client for `redisStore` |
 | `scopedKV(store, prefix)` | A prefixed key-value view, as adapters get |
 | `VersionConflictError` | Thrown by `put` on a version mismatch |
 
-Types: `SessionStore`, `SessionRecord`, `ActiveLeg`, `StoredQuote`, `KVNamespaceLike`, `RedisLike`, `NodeRedisLike`, `RedisStoreOptions`. See [Session stores](../deploy/stores.md) for the interface and a custom store.
+Types: `SessionStore`, `SessionRecord`, `ActiveLeg`, `StoredQuote`, `DurableObjectNamespaceLike`, `DurableObjectStateLike`, `KVNamespaceLike`, `RedisLike`, `NodeRedisLike`, `NodeRedisV4Like`, `RedisStoreOptions`. See [Session stores](../deploy/stores.md) for the interface and a custom store.
 
 ## Other exports
 

@@ -243,8 +243,8 @@ export class RampController {
     const src = session.source
     const chains = this.withdrawChains()
     const chain = src && chains.includes(src.chain) ? src.chain : chains[0] ?? 'eip155:8453'
-    const allowedCur = session.allowedTargets?.fiat?.currencies
-    const local = currencyForCountry(session.country)
+    const allowedCur = session.allowedTargets?.fiat?.currencies?.map((c) => c.toUpperCase())
+    const local = currencyForCountry(session.country).toUpperCase()
     const cashCurrency = !allowedCur?.length || allowedCur.includes(local) ? local : allowedCur[0]!
     this.set({ target: { ...this.draftFor(chain, src), address: this.snap.walletAddress ?? '' }, cashCurrency })
     const tabs = this.withdrawTabs()

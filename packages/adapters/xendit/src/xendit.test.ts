@@ -117,7 +117,8 @@ describe('xendit adapter', () => {
     expect(await a.webhook!.verify(req('bad'), '', wctx)).toBe(false)
     expect(await a.webhook!.verify(req(), '', wctx)).toBe(false)
     const cap = await a.webhook!.parse(JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED', request_amount: 150000, currency: 'IDR' } }), wctx)
-    expect(cap).toEqual([{ ref: 'pr-1', status: 'succeeded', output: { amount: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }])
+    // no output: Xendit's request_amount is gross; the quote's net output stays the reported result
+    expect(cap).toEqual([{ ref: 'pr-1', status: 'succeeded' }])
     const fail = await a.webhook!.parse(JSON.stringify({ event: 'payment.failure', data: { payment_request_id: 'pr-1', status: 'FAILED', failure_code: 'X' } }), wctx)
     expect(fail[0]).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
     expect(await a.webhook!.parse(JSON.stringify({ event: 'other', data: {} }), wctx)).toEqual([])
