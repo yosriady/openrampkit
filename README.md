@@ -53,28 +53,50 @@ It is a single `Request -> Response` handler, so you can deploy it as a Cloudfla
 ## Quick start (Next.js)
 
 ```ts
-// app/api/openramp/[...path]/route.ts
+// lib/openramp.ts (a Next.js route file may only export route handlers, so keep the instance here)
 import { createOpenRamp } from '@openrampkit/server'
 import { relay } from '@openrampkit/adapter-relay'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 
 export const openramp = createOpenRamp({
-  secret: process.env.OPENRAMP_SECRET!,
+  secret: process.env.OPENRAMP_SECRET!, // 32+ characters
   baseUrl: `${process.env.PUBLIC_URL}/api/openramp`,
   adapters: [relay(), mockAdapter()],
+  webhooks: { url: `${process.env.PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET! },
 })
+```
+
+```ts
+// app/api/openramp/[...path]/route.ts
+import { openramp } from '@/lib/openramp'
+
+export const dynamic = 'force-dynamic'
 export const { GET, POST, OPTIONS } = openramp.nextHandlers()
 ```
 
 ```ts
-// your backend decides who the user is and where the money goes
-const { clientSecret } = await openramp.sessions.create({
-  userId: user.id,
-  destination: { type: 'crypto', chain: 'eip155:8453', token: USDC_BASE, address: user.depositAddress },
-})
+// app/api/deposit-session/route.ts: your backend decides who the user is and where the money goes
+import { openramp } from '@/lib/openramp'
+
+export async function POST() {
+  const user = await getUser() // your auth
+  const session = await openramp.sessions.create({
+    userId: user.id,
+    destination: {
+      type: 'crypto',
+      chain: 'eip155:8453', // Base
+      token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC on Base
+      address: user.depositAddress,
+    },
+  })
+  return Response.json(session) // { id, clientSecret, expiresAt }
+}
 ```
 
 ```tsx
+'use client'
+import { DepositButton, OpenRampProvider } from '@openrampkit/react'
+
 <OpenRampProvider baseUrl="/api/openramp">
   <DepositButton getClientSecret={() => fetch('/api/deposit-session', { method: 'POST' }).then((r) => r.json()).then((j) => j.clientSecret)} />
 </OpenRampProvider>
@@ -86,6 +108,8 @@ Without React:
 import { openDeposit } from '@openrampkit/web'
 openDeposit({ baseUrl: '/api/openramp', clientSecret })
 ```
+
+Credit balances from the signed `session.completed` webhook (`openramp.webhooks.verify(req, rawBody)`), not from the browser. See the docs: Guide > Quick start and Webhooks.
 
 ## Develop
 
