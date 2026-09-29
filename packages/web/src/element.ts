@@ -333,7 +333,7 @@ export class OpenRampModal extends LitElement {
     if (s.error) return s.error.message
     if (s.screen === 'step' && s.session) {
       const step = s.session.step
-      const legs = step.progress?.legs.map((l, i) => `${i + 1}. ${titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
+      const legs = step.progress?.legs.map((l, i) => `${i + 1}. ${l.provider ?? titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
       return [m.stepTitle[step.state] ?? '', ...legs].join('. ')
     }
     return ''
@@ -701,7 +701,7 @@ export class OpenRampModal extends LitElement {
           ${q.badges?.includes('best_price') ? html`<span class="badge success">${m.bestPrice}</span>` : nothing}
           ${q.badges?.includes('fastest') ? html`<span class="badge">${m.fastest}</span>` : nothing}
         </span>
-        <span class="row-sub">${sub.join(' · ')}</span>
+        <span class="row-sub wrap">${sub.join(' · ')}</span>
       </span>
       <span class="row-end">
         ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output)}</strong>` : nothing}
@@ -768,7 +768,7 @@ export class OpenRampModal extends LitElement {
           <span class="dot ${l.status}" aria-hidden="true">${l.status === 'succeeded' ? icons.check : i + 1}</span>
           <span>
             <span class="sr-only">${i + 1}.</span>
-            <strong>${titleCase(l.adapterId)}</strong>:
+            <strong>${l.provider ?? titleCase(l.adapterId)}</strong>:
             <span class="leg-status">${m.legStatus[l.status] ?? l.status}</span>
             ${l.txHash ? html`<span class="muted"> ${shortAddress(l.txHash)}</span>` : nothing}
           </span>

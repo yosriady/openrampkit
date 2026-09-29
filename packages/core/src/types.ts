@@ -244,7 +244,7 @@ export type Step = {
   surface?: Surface
   transitions: Transition[]
   error?: OrkError
-  progress?: { legs: Array<{ adapterId: string; legId: string; status: LegStatus; txHash?: string }> }
+  progress?: { legs: Array<{ adapterId: string; legId: string; provider?: string; status: LegStatus; txHash?: string }> }
   expiresAt?: string
 }
 

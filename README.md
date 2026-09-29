@@ -10,6 +10,18 @@ RainbowKit for money movement. An open-source deposit and withdraw kit: one moda
 
 > Status: prototype (phases 0 to 3 of `docs/SPEC.md`). APIs will change.
 
+## Screenshots
+
+| Use Cash (Vietnam) | Quote | VietQR payment | Complete |
+|---|---|---|---|
+| ![](docs/screenshots/01-vn-cash-methods.png) | ![](docs/screenshots/03-vn-quote.png) | ![](docs/screenshots/04-vn-qr.png) | ![](docs/screenshots/06-vn-complete.png) |
+
+| Pay from wallet | Transfer crypto | Merchant QRIS (dark) | Phone sheet |
+|---|---|---|---|
+| ![](docs/screenshots/11-wallet-amount.png) | ![](docs/screenshots/21-transfer-address.png) | ![](docs/screenshots/41-merchant-qr-dark.png) | ![](docs/screenshots/50-mobile-sheet.png) |
+
+All flows run on mock providers in `examples/next-demo`. Recapture with `npx playwright test e2e/screens.spec.ts`.
+
 ## Packages
 
 | Package | What |

@@ -331,6 +331,7 @@ export const styles = css`
     text-overflow: ellipsis;
   }
   .row-sub {
+    display: block;
     margin-top: 2px;
     font-size: 13px;
     color: var(--ork-color-text-secondary);
@@ -338,7 +339,8 @@ export const styles = css`
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .row-sub.reason {
+  .row-sub.reason,
+  .row-sub.wrap {
     white-space: normal;
   }
   .row-end {
@@ -411,6 +413,9 @@ export const styles = css`
     text-align: center;
     outline: none;
     padding: 0;
+  }
+  .amount-input:focus-visible {
+    outline: none;
   }
   .amount-input::placeholder {
     color: var(--ork-color-text-muted);

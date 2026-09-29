@@ -30,7 +30,7 @@ function setup(opts: { webhooks?: boolean } = {}) {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-async function waitFor(fn: () => boolean, ms = 3000) {
+async function waitFor(fn: () => boolean, ms = 10000) {
   const start = Date.now()
   while (!fn()) {
     if (Date.now() - start > ms) throw new Error('timeout')

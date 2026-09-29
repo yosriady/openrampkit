@@ -338,7 +338,7 @@ export function createOpenRamp(config: OpenRampConfig) {
     const act = rec.active!
     const leg = act.legs[act.index]!
     const ls = leg.step!
-    const progress = { legs: act.legs.map((l) => ({ adapterId: l.adapterId, legId: l.legId, status: l.step?.status ?? 'pending', ...(l.step?.txHash ? { txHash: l.step.txHash } : {}) })) }
+    const progress = { legs: act.legs.map((l) => ({ adapterId: l.adapterId, legId: l.legId, provider: adapters.get(l.adapterId)?.name ?? l.adapterId, status: l.step?.status ?? 'pending', ...(l.step?.txHash ? { txHash: l.step.txHash } : {}) })) }
     const allDone = act.legs.every((l) => l.step?.status === 'succeeded')
     if (allDone) return { sessionId: rec.id, state: 'COMPLETED', transitions: [], progress, legIndex: act.index }
     return {
