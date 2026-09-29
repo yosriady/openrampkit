@@ -1,0 +1,70 @@
+import type { Adapter, Logger } from '@openrampkit/adapter'
+import type { Destination, Direction, PollSpec, RegionPolicy, SurfaceKind } from '@openrampkit/core'
+import type { SessionStore } from './store.js'
+
+export type CreateSessionInput = {
+  userId: string
+  direction?: Direction
+  destination: Destination
+  country?: string
+  region?: string
+  email?: string
+  locale?: string
+  amountBounds?: { min?: string; max?: string; currency: string }
+  allowedMethods?: string[]
+  metadata?: Record<string, string>
+  /** Minutes until the session expires (default 30) */
+  ttlMinutes?: number
+}
+
+export type OpenRampConfig = {
+  /** Secret used to sign start URLs. At least 32 characters. */
+  secret: string
+  /** Public URL where this handler is mounted, e.g. https://app.example.com/api/openramp */
+  baseUrl: string
+  adapters: Adapter[]
+  store?: SessionStore
+  livemode?: boolean
+  policy?: {
+    maxLegs?: 1 | 2
+    regions?: RegionPolicy
+    methodPriority?: Record<string, string[]>
+    disabledMethods?: string[]
+  }
+  /** Signed webhooks to the app backend */
+  webhooks?: { url: string; secret: string }
+  /** Resolve the user's country. Defaults to Cloudflare / Vercel geo headers. */
+  geo?: (req: Request) => { country?: string; region?: string } | undefined
+  /**
+   * Optional: let the browser create sessions through `POST {baseUrl}/sessions`.
+   * Return the session input for this request (the app decides userId and destination), or null to refuse.
+   */
+  authorize?: (req: Request, body: unknown) => Promise<CreateSessionInput | null>
+  /** Allowed origins for CORS. Default: same origin only. */
+  cors?: { origins: string[] | '*' }
+  logger?: Logger
+  /** Where providers return the user. Default: `{baseUrl}/return` which closes the tab. */
+  returnUrl?: string
+  fetch?: typeof fetch
+  /** Timeouts in ms. Defaults: quote 9000, webhook delivery 4000. */
+  timeouts?: { quote?: number; webhook?: number }
+}
+
+export const consoleLogger: Logger = {
+  debug: () => {},
+  info: (m, d) => console.info(`[openramp] ${m}`, d ?? ''),
+  warn: (m, d) => console.warn(`[openramp] ${m}`, d ?? ''),
+  error: (m, d) => console.error(`[openramp] ${m}`, d ?? ''),
+}
+
+export const ALL_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'OTP', 'FORM']
+
+/** Default poll spec for steps that wait on a provider or a chain */
+export const DEFAULT_POLL: PollSpec = { intervalMs: 2500, backoff: 1.2, maxIntervalMs: 10_000, giveUpAfterMs: 30 * 60_000 }
+
+export const MAX_STORED_QUOTES = 20
+export const MAX_QUOTED_PATHWAYS = 5
+export const START_URL_TTL_MS = 10 * 60_000
+export const IDEMPOTENCY_TTL_SEC = 60 * 60 * 24
+export const REF_INDEX_TTL_SEC = 60 * 60 * 24 * 30
+export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
