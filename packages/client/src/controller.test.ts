@@ -524,6 +524,22 @@ describe('openSurface', () => {
     expect(h.events).toHaveLength(n)
   })
 
+  it('never opens a javascript: or data: URL', async () => {
+    const win = { open: vi.fn(() => null), location: { href: 'https://app.example/' } }
+    vi.stubGlobal('window', win)
+    for (const surface of [
+      { kind: 'REDIRECT' as const, url: 'javascript:alert(1)', popup: true },
+      { kind: 'REDIRECT' as const, url: 'gcash://pay', popup: true },
+      { kind: 'DEEPLINK' as const, url: 'javascript:alert(1)', appName: 'X' },
+      { kind: 'DEEPLINK' as const, url: 'data:text/html,x', appName: 'X' },
+    ]) {
+      const { c } = await withSurface(surface)
+      c.openSurface()
+    }
+    expect(win.open).not.toHaveBeenCalled()
+    expect(win.location.href).toBe('https://app.example/')
+  })
+
   it('works without a window (server side)', async () => {
     const { c } = await withSurface({ kind: 'DEEPLINK', url: 'x://y', appName: 'X' })
     expect(() => c.openSurface()).not.toThrow()

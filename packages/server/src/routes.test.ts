@@ -130,7 +130,7 @@ describe('sessions', () => {
 
   it('expires an open session after its TTL and sends session.expired', async () => {
     const sent: string[] = []
-    const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w' }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('ok') } })
+    const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('ok') } })
     vi.useFakeTimers({ now: Date.now() })
     try {
       const s = await ramp.sessions.create({ userId: 'u', destination: DEST, ttlMinutes: 1 })
@@ -269,7 +269,7 @@ describe('provider webhooks in', () => {
 
   it('verifies, applies, completes, and ignores repeats and unknown refs', async () => {
     const sent: string[] = []
-    const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w' }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('ok') } }, [hooked])
+    const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('ok') } }, [hooked])
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
     await call(`/sessions/${s.id}/plan`, { method: 'POST', secret: s.clientSecret, body: '{}' })
     const q = await (await call(`/sessions/${s.id}/quotes`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ method: 'card', amount: '10' }) })).json()
@@ -290,7 +290,7 @@ describe('provider webhooks in', () => {
 
   it('a failed provider event fails the session and notifies', async () => {
     const sent: string[] = []
-    const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w' }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('no', { status: 500 }) } }, [hooked])
+    const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('no', { status: 500 }) } }, [hooked])
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
     await call(`/sessions/${s.id}/plan`, { method: 'POST', secret: s.clientSecret, body: '{}' })
     const q = await (await call(`/sessions/${s.id}/quotes`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ method: 'card', amount: '10' }) })).json()

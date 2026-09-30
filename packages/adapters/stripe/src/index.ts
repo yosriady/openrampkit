@@ -359,7 +359,12 @@ export function stripe(opts: StripeOptions) {
     },
 
     webhook: {
-      async verify(req, rawBody) {
+      async verify(req, rawBody, ctx) {
+        // An empty key would let anyone sign (for example an unset environment variable).
+        if (!opts.webhookSecret) {
+          ctx.log.warn('stripe: webhookSecret is not set; rejecting webhook')
+          return false
+        }
         const header = req.headers.get('stripe-signature')
         if (!header) return false
         const { t, v1 } = parseStripeSignature(header)

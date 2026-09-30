@@ -1,7 +1,7 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, isLegTerminal, isTerminal, orkError } from '@openrampkit/core'
+import { OrkException, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
 import type { LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
 import { DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
@@ -49,6 +49,31 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
     progress,
     expiresAt: new Date(rec.expiresAt).toISOString(),
   }
+}
+
+/**
+ * A step whose surface URL is not safe for the browser becomes a failed step. REDIRECT, IFRAME and a
+ * PROVIDER_SDK `redirectUrl` need `https:` (`http:` too in test mode); DEEPLINK may use an app scheme.
+ * `javascript:`, `data:` and similar URLs never reach the client.
+ */
+export function checkSurfaceUrls(rt: Runtime, rec: SessionRecord, ls: LegStep): LegStep {
+  const s = ls.surface
+  if (!s) return ls
+  const web = (u: unknown) => isWebUrl(u, { allowHttp: !rec.livemode }) || (typeof u === 'string' && u.startsWith(`${rt.base}/`))
+  const ok =
+    s.kind === 'REDIRECT'
+      ? web(s.url)
+      : s.kind === 'IFRAME'
+        ? web(s.url) && web(s.origin)
+        : s.kind === 'DEEPLINK'
+          ? isSafeLinkUrl(s.url)
+          : s.kind === 'PROVIDER_SDK' && s.params.redirectUrl !== undefined
+            ? web(s.params.redirectUrl)
+            : true
+  if (ok) return ls
+  rt.log.error('adapter returned a surface URL that is not safe; the leg fails', { sessionId: rec.id, kind: s.kind })
+  const { surface: _unsafe, ...rest } = ls
+  return { ...rest, state: 'FAILED', status: 'failed', transitions: [], error: orkError('PROVIDER_UNAVAILABLE', { recovery: 'choose_other' }) }
 }
 
 /** Replace a provider REDIRECT with a signed, popup-safe start URL on our own origin. */
@@ -105,8 +130,11 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   })
   const treasury = rt.config.treasury
   if (!treasury) return failed('Withdrawals are not set up for this app yet.')
-  // Mark before sending: at most one send per step from our side. The key lets the app dedupe retries.
+  // Mark and save before sending: at most one send per step from our side. When two requests start
+  // this step at the same time, the version check fails one of the saves (409), so only one sends.
+  // The key lets the app dedupe retries.
   leg.treasurySent = [...(leg.treasurySent ?? []), key]
+  await saveSession(rt, rec)
   let hash: string
   try {
     hash = (await treasury.send({ sessionId: rec.id, userId: rec.userId, chain, txs, idempotencyKey: key })).hash
@@ -131,7 +159,7 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
 export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<void> {
   const act = rec.active!
   const leg = act.legs[i]!
-  const wrapped = await wrapSurface(rt, rec, ls)
+  const wrapped = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
   leg.step = wrapped
   if (wrapped.ref && wrapped.ref !== leg.ref) {
     leg.ref = wrapped.ref

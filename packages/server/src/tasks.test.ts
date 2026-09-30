@@ -32,7 +32,7 @@ describe('webhook outbox and sweep', () => {
       return new Response('x', { status: up ? 200 : 503 })
     }
     vi.useFakeTimers({ now: Date.now() })
-    const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w' }, fetch: fetchFn })
+    const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: fetchFn })
     await ramp.sessions.create({ userId: 'u', destination: DEST })
     expect(seen).toEqual(['session.created'])
     // not due yet
@@ -48,7 +48,7 @@ describe('webhook outbox and sweep', () => {
   it('drops a webhook after maxAttempts', async () => {
     const errors: string[] = []
     vi.useFakeTimers({ now: Date.now() })
-    const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w', maxAttempts: 2 }, fetch: async () => new Response('x', { status: 500 }), logger: { ...quiet, error: (m) => errors.push(m) } })
+    const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32), maxAttempts: 2 }, fetch: async () => new Response('x', { status: 500 }), logger: { ...quiet, error: (m) => errors.push(m) } })
     await ramp.sessions.create({ userId: 'u', destination: DEST })
     vi.setSystemTime(Date.now() + 31_000)
     expect((await ramp.sweep()).webhooks).toMatchObject({ dropped: 1, pending: 0 })
@@ -58,7 +58,7 @@ describe('webhook outbox and sweep', () => {
   it('expires idle sessions and notifies; completed sessions leave the open list', async () => {
     const seen: string[] = []
     vi.useFakeTimers({ now: Date.now() })
-    const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w' }, fetch: async (_u, init) => (seen.push(JSON.parse(String(init?.body)).type), new Response('ok')) })
+    const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => (seen.push(JSON.parse(String(init?.body)).type), new Response('ok')) })
     const s = await ramp.sessions.create({ userId: 'u', destination: DEST, ttlMinutes: 1 })
     expect((await ramp.sweep()).sessions).toMatchObject({ checked: 1, expired: 0, open: 1 })
     vi.setSystemTime(Date.now() + 2 * 60_000)

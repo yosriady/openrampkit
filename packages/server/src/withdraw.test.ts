@@ -29,7 +29,7 @@ function make(extra: Partial<OpenRampConfig> = {}, adapters = [mockAdapter({ set
     if (String(input) === HOOK) hooks.push(JSON.parse(String(init?.body)) as Hook)
     return new Response('{}')
   }
-  const ramp = createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger: quiet, webhooks: { url: HOOK, secret: 'whsec' }, fetch: fetchHooks, ...extra })
+  const ramp = createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger: quiet, webhooks: { url: HOOK, secret: 'whsec_test_0123456789' }, fetch: fetchHooks, ...extra })
   const call = async <T = unknown>(path: string, secret: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
     const headers = new Headers({ authorization: `Bearer ${secret}` })
     if (body !== undefined) headers.set('content-type', 'application/json')

@@ -32,7 +32,8 @@ export function createOpenRamp(config: OpenRampConfig) {
       res = await route(rt, req)
     } catch (e) {
       if (e instanceof OrkException) res = errorResponse(e.error, e.status)
-      else if (e instanceof SyntaxError) res = errorResponse(orkError('BAD_REQUEST', { message: e.message }), 400)
+      // No message from the error: a parse error can quote a provider response.
+      else if (e instanceof SyntaxError) res = errorResponse(orkError('BAD_REQUEST'), 400)
       else {
         rt.log.error('unhandled error', { error: e instanceof Error ? (e.stack ?? e.message) : String(e) })
         res = errorResponse(orkError('INTERNAL'), 500)

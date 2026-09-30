@@ -487,6 +487,18 @@ describe('other surfaces (fake client)', () => {
     expect(f.getAttribute('style')).toBe('height:560px')
   })
 
+  it('IFRAME and PROVIDER_SDK never render a javascript: or data: URL', async () => {
+    for (const url of ['javascript:alert(1)', 'data:text/html,<script>alert(1)</script>']) {
+      const h = await mountStep({ kind: 'IFRAME', url, origin: 'https://p.example', provider: 'Prov' })
+      expect(h.$('iframe')).toBeNull()
+      expect(h.text()).toContain('Prov could not load.')
+    }
+    const open = vi.spyOn(window, 'open').mockImplementation((() => null) as never)
+    const sdk = await mountStep({ kind: 'PROVIDER_SDK', provider: 'coinbase_pay', params: { redirectUrl: 'javascript:alert(1)' } })
+    expect(sdk.text()).toContain('This step needs the Coinbase Pay SDK.')
+    expect(open).not.toHaveBeenCalled()
+  })
+
   it('PROVIDER_SDK shows that it is not supported', async () => {
     const h = await mountStep({ kind: 'PROVIDER_SDK', provider: 'coinbase_pay', params: {} })
     expect(h.text()).toContain('This step needs the Coinbase Pay SDK.')

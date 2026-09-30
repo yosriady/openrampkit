@@ -166,6 +166,10 @@ describe('swapped adapter', () => {
     expect(await a.webhook!.verify(req(broadcast, sign(broadcast)), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(true)
     expect(await a.webhook!.verify(req(broadcast, sign('tampered')), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
     expect(await a.webhook!.verify(req(broadcast), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
+    // An empty key must not accept a signature made with an empty key.
+    const unset = swapped({ publicKey: PK, secretKey: '' })
+    const emptySig = createHmac('sha256', '').update(broadcast).digest('base64')
+    expect(await unset.webhook!.verify(req(broadcast, emptySig), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
     expect(await a.webhook!.parse(broadcast, { log: silentLog, shared: memoryKV(), fetch })).toEqual([
       { ref: 'u_42.abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])

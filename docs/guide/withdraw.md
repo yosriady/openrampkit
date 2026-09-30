@@ -145,7 +145,7 @@ createOpenRamp({
 
 What the server does:
 
-- It marks the step as sent before it calls the hook. It calls the hook at most once per step, and the key lets you drop a retry on your side.
+- It marks the step as sent and saves the session (with the version check) before it calls the hook. When two requests start the same step at the same time, one save fails with `409 CONFLICT`, so only one request calls the hook. It calls the hook at most once per step, and the key lets you drop a retry on your side.
 - It reports the hash to the adapter (the leg's `tx_hash` transition), or it waits for the provider to see the transfer.
 - When the hook throws, the leg fails with `PAYMENT_FAILED` ("The withdrawal could not be sent. Contact support.").
 - Without a `treasury` hook, every method of an `app` session is in "Not available" with "Withdrawals are not set up for this app yet."

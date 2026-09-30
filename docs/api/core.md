@@ -141,6 +141,15 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 
 Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED` and `TARGET_NOT_ALLOWED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
 
+## URL checks
+
+```ts
+isWebUrl(url, { allowHttp? })  // true for an absolute https: URL (http: too with allowHttp)
+isSafeLinkUrl(url)             // true for a web URL or an app scheme; false for javascript:, data:, vbscript:, blob:, file:, about:
+```
+
+The server, the client and the web component use them on surface URLs. See [Surface URLs](../guide/security.md#surface-urls).
+
 ## Flow table
 
 | Export | Description |

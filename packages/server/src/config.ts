@@ -64,7 +64,7 @@ export type OpenRampConfig = {
   /** Timeouts in ms. Defaults: quote 9000, webhook delivery 4000. */
   timeouts?: { quote?: number; webhook?: number }
   /**
-   * Per-session request limits for routes that call provider APIs (plan, quotes, target).
+   * Per-session request limits for routes that call provider APIs (plan, quotes, target, select, transitions).
    * Default 60 per minute. The counter lives in the store's KV space (best effort on non-atomic stores).
    */
   limits?: { providerCallsPerMinute?: number }
@@ -116,3 +116,7 @@ export const START_URL_TTL_MS = 10 * 60_000
 export const IDEMPOTENCY_TTL_SEC = 60 * 60 * 24
 export const REF_INDEX_TTL_SEC = 60 * 60 * 24 * 30
 export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
+/** Largest JSON body the browser routes accept */
+export const MAX_JSON_BODY_BYTES = 64 * 1024
+/** Largest provider webhook body */
+export const MAX_WEBHOOK_BODY_BYTES = 1024 * 1024

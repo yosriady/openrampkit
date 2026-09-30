@@ -46,14 +46,15 @@ Every error is JSON:
 
 | Status | When |
 |---|---|
-| `400` | Body is not JSON (`BAD_REQUEST`), a target or source that is not valid, or an adapter refused the input |
+| `400` | Body is not JSON (`BAD_REQUEST`), a field that is not valid (amount, address, source, target, `Idempotency-Key`), or an adapter refused the input |
 | `401` | Bad client secret, bad start URL signature, bad webhook signature, bad tasks token, or `authorize` returned `null` |
 | `403` | Withdraw target refused: `TARGET_NOT_ALLOWED` or `ADDRESS_REJECTED` |
 | `404` | Unknown route or adapter (`NOT_FOUND`) |
 | `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; or a concurrent change (`CONFLICT`) |
-| `410` | Quote expired (`QUOTE_EXPIRED`), or start URL expired (plain text) |
+| `410` | Quote expired (`QUOTE_EXPIRED`), session past its deadline (`SESSION_EXPIRED`), or start URL expired (plain text) |
+| `413` | The body is too large (`BAD_REQUEST`): more than 64 KiB for the browser routes, more than 1 MiB for provider webhooks |
 | `422` | No pathway for the method (`NO_QUOTES`), an amount outside `amountBounds` (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`), or an adapter error |
-| `429` | Provider rate limit (`RATE_LIMITED`) |
+| `429` | Provider rate limit, or the per-session limit (`RATE_LIMITED`) |
 | `500` | Unexpected error (`INTERNAL`); the details are logged, not returned |
 | `502`, `503`, `504` | Provider unavailable or timed out (`PROVIDER_UNAVAILABLE`). `503` also when `screenAddress` throws. |
 
@@ -174,15 +175,15 @@ Body:
 | Field | Required | Description |
 |---|---|---|
 | `method` | yes | A method from the plan |
-| `amount` | yes | Decimal string. `"0"` is allowed for `transfer`. |
+| `amount` | yes | Decimal string, for example `"25.50"` (digits, then an optional dot and digits). `"0"` is allowed for `transfer`. |
 | `amountSide` | no | `'source'` (default) or `'destination'` (one-leg pathways only) |
-| `source` | no | For `wallet` and `transfer`: the token the user pays with |
+| `source` | no | For `wallet` and `transfer`: the token the user pays with (`{ chain, token }`, a CAIP-2 chain and a token address or `native`) |
 
 The server plans first if needed. It quotes up to 5 available pathways for the method in parallel.
 
 For a withdraw session, the source is the session's `source`, and `body.source` is ignored.
 
-Response `200`: `{ "quotes": Quote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
+Response `200`: `{ "quotes": Quote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`, or when a field is not valid; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
 
 ## POST /sessions/:id/select
 
@@ -190,7 +191,7 @@ Headers: `Idempotency-Key: <random>` (recommended).
 
 Body: `{ "quoteId": "q_...", "walletAddress": "0x..." }` (`walletAddress` optional).
 
-The server checks `amountBounds` again, starts the first leg and returns the `PublicSession` with the new step. A `REDIRECT` surface URL is replaced by a start URL. Errors: `410 QUOTE_EXPIRED` when the quote is unknown or expired; `409` while a payment is in progress; `422 AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH` outside the bounds. If the first leg fails to start, the active pathway is rolled back.
+The server checks `amountBounds` again, starts the first leg and returns the `PublicSession` with the new step. A `REDIRECT` surface URL is replaced by a start URL. A surface URL that is not safe fails the leg (see [Surface URLs](../guide/security.md#surface-urls)). Errors: `410 QUOTE_EXPIRED` when the quote is unknown or expired; `409` while a payment is in progress; `422 AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH` outside the bounds. If the first leg fails to start, the active pathway is rolled back.
 
 ## POST /sessions/:id/transitions/:name
 
@@ -205,7 +206,17 @@ Response `200`: the `PublicSession`.
 
 ### Idempotency
 
-When `Idempotency-Key` is present, the server stores the response under `(session, key)` for 24 hours. A repeat returns the stored status and body with `idempotent-replay: true`.
+When `Idempotency-Key` is present, the server stores the response under `(session, route, key)` for 24 hours. The route is `select` or `transitions/{name}`. A repeat on the same route returns the stored status and body with `idempotent-replay: true`. The same key on another route does not replay. The key must have 1 to 255 printable ASCII characters (else `400`).
+
+### Session deadline
+
+After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work.
+
+### Limits
+
+- A JSON body can have at most 64 KiB, and a provider webhook body at most 1 MiB. A larger body gets `413`.
+- `walletAddress` (in `/plan`, `/target` and `/select`) must be 8 to 128 printable characters.
+- `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` call provider APIs. Together they count against `limits.providerCallsPerMinute` per session (default 60). Over the limit: `429 RATE_LIMITED`.
 
 ## GET /start/:sessionId.:token.:sig
 

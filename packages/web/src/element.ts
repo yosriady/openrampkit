@@ -4,7 +4,7 @@ import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
-import { methodName } from '@openrampkit/core'
+import { isWebUrl, methodName } from '@openrampkit/core'
 import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
@@ -1004,6 +1004,8 @@ export class OpenRampModal extends LitElement {
               <button class="btn secondary" type="button" ?disabled=${s.busy} @click=${() => void c.fire('restart')}>${m.chooseOther}</button>
             </div>`
         }
+        // Only http(s) pages (or the inert about:blank): a `javascript:` or `data:` src would run in this page's context.
+        if (surface.url !== 'about:blank' && !isWebUrl(surface.url, { allowHttp: true })) return html`<div class="notice error" role="alert">${m.sdkFailed(provider)}</div>`
         return html`<iframe
           class="provider"
           src=${surface.url}
@@ -1019,7 +1021,7 @@ export class OpenRampModal extends LitElement {
           return html`<div class="provider-sdk" data-provider=${surface.provider}></div>
             ${this._sdkError ? html`<div class="notice error" role="alert">${m.sdkFailed(name)}</div>` : nothing}`
         }
-        const redirectUrl = typeof surface.params.redirectUrl === 'string' ? surface.params.redirectUrl : undefined
+        const redirectUrl = isWebUrl(surface.params.redirectUrl, { allowHttp: true }) ? surface.params.redirectUrl : undefined
         if (redirectUrl) {
           return html`<p class="hint">${m.redirectHint(name)}</p>
             <button class="btn" type="button" @click=${() => window.open(redirectUrl, '_blank')}>${m.continueTo(name)}</button>`

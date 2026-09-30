@@ -19,7 +19,7 @@ export function erc20TransferData(to: string, amountBase: string): string {
 }
 
 /** The fields of `eth_getTransactionReceipt` that the checks read */
-export type EvmReceipt = { status?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
+export type EvmReceipt = { status?: string; blockNumber?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
 
 /**
  * One JSON-RPC call. Network and HTTP errors become PROVIDER_UNAVAILABLE (502, or 504 on a timeout),
