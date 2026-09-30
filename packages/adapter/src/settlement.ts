@@ -3,7 +3,7 @@
 // Web-standard APIs only (fetch), no viem.
 
 import { OrkException, orkError } from '@openrampkit/core'
-import type { ContractCall, TxRequest } from '@openrampkit/core'
+import type { ContractCall, EvmTxRequest } from '@openrampkit/core'
 import { evmRpc } from './evm.js'
 import type { Logger } from './index.js'
 import { hexToBytes, keccak256 } from './keccak.js'
@@ -177,7 +177,7 @@ export function erc20ApproveData(spender: string, amountBase: bigint): string {
  * The WALLET_TX transactions that pay a session through the settlement contract:
  * `approve(contract, amount)` on the token, then `settle(...)` on the contract.
  */
-export function buildSettlementTxs(input: SettlementParams & { chainId: number; contract: string; intent?: SettlementIntent }): TxRequest[] {
+export function buildSettlementTxs(input: SettlementParams & { chainId: number; contract: string; intent?: SettlementIntent }): EvmTxRequest[] {
   return [
     { to: input.token, data: erc20ApproveData(input.contract, input.amount), chainId: input.chainId },
     { to: input.contract, data: encodeSettle(input, input.intent), chainId: input.chainId },

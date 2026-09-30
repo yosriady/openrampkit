@@ -3,7 +3,7 @@
 
 import { POLL as POLLS, awaitPoll, createAdapter, erc20PaidTo, erc20TransferData, evmRpc } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent } from '@openrampkit/adapter'
-import { CHAINS, OrkException, USDC, bps, chainName, evmChainId, fromScaled, minorUnits, mulRatio, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
+import { CHAINS, OrkException, USDC, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isUsdc, minorUnits, mulRatio, nativeDecimals, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
@@ -58,13 +58,33 @@ function symbolOf(a: { chain: string; token: string; symbol?: string }): string 
   if (a.symbol) return a.symbol
   const t = a.token.toLowerCase()
   if (t === 'native' || t === '0x0000000000000000000000000000000000000000' || t === '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee') return CHAINS[a.chain]?.nativeSymbol ?? 'ETH'
-  return USDC[a.chain] === t ? 'USDC' : 'TOKEN'
+  return isUsdc(a.chain, a.token) ? 'USDC' : 'TOKEN'
+}
+
+const BASE58_ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+
+/** A stable fake address for a seed, in the format of `chain` (Solana: base58 of 32 bytes; else EVM). Test data only. */
+function fakeAddressFor(chain: string, seed: string): string {
+  let h = 0n
+  const bits = isSolanaChain(chain) ? 256n : 160n
+  for (const c of seed) h = (h * 131n + BigInt(c.charCodeAt(0))) % (1n << bits)
+  if (!isSolanaChain(chain)) return `0x${h.toString(16).padStart(40, '0')}`
+  // Set the top bit so that the address always has 43 or 44 characters.
+  let n = h | (1n << 255n)
+  let out = ''
+  while (n > 0n) {
+    out = BASE58_ALPHABET[Number(n % 58n)]! + out
+    n /= 58n
+  }
+  return out
 }
 
 const POLL: PollSpec = POLLS.dev
 const ORDER_TTL_SEC = 24 * 60 * 60
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 }
 const usdcChains = Object.fromEntries(Object.entries(USDC).map(([c, t]) => [c, [t]]))
+/** The mock offramp asks for an ERC-20 transfer, so it takes EVM USDC only */
+const evmUsdcChains = Object.fromEntries(Object.entries(USDC).filter(([c]) => isEvmChain(c)).map(([c, t]) => [c, [t]]))
 
 type MockOrder = {
   status: 'awaiting' | 'paid' | 'failed'
@@ -179,7 +199,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       id: 'offramp',
       kind: 'crypto_offramp',
       methods: MOCK_PAYOUT_METHODS,
-      from: { asset: { kind: 'crypto', chains: usdcChains }, location: ['user_wallet', 'address'] },
+      from: { asset: { kind: 'crypto', chains: evmUsdcChains }, location: ['user_wallet', 'address'] },
       to: { asset: { kind: 'fiat', currencies: Object.keys(USD_PER_UNIT) }, location: ['user_account'] },
       regions: { allow: ['*'], deny: [] },
       limits: { min: '5', max: '5000', currency: 'USD' },
@@ -210,11 +230,7 @@ export function mockAdapter(opts: MockOptions = {}) {
   const baseOf = (ctx: AdapterContext) => ctx.urls.webhookUrl.replace(/\/webhooks\/mock$/, '')
   const orderKey = (ref: string) => `order:${ref}`
 
-  function fakeAddress(seed: string): string {
-    let h = 0n
-    for (const c of seed) h = (h * 131n + BigInt(c.charCodeAt(0))) % (1n << 160n)
-    return `0x${h.toString(16).padStart(40, '0')}`
-  }
+  const fakeAddress = (seed: string) => fakeAddressFor('eip155:1', seed)
 
   function destAsset(ctx: AdapterContext): CryptoAsset {
     const d = ctx.destination
@@ -354,7 +370,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       const inAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : BASE_USDC
       return {
         adapterId: 'mock', legId: leg.legId,
-        input: { amount: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : 18) } },
+        input: { amount: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : nativeDecimals(inAsset.chain)) } },
         output: { amount: roundTo(sub(input, fee), 6), asset: destAsset(ctx) },
         fees: [{ kind: 'network', label: 'Network and bridge', amount: roundTo(fee, 6), currency: 'USDC' }],
         eta: spec.eta, expiresAt,
@@ -393,15 +409,26 @@ export function mockAdapter(opts: MockOptions = {}) {
         }
         case 'wallet': {
           const d = destAsset(ctx)
+          const src = quote.input.asset.kind === 'crypto' ? quote.input.asset : d
+          // Solana: a transfer of the input token to a fake address (or the destination on the same chain).
+          const tx: TxRequest = isSolanaChain(src.chain)
+            ? {
+                kind: 'solana', type: 'transfer',
+                to: deliverTo?.address && isSolanaChain(d.chain) ? deliverTo.address : fakeAddressFor(src.chain, ref),
+                mint: src.token === 'native' ? 'native' : src.token,
+                amount: toBaseUnits(quote.input.amount, src.decimals ?? nativeDecimals(src.chain)),
+                decimals: src.decimals ?? nativeDecimals(src.chain),
+              }
+            : { to: deliverTo?.address ?? fakeAddress(ref), data: '0x', value: '0', chainId: evmChainId(src.chain) ?? 8453 }
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
-            surface: { kind: 'WALLET_TX', chain: quote.input.asset.kind === 'crypto' ? quote.input.asset.chain : d.chain, txs: [{ to: deliverTo?.address ?? fakeAddress(ref), data: '0x', value: '0', chainId: Number((quote.input.asset.kind === 'crypto' ? quote.input.asset.chain : d.chain).split(':')[1]) }] },
+            surface: { kind: 'WALLET_TX', chain: src.chain, txs: [tx] },
             transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
           }
         }
         case 'transfer': {
           const src = quote.input.asset.kind === 'crypto' ? quote.input.asset : BASE_USDC
-          const address = fakeAddress(`${ctx.session.userId}:${src.chain}:${src.token}`)
+          const address = fakeAddressFor(src.chain, `${ctx.session.userId}:${src.chain}:${src.token}`)
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
             surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning: `Send only ${symbolOf(src)} on ${chainName(src.chain)}. This is a test address.` },

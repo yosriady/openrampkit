@@ -46,6 +46,18 @@ console.log('MCP ok')
 JS
 node mcp.mjs
 node -e "const s=require('@openrampkit/server');const c=require('@openrampkit/core');const m=require('@openrampkit/mcp');if(typeof s.createOpenRamp!=='function'||typeof c.planPathways!=='function'||typeof m.createOpenRampMcpServer!=='function')process.exit(1);console.log('CJS ok')"
+cat > solana.mjs <<'JS'
+import { solanaWallet, associatedTokenAddress } from '@openrampkit/solana'
+import { SOLANA_MAINNET, SOLANA_USDC_MINT, combineWallets, toSplAmount } from '@openrampkit/core'
+const w = solanaWallet()
+if (w.namespaces[0] !== 'solana' || (await w.getAccounts()).length !== 0) throw new Error('solanaWallet on the server must have no accounts')
+const ata = await associatedTokenAddress('9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM', SOLANA_USDC_MINT)
+if (typeof ata !== 'string' || ata.length < 32) throw new Error('ATA derivation failed')
+if (toSplAmount('12.5', 6) !== '12500000' || combineWallets(w).id !== 'solana' || !SOLANA_MAINNET.startsWith('solana:')) throw new Error('core Solana helpers failed')
+console.log('Solana ok')
+JS
+node solana.mjs
+node -e "const s=require('@openrampkit/solana');if(typeof s.solanaWallet!=='function')process.exit(1);console.log('CJS Solana ok')"
 node -e "const v=require('@openrampkit/vue');const sv=require('@openrampkit/svelte');const so=require('@openrampkit/solid');if(typeof v.provideOpenRamp!=='function'||typeof sv.createOpenRamp!=='function'||typeof so.OpenRampProvider!=='function')process.exit(1);console.log('CJS framework wrappers ok')"
 cat > ssr.mjs <<'JS'
 import { createElement } from 'react'
@@ -104,7 +116,11 @@ import { createOpenRamp, type CreateSessionInput } from '@openrampkit/server'
 import { xendit } from '@openrampkit/adapter-xendit'
 import { relay } from '@openrampkit/adapter-relay'
 import { wagmiWallet } from '@openrampkit/wagmi'
-import type { PublicSession } from '@openrampkit/core'
+import { solanaWallet, type SolanaWalletOptions } from '@openrampkit/solana'
+import { combineWallets, type PublicSession, type SolanaTxRequest, type WalletAdapter } from '@openrampkit/core'
+const solOpts: SolanaWalletOptions = { walletName: 'Phantom', waitForLast: true }
+export const both: WalletAdapter = combineWallets(solanaWallet(solOpts))
+export const splTx: SolanaTxRequest = { kind: 'solana', type: 'transfer', to: 'x', mint: 'native', amount: '1', decimals: 9 }
 import { openDeposit, openWithdraw, darkTheme, stripeOnrampRenderer } from '@openrampkit/web'
 import { runAdapterConformance } from '@openrampkit/adapter/testing'
 import { createOpenRampMcpServer, createMcpHttpHandler, type OpenRampMcpConfig } from '@openrampkit/mcp'

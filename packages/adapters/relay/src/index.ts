@@ -30,15 +30,22 @@ import type { AdapterContext, EvmReceipt, Logger, QuoteInput, SettlementIntent, 
 import {
   CHAINS,
   OrkException,
+  SOLANA_DEVNET,
+  SOLANA_MAINNET,
   USDC,
   chainName,
   cmp,
   evmChainId,
   fromBaseUnits,
+  isSolanaAddress,
+  isSolanaSignature,
+  isSolanaTx,
+  isUsdc,
   orkError,
+  sameToken,
   toBaseUnits,
 } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, SolanaInstruction, TxRequest } from '@openrampkit/core'
 
 export type RelayOptions = {
   /** Relay API key (x-api-key). Needed for GET /requests/v3 and higher rate limits. */
@@ -57,8 +64,9 @@ export type RelayOptions = {
   refundTo?: 'origin' | string
   /**
    * JSON-RPC URLs per CAIP-2 chain, used to verify same-chain, same-token moves on chain
-   * (Relay is not involved there). Defaults to public RPCs for the main chains; set your own
-   * for production. A chain without an RPC URL cannot use same-chain moves.
+   * (Relay is not involved there). EVM chains use `eth_*` methods, Solana uses
+   * `getSignatureStatuses` and `getTransaction`. Defaults to public RPCs for the main chains;
+   * set your own for production. A chain without an RPC URL cannot use same-chain moves.
    */
   rpcUrls?: Record<string, string>
   /**
@@ -78,6 +86,9 @@ export const DEFAULT_RPC_URLS: Record<string, string> = {
   'eip155:42161': 'https://arb1.arbitrum.io/rpc',
   'eip155:10': 'https://mainnet.optimism.io',
   'eip155:137': 'https://polygon-rpc.com',
+  'eip155:4217': 'https://rpc.tempo.xyz',
+  [SOLANA_MAINNET]: 'https://api.mainnet-beta.solana.com',
+  [SOLANA_DEVNET]: 'https://api.devnet.solana.com',
   'eip155:421614': 'https://sepolia-rollup.arbitrum.io/rpc',
   'eip155:46630': 'https://rpc.testnet.chain.robinhood.com',
 }
@@ -86,11 +97,15 @@ export const DEFAULT_RPC_URLS: Record<string, string> = {
 const DIRECT_TX_CLOCK_SKEW_MS = 5 * 60_000
 
 export const RELAY_SOLANA_CHAIN_ID = 792703809
-const SOLANA_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+const SOLANA_CAIP2 = SOLANA_MAINNET
 const EVM_NATIVE = '0x0000000000000000000000000000000000000000'
 const SOLANA_NATIVE = '11111111111111111111111111111111'
-/** Relay accepts any address as `user` for quotes; used when no wallet is connected yet. */
+/**
+ * Relay accepts any address of the origin chain's VM as `user` for quotes; used when no wallet
+ * is connected yet. Relay rejects a `user` of another VM (an EVM address for a Solana origin).
+ */
 const PLACEHOLDER_USER = '0x000000000000000000000000000000000000dEaD'
+const PLACEHOLDER_SOLANA_USER = SOLANA_NATIVE
 const DEPOSIT_ADDRESS_TTL_SEC = 24 * 60 * 60
 const WALLET_QUOTE_REUSE_MS = 20_000
 const WALLET_QUOTE_TTL_MS = 60_000
@@ -104,7 +119,20 @@ const HOP_CHAINS = ['eip155:8453', 'eip155:42161', 'eip155:10', 'eip155:137', 'e
 
 type RelayCurrency = { chainId: number; address: string; symbol: string; decimals: number }
 type RelayAmount = { currency: RelayCurrency; amount: string; amountFormatted?: string }
-type RelayStepItem = { status?: string; data?: { from?: string; to: string; data?: string; value?: string; chainId: number; gas?: string } }
+/** EVM items carry `to`/`data`/`chainId`; Solana items carry `instructions` and lookup tables. */
+type RelayStepItem = {
+  status?: string
+  data?: {
+    from?: string
+    to?: string
+    data?: string
+    value?: string
+    chainId?: number
+    gas?: string
+    instructions?: SolanaInstruction[]
+    addressLookupTableAddresses?: string[]
+  }
+}
 type RelayStep = { id: string; kind: 'transaction' | 'signature' | string; items?: RelayStepItem[]; requestId?: string; depositAddress?: string }
 export type RelayQuoteResponse = {
   requestId?: string
@@ -160,7 +188,28 @@ function sameAsset(aChain: string, aToken: string, bChain: string, bToken: strin
   if (aChain !== bChain) return false
   if (isNative(aChain, aToken) && isNative(bChain, bToken)) return true
   // EVM addresses are case-insensitive; Solana mints are case-sensitive
-  return isSolana(aChain) ? aToken === bToken : aToken.toLowerCase() === bToken.toLowerCase()
+  return sameToken(aChain, aToken, bToken)
+}
+
+/** Key form of an address: EVM addresses lowercased, Solana (base58, case-sensitive) as given */
+function addrKey(address: string): string {
+  return address.startsWith('0x') ? address.toLowerCase() : address
+}
+
+/** True when `address` is a valid account of `chain`'s VM (the format only) */
+function fitsChain(chain: string, address: string | undefined): address is string {
+  if (!address) return false
+  return isSolana(chain) ? isSolanaAddress(address) : /^0x[0-9a-fA-F]{40}$/.test(address)
+}
+
+/** The `user` for a Relay quote: the given address when it fits the origin chain, else a placeholder */
+function quoteUser(originChain: string, address: string | undefined): string {
+  if (fitsChain(originChain, address)) return address
+  return isSolana(originChain) ? PLACEHOLDER_SOLANA_USER : PLACEHOLDER_USER
+}
+
+function sameUser(chain: string, a: unknown, b: string) {
+  return typeof a === 'string' && (isSolana(chain) ? a === b : a.toLowerCase() === b.toLowerCase())
 }
 
 function cryptoAsset(a: Amount | undefined, what: string): CryptoAsset {
@@ -171,13 +220,13 @@ function cryptoAsset(a: Amount | undefined, what: string): CryptoAsset {
 
 function knownDecimals(chain: string, token: string): number | undefined {
   if (isNative(chain, token)) return isSolana(chain) ? 9 : 18
-  if (USDC[chain] && USDC[chain] === token.toLowerCase()) return 6
+  if (isUsdc(chain, token)) return 6
   return undefined
 }
 
 function knownSymbol(chain: string, token: string): string | undefined {
   if (isNative(chain, token)) return isSolana(chain) ? 'SOL' : CHAINS[chain]?.nativeSymbol
-  if (USDC[chain] && USDC[chain] === token.toLowerCase()) return 'USDC'
+  if (isUsdc(chain, token)) return 'USDC'
   return undefined
 }
 
@@ -247,6 +296,7 @@ type WalletRecord = {
   requestId?: string
   txHash?: string
   output?: Amount
+  /** Origin chain: tells how to read `txHash` (EVM hash or Solana signature) */
   chain?: string
   token?: string
   recipient?: string
@@ -277,7 +327,7 @@ export function relay(opts: RelayOptions = {}) {
     if (typeof asset.decimals === 'number') return asset.decimals
     const known = knownDecimals(asset.chain, asset.token)
     if (known !== undefined) return known
-    const key = `dec:${asset.chain}:${asset.token.toLowerCase()}`
+    const key = `dec:${asset.chain}:${isSolana(asset.chain) ? asset.token : asset.token.toLowerCase()}`
     const cached = await ctx.shared.get<number>(key)
     if (typeof cached === 'number') return cached
     const list = await api<Array<{ decimals: number }>>(ctx, '/currencies/v2', {
@@ -340,7 +390,7 @@ export function relay(opts: RelayOptions = {}) {
 
   function depositKey(recipient: string, origin: CryptoAsset, dest: CryptoAsset) {
     const norm = (chain: string, token: string) => (isSolana(chain) ? token : token.toLowerCase())
-    return `da:${recipient.toLowerCase()}:${origin.chain}:${norm(origin.chain, origin.token)}:${dest.chain}:${norm(dest.chain, dest.token)}`
+    return `da:${addrKey(recipient)}:${origin.chain}:${norm(origin.chain, origin.token)}:${dest.chain}:${norm(dest.chain, dest.token)}`
   }
 
   /** Quote with an open deposit address. Returns the raw quote and the deposit address (cached per route for 24 h). */
@@ -349,7 +399,8 @@ export function relay(opts: RelayOptions = {}) {
     p: { origin: CryptoAsset; dest: CryptoAsset; recipient: string; amountBase: string },
   ): Promise<{ q: RelayQuoteResponse; address: string; requestId?: string }> {
     const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', {
-      user: p.recipient,
+      // `user` must be an address of the origin chain's VM (e.g. EVM origin, Solana recipient)
+      user: quoteUser(p.origin.chain, p.recipient),
       recipient: p.recipient,
       ...baseBody(p.origin, p.dest),
       amount: p.amountBase,
@@ -475,12 +526,12 @@ export function relay(opts: RelayOptions = {}) {
     const origin: CryptoAsset = input.source
       ? { kind: 'crypto', chain: input.source.chain, token: input.source.token }
       : cryptoAsset(input.amountIn ?? { amount: '0', asset: input.leg.from.asset }, 'source')
-    if (!origin.chain.startsWith('eip155:')) {
-      throw new OrkException(orkError('BAD_REQUEST', { message: 'Wallet payments support EVM chains only. Use "Transfer crypto" instead.' }))
+    if (!origin.chain.startsWith('eip155:') && origin.chain !== SOLANA_CAIP2) {
+      throw new OrkException(orkError('BAD_REQUEST', { message: 'Wallet payments support EVM chains and Solana only. Use "Transfer crypto" instead.' }))
     }
     const dest = destAsset(ctx, input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
     const recipient = recipientOf(ctx, input.deliverTo)
-    const user = input.source?.address ?? PLACEHOLDER_USER
+    const user = quoteUser(origin.chain, input.source?.address)
     const inDec = await decimalsOf(ctx, { ...origin, ...(input.amountIn?.asset.kind === 'crypto' && input.amountIn.asset.decimals !== undefined ? { decimals: input.amountIn.asset.decimals } : {}) })
     const originMeta = withMeta(origin, inDec)
     const legEta = legs[0]!.eta
@@ -502,7 +553,7 @@ export function relay(opts: RelayOptions = {}) {
         output: { amount, asset: withMeta(dest, inDec) },
         fees: [],
         eta: { min: 5, max: 30 },
-        data: { direct: true, recipient, amountBase: toBaseUnits(amount, inDec), user },
+        data: { direct: true, recipient, amountBase: toBaseUnits(amount, inDec), decimals: inDec, user },
       }
     }
 
@@ -589,12 +640,27 @@ export function relay(opts: RelayOptions = {}) {
       }
       for (const it of s.items ?? []) {
         if (it.status === 'complete' || !it.data) continue
+        const d = it.data
+        if (d.instructions) {
+          // Solana: the wallet builds a v0 transaction from the instructions and lookup tables.
+          txs.push({
+            kind: 'solana',
+            type: 'instructions',
+            instructions: d.instructions,
+            ...(d.addressLookupTableAddresses?.length ? { addressLookupTableAddresses: d.addressLookupTableAddresses } : {}),
+          })
+          continue
+        }
+        if (!d.to || typeof d.chainId !== 'number') {
+          unsupported ??= 'unknown transaction'
+          continue
+        }
         txs.push({
-          to: it.data.to,
-          ...(it.data.data && it.data.data !== '0x' ? { data: it.data.data } : {}),
-          ...(it.data.value && it.data.value !== '0' ? { value: it.data.value } : {}),
-          chainId: it.data.chainId,
-          ...(it.data.gas ? { gas: it.data.gas } : {}),
+          to: d.to,
+          ...(d.data && d.data !== '0x' ? { data: d.data } : {}),
+          ...(d.value && d.value !== '0' ? { value: d.value } : {}),
+          chainId: d.chainId,
+          ...(d.gas ? { gas: d.gas } : {}),
         })
       }
     }
@@ -620,6 +686,7 @@ export function relay(opts: RelayOptions = {}) {
   /** A same-chain wallet payment counts only when the receipt shows it paid the recipient at least the amount. */
   async function verifyDirectWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
     const chain = rec.chain!
+    if (isSolana(chain)) return verifySolanaWallet(ctx, ref, rec)
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
     const extra = { ref, txHash: rec.txHash! }
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
@@ -632,7 +699,6 @@ export function relay(opts: RelayOptions = {}) {
       if (!block?.timestamp) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
       if (Number(BigInt(block.timestamp)) * 1000 < rec.since - DIRECT_TX_CLOCK_SKEW_MS) return fail('The transaction was sent before this payment started.')
     }
-    const need = BigInt(rec.amountBase ?? '0')
     const recipient = (rec.recipient ?? '').toLowerCase()
     let paid = 0n
     if (isNative(chain, rec.token ?? '')) {
@@ -641,13 +707,133 @@ export function relay(opts: RelayOptions = {}) {
     } else {
       paid = erc20PaidTo(receipt, rec.token ?? '', recipient)
     }
-    if (paid < need) return fail('The transaction does not pay the destination the quoted amount.')
+    return settleDirect(ctx, ref, rec, paid)
+  }
+
+  /** Key that marks a transaction as used. EVM hashes are lowercased; Solana signatures are case-sensitive. */
+  function usedKey(chain: string, hash: string) {
+    return `txused:${chain}:${isSolana(chain) ? hash : hash.toLowerCase()}`
+  }
+
+  /** Common end of a same-chain wallet check: the amount, then one transaction for one payment only. */
+  async function settleDirect(ctx: AdapterContext, ref: string, rec: WalletRecord, paid: bigint): Promise<LegStep> {
+    const extra = { ref, txHash: rec.txHash! }
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
+    if (paid < BigInt(rec.amountBase ?? '0')) return fail('The transaction does not pay the destination the quoted amount.')
     // One transaction can complete one payment only: an old hash must not be reused for a new session.
-    const usedKey = `txused:${chain}:${rec.txHash!.toLowerCase()}`
-    const usedBy = await ctx.shared.get<string>(usedKey)
+    const key = usedKey(rec.chain!, rec.txHash!)
+    const usedBy = await ctx.shared.get<string>(key)
     if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
-    if (!usedBy) await ctx.shared.put(usedKey, ref, 90 * 24 * 3600)
+    if (!usedBy) await ctx.shared.put(key, ref, 90 * 24 * 3600)
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
+  }
+
+  // ---------- Solana on-chain checks (same chain, same token) ----------
+
+  type SolTokenBalance = { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string } }
+  type SolTx = {
+    blockTime?: number | null
+    meta: { err: unknown; preBalances: number[]; postBalances: number[]; preTokenBalances?: SolTokenBalance[]; postTokenBalances?: SolTokenBalance[] } | null
+    transaction: { message: { accountKeys: Array<string | { pubkey: string }> } }
+  }
+  type SolStatus = { err: unknown; confirmationStatus?: 'processed' | 'confirmed' | 'finalized' | null } | null
+
+  /** Net amount (base units) that `tx` moved to `owner`: SOL lamports for `native`, else the SPL `mint` */
+  function solanaReceived(tx: SolTx, chain: string, owner: string, token: string): bigint {
+    const meta = tx.meta
+    if (!meta) return 0n
+    if (isNative(chain, token)) {
+      const keys = tx.transaction.message.accountKeys.map((k) => (typeof k === 'string' ? k : k.pubkey))
+      const i = keys.indexOf(owner)
+      return i < 0 ? 0n : BigInt(meta.postBalances[i] ?? 0) - BigInt(meta.preBalances[i] ?? 0)
+    }
+    // Sum the change of every token account of `mint` that `owner` owns (a new account has no pre balance).
+    const mine = (b: SolTokenBalance) => b.owner === owner && b.mint === token
+    const pre = new Map<number, bigint>()
+    for (const b of meta.preTokenBalances ?? []) if (mine(b)) pre.set(b.accountIndex, BigInt(b.uiTokenAmount.amount))
+    let total = 0n
+    for (const b of meta.postTokenBalances ?? []) if (mine(b)) total += BigInt(b.uiTokenAmount.amount) - (pre.get(b.accountIndex) ?? 0n)
+    return total
+  }
+
+  function solanaTx(ctx: AdapterContext, chain: string, signature: string) {
+    return rpc<SolTx | null>(ctx, chain, 'getTransaction', [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }])
+  }
+
+  /**
+   * A same-chain Solana payment counts only when the signature is confirmed without error, the
+   * transaction is not older than the leg, and it moved at least the amount to the recipient.
+   */
+  async function verifySolanaWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
+    const chain = rec.chain!
+    const sig = rec.txHash!
+    const extra = { ref, txHash: sig }
+    const waiting: LegStep = { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
+    const st = await rpc<{ value?: SolStatus[] } | null>(ctx, chain, 'getSignatureStatuses', [[sig], { searchTransactionHistory: true }])
+    const s = st?.value?.[0]
+    if (!s) return waiting
+    if (s.err) return fail('The transaction failed on chain.')
+    if (s.confirmationStatus !== 'confirmed' && s.confirmationStatus !== 'finalized') return waiting
+    const tx = await solanaTx(ctx, chain, sig)
+    if (!tx?.meta) return waiting
+    if (tx.meta.err) return fail('The transaction failed on chain.')
+    // Like EVM: the transaction must be newer than this payment (block time in seconds).
+    if (rec.since !== undefined) {
+      if (typeof tx.blockTime !== 'number') return waiting
+      if (tx.blockTime * 1000 < rec.since - DIRECT_TX_CLOCK_SKEW_MS) return fail('The transaction was sent before this payment started.')
+    }
+    return settleDirect(ctx, ref, rec, solanaReceived(tx, chain, rec.recipient ?? '', rec.token ?? ''))
+  }
+
+  /**
+   * Transfer to the destination itself on Solana: look at recent signatures of the recipient's
+   * token accounts (or of the recipient, for SOL) since the leg started. Each signature counts
+   * for one payment only.
+   */
+  async function findSolanaDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
+    const chain = rec.chain!
+    const token = rec.token!
+    let watch: string[] = [rec.address]
+    if (!isNative(chain, token)) {
+      const res = await rpc<{ value?: Array<{ pubkey: string }> } | null>(ctx, chain, 'getTokenAccountsByOwner', [rec.address, { mint: token }, { encoding: 'jsonParsed', commitment: 'confirmed' }])
+      watch = (res?.value ?? []).map((v) => v.pubkey)
+      if (!watch.length) return undefined
+    }
+    const since = Math.floor(rec.since / 1000) - 60
+    // The same address can serve several sessions: a signature belongs to the first session that counts it.
+    const owner = `${ctx.session.id}:${ref}`
+    const seen = new Set<string>()
+    let total = 0n
+    let last: string | undefined
+    const counted: string[] = []
+    for (const account of watch) {
+      const sigs = await rpc<Array<{ signature: string; err: unknown; blockTime?: number | null }> | null>(ctx, chain, 'getSignaturesForAddress', [account, { limit: 20, commitment: 'confirmed' }])
+      for (const s of sigs ?? []) {
+        if (s.err || seen.has(s.signature) || typeof s.blockTime !== 'number' || s.blockTime < since) continue
+        seen.add(s.signature)
+        const usedBy = await ctx.shared.get<string>(usedKey(chain, s.signature))
+        if (usedBy && usedBy !== owner) continue
+        const tx = await solanaTx(ctx, chain, s.signature)
+        if (!tx?.meta || tx.meta.err) continue
+        const got = solanaReceived(tx, chain, rec.address, token)
+        if (got <= 0n) continue
+        total += got
+        counted.push(s.signature)
+        last ??= s.signature // newest first
+      }
+    }
+    if (total <= 0n || !last) return undefined
+    for (const sig of counted) await ctx.shared.put(usedKey(chain, sig), owner, 90 * 24 * 3600)
+    const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
+    return {
+      state: 'COMPLETED',
+      status: 'succeeded',
+      transitions: [],
+      ref,
+      txHash: last,
+      ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(total.toString(), decimals) } } : {}),
+    }
   }
 
   /**
@@ -732,6 +918,7 @@ export function relay(opts: RelayOptions = {}) {
 
   /** Transfer to the destination itself (same chain and token): find ERC20 Transfer logs to it since the start block. */
   async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
+    if (rec.chain && rec.token && isSolana(rec.chain)) return findSolanaDeposit(ctx, ref, rec)
     if (!rec.chain || !rec.token || !rec.fromBlock || isNative(rec.chain, rec.token)) return undefined
     const logs = await rpc<Array<{ data: string; transactionHash: string }>>(ctx, rec.chain, 'eth_getLogs', [
       { fromBlock: rec.fromBlock, toBlock: 'latest', address: rec.token, topics: [ERC20_TRANSFER_TOPIC, null, topicAddress(rec.address)] },
@@ -756,12 +943,18 @@ export function relay(opts: RelayOptions = {}) {
     if (data.direct) {
       const recipient = String(data.recipient)
       const amountBase = String(data.amountBase)
-      const chainId = evmChainId(origin.chain)!
-      const settling = settlementOf(ctx, input.deliverTo)
-      if (settling) return startSettlement(input, ctx, { contract: settling.contract, chainId, recipient, amountBase })
-      const tx: TxRequest = isNative(origin.chain, origin.token)
-        ? { to: recipient, value: amountBase, chainId }
-        : { to: origin.token, data: erc20TransferData(recipient, amountBase), chainId }
+      let tx: TxRequest
+      if (isSolana(origin.chain)) {
+        const decimals = typeof data.decimals === 'number' ? data.decimals : (origin.decimals ?? knownDecimals(origin.chain, origin.token) ?? 9)
+        tx = { kind: 'solana', type: 'transfer', to: recipient, mint: isNative(origin.chain, origin.token) ? 'native' : origin.token, amount: amountBase, decimals }
+      } else {
+        const chainId = evmChainId(origin.chain)!
+        const settling = settlementOf(ctx, input.deliverTo)
+        if (settling) return startSettlement(input, ctx, { contract: settling.contract, chainId, recipient, amountBase })
+        tx = isNative(origin.chain, origin.token)
+          ? { to: recipient, value: amountBase, chainId }
+          : { to: origin.token, data: erc20TransferData(recipient, amountBase), chainId }
+      }
       const ref = `direct:${ctx.session.id}:${randomHex()}`
       await ctx.store.put(
         `w:${ref}`,
@@ -774,9 +967,14 @@ export function relay(opts: RelayOptions = {}) {
     // Reuse the quote's steps when they are fresh and built for this user, otherwise re-quote.
     let steps = data.steps as RelayStep[] | undefined
     let requestId = data.requestId as string | undefined
-    const user = input.source?.address
+    // Only an address of the origin chain's VM can sign (an EVM address cannot pay from Solana).
+    const given = input.source?.address
+    const user = fitsChain(origin.chain, given) ? given : undefined
+    if (isSolana(origin.chain) && !user) {
+      throw new OrkException(orkError('BAD_REQUEST', { message: 'Connect a Solana wallet to pay from Solana.', recovery: 'choose_other' }))
+    }
     const fresh = typeof data.quotedAt === 'number' && Date.now() - data.quotedAt < WALLET_QUOTE_REUSE_MS
-    if (!steps || !fresh || (user && String(data.user).toLowerCase() !== user.toLowerCase())) {
+    if (!steps || !fresh || (user && !sameUser(origin.chain, data.user, user))) {
       if (!data.body) throw new OrkException(orkError('QUOTE_EXPIRED'), 410)
       const body = { ...(data.body as Record<string, unknown>), ...(user ? { user } : {}) }
       const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', body).catch((e) => {
@@ -801,8 +999,9 @@ export function relay(opts: RelayOptions = {}) {
         }),
       }
     }
-    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref } satisfies WalletRecord, RECORD_TTL_SEC)
-    return payStep(caip2FromRelay(txs[0]!.chainId), txs, ref)
+    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref, chain: origin.chain } satisfies WalletRecord, RECORD_TTL_SEC)
+    const first = txs[0]!
+    return payStep(isSolanaTx(first) ? origin.chain : caip2FromRelay(first.chainId), txs, ref)
   }
 
   async function startDeposit(legId: 'transfer' | 'bridge', input: StartInput, ctx: AdapterContext): Promise<LegStep> {
@@ -813,11 +1012,12 @@ export function relay(opts: RelayOptions = {}) {
       const dest = cryptoAsset(input.quote.output, 'output')
       address = await openDepositAddress(ctx, origin, dest, recipientOf(ctx, input.deliverTo))
     }
-    const key = `d:${address.toLowerCase()}`
+    const key = `d:${addrKey(address)}`
     const prev = await ctx.store.get<DepositRecord>(key)
     const since = prev?.since ?? Date.now()
-    // Same chain and token: the address is the destination itself, so we watch Transfer logs from now on.
-    const fromBlock = data.direct ? (prev?.fromBlock ?? (await rpc<string>(ctx, origin.chain, 'eth_blockNumber', []))) : undefined
+    // Same chain and token: the address is the destination itself, so we watch transfers to it from now on
+    // (EVM: Transfer logs from this block; Solana: signatures since `since`).
+    const fromBlock = data.direct && !isSolana(origin.chain) ? (prev?.fromBlock ?? (await rpc<string>(ctx, origin.chain, 'eth_blockNumber', []))) : undefined
     await ctx.store.put(
       key,
       { address, since, mode: data.direct ? 'direct' : 'relay', output: input.quote.output, chain: origin.chain, token: origin.token, ...(fromBlock ? { fromBlock } : {}) } satisfies DepositRecord,
@@ -870,7 +1070,7 @@ export function relay(opts: RelayOptions = {}) {
       const recipient = recipientOf(ctx)
       const address = await openDepositAddress(ctx, origin, dest, recipient)
       // Remember when this session first used the address, so status ignores older deposits.
-      const key = `d:${address.toLowerCase()}`
+      const key = `d:${addrKey(address)}`
       if (!(await ctx.store.get(key))) {
         await ctx.store.put(key, { address, since: Date.now(), mode: address === recipient ? 'direct' : 'relay' } satisfies DepositRecord, RECORD_TTL_SEC)
       }
@@ -894,9 +1094,12 @@ export function relay(opts: RelayOptions = {}) {
       if (input.leg.legId !== 'wallet' || input.name !== 'submit_tx') {
         throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
       }
-      const txHash = String(input.inputs?.txHash ?? input.inputs?.hash ?? '')
-      if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
+      const txHash = String(input.inputs?.txHash ?? input.inputs?.hash ?? '').trim()
       const rec = (await ctx.store.get<WalletRecord>(`w:${input.ref}`)) ?? { mode: 'relay' as const, requestId: input.ref }
+      // EVM: a 32-byte hex hash. Solana: a base58 signature.
+      const evmHash = /^0x[0-9a-fA-F]{64}$/.test(txHash)
+      const ok = rec.chain ? (isSolana(rec.chain) ? isSolanaSignature(txHash) : evmHash) : evmHash || isSolanaSignature(txHash)
+      if (!ok) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
       return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash }
     },
@@ -925,7 +1128,7 @@ export function relay(opts: RelayOptions = {}) {
       }
 
       // transfer / bridge: look for deposits into the address
-      const rec = await ctx.store.get<DepositRecord>(`d:${input.ref.toLowerCase()}`)
+      const rec = await ctx.store.get<DepositRecord>(`d:${addrKey(input.ref)}`)
       const waiting: LegStep =
         legId === 'bridge'
           ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [POLL_TRANSITION], ref: input.ref }

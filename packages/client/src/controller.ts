@@ -2,7 +2,7 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, cmp, currencyForCountry, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
+import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
 import type {
   Direction,
   MethodOption,
@@ -153,6 +153,8 @@ export class RampController {
   }
 
   private started = false
+  /** Wallet accounts read at start */
+  private accounts: Array<{ chain: string; address: string }> = []
   /** Increments on every quote request, to drop stale responses */
   private quoteSeq = 0
   /** Increments on every applied session, to drop poll responses that raced with an action */
@@ -164,8 +166,10 @@ export class RampController {
     this.set({ screen: 'loading', error: undefined })
     try {
       const accounts = this.opts.wallet ? await this.opts.wallet.getAccounts().catch(() => []) : []
-      const walletAddress: string | undefined = accounts[0]?.address
+      this.accounts = accounts
       const session = await this.opts.client.getSession(this.opts.clientSecret)
+      // Withdraw: the account on the source chain (an EVM and a Solana wallet can both be connected).
+      const walletAddress: string | undefined = (session.source ? accountFor(accounts, session.source.chain) : undefined)?.address ?? accounts[0]?.address
       if (this.opts.expect && session.direction !== this.opts.expect) {
         throw orkError('BAD_REQUEST', { message: `This is not a ${this.opts.expect} session.` })
       }
@@ -246,7 +250,7 @@ export class RampController {
     const allowedCur = session.allowedTargets?.fiat?.currencies?.map((c) => c.toUpperCase())
     const local = currencyForCountry(session.country).toUpperCase()
     const cashCurrency = !allowedCur?.length || allowedCur.includes(local) ? local : allowedCur[0]!
-    this.set({ target: { ...this.draftFor(chain, src), address: this.snap.walletAddress ?? '' }, cashCurrency })
+    this.set({ target: { ...this.draftFor(chain, src), address: accountFor(this.accounts, chain)?.address ?? this.snap.walletAddress ?? '' }, cashCurrency })
     const tabs = this.withdrawTabs()
     if (!tabs.length) {
       this.set({ screen: 'error', error: orkError('TARGET_NOT_ALLOWED') })
@@ -277,7 +281,10 @@ export class RampController {
   setTargetChain(chain: string) {
     const cur = this.snap.target
     const next = this.draftFor(chain, this.snap.session?.source, cur?.token === 'native' ? 'native' : undefined)
-    this.set({ target: { ...next, address: cur?.address ?? '' }, error: undefined })
+    // A Solana address is not valid on an EVM chain (and back): switch to the wallet's account of that kind.
+    const sameKind = !!cur && chainNamespace(cur.chain) === chainNamespace(chain)
+    const address = sameKind ? cur.address : (accountFor(this.accounts, chain)?.address ?? '')
+    this.set({ target: { ...next, address }, error: undefined })
   }
 
   setTargetToken(token: string) {
@@ -448,10 +455,15 @@ export class RampController {
     clearTimeout(this.quoteTimer)
     this.emit('quote.selected', { quoteId })
     this.set({ busy: true, error: undefined })
+    // Pay with wallet: the account on the chain the user pays from (e.g. Solana while an EVM wallet is also connected).
+    const payFrom = this.snap.direction !== 'withdraw' && this.snap.method?.method === 'wallet' && this.snap.source
+      ? accountFor(this.accounts, this.snap.source.chain)?.address
+      : undefined
+    const walletAddress = payFrom ?? this.snap.walletAddress
     try {
       const session = await this.opts.client.select(this.opts.clientSecret, {
         quoteId,
-        ...(this.snap.walletAddress ? { walletAddress: this.snap.walletAddress } : {}),
+        ...(walletAddress ? { walletAddress } : {}),
       })
       this.set({ busy: false })
       this.applySession(session)

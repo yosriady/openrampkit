@@ -110,23 +110,54 @@ export const DEFAULT_METHOD_PRIORITY: Record<string, string[]> = {
   '*': ['apple_pay', 'card', 'google_pay', 'sepa', 'bank_transfer'],
 }
 
-export type ChainInfo = { id: string; chainId?: number; name: string; nativeSymbol: string; /** True for test networks */ testnet?: boolean }
+export type ChainInfo = {
+  /** CAIP-2 chain id */
+  id: string
+  /** EVM chain id (eip155 chains only) */
+  chainId?: number
+  name: string
+  /** Symbol of the gas token. Tempo has no gas token: it shows `USD`. */
+  nativeSymbol: string
+  /** Decimals of the native token (EVM 18, Solana 9) */
+  nativeDecimals?: number
+  /** True for a test network */
+  testnet?: boolean
+  /**
+   * True when the chain has no native gas token and fees are paid in stablecoins (Tempo).
+   * On such chains `eth_getBalance` does not return a real balance, so do not show it.
+   */
+  stablecoinFees?: boolean
+  /** Public block explorer */
+  explorerUrl?: string
+}
+
+/** CAIP-2 id of Solana mainnet (genesis hash prefix) */
+export const SOLANA_MAINNET = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+/** CAIP-2 id of Solana devnet (genesis hash prefix) */
+export const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
+/** CAIP-2 id of Tempo mainnet (chain id 4217) */
+export const TEMPO_MAINNET = 'eip155:4217'
+/** CAIP-2 id of the Tempo Moderato testnet (chain id 42431) */
+export const TEMPO_TESTNET = 'eip155:42431'
 
 export const CHAINS: Record<string, ChainInfo> = {
-  'eip155:1': { id: 'eip155:1', chainId: 1, name: 'Ethereum', nativeSymbol: 'ETH' },
-  'eip155:8453': { id: 'eip155:8453', chainId: 8453, name: 'Base', nativeSymbol: 'ETH' },
-  'eip155:42161': { id: 'eip155:42161', chainId: 42161, name: 'Arbitrum', nativeSymbol: 'ETH' },
-  'eip155:10': { id: 'eip155:10', chainId: 10, name: 'Optimism', nativeSymbol: 'ETH' },
-  'eip155:137': { id: 'eip155:137', chainId: 137, name: 'Polygon', nativeSymbol: 'POL' },
-  'eip155:56': { id: 'eip155:56', chainId: 56, name: 'BNB Chain', nativeSymbol: 'BNB' },
-  'eip155:143': { id: 'eip155:143', chainId: 143, name: 'Monad', nativeSymbol: 'MON' },
-  'eip155:999': { id: 'eip155:999', chainId: 999, name: 'HyperEVM', nativeSymbol: 'HYPE' },
+  'eip155:1': { id: 'eip155:1', chainId: 1, name: 'Ethereum', nativeSymbol: 'ETH', nativeDecimals: 18 },
+  'eip155:8453': { id: 'eip155:8453', chainId: 8453, name: 'Base', nativeSymbol: 'ETH', nativeDecimals: 18 },
+  'eip155:42161': { id: 'eip155:42161', chainId: 42161, name: 'Arbitrum', nativeSymbol: 'ETH', nativeDecimals: 18 },
+  'eip155:10': { id: 'eip155:10', chainId: 10, name: 'Optimism', nativeSymbol: 'ETH', nativeDecimals: 18 },
+  'eip155:137': { id: 'eip155:137', chainId: 137, name: 'Polygon', nativeSymbol: 'POL', nativeDecimals: 18 },
+  'eip155:56': { id: 'eip155:56', chainId: 56, name: 'BNB Chain', nativeSymbol: 'BNB', nativeDecimals: 18 },
+  'eip155:143': { id: 'eip155:143', chainId: 143, name: 'Monad', nativeSymbol: 'MON', nativeDecimals: 18 },
+  'eip155:999': { id: 'eip155:999', chainId: 999, name: 'HyperEVM', nativeSymbol: 'HYPE', nativeDecimals: 18 },
+  [TEMPO_MAINNET]: { id: TEMPO_MAINNET, chainId: 4217, name: 'Tempo', nativeSymbol: 'USD', nativeDecimals: 18, stablecoinFees: true, explorerUrl: 'https://explore.tempo.xyz' },
+  [TEMPO_TESTNET]: { id: TEMPO_TESTNET, chainId: 42431, name: 'Tempo Testnet', nativeSymbol: 'USD', nativeDecimals: 18, stablecoinFees: true, testnet: true, explorerUrl: 'https://explore.testnet.tempo.xyz' },
+  [SOLANA_MAINNET]: { id: SOLANA_MAINNET, name: 'Solana', nativeSymbol: 'SOL', nativeDecimals: 9, explorerUrl: 'https://explorer.solana.com' },
+  [SOLANA_DEVNET]: { id: SOLANA_DEVNET, name: 'Solana Devnet', nativeSymbol: 'SOL', nativeDecimals: 9, testnet: true, explorerUrl: 'https://explorer.solana.com/?cluster=devnet' },
   // Robinhood Chain (Arbitrum Orbit L2). Source: docs.robinhood.com/chain/connecting
-  'eip155:4663': { id: 'eip155:4663', chainId: 4663, name: 'Robinhood Chain', nativeSymbol: 'ETH' },
+  'eip155:4663': { id: 'eip155:4663', chainId: 4663, name: 'Robinhood Chain', nativeSymbol: 'ETH', nativeDecimals: 18 },
   // Test networks
-  'eip155:421614': { id: 'eip155:421614', chainId: 421614, name: 'Arbitrum Sepolia', nativeSymbol: 'ETH', testnet: true },
-  'eip155:46630': { id: 'eip155:46630', chainId: 46630, name: 'Robinhood Chain Testnet', nativeSymbol: 'ETH', testnet: true },
-  'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', name: 'Solana', nativeSymbol: 'SOL' },
+  'eip155:421614': { id: 'eip155:421614', chainId: 421614, name: 'Arbitrum Sepolia', nativeSymbol: 'ETH', nativeDecimals: 18, testnet: true },
+  'eip155:46630': { id: 'eip155:46630', chainId: 46630, name: 'Robinhood Chain Testnet', nativeSymbol: 'ETH', nativeDecimals: 18, testnet: true },
 }
 
 export function chainName(chain: string): string {
@@ -139,14 +170,69 @@ export function evmChainId(chain: string): number | undefined {
   return Number.isFinite(n) ? n : undefined
 }
 
-/** Well-known USDC deployments (lowercase addresses). */
+export function isEvmChain(chain: string): boolean {
+  return chain.startsWith('eip155:')
+}
+
+export function isSolanaChain(chain: string): boolean {
+  return chain.startsWith('solana:')
+}
+
+/** Decimals of the chain's native token: 9 on Solana, else 18 */
+export function nativeDecimals(chain: string): number {
+  return CHAINS[chain]?.nativeDecimals ?? (isSolanaChain(chain) ? 9 : 18)
+}
+
+/**
+ * Canonical form of a token id on a chain. EVM addresses are not case-sensitive, so they are
+ * lowercased. Solana mints (base58) and tokens on other chains are case-sensitive: they stay as given.
+ */
+export function normalizeToken(chain: string, token: string): string {
+  if (token.toLowerCase() === 'native') return 'native'
+  return isEvmChain(chain) ? token.toLowerCase() : token
+}
+
+/** True when two token ids name the same token on `chain` */
+export function sameToken(chain: string, a: string, b: string): boolean {
+  return normalizeToken(chain, a) === normalizeToken(chain, b)
+}
+
+/** USDC mint (Circle) on Solana mainnet */
+export const SOLANA_USDC_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+/** USDC mint (Circle) on Solana devnet */
+export const SOLANA_DEVNET_USDC_MINT = '4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU'
+/** USDC on Tempo mainnet: bridged USDC (Tempo docs call it USDC.e), a TIP-20 token with 6 decimals */
+export const TEMPO_USDC = '0x20c000000000000000000000b9537d11c60e8b50'
+/** pathUSD on Tempo mainnet: the default fee token (TIP-20, 6 decimals) */
+export const TEMPO_PATH_USD = '0x20c0000000000000000000000000000000000000'
+
+/**
+ * Well-known USDC deployments per CAIP-2 chain, in canonical form (see `normalizeToken`):
+ * lowercase EVM addresses, Solana mints as given. All have 6 decimals.
+ */
 export const USDC: Record<string, string> = {
   'eip155:1': '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
   'eip155:8453': '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
   'eip155:42161': '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
   'eip155:10': '0x0b2c639c533813f4aa9d7837caf62653d097ff85',
   'eip155:137': '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  [TEMPO_MAINNET]: TEMPO_USDC,
+  [SOLANA_MAINNET]: SOLANA_USDC_MINT,
   // Circle testnet USDC on Arbitrum Sepolia (developers.circle.com/stablecoins/usdc-contract-addresses)
   'eip155:421614': '0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d',
   // TODO: Robinhood Chain (4663) and its testnet (46630): Circle lists no USDC deployment yet.
+}
+
+/**
+ * More testnet USDC, kept out of `USDC` (Solana devnet). `USDC` lists the withdraw networks and
+ * wallet balances, and no Relay route reaches Solana devnet.
+ */
+export const TESTNET_USDC: Record<string, string> = {
+  [SOLANA_DEVNET]: SOLANA_DEVNET_USDC_MINT,
+}
+
+/** True when `token` is the well-known USDC on `chain` (in `USDC` or `TESTNET_USDC`) */
+export function isUsdc(chain: string, token: string): boolean {
+  const u = USDC[chain] ?? TESTNET_USDC[chain]
+  return !!u && sameToken(chain, u, token)
 }

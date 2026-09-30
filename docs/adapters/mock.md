@@ -43,6 +43,8 @@ Do not turn on `crypto` or `bridge` next to the real Relay adapter: both would o
 
 Because the fiat legs deliver USDC on Base, a destination on another chain (for example Monad) gets a two-leg pathway through the `bridge` leg (or Relay).
 
+Solana destinations work too. A destination of USDC on Solana gets the two-leg pathway (fiat to Base, then `bridge`). The `wallet` leg from a Solana token asks for a Solana transfer (`SolanaTxRequest`, `type: 'transfer'`). The `transfer` leg shows a base58 test address for a Solana source. The `offramp` leg takes EVM USDC only.
+
 The `wallet` leg (with `crypto: true`) also serves withdrawals to a wallet: it asks for one mock transaction to the target address.
 
 ## Offramp leg

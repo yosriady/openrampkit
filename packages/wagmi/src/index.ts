@@ -3,7 +3,7 @@
 
 import { getAccount, getBalance, readContract, sendTransaction, switchChain, waitForTransactionReceipt } from '@wagmi/core'
 import type { Config } from '@wagmi/core'
-import { USDC, evmChainId, fromBaseUnits } from '@openrampkit/core'
+import { CHAINS, USDC, evmChainId, fromBaseUnits, isSolanaTx } from '@openrampkit/core'
 import type { TxRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
 
 export type WagmiWalletOptions = {
@@ -46,6 +46,7 @@ export function wagmiWallet(config: Config, opts: WagmiWalletOptions = {}): Wall
 
   return {
     id: 'wagmi',
+    namespaces: ['eip155'],
 
     async getAccounts() {
       const account = getAccount(config)
@@ -60,15 +61,18 @@ export function wagmiWallet(config: Config, opts: WagmiWalletOptions = {}): Wall
         if (chainId === undefined || !configured.has(chainId)) continue
         const info = config.chains.find((c) => c.id === chainId)!
         const id = chainId as Config['chains'][number]['id']
-        jobs.push(
-          getBalance(config, { address: address as Hex, chainId: id }).then((b) => ({
-            chain,
-            token: 'native',
-            symbol: info.nativeCurrency.symbol,
-            decimals: info.nativeCurrency.decimals,
-            amount: fromBaseUnits(b.value.toString(), info.nativeCurrency.decimals),
-          })),
-        )
+        // Tempo has no native gas token: eth_getBalance returns a placeholder, not a balance.
+        if (!CHAINS[chain]?.stablecoinFees) {
+          jobs.push(
+            getBalance(config, { address: address as Hex, chainId: id }).then((b) => ({
+              chain,
+              token: 'native',
+              symbol: info.nativeCurrency.symbol,
+              decimals: info.nativeCurrency.decimals,
+              amount: fromBaseUnits(b.value.toString(), info.nativeCurrency.decimals),
+            })),
+          )
+        }
         const tokens = [...(USDC[chain] ? [{ address: USDC[chain]!, symbol: 'USDC', decimals: 6 }] : []), ...(opts.tokens?.[chain] ?? [])]
         // An extra token that repeats USDC (or another entry) is read once.
         const seen = new Set<string>()
@@ -101,6 +105,7 @@ export function wagmiWallet(config: Config, opts: WagmiWalletOptions = {}): Wall
       let hash: Hex | undefined
       for (let i = 0; i < txs.length; i++) {
         const tx = txs[i]!
+        if (isSolanaTx(tx)) throw new Error('wagmiWallet sends EVM transactions only. Use @openrampkit/solana for Solana.')
         const chainId = tx.chainId || chainIdOf(chain)
         await ensureChain(chainId)
         const id = chainId as Config['chains'][number]['id']

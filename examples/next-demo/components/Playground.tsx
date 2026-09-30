@@ -2,7 +2,9 @@
 
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { createMockWallet } from '@openrampkit/client'
+import { SOLANA_MAINNET, SOLANA_USDC_MINT, TEMPO_MAINNET, TEMPO_USDC, combineWallets } from '@openrampkit/core'
 import type { Destination, OrkEvent, WalletAdapter } from '@openrampkit/core'
+import { solanaWallet } from '@openrampkit/solana'
 import { DepositButton, OpenRampEmbedded, OpenRampProvider, WithdrawButton, autoTheme, darkTheme, lightTheme } from '@openrampkit/react'
 import { wagmiWallet } from '@openrampkit/wagmi'
 import { useEffect, useMemo, useState } from 'react'
@@ -18,6 +20,9 @@ const DESTINATIONS: Record<string, { label: string; destination: Destination }> 
   base: { label: 'USDC on Base', destination: { type: 'crypto', chain: 'eip155:8453', token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', symbol: 'USDC', decimals: 6, address: '0x000000000000000000000000000000000000dEaD' } },
   arbitrum: { label: 'USDC on Arbitrum', destination: { type: 'crypto', chain: 'eip155:42161', token: '0xaf88d065e77c8cc2239327c5edb3a432268e5831', symbol: 'USDC', decimals: 6, address: '0x000000000000000000000000000000000000dEaD' } },
   monad: { label: 'Token on Monad (hop)', destination: { type: 'crypto', chain: 'eip155:143', token: '0x00000000000000000000000000000000000000c0', symbol: 'USDC', decimals: 6, address: '0x000000000000000000000000000000000000dEaD' } },
+  // Demo address only: put your user's own Solana address here.
+  solana: { label: 'USDC on Solana', destination: { type: 'crypto', chain: SOLANA_MAINNET, token: SOLANA_USDC_MINT, symbol: 'USDC', decimals: 6, address: '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM' } },
+  tempo: { label: 'USDC on Tempo', destination: { type: 'crypto', chain: TEMPO_MAINNET, token: TEMPO_USDC, symbol: 'USDC', decimals: 6, address: '0x000000000000000000000000000000000000dEaD' } },
   merchant: { label: 'Merchant fiat account', destination: { type: 'merchant', currency: 'LOCAL' } },
 }
 
@@ -25,7 +30,7 @@ const LOCALES = [['', 'Browser'], ['en', 'English'], ['vi', 'Tiếng Việt'], [
 
 const CURRENCY: Record<string, string> = { VN: 'VND', ID: 'IDR', TH: 'THB', PH: 'PHP', MY: 'MYR', SG: 'SGD', IN: 'INR', US: 'USD', DE: 'EUR' }
 
-type WalletMode = 'none' | 'mock' | 'wagmi'
+type WalletMode = 'none' | 'mock' | 'wagmi' | 'wagmi+solana'
 type Direction = 'deposit' | 'withdraw'
 type Custody = 'user_wallet' | 'app'
 
@@ -46,11 +51,16 @@ export function Playground({ mock }: { mock: boolean }) {
 
   const theme = useMemo(() => (mode === 'dark' ? darkTheme({ accent }) : mode === 'auto' ? autoTheme({ accent }) : lightTheme({ accent })), [mode, accent])
 
+  // A Solana wallet from Wallet Standard (Phantom, Solflare, Backpack, ...), next to the wagmi wallet.
+  const sol = useMemo(() => solanaWallet(), [])
+  const [solAddress, setSolAddress] = useState<string>()
+
   const wallet: WalletAdapter | undefined = useMemo(() => {
     if (walletMode === 'mock') return createMockWallet()
     if (walletMode === 'wagmi' && isConnected) return wagmiWallet(wagmiConfig)
+    if (walletMode === 'wagmi+solana') return isConnected ? combineWallets(wagmiWallet(wagmiConfig), sol) : sol
     return undefined
-  }, [walletMode, isConnected])
+  }, [walletMode, isConnected, sol, solAddress])
 
   const destination: Destination = useMemo(() => {
     const d = DESTINATIONS[dest]!.destination
@@ -76,7 +86,7 @@ export function Playground({ mock }: { mock: boolean }) {
       cancelled = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [embedded, direction, custody, country, dest, walletMode, isConnected])
+  }, [embedded, direction, custody, country, dest, walletMode, isConnected, solAddress])
 
   useEffect(() => {
     const t = setInterval(() => void fetch('/api/hooks').then((r) => r.json()).then(setHooks).catch(() => {}), 2000)
@@ -150,9 +160,19 @@ export function Playground({ mock }: { mock: boolean }) {
               <option value="none">No wallet</option>
               <option value="mock">Mock wallet (test)</option>
               <option value="wagmi">Connected wallet (wagmi)</option>
+              <option value="wagmi+solana">wagmi and Solana wallet</option>
             </select>
           </label>
           {walletMode === 'wagmi' && !isConnected && <p className="hint">Connect a wallet with the button at the top.</p>}
+          {walletMode === 'wagmi+solana' && (
+            solAddress ? (
+              <p className="hint">Solana: <code>{solAddress.slice(0, 4)}...{solAddress.slice(-4)}</code></p>
+            ) : (
+              <button type="button" id="connect-solana" onClick={() => void sol.connect().then(setSolAddress).catch((e) => alert(String(e?.message ?? e)))}>
+                Connect Solana wallet
+              </button>
+            )
+          )}
           <label>Theme
             <select id="theme" value={mode} onChange={(e) => setMode(e.target.value as 'light' | 'dark' | 'auto')}>
               <option value="light">Light</option><option value="dark">Dark</option><option value="auto">System</option>

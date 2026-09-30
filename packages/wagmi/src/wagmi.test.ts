@@ -147,6 +147,20 @@ describe('wagmiWallet: more', () => {
     expect(log).toEqual(['send:1:0x3:', 'wait:01'])
   })
 
+  it('Tempo: no native balance (it has no gas token), only USDC', async () => {
+    const cfg = { chains: [{ id: 4217, nativeCurrency: { symbol: 'USD', decimals: 18, name: 'USD' } }] } as unknown as Config
+    const balances = await wagmiWallet(cfg).getBalances!([{ chain: 'eip155:4217', address: state.address! }])
+    expect(balances).toEqual([{ chain: 'eip155:4217', token: USDC['eip155:4217'], symbol: 'USDC', decimals: 6, amount: '12.345678', usd: '12.345678' }])
+    expect(vi.mocked(core.getBalance).mock.calls.some((c) => (c[1] as { chainId: number }).chainId === 4217)).toBe(false)
+  })
+
+  it('is an EVM wallet only: refuses Solana transactions', async () => {
+    const w = wagmiWallet(config)
+    expect(w.namespaces).toEqual(['eip155'])
+    await expect(w.sendTransactions('eip155:1', [{ kind: 'solana', type: 'transaction', transaction: 'AA==' }])).rejects.toThrow(/EVM transactions only/)
+    expect(log).toEqual([])
+  })
+
   it('rejects empty batches, non-EVM chains and unconfigured chains before sending', async () => {
     const w = wagmiWallet(config)
     await expect(w.sendTransactions('eip155:1', [])).rejects.toThrow('No transactions to send')

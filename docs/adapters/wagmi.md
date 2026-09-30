@@ -13,11 +13,17 @@ interface WalletAdapter {
   /** Sends the transactions in order and returns the hash of the last one */
   sendTransactions(chain: string, txs: TxRequest[]): Promise<{ hash: string }>
   switchChain?(chain: string): Promise<void>
+  /** CAIP-2 namespaces this wallet sends on, e.g. ['eip155'] or ['solana']. Absent: any. */
+  namespaces?: string[]
 }
 
 type WalletBalance = { chain: string; token: string; symbol: string; decimals: number; amount: string; usd?: string }
-type TxRequest = { to: string; data?: string; value?: string; chainId: number; gas?: string }
+type TxRequest = EvmTxRequest | SolanaTxRequest
+type EvmTxRequest = { kind?: 'evm'; to: string; data?: string; value?: string; chainId: number; gas?: string }
+// SolanaTxRequest has kind: 'solana'. See the Solana guide.
 ```
+
+For Solana wallets, use `@openrampkit/solana`. See [Solana](../guide/solana.md#pay-from-a-solana-wallet). To use an EVM wallet and a Solana wallet together, join them with `combineWallets(wagmiWallet(config), solanaWallet())` from `@openrampkit/core`.
 
 How the controller uses it:
 
@@ -72,11 +78,11 @@ wagmiWallet(config, {
 | Method | What it does |
 |---|---|
 | `getAccounts()` | The connected address on every chain in the wagmi config (`eip155:{id}`), or `[]` when not connected |
-| `getBalances()` | Native balance plus USDC (and your `tokens`) per configured chain. One failing RPC does not hide the other balances. USDC also fills `usd`. |
+| `getBalances()` | Native balance plus USDC (and your `tokens`) per configured chain. One failing RPC does not hide the other balances. USDC also fills `usd`. On Tempo (no native token) it shows USDC only. |
 | `switchChain(chain)` | Switches when the wallet is on another chain. Throws for chains not in the wagmi config. |
 | `sendTransactions(chain, txs)` | For each tx: switch to `tx.chainId`, send, and wait for the receipt between txs. Returns the last hash. |
 
-Only EVM chains are supported. Chains must be in your wagmi config.
+Only EVM chains are supported. Chains must be in your wagmi config. `wagmiWallet` refuses Solana transactions. Tempo works like any EVM chain (see [Chains and tokens](../concepts/chains.md#tempo)).
 
 ## createMockWallet
 

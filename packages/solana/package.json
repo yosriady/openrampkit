@@ -1,0 +1,56 @@
+{
+  "name": "@openrampkit/solana",
+  "version": "0.0.1",
+  "description": "Solana wallet adapter for OpenRampKit (Wallet Standard and @solana/kit)",
+  "keywords": [
+    "onramp",
+    "openrampkit",
+    "solana",
+    "wallet",
+    "wallet-standard"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/guide/solana.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/solana"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@openrampkit/core": "workspace:*",
+    "@solana/kit": "^8.4.0",
+    "@solana/wallet-standard-features": "^1.3.0",
+    "@wallet-standard/app": "^1.1.0",
+    "@wallet-standard/base": "^1.1.0",
+    "@wallet-standard/features": "^1.1.0"
+  }
+}

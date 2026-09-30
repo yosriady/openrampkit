@@ -556,8 +556,9 @@ describe('relay errors', () => {
     const { fetch } = fakeFetch([])
     const a = relay()
     const ctx = makeCtx({ fetch })
-    // non-EVM wallet source
-    await expect(a.quote({ leg: walletLeg, amountIn: { amount: '1', asset: { kind: 'crypto', chain: SOL, token: 'native' } }, source: { chain: SOL, token: 'native' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST', message: expect.stringContaining('EVM chains only') } })
+    // wallet source that is neither EVM nor Solana
+    const BTC = 'bip122:000000000019d6689c085ae165831e93'
+    await expect(a.quote({ leg: walletLeg, amountIn: { amount: '1', asset: { kind: 'crypto', chain: BTC, token: 'native' } }, source: { chain: BTC, token: 'native' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST', message: expect.stringContaining('EVM chains and Solana only') } })
     // no token chosen yet
     await expect(a.quote({ leg: walletLeg, amountIn: { amount: '1', asset: { kind: 'crypto', chain: '*', token: '*' } } }, ctx)).rejects.toMatchObject({ error: { message: 'Choose the token you want to pay with.' } })
     // fiat amount on a crypto leg

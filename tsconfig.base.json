@@ -42,6 +42,9 @@
       "@openrampkit/wagmi": [
         "packages/wagmi/src/index.ts"
       ],
+      "@openrampkit/solana": [
+        "packages/solana/src/index.ts"
+      ],
       "@openrampkit/mcp": [
         "packages/mcp/src/index.ts"
       ],

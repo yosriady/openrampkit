@@ -72,6 +72,30 @@ describe('server + controller, mock provider', () => {
     c.destroy()
   })
 
+  it('QRIS to USDC on Solana: the mint keeps its case, two legs (onramp to Base, bridge to Solana), completes', async () => {
+    const { ramp, client } = setup()
+    const SOL = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+    const MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
+    const s = await ramp.sessions.create({ userId: 'u-sol', country: 'ID', destination: { type: 'crypto', chain: SOL, token: MINT, address: '7uTT8Xi5RWXzy7h9XL244GRgEycDYDhLjr3ZyNdXi8pZ' } })
+    expect((await ramp.sessions.retrieve(s.id))!.destination).toMatchObject({ chain: SOL, token: MINT })
+    const c = new DepositController({ client, clientSecret: s.clientSecret })
+    await c.start()
+    await c.selectMethod('qris')
+    c.setAmount('150000')
+    await c.submitAmount()
+    const q = c.getSnapshot().quotes[0]!
+    expect(q.legs.map((l) => l.legId)).toEqual(['local', 'bridge'])
+    expect(q.output.asset).toMatchObject({ chain: SOL, token: MINT, decimals: 6 })
+    await c.confirm()
+    expect(c.getSnapshot().session!.step.surface!.kind).toBe('QR')
+    await c.fire('simulate_payment')
+    await waitFor(() => c.getSnapshot().screen === 'result')
+    const done = await c.done
+    expect(done.step.state).toBe('COMPLETED')
+    expect(done.result?.output.asset).toMatchObject({ chain: SOL, token: MINT })
+    c.destroy()
+  })
+
   it('card: popup-safe start URL redirects to the hosted checkout, which completes the order', async () => {
     const { ramp, client, fetchToHandler } = setup()
     const s = await ramp.sessions.create({ userId: 'u2', country: 'SG', destination: { type: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x000000000000000000000000000000000000beef' } })
