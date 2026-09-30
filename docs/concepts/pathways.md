@@ -70,7 +70,7 @@ type LegSpec = {
   eta: { min: number; max: number }                          // seconds
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods'>
+  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement'>
 }
 
 type EndpointMatcher = {
@@ -98,7 +98,8 @@ An adapter may also have a live `catalog()`. The server calls it at plan time wi
 6. **Problems.** A leg is marked with a reason, and the pathway goes to the "unavailable" group, when:
    - the app's region policy or the leg's region policy does not allow the user (`REGION_UNSUPPORTED`),
    - the client cannot draw any of the leg's surfaces (`CLIENT_UPGRADE_REQUIRED`),
-   - the leg requires a wallet and none is connected (`BAD_REQUEST`, "Connect a wallet to use this method.").
+   - the leg requires a wallet and none is connected (`BAD_REQUEST`, "Connect a wallet to use this method."),
+   - the destination has `settlement` and the last leg does not declare the `settlement` capability (`PROVIDER_UNAVAILABLE`, "This method cannot pay into the settlement contract.").
 7. **Methods.** Methods not allowed in the user's country are dropped (see [country rules](#method-country-rules)). Methods in `policy.disabledMethods` are dropped. Duplicate pathway ids are dropped.
 
 Pathway ids look like `vietqr:swapped.vietqr>relay.bridge@eip155:8453`: the method, the legs, and the hop chain.

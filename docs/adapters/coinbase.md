@@ -65,4 +65,3 @@ Create a CDP webhook subscription for `onramp.transaction.*` events with the URL
 - **TO VERIFY**: `google_pay` has no own value in the session API; it is sent as `CARD`.
 - **TO VERIFY**: the Buy Config response shape (`{ data: { countries } }` in the guide, `{ countries }` in the API spec). Both are accepted.
 - **TO VERIFY**: the status query parameter casing (`pageSize` in the API spec, `page_size` in the guide).
-- The source comment on `defaultSubdivision` says the adapter context does not carry the session region. It does now (`ctx.session.region`), and the adapter uses it first.

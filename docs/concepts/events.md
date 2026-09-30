@@ -57,7 +57,7 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 | `session.completed` | Every leg succeeded |
 | `session.failed` | The step became `FAILED` or `BLOCKED` |
 | `session.refunded` | The step became `REFUNDED` |
-| `session.expired` | An open session passed its expiry with no payment started (found by the sweep, or by a request) |
+| `session.expired` | The session passed its expiry with no payment started, or with a leg that still waits for the user (found by the sweep, or by a request). Also sent when a leg ends as `expired`. |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` |
 

@@ -59,7 +59,7 @@ createOpenRamp({ store: cloudflareKvStore(env.SESSIONS, { sessionTtlSec: 7 * 24 
 ```
 
 - Sessions are stored under `s:{id}` for `sessionTtlSec` (default 7 days). Other keys are stored under `k:{key}`, with a TTL of at least 60 seconds (the KV minimum).
-- KV reads can be stale for up to about a minute across locations, and there is no compare-and-set. Concurrent writes to one session can be lost. See [Cloudflare Workers](./cloudflare-workers.md#kv-caveat).
+- KV reads can be stale for up to about a minute across locations, and there is no compare-and-set. Concurrent writes to one session can be lost. See [Cloudflare Workers](./cloudflare-workers.md#why-not-workers-kv).
 
 `KVNamespaceLike` is the minimal shape: `get(key, 'text')` and `put(key, value, { expirationTtl })`.
 
@@ -96,18 +96,14 @@ const store = redisStore(fromNodeRedis(new Redis(process.env.REDIS_URL!)))
 `@upstash/redis` matches the `RedisLike` shape directly (`get`, `set(key, value, { ex })`, `eval(script, keys, args)`), and its automatic JSON parsing is handled. `fromNodeRedis` adapts clients with the ioredis call style: `set(key, value, 'EX', seconds)` and `eval(script, numKeys, ...keysAndArgs)`.
 
 ::: tip node-redis v4 and later
-The `redis` package (node-redis v4+) uses another call style (`set(key, value, { EX })`, `eval(script, { keys, arguments })`). `fromNodeRedis` does not fit it despite the name. Use ioredis, or write a small `RedisLike` wrapper:
+The `redis` package (node-redis v4+) uses another call style (`set(key, value, { EX })`, `eval(script, { keys, arguments })`). Use `fromNodeRedisV4` for it:
 
 ```ts
 import { createClient } from 'redis'
-import type { RedisLike } from '@openrampkit/server'
+import { fromNodeRedisV4, redisStore } from '@openrampkit/server'
 
 const client = await createClient({ url: process.env.REDIS_URL }).connect()
-const redis: RedisLike = {
-  get: (k) => client.get(k),
-  set: (k, v, o) => (o?.ex ? client.set(k, v, { EX: o.ex }) : client.set(k, v)),
-  eval: (script, keys, args) => client.eval(script, { keys, arguments: args }),
-}
+const store = redisStore(fromNodeRedisV4(client))
 ```
 :::
 

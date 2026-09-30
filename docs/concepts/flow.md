@@ -52,7 +52,97 @@ The legal moves live in one table in `@openrampkit/core`, `TRANSITION_TABLE`. Th
 | `REFUNDED` | none |
 | `BLOCKED` | `SELECT_METHOD` |
 
-Helpers: `isTerminal(state)`, `isLegalMove(from, to)`, `validateStep(step)`, `TABLE_VERSION` (currently `1`).
+Helpers: `isTerminal(state)`, `isLegalMove(from, to)`, `validateStep(step)`, `TABLE_VERSION` (currently `1`). `isLegalMove` also allows a move to the same state.
+
+The same table as a diagram. `[*]` on the left is a new session. `[*]` on the right is a final state with no way out.
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> SELECT_METHOD
+  SELECT_METHOD --> QUOTE
+  SELECT_METHOD --> BLOCKED
+  SELECT_METHOD --> EXPIRED
+  QUOTE --> SELECT_METHOD
+  QUOTE --> AUTH
+  QUOTE --> KYC
+  QUOTE --> PAYMENT
+  QUOTE --> PROCESSING
+  QUOTE --> BLOCKED
+  QUOTE --> EXPIRED
+  AUTH --> KYC
+  AUTH --> PAYMENT
+  AUTH --> FAILED
+  AUTH --> EXPIRED
+  KYC --> KYC
+  KYC --> PAYMENT
+  KYC --> FAILED
+  KYC --> EXPIRED
+  PAYMENT --> PAYMENT
+  PAYMENT --> PROCESSING
+  PAYMENT --> COMPLETED
+  PAYMENT --> FAILED
+  PAYMENT --> EXPIRED
+  PAYMENT --> QUOTE
+  PROCESSING --> PROCESSING
+  PROCESSING --> PAYMENT
+  PROCESSING --> COMPLETED
+  PROCESSING --> FAILED
+  PROCESSING --> REFUNDED
+  PROCESSING --> EXPIRED
+  FAILED --> SELECT_METHOD: restart
+  BLOCKED --> SELECT_METHOD: restart
+  COMPLETED --> [*]
+  EXPIRED --> [*]
+  REFUNDED --> [*]
+```
+
+`FAILED` and `BLOCKED` are terminal, but the table lets them go back to `SELECT_METHOD`. The `restart` transition does this. In the table, `COMPLETED`, `EXPIRED` and `REFUNDED` have no way out. The server's `restart` route is wider than the table: it accepts a restart after any final state other than `COMPLETED`, until the session deadline.
+
+Who uses the table:
+
+- The server and the client read terminality from it (`isTerminal`). A terminal step stops the poll, and the server refuses a new payment while a step is not terminal.
+- The adapter test kit checks each `LegStep` with `validateStep`. For example, a terminal step must not have an AWAIT transition.
+- The server does not reject a move that is not in the table. Adapters must return legal steps. The conformance kit helps you check this.
+
+In practice, the server moves `SELECT_METHOD` straight to the first leg's state when `POST /select` starts the leg. `QUOTE` is for adapters that quote inside a leg.
+
+### Leg status
+
+Each leg has its own `LegStatus`. The server maps it to a state when a provider event arrives:
+
+```mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> pending
+  pending --> awaiting_user
+  pending --> processing
+  awaiting_user --> processing
+  processing --> awaiting_user
+  awaiting_user --> succeeded
+  processing --> succeeded
+  awaiting_user --> failed
+  processing --> failed
+  processing --> refunded
+  awaiting_user --> expired
+  processing --> expired
+  succeeded --> [*]
+  failed --> [*]
+  refunded --> [*]
+  expired --> [*]
+```
+
+| Leg status | Session state | Final |
+|---|---|---|
+| `pending` | `PROCESSING` | No |
+| `awaiting_user` | `PAYMENT` | No |
+| `processing` | `PROCESSING` | No |
+| `succeeded` | `COMPLETED` for the last leg, else `PROCESSING` while the next leg starts | Yes |
+| `failed` | `FAILED` | Yes |
+| `refunded` | `REFUNDED` | Yes |
+| `expired` | `EXPIRED` | Yes |
+
+The leg diagram shows the usual moves. The code does not enforce them: it only checks that a final leg does not change again (`isLegTerminal`).
 
 ## Transitions
 

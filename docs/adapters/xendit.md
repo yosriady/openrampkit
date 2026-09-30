@@ -50,7 +50,7 @@ Each leg allows only its country. Limits come from Xendit's channel pages.
 ## Quotes and start
 
 - Quote: local. The amount is rounded to the currency's minor units and checked against the channel limits (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`). Fees come from the `fees` option. Quotes expire after 10 minutes.
-- Start: `POST /v3/payment_requests` with `type: 'PAY'`, `capture_method: 'AUTOMATIC'`, the channel code, return URLs, and `metadata: { openramp_session, user_id }`. Header `api-version: 2024-11-11`. Idempotency key: `{sessionId}:xendit:{legId}:start`.
+- Start: `POST /v3/payment_requests` with `type: 'PAY'`, `capture_method: 'AUTOMATIC'`, the channel code, return URLs, and `metadata: { openramp_session, user_id }`. Header `api-version: 2024-11-11`. Idempotency key: `{sessionId}:xendit:{legId}:{nonce}`, with a new nonce per quote.
 - Surface from the payment request's actions: `QR_STRING` gives a `QR`, `WEB_URL` gives a `REDIRECT`, `DEEPLINK_URL` gives a `DEEPLINK`.
 - Status: `GET /v3/payment_requests/{id}`.
 
@@ -69,7 +69,7 @@ Errors: HTTP 429 is `RATE_LIMITED`. Other 4xx is `PROVIDER_DECLINED` with Xendit
 In the Xendit dashboard, set the payment webhook URL to `{baseUrl}/webhooks/xendit`.
 
 - Verification: the `x-callback-token` header must equal `webhookToken`.
-- `payment.capture` (or `data.status === 'SUCCEEDED'`) gives `succeeded` with the amount. `payment.failure` (or `FAILED`) gives `failed`. Other events are ignored.
+- `payment.capture` (or `data.status === 'SUCCEEDED'`) gives `succeeded`. The event has no output amount, because Xendit reports the gross amount and the quote output is net of fees. `payment.failure` (or `FAILED`) gives `failed`. Other events are ignored.
 
 ## Verified vs TO VERIFY
 
@@ -79,5 +79,5 @@ In the Xendit dashboard, set the payment webhook URL to `{baseUrl}/webhooks/xend
 
 ## Notes
 
-- The idempotency key is the same for every start of the same leg in one session. If the user restarts and chooses the same method again with another amount, Xendit may return the first payment request or refuse the new one. Create a new session for a new attempt.
-- The webhook parser throws on a body that is not JSON (the server then answers 400). Other adapters return no events instead.
+- The idempotency key has a nonce per quote. A retried start for the same quote reuses the first payment request. A restart with a new quote creates a new payment request.
+- The webhook parser logs a warning and returns no events for a body that is not JSON, like the other adapters.

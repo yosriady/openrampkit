@@ -142,7 +142,7 @@ const messages = {
 
 Some keys are functions (`via`, `limit`, `etaMinutes`, `continueTo`, and others), and `stepTitle`, `legStatus` and `failedTitle` are records. `defaultMessages` is the English catalog; `catalogs` has all of them. See `packages/web/src/i18n/en.ts` for every key.
 
-Helpers exported from `@openrampkit/web`: `resolveLocale({ locale, sessionLocale, navigatorLanguage })`, `resolveMessages({ ...sources, messages })`, `catalogFor(tag)`, and `mergeMessages(overrides)` (a shallow merge over English only).
+Helpers exported from `@openrampkit/web`: `resolveLocale({ locale, sessionLocale })`, `resolveMessages({ ...sources, messages })`, `catalogFor(tag)`, and `mergeMessages(overrides)` (a shallow merge over English only).
 
 ## React
 

@@ -86,7 +86,7 @@ if (event.type === 'session.completed') {
 }
 ```
 
-`session.result` has the amounts. When Xendit reports the payment, `result.output` is its `request_amount` (the amount the user paid, before Xendit fees) and `result.outputConfirmed` is `true`. Compare it with the expected amount on your order. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
+`session.result` has the amounts. `result.input` is the amount the user paid. The Xendit webhook does not report an output amount, so `result.output` is the quoted net amount (after the fee model of the adapter) and `result.outputConfirmed` is `false`. Compare `result.input` with the expected amount on your order. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
 
 ## Fees in quotes
 
@@ -114,4 +114,4 @@ adapters: [mockAdapter()]
 
 - Channel limits in the adapter come from Xendit's channel pages.
 - VietQR and DuitNow QR are not in the channel list yet. The PayNow QR channel code is marked **TO VERIFY** in the source.
-- The adapter uses one idempotency key per session and leg (`xendit:{legId}:start`). If a user restarts and picks the same method again in the same session, Xendit may return the first payment request. Create a new session for a new attempt.
+- The adapter uses one idempotency key per quote (`xendit:{legId}:{nonce}`). A retried start for the same quote reuses the first payment request. A new quote (for example after "Try again") creates a new payment request.

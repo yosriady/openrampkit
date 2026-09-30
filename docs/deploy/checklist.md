@@ -21,7 +21,7 @@ Go through this list before real money moves.
 
 ## Store
 
-- [ ] You use a shared store with an atomic version check (Redis, or your own). Not the memory store. Not Workers KV for real traffic. See [Session stores](./stores.md).
+- [ ] You use a shared store with an atomic version check (`durableObjectStore` on Cloudflare, `redisStore`, or your own). Not the memory store. Not Workers KV for real traffic. See [Session stores](./stores.md).
 - [ ] Sessions are kept for days (the built-in stores keep them 7 days), so late provider webhooks still find them.
 
 ## CORS and hosting
@@ -35,7 +35,7 @@ Go through this list before real money moves.
 
 ## Provider webhooks
 
-- [ ] Each provider with webhooks points to `{baseUrl}/webhooks/{adapterId}`, and its signing secret is configured on the adapter (`webhookToken` for Xendit, `webhookSecret` for Coinbase and Stripe, `webhookKey` for MoonPay). Swapped sets its callback URL per order.
+- [ ] Each provider with webhooks points to `{baseUrl}/webhooks/{adapterId}`, and its signing secret is configured on the adapter (`webhookToken` for Xendit, `webhookSecret` for Coinbase, Stripe, Meld, Onramper and Peer, `webhookKey` for MoonPay). Swapped sets its callback URL per order.
 - [ ] You tested one webhook per provider in sandbox and saw the session move.
 - [ ] Transak: the adapter verifies webhooks with its cached access token. Make sure at least one quote or start ran on the instance (or the token is in the shared store) before webhooks arrive.
 
@@ -71,7 +71,7 @@ Go through this list before real money moves.
 
 - [ ] You read the TO VERIFY notes on each [adapter page](../adapters/) you use, and tested those paths in sandbox.
 - [ ] Relay has an `apiKey` (the `/requests/v2` fallback retires on 2026-11-24).
-- [ ] Stripe uses `surface: 'redirect'` with the web modal.
+- [ ] Stripe: pass `providerRenderers: { stripe: stripeOnrampRenderer() }` to the modal, or set `surface: 'redirect'` on the adapter.
 - [ ] Coinbase users know they need a Coinbase account.
 
 ## UI

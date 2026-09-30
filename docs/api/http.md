@@ -212,7 +212,7 @@ When `Idempotency-Key` is present, the server stores the response under `(sessio
 
 ### Session deadline
 
-After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work.
+After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work. The exception is a leg that still waits for the user (`awaiting_user`): the [background sweep](./server.md#background-sweep) expires it after the deadline.
 
 ### Limits
 

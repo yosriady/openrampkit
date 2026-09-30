@@ -34,6 +34,11 @@ Each adapter needs an account with its provider, except the mock adapter. You ca
 | [Coinbase](../adapters/coinbase.md) | CDP Secret API key (id and secret), and a CDP webhook subscription secret | [docs.cdp.coinbase.com/onramp](https://docs.cdp.coinbase.com/onramp) |
 | [Transak](../adapters/transak.md) | Partner API key and API secret, and your registered referrer domain | [docs.transak.com](https://docs.transak.com) |
 | [Xendit](../adapters/xendit.md) | Secret API key and webhook verification token | [docs.xendit.co](https://docs.xendit.co) |
+| [MoonPay](../adapters/moonpay.md) | Publishable key, secret key, and a webhook API key | [dev.moonpay.com](https://dev.moonpay.com) |
+| [Stripe](../adapters/stripe.md) | Secret key with onramp access, publishable key, and a webhook endpoint secret | [docs.stripe.com/crypto](https://docs.stripe.com/crypto) |
+| [Meld](../adapters/meld.md) | API key, and a webhook profile secret | [docs.meld.io](https://docs.meld.io) |
+| [Onramper](../adapters/onramper.md) | API key, an Ed25519 signing key, and a webhook secret | [docs.onramper.com](https://docs.onramper.com) |
+| [Peer](../adapters/peer.md) | Merchant API key and webhook secret (opt-in with `enabled: true`) | See [Peer](../adapters/peer.md) |
 
 Providers are the regulated party. They run KYC, take the payment and deliver the funds. Read each provider's terms before you go live.
 
@@ -44,7 +49,8 @@ Keep these out of your client bundle. Store them as environment variables or pla
 | Name (as used in the examples) | Purpose |
 |---|---|
 | `OPENRAMP_SECRET` | Signs popup-safe start URLs. At least 32 characters. `createOpenRamp` throws if it is shorter. |
-| `OPENRAMP_WEBHOOK_SECRET` | Signs the webhooks the server sends to your backend. |
+| `OPENRAMP_WEBHOOK_SECRET` | Signs the webhooks the server sends to your backend. At least 16 characters. |
+| `CRON_SECRET` | Protects the cron route that calls `openramp.sweep()` (Next.js example). To use `POST /tasks/sweep` instead, set `tasksToken` (at least 16 characters). |
 | `PUBLIC_URL` | The public origin of your app. The server's `baseUrl` is built from it. |
 | Provider keys | For example `XENDIT_SECRET_KEY` and `XENDIT_WEBHOOK_TOKEN`. |
 
@@ -56,4 +62,4 @@ openssl rand -hex 32
 
 ## A wallet (optional)
 
-For "Pay with wallet", the modal needs a `WalletAdapter`. Use `@openrampkit/wagmi` if your app uses wagmi, or `createMockWallet()` from `@openrampkit/client` for tests. See [Wallets (wagmi)](../adapters/wagmi.md).
+For "Pay with wallet", the modal needs a `WalletAdapter`. Use `@openrampkit/wagmi` if your app uses wagmi, `@openrampkit/solana` for Solana wallets, or `createMockWallet()` from `@openrampkit/client` for tests. See [Wallets (wagmi)](../adapters/wagmi.md) and [Solana](./solana.md#pay-from-a-solana-wallet).

@@ -59,7 +59,7 @@ An adapter may serve its own pages at `{baseUrl}/adapters/{adapterId}/*`. The mo
 
 ## Common patterns
 
-- **Static legs plus a live catalog.** Swapped, Coinbase, Transak and MoonPay declare static legs and refine them with `catalog()` at plan time (cached in the store). If the catalog call fails, the server logs a warning and uses the static legs.
+- **Static legs plus a live catalog.** Swapped, Coinbase, Transak, MoonPay, Meld, Onramper and Peer declare static legs and refine them with `catalog()` at plan time (cached in the store). If the catalog call fails, the server logs a warning and uses the static legs.
 - **Delivery for hops.** Onramp adapters deliver to `deliverTo.address` when the server gives one (the Relay deposit address in a two-leg pathway), else to the session's destination address.
 - **References.** Every started leg returns a `ref` (an order id, a deposit address or a request id). Webhooks and status checks find the leg by it.
 

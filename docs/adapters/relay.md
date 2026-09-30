@@ -107,4 +107,4 @@ The Relay adapter has no webhook handler. Status comes from polling: the browser
 
 ## Verified vs TO VERIFY
 
-The source has no TO VERIFY markers for Relay. The Relay API paths used are `/quote/v2`, `/currencies/v2`, `/intents/status/v3`, `/requests/v3` (with a key) or `/requests/v2`, and `/chains` (health). Same-chain checks use the JSON-RPC methods `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_blockNumber` and `eth_getLogs`.
+The source has no TO VERIFY markers for Relay. The Relay API paths used are `/quote/v2`, `/currencies/v2`, `/intents/status/v3`, `/requests/v3` (with a key) or `/requests/v2`, and `/chains` (health). Same-chain checks use the JSON-RPC methods `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_getBlockByNumber`, `eth_blockNumber`, `eth_getLogs` and `eth_call` (settlement receipts) on EVM chains, and `getSignatureStatuses`, `getTransaction`, `getTokenAccountsByOwner` and `getSignaturesForAddress` on Solana.

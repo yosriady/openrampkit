@@ -18,6 +18,8 @@ createOpenRamp({
 | `settleMs` | `3000` | Time from "paid" to "completed" |
 | `crypto` | `false` | Add mock `wallet` and `transfer` legs (use when Relay is not configured) |
 | `bridge` | `false` | Add a mock `bridge` leg for two-leg pathways (use when Relay is not configured) |
+| `offramp` | `false` | Add a mock `offramp` leg for withdrawals to cash |
+| `localChain` | none | Test only: add an `onchain` leg that pays with a real ERC-20 transfer on a local chain (Anvil) |
 | `name` | `'Test provider'` | Name shown to users |
 
 What each leg does:
@@ -29,7 +31,9 @@ What each leg does:
 | `payin` (merchant) | `qris`, `promptpay`, `vietqr`, `qrph`, `duitnow`, `paynow`, `card` | `QR` | Press **Simulate payment (test mode)** |
 | `wallet` | `wallet` | `WALLET_TX` | Press **Confirm in wallet** (with a wallet adapter) |
 | `transfer` | `transfer` | `DEPOSIT_ADDRESS` | Press **Simulate deposit (test mode)** |
-| `bridge` | (hop) | none | Settles by itself after `settleMs` |
+| `bridge` | (hop) | none shown (the spec declares `DEPOSIT_ADDRESS`) | Settles by itself after `settleMs` |
+| `offramp` | `bank_transfer`, `gcash`, `momo`, `promptpay` | `FORM`, then `WALLET_TX` | Fill in the payout form, then send the USDC with a wallet or the treasury |
+| `onchain` | `wallet` | `WALLET_TX` | Send a real ERC-20 transfer on the local chain |
 
 See [Mock adapter](../adapters/mock.md) for the details.
 

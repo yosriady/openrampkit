@@ -62,7 +62,7 @@ Flows to try:
 
 ## Cloudflare Worker
 
-[`examples/cloudflare-worker`](https://github.com/yosriady/openrampkit/tree/main/examples/cloudflare-worker) runs the server as a standalone Worker with a KV session store. Your app backend creates sessions over HTTP with a shared API key, through the `authorize` hook. See [Deploy on Cloudflare Workers](../deploy/cloudflare-workers.md).
+[`examples/cloudflare-worker`](https://github.com/yosriady/openrampkit/tree/main/examples/cloudflare-worker) runs the server as a standalone Worker with a Durable Object session store (`durableObjectStore`). Your app backend creates sessions over HTTP with a shared API key, through the `authorize` hook. See [Deploy on Cloudflare Workers](../deploy/cloudflare-workers.md).
 
 ```bash
 cd examples/cloudflare-worker

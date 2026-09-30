@@ -14,7 +14,7 @@ const openramp = createOpenRamp({
 
 ## createOpenRamp(config)
 
-`createOpenRamp` throws at startup when `secret` is shorter than 32 characters, when an adapter targets another API version, or when two adapters share an id.
+`createOpenRamp` throws at startup when `secret` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version, or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -83,7 +83,7 @@ Each run does three things:
 
 1. **Retries failed webhooks.** A delivery that fails (no 2xx answer, or a timeout) goes to an outbox in the store. The sweep sends it again when it is due. The wait starts at 30 seconds and doubles after each failed attempt, up to 1 hour. After `webhooks.maxAttempts` attempts in all (default 8), the server drops the event and logs `webhook dropped after retries` as an error.
 2. **Refreshes open payments.** For each open session with an active payment, it asks the active leg's adapter for status, like `sessions.refresh(id)`. This settles legs without provider webhooks (Relay) after the user leaves.
-3. **Expires idle sessions.** An open session past its expiry with no payment started moves to `EXPIRED`, and the server sends `session.expired`.
+3. **Expires idle sessions.** A session past its expiry moves to `EXPIRED` when no payment started, or when the active leg still waits for the user (`awaiting_user`). The server sends `session.expired`. A leg that the provider is processing is not expired: the sweep refreshes it instead.
 
 ```ts
 type SweepResult = {
@@ -98,7 +98,7 @@ type SweepResult = {
 The outbox and the list of open sessions are small lists in the store's key-value space. Key-value stores are not atomic, so two sweeps that run at the same time can send the same webhook twice. Deduplicate by event id (`openramp-id`) in your backend. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
 :::
 
-The server tracks only the sessions it creates, and keeps up to the last 1,000 open session ids.
+The server tracks only the sessions it creates. The open-session list and the outbox list each keep up to the last 5,000 ids. When a list is full, the server drops the oldest ids and logs a warning: run the sweep more often.
 
 ## CreateSessionInput
 
@@ -129,12 +129,15 @@ These checks also apply to the input that `authorize` returns for `POST /session
 
 ```ts
 type Destination =
-  | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number; calls?: ContractCall[] }
+  | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number;
+      calls?: ContractCall[]; settlement?: { contract: string } }
   | { type: 'merchant'; currency: string; accountRef?: string }
   | { type: 'fiat'; currency: string } // withdraw to cash: set by the server from the user's target
 ```
 
 `chain` is CAIP-2 (`eip155:8453`), `token` is an address or `native`. Pass `symbol` and `decimals` so the modal can format amounts without a lookup.
+
+`settlement` pays through an `OpenRampSettlement` contract. It needs an EVM chain, an EVM `address` (the recipient) and an ERC-20 `token`. `calls` need `settlement`, and a call cannot send native value. The server answers `400` when one of these rules fails. See [On-chain settlement](../concepts/settlement.md).
 
 ### Amount bounds
 

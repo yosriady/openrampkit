@@ -28,6 +28,7 @@ Holds the shared config and opens the modal.
 | `locale` | `string` | BCP 47. Pushed live to an open modal. |
 | `messages` | `Partial<Messages>` | Applied when the modal opens |
 | `onEvent` | `(e: OrkEvent) => void` | Every browser event |
+| `providerRenderers` | `Record<string, ProviderRenderer>` | Renderers for `PROVIDER_SDK` surfaces. See [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk). |
 | `children` | `ReactNode` | |
 
 Only one modal is open at a time: opening a new one closes the previous one. Unmounting the provider closes the modal.

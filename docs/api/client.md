@@ -75,7 +75,7 @@ It works like an external store: `getSnapshot()` returns an immutable `Snapshot`
 | `selectQuote(id)` | Picks a quote (the best one is picked by default) |
 | `confirm()` | Selects the quote on the server and starts the first leg |
 | `fire(name, inputs?)` | Fires a SUBMIT or SURFACE_RESULT transition |
-| `sendWalletTransactions()` | For a `WALLET_TX` surface: sends the transactions with the wallet, then fires the `tx_hash` transition with `{ txHash }` |
+| `sendWalletTransactions()` | For a `WALLET_TX` surface: sends the transactions with the wallet, then fires the step's SURFACE_RESULT transition that `expects: 'tx_hash'` (for example `submit_tx`) with `{ txHash }`. With no such transition, it only sends. |
 | `openSurface()` | For `REDIRECT` and `DEEPLINK`: opens the URL in a new window. Call it inside a click handler. A blocked `DEEPLINK` falls back to navigating the page. |
 | `notifySurface(kind, detail?)` | For a UI that reads provider iframe messages: `'completed'`, `'failed'` or `'closed'`. Polls at once. `closed` sets `surfaceClosed`. Never sets the outcome. |
 | `reopenSurface()` | Clears `surfaceClosed` |

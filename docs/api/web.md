@@ -20,13 +20,14 @@ Mounts `<openramp-modal>`, starts a session and returns a handle. Browser only.
 | `wallet` | `WalletAdapter` | none | Enables "Pay with wallet" |
 | `theme` | `Theme` | light | See [Theming](../guide/theming.md) |
 | `appearance` | `Appearance` | none | See [Theming](../guide/theming.md#appearance) |
-| `locale` | `string` | session locale, then browser, then `en` | BCP 47 tag. Built-in catalogs: `en`, `vi`, `id`, `th`, `ms`, `fil`. |
+| `locale` | `string` | session locale, then `en` | BCP 47 tag. Built-in catalogs: `en`, `vi`, `id`, `th`, `ms`, `fil`. The browser language is not used. |
 | `messages` | `Partial<Messages>` | none | Overrides the locale catalog key by key |
 | `container` | `HTMLElement` | `document.body` | Where to mount the element |
 | `embedded` | `boolean` | `false` | Render inline, without the overlay |
 | `onEvent` | `(e: OrkEvent) => void` | none | [Browser events](../concepts/events.md#browser-events) |
 | `onClose` | `(session?: PublicSession) => void` | none | Called once when the modal closes, with the last session |
 | `fetch` | `typeof fetch` | global | Custom fetch, for tests and demos |
+| `providerRenderers` | `Record<string, ProviderRenderer>` | none | Renderers for `PROVIDER_SDK` surfaces, keyed by the surface `provider`. When set, `PROVIDER_SDK` is added to the surfaces the client can draw. See [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk). |
 
 Returns a `DepositHandle`:
 
@@ -86,6 +87,7 @@ The element renders a controller snapshot and calls its actions. It never talks 
 | `appearance` | property | `Appearance` | Appearance |
 | `messages` | property | `Partial<Messages>` | Message overrides |
 | `locale` | property and attribute | `string` | BCP 47 locale |
+| `providerRenderers` | property | `Record<string, ProviderRenderer>` | Renderers for `PROVIDER_SDK` surfaces. Without one, the modal links to `params.redirectUrl` when it can. |
 | `error` | property | `OrkError` | Error shown when there is no controller (for example the secret failed to load) |
 | `open` | property and boolean attribute (reflected) | `boolean` | Show the modal (not embedded) |
 | `embedded` | property and boolean attribute (reflected) | `boolean` | Inline mode: no overlay, no close button, Escape does not close |
@@ -114,7 +116,7 @@ The modal is a `dialog` with `aria-modal` (a `region` when embedded). It traps f
 
 ### Provider iframe messages
 
-For an `IFRAME` surface, the element listens for `message` events. It accepts a message only when `event.origin` equals the surface's allowed origin and `event.source` is its own iframe. It then calls `controller.notifySurface()`. Helpers: `classifyIframeMessage(data, cfg)`, `iframeOrigin(surface)`, `EMBED_SOURCE` (`'openramp-embed'`). See [Surfaces](../concepts/surfaces.md#iframe).
+For an `IFRAME` surface, the element listens for `message` events. It accepts a message only when `event.origin` equals the surface's allowed origin and `event.source` is its own iframe. It then calls `controller.notifySurface()`. Helpers: `classifyIframeMessage(data, cfg)`, `iframeOrigin(surface)`, `EMBED_SOURCE` (`'openramp-embed'`). See [Surfaces](../concepts/surfaces.md#iframe) and the [iframe message protocol](../concepts/flows.md#iframe-message-protocol).
 
 ## Themes
 
@@ -135,11 +137,21 @@ Types: `Theme`, `ThemeOptions`, `ThemeColors`, `ThemeMode`, `RadiusScale`, `Appe
 | `defaultMessages` | The English catalog |
 | `catalogs` | `{ en, vi, id, th, ms, fil }` |
 | `catalogFor(tag)` | The built-in catalog id for a BCP 47 tag, or `undefined` |
-| `resolveLocale({ locale?, sessionLocale?, navigatorLanguage? })` | `{ catalog, tag }`: explicit, then session, then browser, then `en` |
+| `resolveLocale({ locale?, sessionLocale? })` | `{ catalog, tag }`: explicit, then session, then `en`. The browser language is not used. Aliases: `tl` is `fil`, `in` is `id`, `zsm` is `ms`. |
 | `resolveMessages({ ...sources, messages? })` | The messages to render |
 | `mergeMessages(overrides?)` | Shallow merge over English |
 
 Types: `Messages`, `CatalogLocale`, `LocaleSources`.
+
+## Provider renderers
+
+| Export | Description |
+|---|---|
+| `stripeOnrampRenderer({ load? })` | A renderer for the Stripe onramp element (`@openrampkit/adapter-stripe` with the default `PROVIDER_SDK` surface) |
+| `loadScript(src)` | Loads a script once per page, in the document head |
+| `STRIPE_SCRIPTS` | The Stripe script URLs that `stripeOnrampRenderer` loads |
+
+Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 
 ## Constants and other exports
 

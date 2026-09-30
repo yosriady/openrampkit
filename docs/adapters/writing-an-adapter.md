@@ -121,7 +121,7 @@ type LegEvent = {
 }
 ```
 
-The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events.
+The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events. `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
 
 ## Withdraw legs
 
@@ -170,6 +170,8 @@ From the [spec](../design/spec.md):
 | `legStepFromEvent(event, ref, poll)` | The `LegStep` for a mapped provider status (no event means `PAYMENT`, `awaiting_user`) |
 | `decimalFrom(n, digits = 8)` | A JSON number from a provider to an exact decimal string |
 | `hmacSha256(secret, message, 'hex' \| 'base64')`, `timingSafeEqual(a, b)`, `randomHex(bytes)` | Crypto helpers |
+| `evmRpc`, `erc20TransferData`, `erc20PaidTo`, `ERC20_TRANSFER_TOPIC`, `topicAddress` | EVM JSON-RPC helpers for on-chain checks. See [EVM helpers](../api/adapter.md#evm-helpers). |
+| `buildSettlementTxs`, `settlementIntentTypedData`, `verifySettlement` and more | `OpenRampSettlement` helpers. See [Settlement helpers](../api/adapter.md#settlement-helpers). |
 
 ## A complete example
 

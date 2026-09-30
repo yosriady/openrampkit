@@ -84,7 +84,7 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
 | `session.completed` | Every leg succeeded. **Credit here.** | |
 | `session.failed` | The step became `FAILED` or `BLOCKED` | |
 | `session.refunded` | The step became `REFUNDED` | |
-| `session.expired` | An open session passed its expiry with no payment started | |
+| `session.expired` | The session passed its expiry before the payment went on (no payment started, or the leg still waits for the user), or a leg expired | |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` | |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` | |
 
@@ -125,9 +125,9 @@ The [background sweep](../api/server.md#background-sweep) finds expired sessions
 
 `data.object.session` is a [`PublicSession`](../api/core.md#publicsession). Once a payment started, it has `result` (a [`SessionResult`](../api/core.md#sessionresult)): the method, the provider, what the user paid (`input`), what arrived (`output`), whether `output` is confirmed, the fees and the transaction hashes. `userId` and `metadata` are what you passed to `sessions.create()`. See [Events](../concepts/events.md) for the full types.
 
-## Credit exactly once
+The [webhooks flow](../concepts/flows.md#webhooks-to-your-backend) shows signing, the outbox and the retries as a diagram.
 
-Follow these rules:
+## Credit exactly once
 
 Webhooks are delivered **at least once**. A retry after a timeout, or two sweeps at the same time, can send the same event twice. Follow these rules:
 

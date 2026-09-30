@@ -47,7 +47,7 @@ transak({
 - There is no `status()`. Progress comes from webhooks only.
 
 ::: warning REDIRECT and the Referer header
-Transak checks the browser's `Referer` against `referrerDomain`. The server's popup-safe start redirect sends `referrer-policy: no-referrer` unless the surface sets `keepReferrer: true`, and this adapter does not set it. Keep the default `IFRAME` surface. With `keepReferrer`, the start redirect would send the origin of your OpenRampKit server, which must then match `referrerDomain`.
+Transak checks the browser's `Referer` against `referrerDomain`. The server's popup-safe start redirect sends `referrer-policy: no-referrer` unless the surface sets `keepReferrer: true`. This adapter sets `keepReferrer: true` on its `REDIRECT` surface, so the start redirect uses `referrer-policy: strict-origin` and sends the origin of your OpenRampKit server. That origin must match `referrerDomain`. The default `IFRAME` surface does not use the start redirect.
 :::
 
 ## Webhooks
@@ -71,4 +71,4 @@ Set the webhook URL in the Transak partner dashboard to `{baseUrl}/webhooks/tran
 - **TO VERIFY**: Transak network names for Arbitrum and Optimism (check with `GET /cryptocoins`).
 - **TO VERIFY**: the UPI payment method id (`inr_upi`; partner-specific).
 - **TO VERIFY**: the bank transfer method for currencies other than EUR, GBP and USD (falls back to `sepa_bank_transfer`).
-- **TO VERIFY**: the widget session call marks the end-user IP header `x-user-ip` as required. The adapter does not send it yet, although the adapter context now has `ctx.session.ip`.
+- The widget session call sends the end-user IP header `x-user-ip` when `ctx.session.ip` is known (the IP of the latest browser request).
