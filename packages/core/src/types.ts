@@ -252,7 +252,40 @@ export type StateName =
   | 'REFUNDED'
   | 'BLOCKED'
 
-export type TxRequest = { to: string; data?: string; value?: string; chainId: number; gas?: string }
+/** An EVM transaction for the wallet to send */
+export type EvmTxRequest = { kind?: 'evm'; to: string; data?: string; value?: string; chainId: number; gas?: string }
+
+/** A Solana instruction in the JSON form that Relay returns. `data` is hex. */
+export type SolanaInstruction = {
+  programId: string
+  keys: Array<{ pubkey: string; isSigner: boolean; isWritable: boolean }>
+  /** Instruction data, hex (with or without `0x`) */
+  data: string
+}
+
+/**
+ * A Solana transaction for the wallet to sign and send. The wallet adds the fee payer
+ * (the connected account) and a recent blockhash.
+ * - `instructions`: build a v0 transaction from these instructions (Relay's Solana steps).
+ * - `transaction`: an already built transaction, base64 wire format (unsigned or partly signed).
+ * - `transfer`: move `amount` base units of `mint` (or `native` SOL) to the owner address `to`.
+ *   For an SPL token the wallet creates the recipient's associated token account when it is missing.
+ */
+export type SolanaTxRequest =
+  | { kind: 'solana'; type: 'instructions'; instructions: SolanaInstruction[]; addressLookupTableAddresses?: string[] }
+  | { kind: 'solana'; type: 'transaction'; transaction: string }
+  | { kind: 'solana'; type: 'transfer'; to: string; mint: string; amount: string; decimals: number }
+
+/** A transaction for the wallet: EVM (no `kind`, or `kind: 'evm'`) or Solana (`kind: 'solana'`) */
+export type TxRequest = EvmTxRequest | SolanaTxRequest
+
+export function isSolanaTx(tx: TxRequest): tx is SolanaTxRequest {
+  return tx.kind === 'solana'
+}
+
+export function isEvmTx(tx: TxRequest): tx is EvmTxRequest {
+  return tx.kind !== 'solana'
+}
 
 export type FieldSpec = {
   id: string

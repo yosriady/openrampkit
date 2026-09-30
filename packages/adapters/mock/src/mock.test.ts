@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkLegQuote, checkLegStep } from '@openrampkit/adapter'
 import type { LegEvent, RouteContext } from '@openrampkit/adapter'
-import { USDC } from '@openrampkit/core'
+import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, isSolanaAddress, planPathways } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, memoryKV, runAdapterConformance } from '@openrampkit/adapter/testing'
 import { mockAdapter } from './index.js'
@@ -314,5 +314,48 @@ describe('mock offramp (withdraw to cash)', () => {
       await expect(run(ok, shared)).resolves.toMatchObject({ state: 'COMPLETED' })
       await expect(run(ok, shared, 'sess_2')).resolves.toMatchObject({ state: 'FAILED', error: { message: /already used/ } })
     })
+  })
+})
+
+describe('mock adapter: Solana', () => {
+  const SOL = SOLANA_MAINNET
+  const SOL_DEST = '7uTT8Xi5RWXzy7h9XL244GRgEycDYDhLjr3ZyNdXi8pZ'
+  const SOL_USDC: CryptoAsset = { kind: 'crypto', chain: SOL, token: SOLANA_USDC_MINT }
+  const solDest = { type: 'crypto' as const, chain: SOL, token: SOLANA_USDC_MINT, address: SOL_DEST }
+
+  it('plans a card > bridge pathway to USDC on Solana, and the bridge delivers the Solana mint', async () => {
+    const a = mockAdapter({ settleMs: 0, crypto: true, bridge: true })
+    const plan = planPathways({ direction: 'deposit', destination: solDest, user: { country: 'ID' }, legs: a.legs.map((spec) => ({ adapterId: 'mock', provider: 'Test provider', spec })) })
+    const ids = plan.pathways.map((p) => p.id)
+    expect(ids).toContain('card:mock.card>mock.bridge@eip155:8453')
+    expect(ids).toContain('qris:mock.local>mock.bridge@eip155:8453')
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: solDest })
+    const bridge = leg('bridge', { asset: BASE_USDC, location: { kind: 'address', address: 'deposit' } }, { asset: SOL_USDC, location: { kind: 'address', address: SOL_DEST } })
+    const q = await a.quote({ leg: bridge, amountIn: { amount: '10', asset: BASE_USDC } }, ctx)
+    expect(q.output.asset).toMatchObject({ chain: SOL, token: SOLANA_USDC_MINT, decimals: 6 })
+  })
+
+  it('wallet leg from Solana gives a Solana transfer; transfer leg shows a base58 deposit address', async () => {
+    const a = mockAdapter({ settleMs: 0, crypto: true })
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: solDest })
+    const to = { asset: SOL_USDC, location: { kind: 'address' as const, address: SOL_DEST } }
+    const solWallet = leg('wallet', { asset: SOL_USDC, location: { kind: 'user_wallet' } }, to)
+    const q = await a.quote({ leg: solWallet, amountIn: { amount: '2.5', asset: { ...SOL_USDC, decimals: 6 } } }, ctx)
+    const w = await a.start({ leg: solWallet, quote: q, deliverTo: { address: SOL_DEST } }, ctx)
+    expect(w.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '2500000', decimals: 6 }] })
+    const native = { kind: 'crypto' as const, chain: SOL, token: 'native' }
+    const nq = await a.quote({ leg: solWallet, amountIn: { amount: '1', asset: native } }, ctx)
+    expect(nq.input.asset).toMatchObject({ symbol: 'SOL', decimals: 9 })
+    const t = await a.start({ leg: leg('transfer', { asset: SOL_USDC, location: { kind: 'user_wallet' } }, to), quote: { ...q, legId: 'transfer' } }, ctx)
+    expect(t.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, chainName: 'Solana', symbol: 'USDC' })
+    expect(isSolanaAddress((t.surface as { address: string }).address)).toBe(true)
+    for (const s of [w, t]) expect(checkLegStep(s)).toEqual([])
+  })
+
+  it('the mock offramp takes EVM USDC only', () => {
+    const off = mockAdapter({ offramp: true }).legs.find((l) => l.id === 'offramp')!
+    const chains = Object.keys((off.from.asset as { chains: Record<string, string[]> }).chains)
+    expect(chains).not.toContain(SOL)
+    expect(chains).toContain('eip155:8453')
   })
 })

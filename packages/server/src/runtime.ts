@@ -1,6 +1,6 @@
 import { ADAPTER_API_VERSION } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
-import { OrkException, orkError } from '@openrampkit/core'
+import { OrkException, normalizeToken, orkError } from '@openrampkit/core'
 import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
 import type { OpenRampConfig } from './config.js'
@@ -139,7 +139,7 @@ export function destinationOf(rec: SessionRecord): Destination {
 }
 
 export function normalizeDestination(d: Destination): Destination {
-  if (d.type === 'crypto') return { ...d, token: d.token.toLowerCase(), ...(d.settlement ? { settlement: { contract: d.settlement.contract.toLowerCase() } } : {}) }
+  if (d.type === 'crypto') return { ...d, token: normalizeToken(d.chain, d.token), ...(d.settlement ? { settlement: { contract: d.settlement.contract.toLowerCase() } } : {}) }
   return { ...d, currency: d.currency.toUpperCase() }
 }
 

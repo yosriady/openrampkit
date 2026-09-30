@@ -1,6 +1,6 @@
 // Pathway planner. A pure function: no network, no clock. The server feeds it leg specs and user context.
 
-import { DEFAULT_METHOD_PRIORITY, METHODS, currencyForCountry, methodAvailableIn, methodName } from './codes.js'
+import { DEFAULT_METHOD_PRIORITY, METHODS, currencyForCountry, methodAvailableIn, methodName, normalizeToken, sameToken } from './codes.js'
 import { orkError } from './errors.js'
 import { isRegionAllowed } from './region.js'
 import type {
@@ -69,7 +69,7 @@ export function assetMatches(m: EndpointMatcher['asset'], a: Asset): boolean {
     if (m.chains === '*') return true
     const tokens = m.chains[a.chain]
     if (!tokens) return false
-    return tokens === '*' || tokens.includes(a.token.toLowerCase())
+    return tokens === '*' || tokens.some((t) => sameToken(a.chain, t, a.token))
   }
   return false
 }
@@ -92,7 +92,7 @@ function enumerateCrypto(m: EndpointMatcher['asset']): CryptoAsset[] | null {
 export function destinationEndpoint(d: Destination): Endpoint {
   if (d.type === 'crypto') {
     return {
-      asset: { kind: 'crypto', chain: d.chain, token: d.token.toLowerCase(), ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) },
+      asset: { kind: 'crypto', chain: d.chain, token: normalizeToken(d.chain, d.token), ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) },
       location: { kind: 'address', address: d.address },
     }
   }
@@ -106,7 +106,7 @@ export function withdrawSourceEndpoint(src: WithdrawSource): Endpoint {
     asset: {
       kind: 'crypto',
       chain: src.chain,
-      token: src.token.toLowerCase(),
+      token: normalizeToken(src.chain, src.token),
       ...(src.symbol ? { symbol: src.symbol } : {}),
       ...(src.decimals !== undefined ? { decimals: src.decimals } : {}),
     },
@@ -237,7 +237,7 @@ export function planPathways(input: PlannerInput): PlanResult {
     if (!produced?.length) continue
     const ordered = [...produced].sort((a, b) => rank(a) - rank(b))
     function rank(a: CryptoAsset) {
-      const i = hops.findIndex((h) => h.chain === a.chain && h.token.toLowerCase() === a.token.toLowerCase())
+      const i = hops.findIndex((h) => h.chain === a.chain && sameToken(a.chain, h.token, a.token))
       return i === -1 ? hops.length : i
     }
     let found = false

@@ -22,7 +22,7 @@ relay({
 | `appFee` | `{ bps: number; recipient: string }` | none | Your fee in basis points. It accrues as a claimable balance at Relay. |
 | `referrer` | `string` | none | Relay `referrer`, for attribution |
 | `refundTo` | `'origin' \| string` | `'origin'` | Where Relay refunds failed deposit-address requests. `'origin'` turns on automatic refund to the original sender. |
-| `rpcUrls` | `Record<string, string>` | public RPCs for Ethereum, Base, Arbitrum, Optimism, Polygon, Arbitrum Sepolia, Robinhood Chain Testnet | JSON-RPC URL per CAIP-2 chain. The adapter uses it to check same-chain, same-token moves on chain. Set your own in production: the public RPCs have rate limits. |
+| `rpcUrls` | `Record<string, string>` | public RPCs for Ethereum, Base, Arbitrum, Optimism, Polygon, Tempo, Solana (mainnet and devnet), Arbitrum Sepolia, Robinhood Chain Testnet | JSON-RPC URL per CAIP-2 chain. The adapter uses it to check same-chain, same-token moves on chain. Set your own in production: the public RPCs have rate limits. |
 | `signSettlementIntent` | `(typedData) => Promise<string>` | none | Signs the EIP-712 intent for a settlement contract that has an intent signer. See [On-chain settlement](../concepts/settlement.md). |
 | `settlementIntentTtlSec` | `number` | `1800` | How long a signed settlement intent stays valid, in seconds |
 
@@ -34,7 +34,7 @@ Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `
 
 | Leg | Method | From | To | Surface | Notes |
 |---|---|---|---|---|---|
-| `wallet` | `wallet` | Any crypto in the user's wallet | Any crypto at an address | `WALLET_TX` | Requires a connected wallet (deposits). EVM source chains only. Also the "To wallet" leg of withdrawals. |
+| `wallet` | `wallet` | Any crypto in the user's wallet | Any crypto at an address | `WALLET_TX` | Requires a connected wallet (deposits). EVM and Solana source chains. Also the "To wallet" leg of withdrawals. |
 | `transfer` | `transfer` | Any crypto in the user's wallet | Any crypto at an address | `DEPOSIT_ADDRESS` | Any amount. The user sends from any wallet or exchange. |
 | `bridge` | (hop) | USDC on Base, Arbitrum, Optimism, Polygon or Ethereum, at an address | Any crypto at an address | none shown | The second leg of a two-leg pathway |
 
@@ -47,6 +47,16 @@ All legs allow every region.
 - On start, the adapter reuses the quote's transaction steps when they are less than 20 seconds old and built for the same user. Otherwise it quotes again with the user's address.
 - Only `transaction` steps are supported. A route that needs a `signature` step fails with `PROVIDER_DECLINED` and suggests another token or "Transfer crypto".
 - After the wallet sends, the client fires `submit_tx` with `{ txHash }`. The adapter then checks `GET /intents/status/v3?requestId=...`.
+
+#### Solana and Tempo
+
+- **Solana origin.** Relay returns Solana instructions and address lookup tables. The adapter puts them in the `WALLET_TX` surface as a `SolanaTxRequest` (`type: 'instructions'`). `@openrampkit/solana` builds, signs and sends the transaction. `submit_tx` takes the base58 signature.
+- **Solana `user`.** Relay needs a `user` of the origin chain's kind. The quote uses a placeholder until a Solana address is known. The payment starts only with a Solana address; else it fails with "Connect a Solana wallet to pay from Solana."
+- **Solana destination.** Deposits from EVM chains to Solana work with a Solana `recipient`. For open deposit addresses on an EVM origin, `user` is an EVM placeholder, because Relay rejects a Solana `user` there.
+- **Solana deposit addresses.** An open deposit address on Solana (the user sends from Solana) needs a Relay API key.
+- **Tempo.** Relay supports Tempo (chain id `4217`). USDC on Tempo is `0x20c000000000000000000000b9537d11c60e8b50`. See [Chains and tokens](../concepts/chains.md#tempo).
+
+See [Solana](../guide/solana.md) for the full guide.
 
 #### Withdrawals
 
@@ -75,6 +85,8 @@ When the source and the destination are the same token on the same chain, Relay 
 | `wallet` | After `submit_tx`, the leg is `PROCESSING` (sub-state `confirming`) until the receipt exists (`eth_getTransactionReceipt`). The leg succeeds only when the transaction succeeded, was mined after the payment started (the block time from `eth_getBlockByNumber`, with 5 minutes of clock tolerance), paid the recipient at least the quoted amount (the value of a native transfer from `eth_getTransactionByHash`, or the sum of the token's `Transfer` logs to the recipient), and did not complete another payment before. Otherwise it fails with `DELIVERY_FAILED`. |
 | `wallet` with `destination.settlement` | The wallet sends `approve` and `settle` to the settlement contract. The adapter reads the contract receipt of the session (`eth_call`) and its `Settled` log (`eth_getLogs`). The leg succeeds when the token, the recipient, the amount and the calls agree with the quote. It does not need the transaction hash. See [On-chain settlement](../concepts/settlement.md). |
 | `transfer` | At start, the adapter records the current block (`eth_blockNumber`). Status looks for the token's `Transfer` logs to the destination since that block (`eth_getLogs`), and completes with their sum as the output. Native tokens are not detected: the leg stays in `PAYMENT`. |
+| `wallet` (Solana) | `getSignatureStatuses` must show `confirmed` or `finalized` with no error. Then `getTransaction` (`jsonParsed`) must show that the recipient got at least the quoted amount: the balance change of its token accounts for the mint, or its lamport change for SOL. The block time must not be before the payment started (5 minutes of tolerance). One signature completes one payment only. |
+| `transfer` (Solana) | Status reads the recipient's token accounts for the mint (`getTokenAccountsByOwner`), then their recent signatures (`getSignaturesForAddress`) since the leg started. It adds what each new, successful transaction paid the recipient. Each signature counts for one session only. For SOL, it reads the signatures of the recipient address. |
 
 ::: warning What the check does not cover
 The `wallet` check proves that a new transaction paid the recipient, and that no other session of this adapter used the same hash (the record lives in the store for 90 days). It does not check who sent it. The `transfer` check counts every transfer to the destination after the start block, from any sender. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).

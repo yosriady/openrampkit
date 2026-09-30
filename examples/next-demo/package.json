@@ -16,6 +16,7 @@
     "@openrampkit/core": "workspace:*",
     "@openrampkit/react": "workspace:*",
     "@openrampkit/server": "workspace:*",
+    "@openrampkit/solana": "workspace:*",
     "@openrampkit/wagmi": "workspace:*",
     "@openrampkit/web": "workspace:*",
     "@rainbow-me/rainbowkit": "^2.2.8",

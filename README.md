@@ -37,7 +37,8 @@ All flows run on mock providers in `examples/next-demo`. To try the widget witho
 | `@openrampkit/vue` | Vue 3 and Nuxt: `OpenRampProvider`, `provideOpenRamp`, `DepositButton`, composables |
 | `@openrampkit/svelte` | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, `use:depositButton` and other actions |
 | `@openrampkit/solid` | Solid and SolidStart: `OpenRampProvider`, `DepositButton`, primitives |
-| `@openrampkit/wagmi` | Wallet adapter for wagmi apps |
+| `@openrampkit/wagmi` | Wallet adapter for wagmi apps (EVM chains, including Tempo) |
+| `@openrampkit/solana` | Wallet adapter for Solana wallets (Wallet Standard, `@solana/kit`): Relay's Solana transactions and SPL transfers |
 | `@openrampkit/adapter-relay` | Wallet pay, transfer to a deposit address, and the bridge hop (Relay) |
 | `@openrampkit/adapter-swapped` | Card, Apple Pay, Google Pay and SEA local methods (Swapped); payouts to bank transfer, Skrill, PIX and Interac for withdrawals |
 | `@openrampkit/adapter-coinbase` | Coinbase Onramp |

@@ -120,8 +120,17 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 | `DEFAULT_METHOD_PRIORITY` | Default method order per country |
 | `COUNTRY_CURRENCY`, `currencyForCountry(country)` | Local currency (USD when unknown) |
 | `CURRENCY_MINOR_UNITS`, `minorUnits(currency)` | Minor units (IDR, VND, JPY, KRW: 0; default 2) |
-| `CHAINS`, `chainName(chain)`, `evmChainId(chain)` | Known chains (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Monad, HyperEVM, Solana) |
-| `USDC` | Well-known USDC addresses (lowercase) on Ethereum, Base, Arbitrum, Optimism, Polygon |
+| `CHAINS`, `chainName(chain)`, `evmChainId(chain)` | Known chains (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Monad, HyperEVM, Tempo, Tempo Testnet, Solana, Solana Devnet). See [Chains and tokens](../concepts/chains.md). |
+| `SOLANA_MAINNET`, `SOLANA_DEVNET`, `TEMPO_MAINNET`, `TEMPO_TESTNET` | CAIP-2 ids |
+| `isEvmChain(chain)`, `isSolanaChain(chain)`, `nativeDecimals(chain)` | Chain helpers |
+| `USDC` | Well-known USDC per chain: Ethereum, Base, Arbitrum, Optimism, Polygon, Tempo (lowercase), Solana (base58 mint as given) |
+| `TESTNET_USDC`, `isUsdc(chain, token)` | Testnet USDC (Solana devnet), and a check for mainnet or testnet USDC |
+| `SOLANA_USDC_MINT`, `SOLANA_DEVNET_USDC_MINT`, `TEMPO_USDC`, `TEMPO_PATH_USD` | Token addresses |
+| `normalizeToken(chain, token)`, `sameToken(chain, a, b)` | EVM addresses lowercased, Solana mints as given |
+| `isSolanaAddress`, `isSolanaSignature` | Format checks (base58) |
+| `toSplAmount(value, decimals)`, `fromSplAmount(base, decimals)`, `lamportsToSol`, `solToLamports` | SPL amounts. `toSplAmount` is strict: it refuses extra decimals, negative values and values above u64. |
+| `isSolanaTx(tx)`, `isEvmTx(tx)` | Tell `TxRequest` kinds apart |
+| `combineWallets(...wallets)`, `accountFor(accounts, chain)`, `chainNamespace(chain)` | Join an EVM and a Solana wallet adapter; pick the account of a chain |
 
 ## Region policy
 

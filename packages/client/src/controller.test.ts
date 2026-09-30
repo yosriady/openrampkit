@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { USDC, orkError } from '@openrampkit/core'
+import { USDC, combineWallets, orkError } from '@openrampkit/core'
 import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import { DepositController, OrkClientError, createMockWallet } from './index.js'
 import type { ControllerOptions } from './index.js'
@@ -383,6 +383,32 @@ describe('confirm, fire and wallet', () => {
     expect(client.select).toHaveBeenCalledWith('ors_1.sig', { quoteId: 'q2', walletAddress: '0x2222222222222222222222222222222222222222' })
     expect(c.getSnapshot()).toMatchObject({ screen: 'step', busy: false })
     expect(types()).toEqual(expect.arrayContaining(['quote.selected', 'step.changed']))
+  })
+
+  it('pay with wallet from Solana: confirm sends the Solana account when EVM and Solana wallets are combined', async () => {
+    const SOL = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
+    const SOL_USER = '9WzDXwBbmkg8ZTbNMqUxvQRAyrZzDsGYdLVL9zYtAWWM'
+    const sol: WalletAdapter = {
+      id: 'sol',
+      namespaces: ['solana'],
+      getAccounts: async () => [{ chain: SOL, address: SOL_USER }],
+      getBalances: async () => [{ chain: SOL, token: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', decimals: 6, amount: '900', usd: '900' }],
+      sendTransactions: async () => ({ hash: 'sig' }),
+    }
+    const evm = createMockWallet({ address: '0x2222222222222222222222222222222222222222' })
+    const { c, client } = make({ wallet: combineWallets(evm, sol) })
+    await c.start()
+    // the largest balance is Solana USDC, so it is the default source
+    expect(c.getSnapshot().source).toMatchObject({ chain: SOL })
+    await c.selectMethod('wallet')
+    c.setAmount('10')
+    await c.submitAmount()
+    await c.confirm()
+    expect(client.select).toHaveBeenCalledWith('ors_1.sig', { quoteId: 'q1', walletAddress: SOL_USER })
+    // an EVM source uses the EVM account
+    c.setSource({ chain: 'eip155:42161', token: USDC['eip155:42161']! })
+    await c.confirm()
+    expect(client.select).toHaveBeenLastCalledWith('ors_1.sig', { quoteId: 'q1', walletAddress: '0x2222222222222222222222222222222222222222' })
   })
 
   it('confirm failure keeps the quotes screen and shows the error', async () => {

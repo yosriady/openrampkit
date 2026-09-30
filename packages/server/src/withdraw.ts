@@ -1,6 +1,6 @@
 // Withdraw sessions: validate the source at creation, and the target the user picks.
 
-import { CHAINS, OrkException, USDC, orkError } from '@openrampkit/core'
+import { CHAINS, OrkException, isUsdc, nativeDecimals, normalizeToken, orkError } from '@openrampkit/core'
 import type { Destination, WithdrawSource, WithdrawTarget } from '@openrampkit/core'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
@@ -29,12 +29,12 @@ export function isValidToken(chain: string, token: string): boolean {
   return OTHER_ADDRESS.test(token)
 }
 
-const normToken = (chain: string, token: string) => (chain.startsWith('eip155:') ? token.toLowerCase() : token)
+const normToken = (chain: string, token: string) => normalizeToken(chain, token)
 
 /** Symbol and decimals we know for a token, else the (checked) values the caller gave. */
 function tokenMeta(chain: string, token: string, given: { symbol?: unknown; decimals?: unknown }): { symbol?: string; decimals?: number } {
-  if (USDC[chain] && USDC[chain] === token) return { symbol: 'USDC', decimals: 6 }
-  if (token === 'native' && CHAINS[chain]) return { symbol: CHAINS[chain]!.nativeSymbol, decimals: chain.startsWith('solana:') ? 9 : 18 }
+  if (isUsdc(chain, token)) return { symbol: 'USDC', decimals: 6 }
+  if (token === 'native' && CHAINS[chain]) return { symbol: CHAINS[chain]!.nativeSymbol, decimals: nativeDecimals(chain) }
   const symbol = typeof given.symbol === 'string' && SYMBOL.test(given.symbol) ? given.symbol : undefined
   const decimals = typeof given.decimals === 'number' && Number.isInteger(given.decimals) && given.decimals >= 0 && given.decimals <= 36 ? given.decimals : undefined
   return { ...(symbol ? { symbol } : {}), ...(decimals !== undefined ? { decimals } : {}) }
