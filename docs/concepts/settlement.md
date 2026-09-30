@@ -153,10 +153,12 @@ The contract has no upgrade path. Ownership moves in two steps (`transferOwnersh
 
 ## Networks
 
-| Network | Chain id | USDC |
-|---|---|---|
-| Arbitrum Sepolia | 421614 | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` (Circle) |
-| Arbitrum One | 42161 | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (Circle) |
-| Robinhood Chain Testnet | 46630 | Not published yet |
+| Network | Chain id | OpenRampSettlement | USDC |
+|---|---|---|---|
+| Arbitrum Sepolia | 421614 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` (Circle) |
+| Robinhood Chain Testnet | 46630 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | Not published yet |
+| Arbitrum One | 42161 | Not deployed yet | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (Circle) |
+
+The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. Demo settlements with a test token are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
 
 To deploy the contract, read [`contracts/README.md`](https://github.com/yosriady/openrampkit/tree/main/contracts#deploy).

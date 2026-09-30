@@ -98,7 +98,7 @@ export function OpenRampProvider(props: OpenRampProviderProps) {
     el.locale = config.locale
   }, [config.theme, config.appearance, config.locale, isOpen])
 
-  const value = useMemo<Ctx>(() => ({ ...config, beginDeposit, beginWithdraw, close, isOpen }), [config.baseUrl, config.wallet, config.theme, config.appearance, config.messages, config.locale, config.onEvent, beginDeposit, beginWithdraw, close, isOpen])
+  const value = useMemo<Ctx>(() => ({ ...config, beginDeposit, beginWithdraw, close, isOpen }), [config.baseUrl, config.wallet, config.theme, config.appearance, config.messages, config.locale, config.onEvent, config.providerRenderers, beginDeposit, beginWithdraw, close, isOpen])
   return createElement(OpenRampContext.Provider, { value }, children)
 }
 
