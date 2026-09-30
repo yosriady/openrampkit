@@ -36,6 +36,24 @@ jobs:
       - name: Docs build
         run: pnpm docs:build
 
+  chain:
+    name: Local chain test (Anvil, real WALLET_TX)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: foundry-rs/foundry-toolchain@v1
+      - run: pnpm install --frozen-lockfile
+      - name: Anvil end-to-end test (server, client, wagmi adapter, mock USDC)
+        env:
+          OPENRAMP_REQUIRE_ANVIL: '1'
+        run: pnpm test:chain
+
   e2e:
     name: Browser tests (desktop, Android, iPhone)
     runs-on: ubuntu-latest

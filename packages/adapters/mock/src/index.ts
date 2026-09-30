@@ -1,8 +1,8 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { POLL as POLLS, awaitPoll, createAdapter } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, erc20PaidTo, erc20TransferData, evmRpc } from '@openrampkit/adapter'
+import type { AdapterContext, EvmReceipt, LegEvent } from '@openrampkit/adapter'
 import { CHAINS, OrkException, USDC, bps, chainName, evmChainId, fromScaled, minorUnits, mulRatio, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
@@ -21,6 +21,27 @@ export type MockOptions = {
   offramp?: boolean
   /** Name shown to users. Default "Test provider". */
   name?: string
+  /**
+   * Test only: add an `onchain` leg (method `wallet`, surface WALLET_TX) on a local dev chain such as
+   * Anvil. It asks the wallet to send `token` to the destination address with a real ERC-20 transfer,
+   * and completes only when the receipt, read over JSON-RPC from `rpcUrl`, shows that transfer.
+   * Use it with a destination on `chain` in `token`. The quote is 1:1 with no fee.
+   */
+  localChain?: MockLocalChain
+}
+
+/** A local dev chain for the mock `onchain` leg (see `MockOptions.localChain`) */
+export type MockLocalChain = {
+  /** CAIP-2 chain id, for example `eip155:31337` (Anvil) */
+  chain: string
+  /** JSON-RPC URL of the chain, for example `http://127.0.0.1:8545` */
+  rpcUrl: string
+  /** ERC-20 token contract to pay with, for example a mock USDC */
+  token: string
+  /** Default `USDC` */
+  symbol?: string
+  /** Default 6 */
+  decimals?: number
 }
 
 /** Payout methods of the mock offramp leg */
@@ -55,17 +76,14 @@ type MockOrder = {
   input?: Amount
   payTo?: string
   account?: string
+  /** Local chain: the hash the wallet reported */
+  txHash?: string
 }
 
 const WORK = 18
 /** Exact decimal division, `a / b` (test data only) */
 function div(a: string, b: string): string {
   return fromScaled((toScaled(a, WORK) * 10n ** BigInt(WORK)) / toScaled(b, WORK), WORK)
-}
-
-/** ERC-20 `transfer(to, amount)` calldata */
-function erc20Transfer(to: string, amountBase: string): string {
-  return `0xa9059cbb${to.toLowerCase().replace(/^0x/, '').padStart(64, '0')}${BigInt(amountBase).toString(16).padStart(64, '0')}`
 }
 
 /** Payout account fields per method. Labels are the provider's own (English). */
@@ -170,6 +188,25 @@ export function mockAdapter(opts: MockOptions = {}) {
     })
   }
 
+  const local = opts.localChain
+  const localAsset: CryptoAsset | undefined = local
+    ? { kind: 'crypto', chain: local.chain, token: local.token.toLowerCase(), symbol: local.symbol ?? 'USDC', decimals: local.decimals ?? 6 }
+    : undefined
+  if (localAsset) {
+    const chains = { [localAsset.chain]: [localAsset.token] }
+    legs.push({
+      id: 'onchain',
+      kind: 'bridge_swap',
+      methods: ['wallet'],
+      from: { asset: { kind: 'crypto', chains }, location: ['user_wallet'] },
+      to: { asset: { kind: 'crypto', chains }, location: ['address'] },
+      regions: { allow: ['*'], deny: [] },
+      eta: { min: 1, max: 30 },
+      surfaces: ['WALLET_TX'],
+      requires: ['wallet'],
+    })
+  }
+
   const baseOf = (ctx: AdapterContext) => ctx.urls.webhookUrl.replace(/\/webhooks\/mock$/, '')
   const orderKey = (ref: string) => `order:${ref}`
 
@@ -207,12 +244,42 @@ export function mockAdapter(opts: MockOptions = {}) {
     }
     const input = o.input ?? { amount: '0', asset: BASE_USDC }
     const asset = input.asset.kind === 'crypto' ? input.asset : BASE_USDC
-    const tx: TxRequest = { to: asset.token, data: erc20Transfer(o.payTo ?? fakeAddress(ref), toBaseUnits(input.amount, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
+    const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo ?? fakeAddress(ref), toBaseUnits(input.amount, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
     return {
       state: 'PAYMENT', sub: 'SEND_CRYPTO', status: 'awaiting_user', ref,
       surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
     }
+  }
+
+  /** The local chain leg's user step: one ERC-20 transfer to the destination address. */
+  function localStep(ref: string, o: MockOrder): LegStep {
+    const asset = localAsset!
+    const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo!, toBaseUnits(o.input!.amount, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain)! }
+    return {
+      state: 'PAYMENT', sub: 'SEND_CRYPTO', status: 'awaiting_user', ref,
+      surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
+      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+    }
+  }
+
+  /** The local chain leg completes only when the receipt pays the destination at least the quoted amount. */
+  async function verifyLocal(ref: string, o: MockOrder, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<LegStep> {
+    const asset = localAsset!
+    const txHash = o.txHash!
+    const receipt = await evmRpc<EvmReceipt | null>(ctx.fetch, local!.rpcUrl, 'eth_getTransactionReceipt', [txHash], { log: ctx.log })
+    if (!receipt) return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, txHash, transitions: [awaitPoll(POLL)] }
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, txHash })
+    if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
+    if (erc20PaidTo(receipt, asset.token, o.payTo!) < BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))) {
+      return fail('The transaction does not pay the destination the quoted amount.')
+    }
+    // One transaction completes one payment only.
+    const usedKey = `txused:${asset.chain}:${txHash.toLowerCase()}`
+    const usedBy = await ctx.shared.get<string>(usedKey)
+    if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
+    if (!usedBy) await ctx.shared.put(usedKey, ref, ORDER_TTL_SEC)
+    return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash }
   }
 
   return createAdapter({
@@ -266,6 +333,17 @@ export function mockAdapter(opts: MockOptions = {}) {
           input: { amount: input, asset: { kind: 'fiat', currency: fiat } },
           output: { amount: out.startsWith('-') ? '0' : out, asset: leg.to.asset.kind === 'crypto' ? { ...BASE_USDC, ...leg.to.asset, symbol: 'USDC', decimals: 6 } : BASE_USDC },
           fees: [{ kind: 'provider', label: `${name} fee`, amount: roundTo(mulRatio(fee, String(1 / Number(rate))), minorUnits(fiat)), currency: fiat }],
+          eta: spec.eta, expiresAt,
+        }
+      }
+      if (spec.id === 'onchain' && localAsset) {
+        // A plain transfer on the local chain: what the user sends arrives.
+        const amount = amountIn?.amount ?? amountOut?.amount ?? '0'
+        return {
+          adapterId: 'mock', legId: leg.legId,
+          input: { amount, asset: localAsset },
+          output: { amount, asset: localAsset },
+          fees: [],
           eta: spec.eta, expiresAt,
         }
       }
@@ -331,6 +409,13 @@ export function mockAdapter(opts: MockOptions = {}) {
             ],
           }
         }
+        case 'onchain': {
+          const recipient = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
+          if (!recipient) throw new OrkException(orkError('BAD_REQUEST', { message: 'The local chain leg needs a destination address.' }), 400)
+          const o: MockOrder = { ...order, input: quote.input, payTo: recipient }
+          await ctx.shared.put(orderKey(ref), o, ORDER_TTL_SEC)
+          return localStep(ref, o)
+        }
         case 'offramp': {
           const offer: MockOrder = { ...order, ...(leg.method ? { method: leg.method } : {}), input: quote.input, payTo: fakeAddress(`offramp:${ref}`) }
           await ctx.shared.put(orderKey(ref), offer, ORDER_TTL_SEC)
@@ -361,6 +446,14 @@ export function mockAdapter(opts: MockOptions = {}) {
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
         return offrampStep(ref, next)
       }
+      if (o.kind === 'onchain') {
+        if (t !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+        const txHash = typeof inputs?.txHash === 'string' ? inputs.txHash : ''
+        if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
+        const next: MockOrder = { ...o, txHash }
+        await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
+        return verifyLocal(ref, next, ctx)
+      }
       if (o.kind === 'offramp' && t === 'submit_tx' && !o.account) {
         throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
       }
@@ -376,6 +469,8 @@ export function mockAdapter(opts: MockOptions = {}) {
     },
 
     async status({ ref }, ctx): Promise<LegStep> {
+      const pending = await ctx.shared.get<MockOrder>(orderKey(ref))
+      if (pending?.kind === 'onchain') return pending.txHash ? verifyLocal(ref, pending, ctx) : localStep(ref, pending)
       const done = await settled(ref, ctx)
       if (done) return done
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))

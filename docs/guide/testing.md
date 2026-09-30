@@ -112,6 +112,49 @@ pnpm typecheck
 
 Tests for the web component and React run in `happy-dom`. Adapter tests use `fakeFetch` from `@openrampkit/adapter/testing`, so they never call a real provider.
 
+## Real-chain test with Anvil
+
+The mock wallet does not touch a chain. To test a `WALLET_TX` leg with real transactions, use a local [Anvil](https://book.getfoundry.sh/anvil/) chain. The test `packages/wagmi/src/anvil.test.ts` does these steps:
+
+1. It starts Anvil on a free port (chain ID 31337, no fork).
+2. It deploys a mock USDC (6 decimals) from `scripts/anvil/MockUSDC.sol`.
+3. It mints 1000 mock USDC to the Anvil default dev account 0.
+4. It connects the real `wagmiWallet` adapter through the wagmi `mock` connector. Anvil signs with its unlocked dev account.
+5. It runs the server with `mockAdapter({ localChain })` and drives a `DepositController`: session, plan, quote, select and pay.
+6. The wallet sends a real ERC-20 transfer. The adapter reads the receipt over JSON-RPC.
+7. It runs `sweep()` and checks that the session is `COMPLETED`.
+8. It reads the token balances on chain.
+
+The test also checks that a transaction stays `PROCESSING` until it is mined, and that a transaction that pays another address fails.
+
+Install Foundry first:
+
+```bash
+curl -L https://foundry.paradigm.xyz | bash
+foundryup
+```
+
+Then run the test from the repo root:
+
+```bash
+pnpm test:chain
+```
+
+When `anvil` is not on your `PATH`, the test is skipped, and `pnpm test` skips it too. On CI, the `chain` job installs Foundry and sets `OPENRAMP_REQUIRE_ANVIL=1`. Then a missing `anvil` makes the job fail.
+
+To start a chain for your own tests, run this command:
+
+```bash
+pnpm chain:local                  # a free port
+pnpm chain:local -- --port 8545   # a fixed port
+```
+
+It prints the RPC URL and the mock USDC address. It runs until you press Ctrl+C. It needs Node 22.18 or later.
+
+::: warning
+Use only the Anvil default dev account and the mock USDC. Its private key is public. Never send real funds to it, and never use `localChain` with a real chain.
+:::
+
 ## Browser tests with Playwright
 
 `examples/next-demo` has Playwright tests that drive the real modal against the mock providers. They run in three projects:

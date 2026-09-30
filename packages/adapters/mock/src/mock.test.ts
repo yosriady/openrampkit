@@ -236,4 +236,70 @@ describe('mock offramp (withdraw to cash)', () => {
     await t('submit_tx', { txHash: TX })
     await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })).rejects.toMatchObject({ status: 409 })
   })
+
+  describe('localChain (onchain leg)', () => {
+    const RPC = 'http://127.0.0.1:8545/'
+    const TOKEN = '0x5fbdb2315678afecb367f032d93f642f64180aa3'
+    const ANVIL_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:31337', token: TOKEN, symbol: 'USDC', decimals: 6 }
+    const onchainLeg = leg('onchain', { asset: ANVIL_USDC, location: { kind: 'user_wallet' } }, { asset: ANVIL_USDC, location: { kind: 'address', address: DEST } })
+    const destination = { type: 'crypto' as const, chain: 'eip155:31337', token: TOKEN, address: DEST }
+    const HASH = `0x${'ab'.repeat(32)}`
+    const transferLog = (to: string, amount: bigint, token = TOKEN) => ({
+      address: token,
+      topics: ['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', `0x${'00'.repeat(12)}${'11'.repeat(20)}`, `0x${to.slice(2).padStart(64, '0')}`],
+      data: `0x${amount.toString(16).padStart(64, '0')}`,
+    })
+
+    function setup(receipt: unknown) {
+      const rpc = fakeFetch([{ method: 'POST', match: RPC, reply: (c) => ({ jsonrpc: '2.0', id: 1, result: (c.body as { method: string }).method === 'eth_getTransactionReceipt' ? receipt : null }) }])
+      const a = mockAdapter({ localChain: { chain: 'eip155:31337', rpcUrl: RPC, token: TOKEN.toUpperCase().replace('0X', '0x') } })
+      const ctx = makeCtx({ fetch: rpc.fetch, destination })
+      return { a, ctx, rpc }
+    }
+
+    it('declares a wallet leg on the local chain and quotes it 1:1 with no fee', async () => {
+      const { a, ctx } = setup(null)
+      expect(a.legs.map((l) => l.id)).toEqual(['card', 'local', 'payin', 'onchain'])
+      expect(a.legs.find((l) => l.id === 'onchain')).toMatchObject({ methods: ['wallet'], surfaces: ['WALLET_TX'], from: { asset: { chains: { 'eip155:31337': [TOKEN] } } } })
+      const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, ctx)
+      expect(checkLegQuote(q)).toEqual([])
+      expect(q).toMatchObject({ input: { amount: '25', asset: ANVIL_USDC }, output: { amount: '25', asset: ANVIL_USDC }, fees: [] })
+    })
+
+    it('asks for an ERC-20 transfer to the destination and completes when the receipt pays it', async () => {
+      const { a, ctx, rpc } = setup({ status: '0x1', logs: [transferLog(DEST, 25_000_000n)] })
+      const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, ctx)
+      const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, ctx)
+      expect(checkLegStep(start)).toEqual([])
+      expect(start.surface).toEqual({
+        kind: 'WALLET_TX',
+        chain: 'eip155:31337',
+        txs: [{ to: TOKEN, data: `0xa9059cbb${DEST.slice(2).padStart(64, '0')}${(25_000_000).toString(16).padStart(64, '0')}`, value: '0', chainId: 31337 }],
+      })
+      await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX' } })
+      await expect(a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: '0xabc' } }, ctx)).rejects.toMatchObject({ status: 400 })
+      const done = await a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
+      expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { amount: '25' } })
+      expect(rpc.calls.at(-1)!.body).toMatchObject({ method: 'eth_getTransactionReceipt', params: [HASH] })
+      await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED' })
+    })
+
+    it('stays PROCESSING without a receipt and fails a reverted, short, reused or unrelated transaction', async () => {
+      const run = async (receipt: unknown, shared = memoryKV(), sessionId = 'sess_1') => {
+        const { a, ctx } = setup(receipt)
+        const c = { ...ctx, shared, session: { ...ctx.session, id: sessionId } }
+        const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, c)
+        const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, c)
+        return a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, c)
+      }
+      await expect(run(null)).resolves.toMatchObject({ state: 'PROCESSING', txHash: HASH })
+      await expect(run({ status: '0x0', logs: [] })).resolves.toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
+      await expect(run({ status: '0x1', logs: [transferLog(DEST, 24_999_999n)] })).resolves.toMatchObject({ state: 'FAILED', error: { message: /quoted amount/ } })
+      await expect(run({ status: '0x1', logs: [transferLog(DEST, 25_000_000n, `0x${'22'.repeat(20)}`)] })).resolves.toMatchObject({ state: 'FAILED' })
+      const shared = memoryKV()
+      const ok = { status: '0x1', logs: [transferLog(DEST, 25_000_000n)] }
+      await expect(run(ok, shared)).resolves.toMatchObject({ state: 'COMPLETED' })
+      await expect(run(ok, shared, 'sess_2')).resolves.toMatchObject({ state: 'FAILED', error: { message: /already used/ } })
+    })
+  })
 })
