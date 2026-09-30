@@ -56,6 +56,7 @@ export default defineConfig({
             { text: 'Flow state machine', link: '/concepts/flow' },
             { text: 'Surfaces', link: '/concepts/surfaces' },
             { text: 'Events', link: '/concepts/events' },
+            { text: 'On-chain settlement', link: '/concepts/settlement' },
           ],
         },
       ],

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
+import { buildSettlementTxs, checkAdapterShape, checkLegQuote, checkLegStep, encodeSettle, hashSettlementCalls } from '@openrampkit/adapter'
+import type { SettlementIntentTypedData } from '@openrampkit/adapter'
 import { USDC, planPathways } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { RELAY_POLL, RELAY_SOLANA_CHAIN_ID, caip2FromRelay, erc20TransferData, relay, relayChainId, relayCurrency } from './index.js'
@@ -793,5 +794,106 @@ describe('relay same-chain tx reuse', () => {
     }
     expect(await pay()).toMatchObject({ state: 'COMPLETED' })
     expect(await pay()).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+  })
+})
+
+describe('relay settlement contract', () => {
+  const CONTRACT = '0x2222222222222222222222222222222222222222'
+  const VAULT = '0x4444444444444444444444444444444444444444'
+  const TX = `0x${'aa'.repeat(32)}`
+  const w = (v: string | bigint) => (typeof v === 'bigint' ? v.toString(16) : v.slice(2).toLowerCase()).padStart(64, '0')
+  const dest = { type: 'crypto' as const, chain: BASE_USDC.chain, token: BASE_USDC.token, address: DEST, settlement: { contract: CONTRACT }, calls: [{ to: VAULT, data: '0x6e553f65' }] }
+
+  function chain(opts: { settledAt?: bigint; amount?: bigint; recipient?: string; receipt?: unknown } = {}) {
+    return fakeFetch([
+      {
+        method: 'POST',
+        match: 'mainnet.base.org',
+        reply: (c) => {
+          const { method } = c.body as { method: string }
+          if (method === 'eth_blockNumber') return { result: '0x64' }
+          if (method === 'eth_call') return { result: `0x${w(USER)}${w(opts.settledAt ?? 0n)}${w(BASE_USDC.token)}${w(opts.recipient ?? DEST)}${w(opts.amount ?? 12_500_000n)}` }
+          if (method === 'eth_getLogs') return { result: [{ data: `0x${w(BASE_USDC.token)}${w(opts.amount ?? 12_500_000n)}${hashSettlementCalls([{ target: VAULT, data: '0x6e553f65' }]).slice(2)}`, topics: [], transactionHash: TX, blockNumber: '0x65' }] }
+          if (method === 'eth_getTransactionReceipt') return { result: opts.receipt ?? null }
+          return { result: null }
+        },
+      },
+    ])
+  }
+
+  const start = async (a: ReturnType<typeof relay>, ctx: ReturnType<typeof makeCtx>) => {
+    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '12.5', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER }, deliverTo: { address: DEST } }, ctx)
+    return a.start({ leg: walletLeg, quote: q, deliverTo: { address: DEST }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER } }, ctx)
+  }
+
+  it('builds approve + settle with the destination calls, and verifies by session id', async () => {
+    const { fetch } = chain({ settledAt: 1_700_000_000n })
+    const a = relay()
+    const ctx = makeCtx({ fetch, destination: dest })
+    const step = await start(a, ctx)
+    const calls = [{ target: VAULT, data: '0x6e553f65' }]
+    expect(step.surface).toEqual({
+      kind: 'WALLET_TX',
+      chain: 'eip155:8453',
+      txs: buildSettlementTxs({ chainId: 8453, contract: CONTRACT, sessionId: 'sess_1', token: BASE_USDC.token, amount: 12_500_000n, recipient: DEST, calls }),
+    })
+    // Settled on chain: completes even before the client reports the hash, with the hash from the log.
+    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: TX })
+  })
+
+  it('waits, confirms and fails as the chain says', async () => {
+    const run = async (opts: Parameters<typeof chain>[0], submit = true) => {
+      const { fetch } = chain(opts)
+      const a = relay()
+      const ctx = makeCtx({ fetch, destination: dest })
+      const step = await start(a, ctx)
+      if (submit) await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
+      return a.status!({ leg: walletLeg, ref: step.ref! }, ctx)
+    }
+    expect(await run({}, false)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await run({})).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
+    expect(await run({ receipt: { status: '0x0', logs: [] } })).toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
+    expect(await run({ receipt: { status: '0x1', logs: [] } })).toMatchObject({ state: 'FAILED', error: { message: 'The transaction did not settle this session.' } })
+    expect(await run({ settledAt: 1n, amount: 1n })).toMatchObject({ state: 'FAILED', error: { message: 'The settlement paid less than the quoted amount.' } })
+    expect(await run({ settledAt: 1n, recipient: USER })).toMatchObject({ state: 'FAILED', error: { message: 'The settlement paid a different recipient.' } })
+  })
+
+  it('signs the intent with the app hook', async () => {
+    const { fetch } = chain()
+    const sign = vi.fn(async (_typed: SettlementIntentTypedData) => '0xabcd')
+    const a = relay({ signSettlementIntent: sign, settlementIntentTtlSec: 60 })
+    const ctx = makeCtx({ fetch, destination: dest })
+    const step = await start(a, ctx)
+    expect(sign).toHaveBeenCalledOnce()
+    const typed = sign.mock.calls[0]![0]
+    expect(typed.domain).toEqual({ name: 'OpenRampSettlement', version: '1', chainId: 8453, verifyingContract: CONTRACT })
+    expect(typed.message).toMatchObject({ payer: USER, token: BASE_USDC.token, recipient: DEST, minAmount: 12_500_000n, calls: [{ target: VAULT, data: '0x6e553f65' }] })
+    const settleTx = (step.surface as { txs: Array<{ data: string }> }).txs[1]!
+    expect(settleTx.data).toBe(
+      encodeSettle(
+        { sessionId: 'sess_1', token: BASE_USDC.token, amount: 12_500_000n, recipient: DEST, calls: [{ target: VAULT, data: '0x6e553f65' }] },
+        { payer: USER, minAmount: 12_500_000n, deadline: typed.message.deadline, signature: '0xabcd' },
+      ),
+    )
+  })
+
+  it('refuses a cross-chain wallet payment into a settlement', async () => {
+    const a = relay()
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: dest })
+    await expect(
+      a.quote({ leg: walletLeg, amountIn: { amount: '1', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token, address: USER }, deliverTo: { address: DEST } }, ctx),
+    ).rejects.toMatchObject({ error: { code: 'BAD_REQUEST', message: expect.stringMatching(/settles on Base/) } })
+  })
+
+  it('only the wallet leg is offered for a settlement destination', () => {
+    const plan = planPathways({
+      direction: 'deposit',
+      destination: dest,
+      user: { country: 'VN', walletConnected: true },
+      legs: relay().legs.map((spec) => ({ adapterId: 'relay', provider: 'Relay', spec })),
+    })
+    const byId = Object.fromEntries(plan.pathways.map((p) => [p.id, p]))
+    expect(byId['wallet:relay.wallet']?.reason).toBeUndefined()
+    expect(byId['transfer:relay.transfer']?.reason).toMatchObject({ code: 'PROVIDER_UNAVAILABLE' })
   })
 })

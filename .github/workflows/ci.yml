@@ -54,6 +54,40 @@ jobs:
           OPENRAMP_REQUIRE_ANVIL: '1'
         run: pnpm test:chain
 
+  contracts:
+    name: Contracts (Foundry) and settlement helpers on Anvil
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+        with:
+          # Pinned so `forge fmt --check` does not change with new releases
+          version: v1.8.3
+      - name: forge fmt --check
+        working-directory: contracts
+        run: forge fmt --check
+      - name: forge build
+        working-directory: contracts
+        run: forge build --sizes
+      - name: forge test
+        working-directory: contracts
+        env:
+          FOUNDRY_PROFILE: ci
+        run: forge test -vvv
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: TypeScript helpers against the compiled contract (ABI check, Anvil deploy, EIP-712 parity)
+        env:
+          OPENRAMP_REQUIRE_SETTLEMENT_CHAIN: '1'
+        run: pnpm exec vitest run packages/adapter/src/settlement
+
   e2e:
     name: Browser tests (desktop, Android, iPhone)
     runs-on: ubuntu-latest
