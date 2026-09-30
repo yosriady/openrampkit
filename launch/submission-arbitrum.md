@@ -46,8 +46,9 @@ The project started on 29 September 2026. All code was written in the buildathon
 
 ## How it uses Arbitrum
 
-- `OpenRampSettlement` is deployed on Arbitrum Sepolia: [address, Arbiscan link].
-- It is also deployed on Robinhood Chain testnet: [address, explorer link].
+- `OpenRampSettlement` is deployed and verified on Arbitrum Sepolia: `0xBF66696115128B8f9f794780061348b4213A7132` (https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132).
+- Same address on Robinhood Chain testnet: https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132
+- Demo settlements, including a vault deposit in the same transaction: contracts/deployments.md.
 - Arbitrum One is a default destination and a Relay RPC target. The Relay adapter builds the `approve` and `settle` calls, then verifies the settlement onchain.
 
 ## Smart contract quality
@@ -92,7 +93,7 @@ https://yosriady.github.io/openrampkit/playground/ (live demo, mock providers). 
 
 **Core Protocol / Smart Contract Addresses**
 
-OpenRampSettlement on Arbitrum Sepolia: [0x...] (verified on Arbiscan). OpenRampSettlement on Robinhood Chain testnet: [0x...]. Source and tests: https://github.com/yosriady/openrampkit/tree/main/contracts
+OpenRampSettlement on Arbitrum Sepolia: 0xBF66696115128B8f9f794780061348b4213A7132 (verified). OpenRampSettlement on Robinhood Chain testnet: 0xBF66696115128B8f9f794780061348b4213A7132 (same address, verified). Source and tests: https://github.com/yosriady/openrampkit/tree/main/contracts
 
 **Factory / Pool Contracts**
 
