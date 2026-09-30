@@ -18,7 +18,7 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       include: ['packages/**/src/**'],
-      exclude: ['**/*.test.ts', '**/testctx.ts', '**/types.ts', '**/wallet.ts', '**/icons.ts', '**/styles.ts'],
+      exclude: ['**/*.test.ts', '**/testctx.ts', '**/testchain.ts', '**/types.ts', '**/wallet.ts', '**/icons.ts', '**/styles.ts'],
       reporter: ['text-summary', 'text'],
     },
   },

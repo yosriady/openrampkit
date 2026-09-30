@@ -8,8 +8,8 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL, awaitPoll, createAdapter, fetchJson, httpErrorToOrk, randomHex } from '@openrampkit/adapter'
-import type { AdapterContext, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, fetchJson, httpErrorToOrk, randomHex, topicAddress } from '@openrampkit/adapter'
+import type { AdapterContext, EvmReceipt, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
   OrkException,
@@ -54,9 +54,6 @@ export const DEFAULT_RPC_URLS: Record<string, string> = {
   'eip155:10': 'https://mainnet.optimism.io',
   'eip155:137': 'https://polygon-rpc.com',
 }
-
-const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
-const topicAddress = (a: string) => `0x${a.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`
 
 export const RELAY_SOLANA_CHAIN_ID = 792703809
 const SOLANA_CAIP2 = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
@@ -177,12 +174,8 @@ function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: number }) 
   return { min: Math.max(1, Math.round(t)), max: Math.max(fallback.max, Math.round(t * 4)) }
 }
 
-/** ERC-20 transfer(address,uint256) calldata */
-export function erc20TransferData(to: string, amountBase: string): string {
-  const addr = to.toLowerCase().replace(/^0x/, '').padStart(64, '0')
-  const amt = BigInt(amountBase).toString(16).padStart(64, '0')
-  return `0xa9059cbb${addr}${amt}`
-}
+/** ERC-20 transfer(address,uint256) calldata (from `@openrampkit/adapter`) */
+export { erc20TransferData }
 
 /** Map a failed Relay HTTP call to an OrkException with a safe message. */
 function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
@@ -561,22 +554,13 @@ export function relay(opts: RelayOptions = {}) {
   async function rpc<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, method: string, params: unknown[]): Promise<T> {
     const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
     if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
-    let res: { result?: T; error?: { message?: string } }
-    try {
-      res = await fetchJson(ctx.fetch, url, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
-    } catch (e) {
-      throw httpErrorToOrk(e, 'The chain RPC', { what: 'check this transfer', log: ctx.log })
-    }
-    if (res.error) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `RPC error: ${String(res.error.message ?? '').slice(0, 120)}` }), 502)
-    return res.result as T
+    return evmRpc<T>(ctx.fetch, url, method, params, { log: ctx.log })
   }
-
-  type Receipt = { status?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
 
   /** A same-chain wallet payment counts only when the receipt shows it paid the recipient at least the amount. */
   async function verifyDirectWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
     const chain = rec.chain!
-    const receipt = await rpc<Receipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
+    const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
     const extra = { ref, txHash: rec.txHash! }
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
     const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
@@ -588,11 +572,7 @@ export function relay(opts: RelayOptions = {}) {
       const tx = await rpc<{ to?: string; value?: string } | null>(ctx, chain, 'eth_getTransactionByHash', [rec.txHash])
       if (tx?.to?.toLowerCase() === recipient) paid = BigInt(tx.value ?? '0x0')
     } else {
-      for (const log of receipt.logs ?? []) {
-        if (log.address.toLowerCase() === (rec.token ?? '').toLowerCase() && log.topics[0] === TRANSFER_TOPIC && log.topics[2]?.toLowerCase() === topicAddress(recipient)) {
-          paid += BigInt(log.data)
-        }
-      }
+      paid = erc20PaidTo(receipt, rec.token ?? '', recipient)
     }
     if (paid < need) return fail('The transaction does not pay the destination the quoted amount.')
     // One transaction can complete one payment only: an old hash must not be reused for a new session.
@@ -607,7 +587,7 @@ export function relay(opts: RelayOptions = {}) {
   async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
     if (!rec.chain || !rec.token || !rec.fromBlock || isNative(rec.chain, rec.token)) return undefined
     const logs = await rpc<Array<{ data: string; transactionHash: string }>>(ctx, rec.chain, 'eth_getLogs', [
-      { fromBlock: rec.fromBlock, toBlock: 'latest', address: rec.token, topics: [TRANSFER_TOPIC, null, topicAddress(rec.address)] },
+      { fromBlock: rec.fromBlock, toBlock: 'latest', address: rec.token, topics: [ERC20_TRANSFER_TOPIC, null, topicAddress(rec.address)] },
     ])
     if (!logs?.length) return undefined
     const total = logs.reduce((acc, l) => acc + BigInt(l.data), 0n)

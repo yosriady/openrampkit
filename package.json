@@ -9,6 +9,8 @@
     "typecheck": "pnpm -r --filter './packages/**' typecheck",
     "dev:example": "pnpm --filter next-demo dev",
     "coverage": "vitest run --coverage",
+    "test:chain": "vitest run packages/wagmi/src/anvil.test.ts",
+    "chain:local": "node scripts/anvil.ts",
     "docs:dev": "pnpm --filter openrampkit-docs dev",
     "docs:build": "pnpm --filter openrampkit-docs build",
     "changeset": "changeset",
