@@ -1,5 +1,9 @@
 # Examples
 
+## Static playground (live demo)
+
+[`examples/playground`](https://github.com/yosriady/openrampkit/tree/main/examples/playground) is a Vite page. The server runs in the browser with mock providers, so it needs no backend and no secrets. The docs site hosts it. See [Live demo (playground)](./playground.md).
+
 ## Next.js playground
 
 [`examples/next-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/next-demo) is a Next.js App Router app with a playground. You pick the flow (deposit or withdraw), the user's country, the destination, who holds the funds, the wallet, the theme and the accent color, and the widget restarts with a new session. The page also shows the widget events and the webhooks your backend received.

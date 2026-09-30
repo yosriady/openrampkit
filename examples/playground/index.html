@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>OpenRampKit Playground</title>
+    <meta name="description" content="Try the OpenRampKit deposit and withdraw widget. Demo mode: mock providers, no real money." />
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body data-mode="light">
+    <div class="banner" role="note" data-testid="demo-banner">
+      <strong>Demo mode:</strong> mock providers, no real money. The OpenRampKit server runs in this browser tab.
+    </div>
+    <header class="top">
+      <div class="brand">OpenRamp<span>Kit</span> <em>playground</em></div>
+      <nav>
+        <a id="docs-link" href="../">Docs</a>
+        <a href="https://github.com/yosriady/openrampkit">GitHub</a>
+      </nav>
+    </header>
+    <main class="grid">
+      <section class="panel" aria-label="Setup">
+        <h2>Setup</h2>
+        <label>Flow
+          <select id="direction">
+            <option value="deposit">Deposit</option>
+            <option value="withdraw">Withdraw</option>
+          </select>
+        </label>
+        <label>User country
+          <select id="country">
+            <option value="VN">Vietnam (VN)</option>
+            <option value="ID">Indonesia (ID)</option>
+            <option value="TH">Thailand (TH)</option>
+            <option value="MY">Malaysia (MY)</option>
+            <option value="PH">Philippines (PH)</option>
+            <option value="SG">Singapore (SG)</option>
+            <option value="US">United States (US)</option>
+          </select>
+        </label>
+        <label>Language
+          <select id="locale">
+            <option value="en">English (en)</option>
+            <option value="vi">Tiếng Việt (vi)</option>
+            <option value="id">Bahasa Indonesia (id)</option>
+            <option value="th">ไทย (th)</option>
+            <option value="ms">Bahasa Melayu (ms)</option>
+            <option value="fil">Filipino (fil)</option>
+          </select>
+        </label>
+        <label>Theme
+          <select id="theme">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </label>
+        <label>Accent
+          <input id="accent" type="color" value="#2744c4" />
+        </label>
+        <label>Display
+          <select id="display">
+            <option value="embedded">Embedded (inline)</option>
+            <option value="modal">Modal</option>
+          </select>
+        </label>
+        <p class="hint">
+          The page uses a mock wallet with 40 USDC on Base. In a QR step, press "Simulate payment". Card checkout is hidden
+          here because it needs a hosted page. Run <code>examples/next-demo</code> to try it.
+        </p>
+      </section>
+
+      <section class="stage" aria-label="Widget">
+        <div id="widget"></div>
+        <button id="open" class="open" type="button" hidden>Deposit</button>
+      </section>
+
+      <section class="panel" aria-label="Output">
+        <h2>Code</h2>
+        <pre class="code"><code id="code"></code></pre>
+        <h2>Widget events</h2>
+        <ol class="log" id="events" data-testid="events"></ol>
+        <h2>Webhooks received by your backend</h2>
+        <ol class="log" id="webhooks" data-testid="webhooks"></ol>
+      </section>
+    </main>
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>

@@ -30,6 +30,7 @@ jobs:
         run: |
           pnpm --filter next-demo exec tsc --noEmit -p .
           pnpm --filter cloudflare-worker-example exec tsc --noEmit -p .
+          pnpm --filter playground typecheck
       - name: Package smoke test (pack, install, ESM, CJS, SSR, TypeScript)
         run: pnpm smoke
       - name: Docs build
@@ -59,9 +60,17 @@ jobs:
           OPENRAMP_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
           PUBLIC_URL: http://localhost:3000
         run: pnpm exec playwright test e2e/deposit.spec.ts e2e/withdraw.spec.ts
+      - name: Run playground browser tests (static build, desktop and Pixel 7)
+        if: success() || failure()
+        working-directory: examples/playground
+        env:
+          CI: '1'
+        run: pnpm exec playwright test
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-report
-          path: examples/next-demo/playwright-report
+          path: |
+            examples/next-demo/playwright-report
+            examples/playground/playwright-report
           retention-days: 7

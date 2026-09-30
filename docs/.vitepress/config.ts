@@ -1,12 +1,17 @@
 import { defineConfig } from 'vitepress'
 
+// Public path of the site. GitHub Pages serves it at https://yosriady.github.io/openrampkit/, so the
+// workflow sets DOCS_BASE=/openrampkit/. A custom domain or Cloudflare Pages serves it at the root: leave it unset.
+const base = (process.env.DOCS_BASE ?? '/').replace(/\/?$/, '/')
+
 export default defineConfig({
+  base,
   title: 'OpenRampKit',
   description: 'Open-source deposit and withdraw kit: one modal, your server, pluggable adapters.',
   cleanUrls: true,
   lastUpdated: true,
   // The design notes link to local files outside the site; do not fail the build on those.
-  ignoreDeadLinks: [/^\.\.\/\.\.\//, /localhost/],
+  ignoreDeadLinks: [/^\.\.\/\.\.\//, /localhost/, /(^|\.\.\/)playground\/$/],
   srcExclude: ['**/node_modules/**', 'README.md'],
   themeConfig: {
     nav: [
@@ -16,6 +21,8 @@ export default defineConfig({
       { text: 'API', link: '/api/server' },
       { text: 'Deploy', link: '/deploy/cloudflare-workers' },
       { text: 'Design', link: '/design/scope' },
+      // The playground is a separate static app, copied to `dist/playground/`. `target: '_self'` makes a full page load.
+      { text: 'Live demo', link: '/playground/', target: '_self' },
     ],
     sidebar: {
       '/guide/': [
@@ -33,6 +40,7 @@ export default defineConfig({
             { text: 'Webhooks to your backend', link: '/guide/webhooks' },
             { text: 'Testing with mocks', link: '/guide/testing' },
             { text: 'Examples', link: '/guide/examples' },
+            { text: 'Live demo (playground)', link: '/guide/playground' },
           ],
         },
       ],
@@ -89,6 +97,7 @@ export default defineConfig({
           text: 'Deploy',
           items: [
             { text: 'Cloudflare Workers', link: '/deploy/cloudflare-workers' },
+            { text: 'Host the docs and playground', link: '/deploy/docs-site' },
             { text: 'Next.js / Vercel', link: '/deploy/nextjs' },
             { text: 'Node, Bun, Deno', link: '/deploy/node' },
             { text: 'Session stores', link: '/deploy/stores' },
