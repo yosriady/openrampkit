@@ -1,73 +1,132 @@
+<div align="center">
+
 # OpenRampKit
 
-RainbowKit for money movement. An open-source deposit and withdraw kit: one modal (a web component that works in any framework), a server you host yourself, and provider adapters that anyone can write.
+**The RainbowKit for onramps and deposits.**
 
-- **Open and self-hosted.** MIT. Your provider keys, your server, no platform fee.
-- **Any destination.** A token on any chain (crypto apps), or your own fiat account (any app).
-- **Pathways.** One to two legs, for example "VietQR, then Swapped to USDC on Base, then Relay to Monad". Every leg's quote, fee and status is visible.
-- **Local rails first.** QRIS, PromptPay, QR Ph, DuitNow, VietQR, GCash, MoMo and more.
-- **Adapters like wagmi connectors.** `createAdapter()` plus a conformance test kit.
+Open-source, unified deposit infrastructure for crypto apps.<br>
+Solving the onboarding chasm of getting billions of users onchain.
 
-**[Docs](https://yosriady.github.io/openrampkit/)** · **[Live demo (playground)](https://yosriady.github.io/openrampkit/playground/)**. The demo uses mock providers and moves no real money.
+[![CI](https://github.com/yosriady/openrampkit/actions/workflows/ci.yml/badge.svg)](https://github.com/yosriady/openrampkit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)](tsconfig.base.json)
 
-> Status: prototype (phases 0 to 3 of the [spec](docs/design/spec.md)). APIs will change.
+**[Docs](https://yosriady.github.io/openrampkit/)** · **[Live demo](https://yosriady.github.io/openrampkit/playground/)** · **[Security](SECURITY.md)**
 
-## Screenshots
+</div>
 
-| Use Cash (Vietnam) | Quote | VietQR payment | Complete |
-|---|---|---|---|
-| ![](docs/screenshots/01-vn-cash-methods.png) | ![](docs/screenshots/03-vn-quote.png) | ![](docs/screenshots/04-vn-qr.png) | ![](docs/screenshots/06-vn-complete.png) |
+<table>
+  <tr>
+    <td align="center"><img src="docs/screenshots/01-vn-cash-methods.png" height="320" alt="Local cash methods in Vietnam"><br><sub>Local methods first</sub></td>
+    <td align="center"><img src="docs/screenshots/04-vn-qr.png" height="320" alt="VietQR payment screen"><br><sub>Pay by VietQR</sub></td>
+    <td align="center"><img src="docs/screenshots/11-wallet-amount.png" height="320" alt="Pay from a connected wallet"><br><sub>Pay from wallet</sub></td>
+    <td align="center"><img src="docs/screenshots/41-merchant-qr-dark.png" height="320" alt="Merchant QRIS payment in dark mode"><br><sub>Merchant QRIS, dark</sub></td>
+    <td align="center"><img src="docs/screenshots/50-mobile-sheet.png" height="320" alt="Bottom sheet on a phone"><br><sub>Phone sheet</sub></td>
+  </tr>
+</table>
 
-| Pay from wallet | Transfer crypto | Merchant QRIS (dark) | Phone sheet |
-|---|---|---|---|
-| ![](docs/screenshots/11-wallet-amount.png) | ![](docs/screenshots/21-transfer-address.png) | ![](docs/screenshots/41-merchant-qr-dark.png) | ![](docs/screenshots/50-mobile-sheet.png) |
+OpenRampKit gives your app one deposit and withdraw modal, a server that you host, and provider adapters that anyone can write. Withdrawals are supported too. Local payment methods are first class: VietQR, QRIS, PromptPay, QR Ph, PayNow and GCash sit next to cards, Pix, UPI and SEPA.
 
-All flows run on mock providers in `examples/next-demo`. To try the widget without an install, open the [playground](https://yosriady.github.io/openrampkit/playground/). It runs the server in your browser tab. Recapture with `npx playwright test e2e/screens.spec.ts`.
+> [!NOTE]
+> **Status: prototype.** Packages are at `0.0.1` and APIs will change. The [live demo](https://yosriady.github.io/openrampkit/playground/) uses mock providers and moves no real money.
 
-## Packages
+## Contents
 
-| Package | What |
-|---|---|
-| `@openrampkit/core` | Types, exact money math, codes, region policy, flow table, pathway planner, ranking |
-| `@openrampkit/adapter` | Adapter API (`createAdapter`) and test kit |
-| `@openrampkit/server` | Web-standard handler: sessions, pathways, quotes, legs, webhooks. Runs on Cloudflare Workers, Next.js, Node, Bun, Deno |
-| `@openrampkit/client` | Framework-free client and `DepositController`; `createMockWallet` for tests |
-| `@openrampkit/web` | `<openramp-modal>` web component (Lit, Shadow DOM) and `openDeposit()` |
-| `@openrampkit/react` | `OpenRampProvider`, `DepositButton`, `useOpenRamp`, headless hooks |
-| `@openrampkit/vue` | Vue 3 and Nuxt: `OpenRampProvider`, `provideOpenRamp`, `DepositButton`, composables |
-| `@openrampkit/svelte` | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, `use:depositButton` and other actions |
-| `@openrampkit/solid` | Solid and SolidStart: `OpenRampProvider`, `DepositButton`, primitives |
-| `@openrampkit/wagmi` | Wallet adapter for wagmi apps (EVM chains, including Tempo) |
-| `@openrampkit/solana` | Wallet adapter for Solana wallets (Wallet Standard, `@solana/kit`): Relay's Solana transactions and SPL transfers |
-| `@openrampkit/adapter-relay` | Wallet pay, transfer to a deposit address, and the bridge hop (Relay) |
-| `@openrampkit/adapter-swapped` | Card, Apple Pay, Google Pay and SEA local methods (Swapped); payouts to bank transfer, Skrill, PIX and Interac for withdrawals |
-| `@openrampkit/adapter-coinbase` | Coinbase Onramp |
-| `@openrampkit/adapter-transak` | Transak |
-| `@openrampkit/adapter-mock` | Test provider with every surface type. Moves no money |
+- [Why](#why)
+- [Features](#features)
+- [Quick start](#quick-start)
+- [How it works](#how-it-works)
+- [Packages](#packages)
+- [Adapters](#adapters)
+- [Chains and payment methods](#chains-and-payment-methods)
+- [Onchain settlement](#onchain-settlement)
+- [Deploy](#deploy)
+- [Development](#development)
+- [Status and roadmap](#status-and-roadmap)
+- [Contributing](#contributing), [Security](#security), [License](#license)
 
-## Why a server?
+## Why
 
-The browser cannot be trusted with provider secrets or with the destination address. The server:
+- **Most people cannot pay the way ramps expect.** In Southeast Asia and other markets, people pay with local QR codes and e-wallets, not cards. Global ramps are card first and cover few local methods.
+- **Each provider is a separate integration.** To reach users in many countries, an app must add 5 to 10 providers. Each one has its own keys, KYC hand-off, webhooks, statuses and failure modes.
+- **Hosted aggregators take control and a fee.** They hold the provider contracts, the data and the routing. You cannot add a provider that they do not support.
 
-1. holds provider secrets and signs provider URLs (Swapped, Coinbase, Transak),
-2. fixes the user, destination and amount limits when the session is created,
-3. receives provider webhooks and sends signed webhooks to your backend, so you credit balances from a trusted source,
-4. runs a background sweep (`openramp.sweep()`, from a cron trigger or `POST /tasks/sweep`) that retries failed webhooks, checks the status of open payments after the user closes the tab, and expires idle sessions. Schedule it every minute; without a scheduled sweep, nothing runs after the user leaves.
+OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use your own provider keys. There is no platform fee.
 
-It is a single `Request -> Response` handler, so you can deploy it as a Cloudflare Worker or mount it in your existing app.
+## Features
 
-## Quick start (Next.js)
+**UI**
+- `<openramp-modal>`: a web component (Lit, Shadow DOM) that works in any framework.
+- Wrappers for React, Vue 3 (and Nuxt), Svelte 5 and 4 (and SvelteKit), and Solid (and SolidStart). All are SSR-safe.
+- Modal, embedded and headless modes. Light, dark and auto themes, CSS variables and parts.
+- Deposit and withdraw buttons: `DepositButton`, `WithdrawButton`, `openDeposit()`, `openWithdraw()`.
+
+**Pathways and planner**
+- A pathway has one or two legs. Example: VietQR at an onramp to USDC on Base, then a Relay bridge to a token on another chain.
+- A pure planner builds every pathway that can reach the destination and groups them by payment method.
+- The server quotes up to five pathways in parallel and ranks them. Each leg shows its quote, fee and status.
+- Default method order per country puts local QR and e-wallet methods first.
+
+**Server**
+- One web-standard `Request -> Response` handler. It runs on Cloudflare Workers, Next.js, Node 20+, Bun and Deno.
+- Holds provider secrets. Fixes the user, the destination and the amount limits when your backend creates the session.
+- Receives provider webhooks. Sends signed webhooks (HMAC-SHA256) to your backend, with retries.
+- A background `sweep()` retries webhooks, checks open payments after the user leaves, and expires idle sessions.
+- Session stores: memory (dev), Cloudflare Durable Objects, Cloudflare KV, Redis, or your own.
+- Signed, expiring pay links (`sessions.payLink()`) to a hosted page.
+
+**Adapters**
+- 10 provider adapters plus a mock adapter. Write your own with `createAdapter()` and test it with the conformance kit.
+- Two wallet adapters: `wagmiWallet()` for EVM and `solanaWallet()` for Solana (Wallet Standard).
+
+**Destinations and chains**
+- Deposit to a token on any chain that an adapter supports: Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Monad, HyperEVM, Tempo and Solana.
+- Robinhood Chain and Arbitrum Sepolia for the settlement contract.
+- Or deposit fiat into your own merchant account (Xendit), with no crypto in the flow.
+
+**Onchain settlement**
+- `OpenRampSettlement` settles each session once, onchain. It can run an allowlisted call bundle, for example an ERC-4626 vault deposit, in the same transaction.
+
+**AI agents (MCP)**
+- `@openrampkit/mcp` lets an agent create a deposit or payout session and send a pay link. A person pays. The agent waits for the result.
+
+**Withdraw**
+- To a wallet on any chain (Relay), or to cash (Swapped payouts: bank transfer, Skrill, Pix, Interac).
+- User wallet custody, or app custody with your own treasury hook. Address checks, `allowedTargets` and `screenAddress` (fails closed).
+
+**i18n**
+- Built-in catalogs: English, Vietnamese, Indonesian, Thai, Malay and Filipino. Override any string with `messages`.
+
+**Accessibility**
+- The modal is a `dialog` with `aria-modal`. It traps focus, closes on Escape, moves focus to each new screen and announces progress in a live region.
+- CI runs axe checks, keyboard tests and locale tests in the browser.
+
+**Security**
+- The browser gets only a client secret. It cannot change the user, the destination or the amount limits.
+- Provider webhooks are verified over the raw body. Start URLs are signed and expire. Body size limits, rate limits and timeouts are on by default. See [SECURITY.md](SECURITY.md).
+
+## Quick start
+
+This example uses Next.js and the mock adapter, so you need no provider account. See the full [Quick start (Next.js)](https://yosriady.github.io/openrampkit/guide/quick-start-nextjs) guide.
+
+### 1. Install
+
+```bash
+pnpm add @openrampkit/server @openrampkit/adapter-mock @openrampkit/react
+```
+
+### 2. Create the server
 
 ```ts
-// lib/openramp.ts (a Next.js route file may only export route handlers, so keep the instance here)
-import { createOpenRamp } from '@openrampkit/server'
-import { relay } from '@openrampkit/adapter-relay'
+// lib/openramp.ts
+import { createOpenRamp, memoryStore } from '@openrampkit/server'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 
 export const openramp = createOpenRamp({
   secret: process.env.OPENRAMP_SECRET!, // 32+ characters
   baseUrl: `${process.env.PUBLIC_URL}/api/openramp`,
-  adapters: [relay(), mockAdapter()],
+  adapters: [mockAdapter({ crypto: true, bridge: true })], // moves no money
+  store: memoryStore(), // dev only; use durableObjectStore or redisStore in production
   webhooks: { url: `${process.env.PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET! },
 })
 ```
@@ -80,18 +139,25 @@ export const dynamic = 'force-dynamic'
 export const { GET, POST, OPTIONS } = openramp.nextHandlers()
 ```
 
+### 3. Create a session in your backend
+
+Your backend decides who the user is and where the money goes. The browser never sends the destination.
+
 ```ts
-// app/api/deposit-session/route.ts: your backend decides who the user is and where the money goes
+// app/api/deposit-session/route.ts
 import { openramp } from '@/lib/openramp'
 
 export async function POST() {
   const user = await getUser() // your auth
   const session = await openramp.sessions.create({
     userId: user.id,
+    country: 'VN',
     destination: {
       type: 'crypto',
       chain: 'eip155:8453', // Base
       token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', // USDC on Base
+      symbol: 'USDC',
+      decimals: 6,
       address: user.depositAddress,
     },
   })
@@ -99,32 +165,286 @@ export async function POST() {
 }
 ```
 
+### 4. Add the button
+
 ```tsx
 'use client'
 import { DepositButton, OpenRampProvider } from '@openrampkit/react'
 
-<OpenRampProvider baseUrl="/api/openramp">
-  <DepositButton getClientSecret={() => fetch('/api/deposit-session', { method: 'POST' }).then((r) => r.json()).then((j) => j.clientSecret)} />
-</OpenRampProvider>
+const getClientSecret = () =>
+  fetch('/api/deposit-session', { method: 'POST' }).then((r) => r.json()).then((j) => j.clientSecret)
+
+export function Deposit() {
+  return (
+    <OpenRampProvider baseUrl="/api/openramp">
+      <DepositButton getClientSecret={getClientSecret} onComplete={(s) => console.log('done', s.id)} />
+    </OpenRampProvider>
+  )
+}
 ```
 
-Without React:
+Without a framework, use the web component:
 
-```js
+```ts
 import { openDeposit } from '@openrampkit/web'
-openDeposit({ baseUrl: '/api/openramp', clientSecret })
+
+const { done } = openDeposit({ baseUrl: '/api/openramp', clientSecret: getClientSecret })
+await done // resolves on COMPLETED
 ```
 
-Credit balances from the signed `session.completed` webhook (`openramp.webhooks.verify(req, rawBody)`), not from the browser. See the docs: Guide > Quick start and Webhooks.
+### 5. Credit the user from the webhook
 
-## Develop
+Credit balances from the signed `session.completed` webhook, not from the browser.
+
+```ts
+// app/api/hooks/route.ts
+import { openramp } from '@/lib/openramp'
+
+export async function POST(req: Request) {
+  const body = await req.text() // the raw body
+  if (!(await openramp.webhooks.verify(req, body))) return new Response('bad signature', { status: 401 })
+  const event = JSON.parse(body)
+  if (event.type === 'session.completed') {
+    // credit the user once per session
+  }
+  return new Response('ok')
+}
+```
+
+Next steps: [Webhooks](https://yosriady.github.io/openrampkit/guide/webhooks), [Withdrawals](https://yosriady.github.io/openrampkit/guide/withdraw), [Theming](https://yosriady.github.io/openrampkit/guide/theming), [Production checklist](https://yosriady.github.io/openrampkit/deploy/checklist).
+
+## How it works
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant B as Browser (modal)
+    participant A as Your backend
+    participant S as OpenRampKit server
+    participant P as Providers
+    participant C as Chain
+    B->>A: Start a deposit
+    A->>S: sessions.create(userId, destination)
+    S-->>A: clientSecret
+    A-->>B: clientSecret
+    B->>S: Plan, quotes, select
+    S->>P: Quote and start legs (your keys)
+    S-->>B: Next step and surface (QR, redirect, wallet tx)
+    B->>P: User pays (bank app, card page, wallet)
+    P->>C: Deliver funds to the destination
+    P-->>S: Provider webhook or status check
+    S-->>A: Signed session.completed webhook
+    A->>A: Credit the user
+```
+
+- **The server fixes the destination.** The browser holds only a client secret for one session.
+- **Server-driven steps.** The server tells the modal what to show next: a QR code, a redirect, a deposit address or a wallet transaction. The modal has no provider logic.
+- **Errors are fields.** A failed quote or payment is an `OrkError` with a code, a safe message and a recovery hint.
+
+Read more: [Architecture](https://yosriady.github.io/openrampkit/concepts/architecture), [Pathways and legs](https://yosriady.github.io/openrampkit/concepts/pathways), [Sessions and security](https://yosriady.github.io/openrampkit/concepts/sessions), [Surfaces](https://yosriady.github.io/openrampkit/concepts/surfaces).
+
+## Packages
+
+| Package | What it is |
+|---|---|
+| [`@openrampkit/core`](packages/core) | Types, exact money math, method and chain codes, region policy, flow table, pathway planner, ranking |
+| [`@openrampkit/adapter`](packages/adapter) | `createAdapter()`, the conformance test kit, and the settlement helpers |
+| [`@openrampkit/server`](packages/server) | `createOpenRamp()`: sessions, pathways, quotes, legs, webhooks, stores, sweep, pay links |
+| [`@openrampkit/client`](packages/client) | Framework-free HTTP client, `DepositController`, `WithdrawController`, `createMockWallet` |
+| [`@openrampkit/web`](packages/web) | `<openramp-modal>` web component, `openDeposit()`, `openWithdraw()`, themes, i18n |
+| [`@openrampkit/react`](packages/react) | `OpenRampProvider`, `DepositButton`, `WithdrawButton`, `OpenRampEmbedded`, `useDepositController` |
+| [`@openrampkit/vue`](packages/vue) | Vue 3 and Nuxt: `OpenRampProvider`, `provideOpenRamp`, buttons, `OpenRampEmbedded`, composables |
+| [`@openrampkit/svelte`](packages/svelte) | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, `use:depositButton` and other actions |
+| [`@openrampkit/solid`](packages/solid) | Solid and SolidStart: `OpenRampProvider`, buttons, `OpenRampEmbedded`, primitives |
+| [`@openrampkit/wagmi`](packages/wagmi) | `wagmiWallet()`: a wallet adapter for wagmi apps (EVM chains, including Tempo) |
+| [`@openrampkit/solana`](packages/solana) | `solanaWallet()`: a wallet adapter for Solana (Wallet Standard, `@solana/kit`) |
+| [`@openrampkit/mcp`](packages/mcp) | MCP server and `openrampkit-mcp` CLI for AI agents: deposit and payout sessions with pay links |
+| `@openrampkit/adapter-*` | Provider adapters. See [Adapters](#adapters). |
+
+## Adapters
+
+Each provider is an adapter, like a wagmi connector. Pass the configured adapters to `createOpenRamp({ adapters })`.
+
+| Id | Package | What it does | Status |
+|---|---|---|---|
+| `relay` | [`adapter-relay`](packages/adapters/relay) | Pay with wallet, transfer to a deposit address, bridge hop, withdraw to any address | Working. Live check with `pnpm live:relay` (moves no money) |
+| `swapped` | [`adapter-swapped`](packages/adapters/swapped) | Card, Apple Pay, Google Pay, SEPA and SEA local methods (VietQR, MoMo, GCash, PromptPay and more). Payouts for withdrawals | Working. Status polling TO VERIFY |
+| `coinbase` | [`adapter-coinbase`](packages/adapters/coinbase) | Coinbase Onramp: card, Apple Pay, Google Pay | Working. Some details TO VERIFY |
+| `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI | Working. Some details TO VERIFY |
+| `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
+| `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |
+| `xendit` | [`adapter-xendit`](packages/adapters/xendit) | QRIS, QR Ph, PromptPay, PayNow and e-wallets into your own merchant account | Working. Merchant destination only |
+| `meld` | [`adapter-meld`](packages/adapters/meld) | Aggregator: card, UPI, Pix, SEPA, ACH, Binance Pay and more | New. In progress |
+| `onramper` | [`adapter-onramper`](packages/adapters/onramper) | Aggregator: card, SEPA, ACH, Pix, UPI and more | New. In progress |
+| `peer` | [`adapter-peer`](packages/adapters/peer) | P2P rails (zkp2p): Venmo, Cash App, Zelle, Chime, PayPal, Revolut, Wise | New. Opt-in (`enabled: true`); read the warning |
+| `mock` | [`adapter-mock`](packages/adapters/mock) | Every surface type, for dev, tests and the demo | Mock. Moves no money. Refuses live sessions |
+
+"TO VERIFY" means the source marks a provider detail as not yet checked against the live API. See the [adapter docs](https://yosriady.github.io/openrampkit/adapters/) and [Writing an adapter](https://yosriady.github.io/openrampkit/adapters/writing-an-adapter).
+
+## Chains and payment methods
+
+### Chains
+
+Chains use CAIP-2 ids. `CHAINS` in `@openrampkit/core` holds the metadata. A chain that is not in the table still works when an adapter supports it.
+
+| Chain | CAIP-2 id | Notes |
+|---|---|---|
+| Ethereum, Base, Optimism, Polygon | `eip155:1`, `eip155:8453`, `eip155:10`, `eip155:137` | Base is the default hop chain for two-leg pathways |
+| Arbitrum | `eip155:42161` | Settlement contract target. Arbitrum Sepolia (`eip155:421614`) for tests |
+| BNB Chain, Monad, HyperEVM | `eip155:56`, `eip155:143`, `eip155:999` | Chain metadata. Routes come from the adapters you configure |
+| Tempo | `eip155:4217` | Stablecoin fees, no native gas token. Through Relay. See [Tempo](https://yosriady.github.io/openrampkit/concepts/chains#tempo) |
+| Robinhood Chain | `eip155:4663` | Arbitrum Orbit L2. Testnet `eip155:46630` is a settlement deploy target |
+| Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Destination and source. See [Solana](https://yosriady.github.io/openrampkit/guide/solana) |
+
+### Payment methods
+
+The method vocabulary is in `packages/core/src/codes.ts`. Which methods a user sees depends on the adapters you configure and the user's country.
+
+| Market | Methods | Adapters |
+|---|---|---|
+| Vietnam | VietQR, MoMo, ZaloPay | Swapped; Xendit\* (MoMo, ZaloPay) |
+| Indonesia | QRIS, GoPay, DANA, OVO, ShopeePay | Swapped (GoPay, DANA, OVO); Xendit\* (QRIS, DANA, OVO, ShopeePay) |
+| Thailand | PromptPay, TrueMoney | Swapped (PromptPay); Xendit\* |
+| Philippines | QR Ph, GCash, Maya, GrabPay | Swapped (GCash, Maya, GrabPay); Xendit\* |
+| Malaysia | DuitNow QR, Touch 'n Go, GrabPay | Swapped (Touch 'n Go, GrabPay); Xendit\* (Touch 'n Go, GrabPay). DuitNow QR: mock only today |
+| Singapore | PayNow | Xendit\* |
+| Brazil | Pix | Swapped, MoonPay, Meld, Onramper |
+| India | UPI | Swapped, Transak, Meld, Onramper |
+| Europe | SEPA | Swapped, Transak, MoonPay, Meld, Onramper |
+| United States | ACH, Venmo, Cash App, Zelle, Chime, PayPal | MoonPay, Stripe, Meld, Onramper (ACH); MoonPay (PayPal, Venmo); Peer, opt-in |
+| Canada | Interac | MoonPay |
+| Global | Card, Apple Pay, Google Pay | Swapped, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper |
+| Crypto | Pay with wallet, Transfer crypto | Relay |
+
+\* Xendit pays into your own merchant account (a [merchant fiat destination](https://yosriady.github.io/openrampkit/guide/merchant-destination)). Swapped, Transak, Meld and Onramper also read a live catalog, so the exact list per country can change.
+
+**Withdraw targets:** a wallet address on any chain that Relay supports, or cash through Swapped payouts (bank transfer in EUR, DKK and GBP, Skrill, Pix in Brazil, Interac in Canada).
+
+## Onchain settlement
+
+`OpenRampSettlement` is the onchain end point of a deposit session.
+
+- A payer settles one session. The contract takes the amount, then pays the recipient or runs an allowlisted call bundle (for example an ERC-4626 deposit) in the same transaction.
+- Each session id settles once. A second settlement reverts with `AlreadySettled`.
+- The server verifies a payment by one receipt and one `Settled` event. It does not trust a transaction hash from the browser.
+- An optional EIP-712 intent from the server binds the session, payer, token, recipient, minimum amount, calls and deadline.
+- `Ownable2Step`, `Pausable`, no upgradeability, `ReentrancyGuardTransient`. Unit, fuzz and invariant tests in Foundry.
+- Deploy targets: Arbitrum Sepolia, Arbitrum One and Robinhood Chain Testnet.
+
+TypeScript helpers (`buildSettlementTxs`, `verifySettlement`, the ABI) are in `@openrampkit/adapter`. Today the Relay `wallet` leg can pay into the contract.
+
+Read the [settlement docs](https://yosriady.github.io/openrampkit/concepts/settlement) and [contracts/README.md](contracts/README.md).
+
+## Deploy
+
+| Host | How | Guide |
+|---|---|---|
+| Cloudflare Workers | A Worker with `durableObjectStore` (strongly consistent, no extra service). A Cron Trigger calls `sweep()` | [Cloudflare Workers](https://yosriady.github.io/openrampkit/deploy/cloudflare-workers), [example](examples/cloudflare-worker) |
+| Next.js / Vercel | `openramp.nextHandlers()` in a catch-all route. A Vercel Cron Job calls `sweep()` | [Next.js](https://yosriady.github.io/openrampkit/deploy/nextjs), [example](examples/next-demo) |
+| Node, Bun, Deno | `openramp.handle(request)` | [Node, Bun, Deno](https://yosriady.github.io/openrampkit/deploy/node) |
+
+Also read: [Session stores](https://yosriady.github.io/openrampkit/deploy/stores) and the [Production checklist](https://yosriady.github.io/openrampkit/deploy/checklist). Schedule the sweep every minute. Without it, nothing runs after the user leaves.
+
+## Development
+
+### Prerequisites
+
+- Node.js 22 (CI uses 22; the packages need Node 20 or later)
+- pnpm 11 (`packageManager: pnpm@11.10.0`)
+- Foundry (optional): for `contracts/` and the Anvil chain tests
+
+### Scripts
 
 ```bash
 pnpm install
-pnpm test          # unit and end-to-end tests with the mock provider
-pnpm build
+pnpm build            # build all packages
+pnpm test             # unit and integration tests (Vitest)
+pnpm typecheck        # typecheck all packages
+pnpm coverage         # tests with coverage
+pnpm smoke            # pack and install each package: ESM, CJS, SSR, TypeScript
+pnpm docs:dev         # VitePress docs
 pnpm playground:dev   # static playground, server in the browser: http://localhost:5175/playground/
-pnpm site:build       # docs and playground in docs/.vitepress/dist (DOCS_BASE=/openrampkit/ for GitHub Pages)
+pnpm dev:example      # Next.js demo (examples/next-demo)
+pnpm test:chain       # real WALLET_TX on a local Anvil chain (needs Foundry)
+pnpm live:relay       # live Relay API check with your key (moves no money)
+pnpm --filter next-demo e2e   # Playwright browser tests
 ```
 
-Full documentation: `pnpm docs:dev` (VitePress in `docs/`). Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [landscape](docs/design/landscape.md).
+Contracts:
+
+```bash
+git submodule update --init --recursive
+cd contracts && forge build && forge test
+```
+
+### Repo layout
+
+```
+.
+├── packages/
+│   ├── core/          types, money math, codes, planner
+│   ├── adapter/       createAdapter, test kit, settlement helpers
+│   ├── server/        createOpenRamp handler and stores
+│   ├── client/        HTTP client and controllers
+│   ├── web/           <openramp-modal> web component
+│   ├── react/ vue/ svelte/ solid/   framework wrappers
+│   ├── wagmi/ solana/ wallet adapters
+│   ├── mcp/           MCP server for AI agents
+│   └── adapters/      coinbase, meld, mock, moonpay, onramper, peer,
+│                      relay, stripe, swapped, transak, xendit
+├── contracts/         OpenRampSettlement (Foundry)
+├── examples/
+│   ├── next-demo/          Next.js app with Playwright tests
+│   ├── cloudflare-worker/  Worker with a Durable Object store
+│   ├── playground/         static demo, server in the browser
+│   └── agent/              MCP agent example
+├── docs/              VitePress docs and screenshots
+└── scripts/           smoke test, Anvil, site build, live checks
+```
+
+<details>
+<summary><b>More screenshots</b></summary>
+
+| Use cash (Vietnam) | Quote | Complete | Transfer crypto |
+|---|---|---|---|
+| ![Cash methods](docs/screenshots/01-vn-cash-methods.png) | ![Quote](docs/screenshots/03-vn-quote.png) | ![Complete](docs/screenshots/06-vn-complete.png) | ![Transfer address](docs/screenshots/21-transfer-address.png) |
+
+| Card checkout | Merchant methods (dark) | Withdraw to wallet | Withdraw to cash |
+|---|---|---|---|
+| ![Card checkout](docs/screenshots/31-card-checkout.png) | ![Merchant methods](docs/screenshots/40-merchant-methods-dark.png) | ![Withdraw to wallet](docs/screenshots/withdraw-01-to-wallet.png) | ![Withdraw cash methods](docs/screenshots/withdraw-10-cash-methods.png) |
+
+![The playground](docs/screenshots/00-playground.png)
+
+</details>
+
+## Status and roadmap
+
+OpenRampKit is a prototype. Phases 0 to 3 of the [spec](docs/design/spec.md) are done, and parts of phase 5 (withdraw, more adapters, web component wrappers, Solana wallets, settlement calls) are in the repo.
+
+Next:
+
+- Publish the packages to npm (`0.x`) and harden the public alpha.
+- Resolve the TO VERIFY provider details against live APIs and sandboxes.
+- DuitNow QR and VietQR through a live provider.
+- Fiat payouts to banks and e-wallets in Southeast Asia (Xendit).
+- A React Native package, and more wallet adapters (Privy).
+- Deploy `OpenRampSettlement` to public networks.
+
+Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [market landscape](docs/design/landscape.md).
+
+## Contributing
+
+Contributions are welcome, especially new adapters.
+
+1. Read [Writing an adapter](https://yosriady.github.io/openrampkit/adapters/writing-an-adapter).
+2. Run the conformance kit from `@openrampkit/adapter/testing` against your adapter.
+3. Run `pnpm build && pnpm typecheck && pnpm test` before you open a pull request.
+4. Add a changeset with `pnpm changeset` when you change a published package.
+
+## Security
+
+OpenRampKit moves money. Do not open a public issue for a vulnerability. Use GitHub private vulnerability reporting. Read [SECURITY.md](SECURITY.md) for the threat model and the controls, and the [security guide](https://yosriady.github.io/openrampkit/guide/security) for what your app must do.
+
+## License
+
+[MIT](LICENSE)
