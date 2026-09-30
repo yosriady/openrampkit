@@ -122,6 +122,37 @@ importers:
         specifier: ^5.9.0
         version: 5.9.3
 
+  examples/playground:
+    dependencies:
+      '@openrampkit/adapter-mock':
+        specifier: workspace:*
+        version: link:../../packages/adapters/mock
+      '@openrampkit/client':
+        specifier: workspace:*
+        version: link:../../packages/client
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@openrampkit/server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      '@openrampkit/web':
+        specifier: workspace:*
+        version: link:../../packages/web
+    devDependencies:
+      '@playwright/test':
+        specifier: ^1.55.0
+        version: 1.63.0
+      '@types/node':
+        specifier: ^22.10.0
+        version: 22.20.4
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
+      vite:
+        specifier: ^7.3.6
+        version: 7.3.6(@types/node@22.20.4)
+
   packages/adapter:
     dependencies:
       '@openrampkit/core':

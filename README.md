@@ -8,6 +8,8 @@ RainbowKit for money movement. An open-source deposit and withdraw kit: one moda
 - **Local rails first.** QRIS, PromptPay, QR Ph, DuitNow, VietQR, GCash, MoMo and more.
 - **Adapters like wagmi connectors.** `createAdapter()` plus a conformance test kit.
 
+**[Docs](https://yosriady.github.io/openrampkit/)** · **[Live demo (playground)](https://yosriady.github.io/openrampkit/playground/)**. The demo uses mock providers and moves no real money.
+
 > Status: prototype (phases 0 to 3 of the [spec](docs/design/spec.md)). APIs will change.
 
 ## Screenshots
@@ -20,7 +22,7 @@ RainbowKit for money movement. An open-source deposit and withdraw kit: one moda
 |---|---|---|---|
 | ![](docs/screenshots/11-wallet-amount.png) | ![](docs/screenshots/21-transfer-address.png) | ![](docs/screenshots/41-merchant-qr-dark.png) | ![](docs/screenshots/50-mobile-sheet.png) |
 
-All flows run on mock providers in `examples/next-demo`. Recapture with `npx playwright test e2e/screens.spec.ts`.
+All flows run on mock providers in `examples/next-demo`. To try the widget without an install, open the [playground](https://yosriady.github.io/openrampkit/playground/). It runs the server in your browser tab. Recapture with `npx playwright test e2e/screens.spec.ts`.
 
 ## Packages
 
@@ -117,6 +119,8 @@ Credit balances from the signed `session.completed` webhook (`openramp.webhooks.
 pnpm install
 pnpm test          # unit and end-to-end tests with the mock provider
 pnpm build
+pnpm playground:dev   # static playground, server in the browser: http://localhost:5175/playground/
+pnpm site:build       # docs and playground in docs/.vitepress/dist (DOCS_BASE=/openrampkit/ for GitHub Pages)
 ```
 
 Full documentation: `pnpm docs:dev` (VitePress in `docs/`). Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [landscape](docs/design/landscape.md).
