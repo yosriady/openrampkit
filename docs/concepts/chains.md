@@ -18,6 +18,9 @@ OpenRampKit names chains with CAIP-2 ids and tokens with their address (or `nati
 | Tempo Testnet (Moderato) | `eip155:42431` | none | Metadata only |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | SOL (9 decimals) | See [Solana](../guide/solana.md) |
 | Solana Devnet | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | SOL | Metadata and devnet USDC only |
+| Robinhood Chain | `eip155:4663` | ETH | Arbitrum Orbit L2. No USDC in `USDC` yet. |
+| Arbitrum Sepolia | `eip155:421614` | ETH | Testnet. Circle test USDC. Used by the [settlement](./settlement.md) contract tests. |
+| Robinhood Chain Testnet | `eip155:46630` | ETH | Testnet |
 
 `CHAINS[id]` gives `name`, `nativeSymbol`, `nativeDecimals`, `testnet`, `stablecoinFees` and `explorerUrl`. A chain that is not in the table still works when an adapter supports it. The UI then shows the CAIP-2 id as the name.
 
@@ -27,7 +30,7 @@ OpenRampKit names chains with CAIP-2 ids and tokens with their address (or `nati
 - Solana mints are base58 and case-sensitive. OpenRampKit keeps them as given.
 - `normalizeToken(chain, token)` and `sameToken(chain, a, b)` apply these rules. Use them when you compare tokens.
 
-`USDC[chain]` gives the well-known USDC on each chain: Ethereum, Base, Arbitrum, Optimism, Polygon, Tempo and Solana. `TESTNET_USDC` gives testnet USDC (Solana devnet). `isUsdc(chain, token)` checks both.
+`USDC[chain]` gives the well-known USDC on each chain: Ethereum, Base, Arbitrum, Optimism, Polygon, Tempo, Solana, and Circle's test USDC on Arbitrum Sepolia. `TESTNET_USDC` gives Solana devnet USDC. `isUsdc(chain, token)` checks both.
 
 ## Tempo
 

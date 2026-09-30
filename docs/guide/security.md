@@ -45,7 +45,7 @@ Provider URLs reach the browser as popups, iframes and links. The server checks 
 
 The client and the web component do the same checks again. They never open or embed a `javascript:` or `data:` URL.
 
-A `REDIRECT` goes through a start URL on your server: `{baseUrl}/start/{session}.{token}.{signature}`. The signature is an HMAC with `secret`. The link expires after 10 minutes. The redirect has `cache-control: no-store` and `referrer-policy: no-referrer`.
+A `REDIRECT` goes through a start URL on your server: `{baseUrl}/start/{session}.{token}.{signature}`. The signature is an HMAC with `secret`. The link expires after 10 minutes. The redirect has `cache-control: no-store` and `referrer-policy: no-referrer`. When the surface sets `keepReferrer: true` (Transak), it uses `referrer-policy: strict-origin`.
 
 ### Provider webhooks in
 
@@ -91,7 +91,7 @@ Without `cors`, the server sends no CORS headers. With a list of origins, the se
 
 ### Operational routes
 
-`POST /tasks/sweep` and `GET /health?deep=1` need `Authorization: Bearer {tasksToken}`. Without `tasksToken`, they are off.
+`POST /tasks/sweep` and `GET /health?deep=1` need `Authorization: Bearer {tasksToken}`. Without `tasksToken`, `POST /tasks/sweep` answers 404 and `GET /health?deep=1` answers 401. The plain `GET /health` is public: it lists the adapter ids and calls no provider.
 
 ## What you must do
 
@@ -109,6 +109,6 @@ Without `cors`, the server sends no CORS headers. With a list of origins, the se
 ## Known limits
 
 - `x-forwarded-for` and `x-real-ip` can be forged when no proxy sets them. The server gives the IP to providers as a hint only.
-- The KV stores (`memoryStore`, `cloudflareKvStore`) have no atomic version check. Two requests at the same time can both write.
+- `cloudflareKvStore` has no atomic version check. Two requests at the same time can both write. `memoryStore` is atomic, but only inside one process.
 - A same-chain `transfer` to a destination address counts every transfer after the start block, from any sender. See [Same-chain moves](../adapters/relay.md#same-chain-moves).
 - Onramper, Swapped and Xendit webhooks have no replay window, because the providers do not sign a time.

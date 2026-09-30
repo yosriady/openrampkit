@@ -139,12 +139,12 @@ All results are compact JSON. An error result has `isError: true` and `{ "error"
 
 | Tool | Input | Result |
 |---|---|---|
-| `list_payment_methods` | `country`, `direction` | The methods in that country: `method`, `name`, `available`, `eta`, `limits` |
-| `get_quotes` | `country`, `amount`, `method?`, `direction` | Quotes: `pay`, `receive`, `fees`, `eta`. Without `method`, it quotes up to 3 cash methods. |
-| `create_deposit_session` | `country`, `destination?`, `currency?`, `max_amount?`, `min_amount?`, `method?`, `amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `bounds`. With `method` and `amount`: also `payment` (for example a VietQR `qr_payload`). |
-| `create_withdraw_session` | `country`, `amount?`, `max_amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `bounds` |
+| `list_payment_methods` | `country`, `direction`, `destination?` (only with more than one destination) | The methods in that country: `method`, `name`, `available`, `eta`, `limits` |
+| `get_quotes` | `country`, `amount`, `method?`, `direction`, `destination?` (only with more than one destination) | Quotes: `pay`, `receive`, `fees`, `eta`. Without `method`, it quotes up to 3 cash methods. |
+| `create_deposit_session` | `country`, `destination?`, `custom_destination?` (only with `allowCustomAddress`), `currency?`, `max_amount?`, `min_amount?`, `method?`, `amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next`. With `method` and `amount`: also `payment` (for example a VietQR `qr_payload`). |
+| `create_withdraw_session` | `country`, `amount?`, `max_amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `bounds`, `next` |
 | `get_session_status` | `session_id` | `status`, `state`, `done`, `paid`, `received`, `tx_hashes`, `error` |
-| `wait_for_completion` | `session_id`, `timeout_seconds` | Like `get_session_status`. `timed_out: true` when the payment did not finish in time. |
+| `wait_for_completion` | `session_id`, `timeout_seconds` (default 60, capped by `maxWaitSeconds`) | Like `get_session_status`. `timed_out: true` when the payment did not finish in time. |
 
 `list_payment_methods` and `get_quotes` use a short preview session (10 minutes) on your server. They do not move money.
 

@@ -121,7 +121,7 @@ const res = await fetch('https://openramp-server.your-account.workers.dev/sessio
 const { clientSecret } = await res.json() // 201
 ```
 
-`POST /sessions` fills `country` and `region` from Cloudflare's `cf-ipcountry` header of the request. That is your backend's location, not the user's, so send `country` in the body (it wins).
+`POST /sessions` fills `country` from Cloudflare's `cf-ipcountry` header of the request (or from your `geo` hook, when you set one). That is your backend's location, not the user's, so send `country` in the body (it wins).
 
 In the browser, point the modal at the Worker:
 

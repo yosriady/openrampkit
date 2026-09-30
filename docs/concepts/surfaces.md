@@ -7,7 +7,7 @@ type SurfaceKind = 'REDIRECT' | 'IFRAME' | 'PROVIDER_SDK' | 'QR' | 'DEEPLINK' | 
                  | 'DEPOSIT_ADDRESS' | 'WALLET_TX' | 'OTP' | 'FORM'
 ```
 
-Each leg spec lists the surfaces it may use (`LegSpec.surfaces`). The client tells the server which surfaces it can draw (`POST /plan` with `surfaces`). The planner marks legs that need other surfaces as unavailable with `CLIENT_UPGRADE_REQUIRED`. The web modal draws every kind except `PROVIDER_SDK` (`SUPPORTED_SURFACES`).
+Each leg spec lists the surfaces it may use (`LegSpec.surfaces`). The client tells the server which surfaces it can draw (`POST /plan` with `surfaces`). The planner marks legs that need other surfaces as unavailable with `CLIENT_UPGRADE_REQUIRED`. The web modal draws every kind in `SUPPORTED_SURFACES`. It adds `PROVIDER_SDK` only when the app passes `providerRenderers` (see below).
 
 ## REDIRECT
 
@@ -34,7 +34,7 @@ A hosted page at the provider: a card checkout, a bank login, an e-wallet web ch
 
 A provider widget inside the modal (Swapped, Transak by default).
 
-- The iframe gets `allow` (default `payment; camera; microphone; clipboard-write`), a `sandbox` that allows scripts, same origin, forms, popups and top navigation on user action, and `height` (default 560 px).
+- The iframe gets `allow` (default `payment; camera; microphone; clipboard-write`), a `sandbox` that allows scripts, same origin, forms, popups (which may leave the sandbox) and top navigation on user action, and `height` (default 560 px).
 - `messages` tells the modal how to read `postMessage` events from the widget:
 
 ```ts
@@ -59,7 +59,25 @@ The modal accepts a message only when `event.origin` equals the allowed origin e
 { kind: 'PROVIDER_SDK'; provider: string; params: Record<string, unknown> }
 ```
 
-A step that needs the provider's own browser SDK. The web modal does not draw it: it shows "This step needs the {provider} SDK. This screen cannot show it." The web client does not list it in its surfaces, so the planner hides legs that need only this surface. A custom UI can support it.
+A step that needs the provider's own browser SDK, for example the Stripe onramp element. The web modal draws it with a **provider renderer**:
+
+```ts
+import { openDeposit, stripeOnrampRenderer } from '@openrampkit/web'
+
+openDeposit({
+  baseUrl: '/api/openramp',
+  clientSecret,
+  providerRenderers: { stripe: stripeOnrampRenderer() }, // key: the surface `provider`
+})
+```
+
+`OpenRampProvider` (React, Vue, Solid) and `createOpenRamp()` (Svelte) take the same `providerRenderers` option.
+
+- With at least one renderer, the client adds `PROVIDER_SDK` to the surfaces it sends to `POST /plan`. Without one, the planner shows legs that need only this surface as unavailable (`CLIENT_UPGRADE_REQUIRED`).
+- A renderer is `(container, ctx) => void | cleanup`. `ctx` has `surface`, `mode` (`light` or `dark`), `completed(detail?)` and `failed(detail?)`. The modal mounts it once per step, and calls the cleanup when the step changes.
+- `completed()` and `failed()` only start a status check. The server status decides the outcome, as for [iframe messages](./flows.md#iframe-message-protocol).
+- When no renderer matches the surface `provider`, the modal shows a "Continue" link to `params.redirectUrl` when it is a web URL. Else it shows "This step needs the {provider} SDK".
+- `loadScript(src)` loads a provider script once per page, in the document head. `stripeOnrampRenderer()` uses it for `STRIPE_SCRIPTS`. Your CSP must allow scripts and frames from `js.stripe.com` and `crypto-js.stripe.com`.
 
 ## QR
 
@@ -106,13 +124,17 @@ Bank transfer details: account number, bank name, reference. The modal shows eac
 
 ```ts
 { kind: 'WALLET_TX'; chain: string; txs: TxRequest[] }
-type TxRequest = { to: string; data?: string; value?: string; chainId: number; gas?: string }
+type TxRequest = EvmTxRequest | SolanaTxRequest
+type EvmTxRequest = { kind?: 'evm'; to: string; data?: string; value?: string; chainId: number; gas?: string }
+// SolanaTxRequest: { kind: 'solana', type: 'instructions' | 'transaction' | 'transfer', ... }
 ```
+
+See [Solana transactions in WALLET_TX](../guide/solana.md#solana-transactions-in-wallet-tx) for the Solana forms.
 
 Transactions for the user's connected wallet to sign, in order (for example an approval, then a deposit).
 
 - The modal shows "Approve N transactions on {chain}." and a **Confirm in wallet** button. While the wallet is open, the button says "Check your wallet".
-- On click, `DepositController.sendWalletTransactions()` calls `wallet.sendTransactions(chain, txs)` and fires the step's `SURFACE_RESULT` (`expects: 'tx_hash'`) transition with `{ txHash }`.
+- On click, `DepositController.sendWalletTransactions()` calls `wallet.sendTransactions(chain, txs)` and fires the step's `SURFACE_RESULT` (`expects: 'tx_hash'`) transition with `{ txHash }`. See the [wallet payment flow](./flows.md#crypto-payment-from-a-connected-wallet).
 
 ![Confirm in wallet](../screenshots/12-wallet-confirm.png)
 

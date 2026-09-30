@@ -46,7 +46,7 @@ interface Adapter {
 | `transition` | `POST /transitions/:name` for SUBMIT and SURFACE_RESULT transitions |
 | `status` | `GET /step` (at most every 2 s per leg), `sweep()` and `sessions.refresh()` |
 | `webhook` | `POST /webhooks/:adapterId` |
-| `health` | `GET /health` |
+| `health` | `GET /health?deep=1` with the tasks token (plain `GET /health` does not call adapters) |
 | `routes` | Any request to `/adapters/:adapterId/*` |
 
 ## Inputs
@@ -133,6 +133,37 @@ Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 | `randomHex(bytes = 8)` | Random hex string |
 | `hmacSha256(secret, message, 'hex' \| 'base64')` | WebCrypto HMAC |
 | `timingSafeEqual(a, b)` | Constant-time string compare |
+
+## EVM helpers
+
+Plain JSON-RPC over `fetch`. No viem.
+
+| Export | Description |
+|---|---|
+| `evmRpc(fetch, url, method, params, { log? })` | One JSON-RPC call. A network, HTTP or RPC error becomes `PROVIDER_UNAVAILABLE` (502, or 504 on a timeout). |
+| `erc20TransferData(to, amountBase)` | ERC-20 `transfer(to, amount)` calldata |
+| `erc20PaidTo(receipt, token, recipient)` | The sum of ERC-20 `Transfer` logs of `token` to `recipient` in a receipt, in base units (`bigint`) |
+| `ERC20_TRANSFER_TOPIC`, `topicAddress(address)` | The `Transfer` event topic, and an address as a 32-byte topic, for `eth_getLogs` filters |
+| `EvmReceipt` | The receipt fields the helpers read (`status`, `blockNumber`, `logs`) |
+
+## Settlement helpers
+
+Helpers for the `OpenRampSettlement` contract. See [On-chain settlement](../concepts/settlement.md) and the [settlement flow](../concepts/flows.md#on-chain-settlement).
+
+| Export | Description |
+|---|---|
+| `buildSettlementTxs({ chainId, contract, sessionId, token, amount, recipient, calls?, intent? })` | The two WALLET_TX transactions: `approve`, then `settle` |
+| `encodeSettle(params, intent?, { fromBalance? })` | `settle` (or `settleFromBalance`) calldata |
+| `erc20ApproveData(spender, amountBase)` | ERC-20 `approve` calldata |
+| `settlementIntentTypedData({ chainId, contract, sessionId, token, recipient, minAmount, calls?, deadline, payer? })` | The EIP-712 typed data for the intent signer |
+| `hashSettlementCalls(calls)` | The calls hash, equal to the contract `hashCalls` and to `callsHash` in `Settled` |
+| `settlementCallsFrom(destination.calls)` | `ContractCall[]` to `SettlementCall[]`. Throws on a bad address, bad data or native value. |
+| `verifySettlement({ rpcUrl, contract, sessionId, fromBlock?, expect? })` | Reads `receiptOf` and the `Settled` log. Returns `{ settled: false }` or `{ settled: true, ok, problem?, record }`. |
+| `sessionIdToBytes32(id)`, `bytes32ToSessionId(word)` | The session id as `bytes32` (UTF-8, padded with zeros), and back |
+| `isEvmAddress(value)`, `keccak256(data)` | Small utilities |
+| `OPEN_RAMP_SETTLEMENT_ABI`, `SETTLEMENT_SELECTORS`, `SETTLED_TOPIC`, `SETTLEMENT_INTENT_TYPES` | The ABI, the function selectors, the `Settled` topic and the EIP-712 types |
+
+Types: `SettlementCall`, `SettlementIntent`, `SettlementParams`, `SettlementIntentTypedData`, `SettlementRecord`, `VerifySettlementResult`.
 
 ## Conformance checks (main entry)
 

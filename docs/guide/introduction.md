@@ -49,6 +49,8 @@ The cost of self-hosting is real. You sign up with each provider, you keep their
 5. The server learns about progress from provider webhooks and status checks. When all legs succeed, the step is `COMPLETED`.
 6. The server sends `session.completed` to your backend. You credit the user.
 
+The [Flows](../concepts/flows.md) page shows each step as a sequence diagram.
+
 ## How a withdrawal works
 
 1. Your backend creates a session with `direction: 'withdraw'` and a `source` (the asset, and who holds it). It returns `clientSecret` to the browser.
@@ -65,4 +67,6 @@ A background sweep keeps each session moving after the user closes the tab. See 
 - [Installation](./installation.md)
 - [Quick start (Next.js)](./quick-start-nextjs.md)
 - [Withdrawals](./withdraw.md)
+- [Features](./features.md): every feature, with links
 - [Architecture](../concepts/architecture.md)
+- [Flows](../concepts/flows.md): the key flows as sequence diagrams

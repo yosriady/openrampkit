@@ -13,12 +13,16 @@ stripe({
   secretKey: process.env.STRIPE_SECRET_KEY!,
   publishableKey: process.env.STRIPE_PUBLISHABLE_KEY!,
   webhookSecret: process.env.STRIPE_WEBHOOK_SECRET!,
-  surface: 'redirect', // the web modal cannot draw the default PROVIDER_SDK surface
 })
 ```
 
 ::: warning Pick the surface
-By default the adapter returns a `PROVIDER_SDK` surface for Stripe's embedded onramp (`@stripe/crypto`). The OpenRampKit web modal does not draw `PROVIDER_SDK`, so the planner shows Stripe's methods as "Not available" (`CLIENT_UPGRADE_REQUIRED`). Use `surface: 'redirect'` with the web modal, or build a custom UI that loads `@stripe/crypto` with the surface's `params`.
+By default the adapter returns a `PROVIDER_SDK` surface for Stripe's embedded onramp. The surface `params` carry `clientSecret`, `publishableKey`, `sessionId` and `redirectUrl` (when Stripe gives one). You have two choices:
+
+- Keep the default and pass `providerRenderers: { stripe: stripeOnrampRenderer() }` to `openDeposit()` or `OpenRampProvider`. The modal mounts the Stripe element. See [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk).
+- Set `surface: 'redirect'`. The modal opens the Stripe-hosted onramp in a new tab.
+
+Without a renderer and with the default surface, the planner shows Stripe's methods as "Not available" (`CLIENT_UPGRADE_REQUIRED`).
 :::
 
 ## Options

@@ -19,6 +19,9 @@ So the server:
 
 ## Creating a session
 
+The [session creation flow](./flows.md#session-creation) shows the full sequence as a diagram.
+
+
 ```ts
 const { id, clientSecret, expiresAt } = await openramp.sessions.create({
   userId: user.id,
@@ -37,7 +40,7 @@ See [`CreateSessionInput`](../api/server.md#createsessioninput) for every field.
 - `country` and `region` are uppercased. They drive the currency, the methods and the region checks.
 - `allowedMethods` filters the plan: other methods are not shown and cannot be quoted.
 - `amountBounds` is shown to the user as a min and max on the amount screen. The server enforces it on quotes and on select (see [Amount bounds](../api/server.md#amount-bounds)). Provider limits still apply.
-- `email` is passed to adapters that can prefill it (Swapped, Transak, MoonPay).
+- `email` is passed to adapters that can prefill it (Swapped, Transak, MoonPay, Onramper).
 - `locale` (BCP 47, such as `vi`) is sent to the modal as `PublicSession.locale`, where it picks the language unless the client sets one. Adapters get it as `ctx.session.locale` (`en` when not set).
 
 ## Client secrets
@@ -47,6 +50,8 @@ See [`CreateSessionInput`](../api/server.md#createsessioninput) for every field.
 The browser sends it on every call as `Authorization: Bearer {clientSecret}`. The server checks that the id in the token matches the id in the URL, and compares the hash in constant time. A wrong or missing secret gets `401 UNAUTHORIZED`.
 
 A client secret gives access to one session only. It can read the session and move it forward. It cannot change the user, the destination, the metadata or the expiry. Treat it like a short-lived token: send it only to the user who owns the session.
+
+A **pay link credential** works like a client secret. `openramp.sessions.payLink(id)` or `POST /sessions/:id/pay-link` returns a URL `{baseUrl}/pay/{sessionId}.pay_{exp}_{sig}`. The part after the dot is an HMAC over the session id and an expiry, signed with your `secret`. It works until it expires (by default the session expiry plus 30 minutes). An expired credential gets `401` with "This pay link expired.". A pay link credential cannot make another pay link. See [GET /pay/:credential](../api/http.md#get-pay-credential) and the [agent flow](./flows.md#ai-agent-via-mcp).
 
 ## Browser-created sessions (optional)
 
@@ -89,7 +94,14 @@ When the provider is done, it sends the user to `returnUrl` (default `{baseUrl}/
 
 ## Expiry
 
-Sessions expire after `ttlMinutes` (default 30). When the background sweep or a request finds an **open** session after its expiry, the server moves it to `EXPIRED` with `SESSION_EXPIRED` and sends `session.expired`. A session that is already processing a payment does not expire this way: the provider decides the outcome.
+Sessions expire after `ttlMinutes` (default 30). The server moves a session to `EXPIRED` with `SESSION_EXPIRED` and sends `session.expired` in these cases:
+
+- A request finds an **open** session (no payment started) after its expiry.
+- The background sweep finds a session after its expiry with no payment started, or with a leg that still waits for the user (`awaiting_user`, for example an unpaid QR code).
+
+A leg that the provider is processing does not expire this way: the provider decides the outcome. A leg can also end as `expired` on its own (the provider says so). Then the step is `EXPIRED`, and the server sends `session.expired` too.
+
+See the [expiry flow](./flows.md#background-sweep-and-session-expiry).
 
 Quotes expire on their own schedule (`expiresAt`). Selecting an expired quote returns `410 QUOTE_EXPIRED`.
 

@@ -11,14 +11,16 @@ The packages are at version `0.0.1` and the APIs will change. If a package is no
 | Package | Runs on | What it is |
 |---|---|---|
 | `@openrampkit/server` | Server | The handler: sessions, planning, quotes, legs, webhooks, stores |
-| `@openrampkit/adapter-*` | Server | Provider adapters: `relay`, `swapped`, `coinbase`, `transak`, `xendit`, `mock` |
-| `@openrampkit/web` | Browser | `<openramp-modal>` and `openDeposit()` |
+| `@openrampkit/adapter-*` | Server | Provider adapters: `relay`, `swapped`, `xendit`, `coinbase`, `transak`, `moonpay`, `stripe`, `meld`, `onramper`, `peer`, `mock` |
+| `@openrampkit/web` | Browser | `<openramp-modal>`, `openDeposit()`, `openWithdraw()`, themes, provider renderers |
 | `@openrampkit/react` | Browser (SSR-safe) | `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, hooks |
 | `@openrampkit/vue` | Browser (SSR-safe) | Vue 3 and Nuxt: `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, composables |
 | `@openrampkit/svelte` | Browser (SSR-safe) | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, actions |
 | `@openrampkit/solid` | Browser (SSR-safe) | Solid and SolidStart: `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, primitives |
 | `@openrampkit/client` | Browser or Node | HTTP client, `DepositController`, `createMockWallet` |
 | `@openrampkit/wagmi` | Browser | `wagmiWallet()`: a `WalletAdapter` for wagmi apps |
+| `@openrampkit/solana` | Browser | `solanaWallet()`: a `WalletAdapter` for Solana wallets (Wallet Standard) |
+| `@openrampkit/mcp` | Node | An MCP server for AI agents. See [Agents (MCP)](./agents.md). |
 | `@openrampkit/core` | Anywhere | Types, money math, codes, planner, flow table |
 | `@openrampkit/adapter` | Server | `createAdapter()`, helpers, and the `/testing` kit |
 

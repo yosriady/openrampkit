@@ -13,7 +13,7 @@ export type OpenRampProviderProps = {
   appearance?: Appearance
   /** Partial message catalog. Overrides the locale catalog key by key. */
   messages?: Partial<Messages>
-  /** BCP 47 locale (`en`, `vi`, `id`, `th`, `ms`, `fil`, ...). Default: session locale, then browser language, then English. */
+  /** BCP 47 locale (`en`, `vi`, `id`, `th`, `ms`, `fil`, ...). Default: session locale, then English (the browser language is not used). */
   locale?: string
   /** Renderers for PROVIDER_SDK surfaces, e.g. `{ stripe: stripeOnrampRenderer() }` from `@openrampkit/web` */
   providerRenderers?: Record<string, ProviderRenderer>
