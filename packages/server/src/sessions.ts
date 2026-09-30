@@ -2,6 +2,7 @@ import { OrkException, isTerminal, orkError } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
+import { checkPayCredential, isPayCredential } from './pay.js'
 import { trackOpenSession } from './tasks.js'
 import { normalizeDestination, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
@@ -112,8 +113,12 @@ export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
   const [sid, secret] = token.split('.')
   if (!sid || !secret || sid !== id) throw new OrkException(orkError('UNAUTHORIZED'), 401)
+  if (isPayCredential(secret)) {
+    const check = await checkPayCredential(rt, sid, secret)
+    if (check !== 'ok') throw new OrkException(orkError('UNAUTHORIZED', check === 'expired' ? { message: 'This pay link expired.' } : {}), 401)
+  }
   const rec = await rt.store.get(id)
-  if (!rec || !safeEqual(rec.secretHash, await sha256Hex(secret))) throw new OrkException(orkError('UNAUTHORIZED'), 401)
+  if (!rec || (!isPayCredential(secret) && !safeEqual(rec.secretHash, await sha256Hex(secret)))) throw new OrkException(orkError('UNAUTHORIZED'), 401)
   if (Date.now() > rec.expiresAt && !isTerminal(rec.step.state) && rec.status === 'open') {
     rec.status = 'expired'
     rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: orkError('SESSION_EXPIRED') }

@@ -16,7 +16,9 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `POST` | `/sessions/:id/quotes` | Bearer | Quote a method |
 | `POST` | `/sessions/:id/select` | Bearer, `Idempotency-Key` | Confirm a quote and start the first leg |
 | `POST` | `/sessions/:id/transitions/:name` | Bearer, `Idempotency-Key` | Fire a transition |
+| `POST` | `/sessions/:id/pay-link` | Bearer client secret | Make a signed pay link |
 | `GET` | `/start/:token` | Signed token | Popup-safe redirect to a provider |
+| `GET` | `/pay/:credential` | Signed credential | Hosted pay page for one session |
 | `GET` | `/return` | none | "You can close this tab" page |
 | `POST` | `/webhooks/:adapterId` | Adapter verifies | Provider webhooks |
 | any | `/adapters/:adapterId/*` | Adapter decides | Adapter routes |
@@ -32,7 +34,7 @@ Session routes need the client secret:
 Authorization: Bearer ors_6a1f0c2b9d8e7f6a5b4c3d2e.4b1f...
 ```
 
-The session id before the dot must equal `:id`. A missing or wrong secret gets `401 UNAUTHORIZED`. When an open session is past its expiry, loading it moves it to `EXPIRED` first.
+The session id before the dot must equal `:id`. A missing or wrong secret gets `401 UNAUTHORIZED`. A [pay link](#get-pay-credential) credential (`ors_....pay_{exp}_{sig}`) also works, until it expires. When an open session is past its expiry, loading it moves it to `EXPIRED` first.
 
 Session routes record the caller's IP (`cf-connecting-ip`, `x-real-ip` or the first `x-forwarded-for`) for adapters.
 
@@ -221,6 +223,31 @@ After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` tr
 ## GET /start/:sessionId.:token.:sig
 
 Checks the HMAC signature (`401` when wrong), then the token's expiry (10 minutes; `410` text when expired), then answers `302` to the provider URL with `cache-control: no-store` and `referrer-policy: no-referrer` (or `strict-origin` when the surface set `keepReferrer`).
+
+## POST /sessions/:id/pay-link
+
+Makes a signed link to the [pay page](#get-pay-credential). Only the client secret can call it: a pay link credential gets `403`.
+
+- Body (optional): `{ "ttlMinutes": 15 }`. The default and the maximum is the session expiry plus 30 minutes.
+- Response `201`: `{ "url": "https://.../pay/ors_....pay_tm5nzp_c7c8...", "expiresAt": "..." }`
+- `404` when `payPage` is `false`.
+
+The backend API `openramp.sessions.payLink(id, { ttlMinutes? })` returns the same object without a client secret.
+
+## GET /pay/:credential
+
+A small HTML page that mounts `<openramp-modal>` for the session in embedded mode (`openDeposit` or `openWithdraw`). A person opens it on a phone and pays. See [Agents (MCP)](../guide/agents.md#the-pay-link).
+
+The credential is `{sessionId}.pay_{exp}_{sig}`: `exp` is the expiry (Unix seconds, base 36) and `sig` is an HMAC-SHA256 of the session id and `exp` with `secret`. The page passes the credential to the modal as the client secret.
+
+| Status | When |
+|---|---|
+| `200` | HTML with `cache-control: no-store`, `referrer-policy: no-referrer`, and a content security policy with a script nonce and `frame-ancestors 'none'` |
+| `401` | The signature is wrong (plain text) |
+| `404` | The session does not exist, or `payPage` is `false` |
+| `410` | The link expired (plain text) |
+
+The page imports `payPage.scriptUrl` (default `https://esm.sh/@openrampkit/web@0`).
 
 ## GET /return
 

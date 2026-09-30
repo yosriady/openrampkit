@@ -10,6 +10,7 @@ import { refreshActive } from './legs.js'
 import { route } from './routes.js'
 import { createRuntime, publicSession, saveSession } from './runtime.js'
 import { createSession } from './sessions.js'
+import { createPayLink } from './pay.js'
 import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
 
@@ -19,6 +20,7 @@ export { verifyWebhook } from './crypto.js'
 export type { CreateSessionInput, OpenRampConfig, TreasuryHook, TreasurySendInput } from './config.js'
 export { isValidAddress } from './withdraw.js'
 export type { CreatedSession } from './sessions.js'
+export type { PayLink } from './pay.js'
 export type { SweepResult } from './tasks.js'
 
 export function createOpenRamp(config: OpenRampConfig) {
@@ -62,6 +64,14 @@ export function createOpenRamp(config: OpenRampConfig) {
         if (!rec) return null
         if (await refreshActive(rt, rec, true)) await saveSession(rt, rec)
         return publicSession(rec)
+      },
+      /**
+       * A signed, expiring link to a hosted page where a person completes this session
+       * (`GET {baseUrl}/pay/:credential`). Default expiry: the session expiry plus 30 minutes.
+       */
+      async payLink(id: string, opts: { ttlMinutes?: number } = {}) {
+        const rec = await rt.store.get(id)
+        return rec ? createPayLink(rt, rec, opts.ttlMinutes) : null
       },
     },
     /**

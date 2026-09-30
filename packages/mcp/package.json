@@ -1,0 +1,61 @@
+{
+  "name": "@openrampkit/mcp",
+  "version": "0.0.1",
+  "description": "Model Context Protocol server for OpenRampKit: agents create deposit and payout sessions, a person pays through a hosted link",
+  "keywords": [
+    "agents",
+    "mcp",
+    "model-context-protocol",
+    "offramp",
+    "onramp",
+    "openrampkit"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/guide/agents.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/mcp"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "openrampkit-mcp": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.31.0",
+    "@openrampkit/core": "workspace:*",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@openrampkit/adapter-mock": "workspace:*",
+    "@openrampkit/server": "workspace:*"
+  }
+}

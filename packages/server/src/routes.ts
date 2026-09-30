@@ -11,6 +11,7 @@ import type { QuotesBody } from './planning.js'
 import { adapterContext, publicSession, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { createSession, loadAuthed } from './sessions.js'
+import { createPayLink, isPayCredential, payRoute } from './pay.js'
 import { sweep } from './tasks.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
@@ -56,6 +57,7 @@ export async function route(rt: Runtime, req: Request): Promise<Response> {
   if (head === 'sessions' && !id && method === 'POST') return createSessionRoute(rt, req)
   if (head === 'sessions' && id) return sessionRoute(rt, req, method, id, action, arg)
   if (head === 'start' && id && method === 'GET') return startRoute(rt, id)
+  if (head === 'pay' && id && method === 'GET') return payRoute(rt, id)
   if (head === 'return' && method === 'GET') return new Response(RETURN_PAGE, { headers: { 'content-type': 'text/html; charset=utf-8' } })
   if (head === 'webhooks' && id && method === 'POST') return webhookRoute(rt, req, id)
   if (head === 'adapters' && id) return adapterRoute(rt, req, id, parts.slice(2).join('/'))
@@ -104,6 +106,13 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
   }
 
   if (action === 'target' && method === 'POST') return targetRoute(rt, req, rec)
+
+  if (action === 'pay-link' && method === 'POST') {
+    // A pay link cannot mint another pay link: only the client secret can.
+    if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(orkError('UNAUTHORIZED'), 403)
+    const body = await readJson<{ ttlMinutes?: number }>(req, {})
+    return json(await createPayLink(rt, rec, typeof body.ttlMinutes === 'number' ? body.ttlMinutes : undefined), 201)
+  }
 
   if (action === 'quotes' && method === 'POST') {
     if (rec.active && !isTerminal(rec.step.state)) return inProgress()

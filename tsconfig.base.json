@@ -42,6 +42,9 @@
       "@openrampkit/wagmi": [
         "packages/wagmi/src/index.ts"
       ],
+      "@openrampkit/mcp": [
+        "packages/mcp/src/index.ts"
+      ],
       "@openrampkit/adapter-*": [
         "packages/adapters/*/src/index.ts"
       ]

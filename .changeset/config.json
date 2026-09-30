@@ -7,5 +7,5 @@
   "access": "public",
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
-  "ignore": ["next-demo", "cloudflare-worker-example", "openrampkit-docs"]
+  "ignore": ["next-demo", "cloudflare-worker-example", "agent-example", "openrampkit-docs"]
 }

@@ -41,6 +41,7 @@ const openramp = createOpenRamp({
 | `limits.providerCallsPerMinute` | `number` | `60` | Per session: requests to `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` in one minute. More get `429 RATE_LIMITED`. |
 | `screenAddress` | `(address, chain) => Promise<boolean>` | none | Withdraw: check a "To wallet" address. `false` or an error refuses it (fail closed). See [Screen addresses](../guide/withdraw.md#screen-addresses). |
 | `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. See [Custody](../guide/withdraw.md#custody-app). |
+| `payPage` | `false \| { scriptUrl?, title? }` | on, script from esm.sh | The hosted pay page `GET /pay/:credential`. `false` turns it off. See [The pay link](../guide/agents.md#the-pay-link). |
 
 The default geo lookup reads `cf-ipcountry` or `x-vercel-ip-country` (ignoring `XX`), and `x-vercel-ip-country-region` for the region (as `{country}-{region}`).
 
@@ -56,6 +57,7 @@ openramp.nextHandlers()       // { GET, POST, OPTIONS } for a Next.js App Router
 await openramp.sessions.create(input)  // Promise<CreatedSession>
 await openramp.sessions.retrieve(id)   // Promise<PublicSession | null>
 await openramp.sessions.refresh(id)    // Promise<PublicSession | null>: ask the active leg's adapter for status now
+await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { url, expiresAt }, a signed link to the pay page
 
 await openramp.sweep({ limit? })       // Promise<SweepResult>: retry webhooks, refresh open payments, expire sessions
 
@@ -183,6 +185,6 @@ Types: `SessionStore`, `SessionRecord`, `ActiveLeg`, `StoredQuote`, `DurableObje
 
 ## Other exports
 
-Types: `OpenRampConfig`, `CreateSessionInput`, `CreatedSession`, `OpenRamp`, `SweepResult`, `TreasuryHook`, `TreasurySendInput`.
+Types: `OpenRampConfig`, `CreateSessionInput`, `CreatedSession`, `OpenRamp`, `PayLink`, `SweepResult`, `TreasuryHook`, `TreasurySendInput`.
 
 `isValidAddress(chain, address)` checks an address format for a chain: `0x` and 40 hex digits (not the zero address) on EVM chains, base58 of 32 to 44 characters on Solana. The `/target` route uses it.

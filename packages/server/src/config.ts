@@ -79,6 +79,13 @@ export type OpenRampConfig = {
    * Without it, withdraw methods for app custody show as unavailable.
    */
   treasury?: TreasuryHook
+  /**
+   * Hosted pay links (`GET {baseUrl}/pay/:credential`): a page that mounts `<openramp-modal>` for one session.
+   * Links come from `openramp.sessions.payLink(id)` or `POST {baseUrl}/sessions/:id/pay-link`.
+   * `scriptUrl` is the ES module of `@openrampkit/web` the page imports (default: esm.sh).
+   * Set `false` to turn pay links off.
+   */
+  payPage?: false | { scriptUrl?: string; title?: string }
 }
 
 export type TreasurySendInput = {
@@ -113,6 +120,8 @@ export const DEFAULT_POLL: PollSpec = { intervalMs: 2500, backoff: 1.2, maxInter
 export const MAX_STORED_QUOTES = 20
 export const MAX_QUOTED_PATHWAYS = 5
 export const START_URL_TTL_MS = 10 * 60_000
+/** A pay link works until the session expires plus this grace, so a payment in progress can finish. */
+export const PAY_LINK_GRACE_MS = 30 * 60_000
 export const IDEMPOTENCY_TTL_SEC = 60 * 60 * 24
 export const REF_INDEX_TTL_SEC = 60 * 60 * 24 * 30
 export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
