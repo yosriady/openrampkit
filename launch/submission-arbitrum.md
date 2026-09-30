@@ -30,7 +30,7 @@ OpenRampKit is an open-source (MIT), self-hosted kit that lets any app take mone
 
 ## Solution
 
-1. **One component.** A web component with React, Vue, Svelte and Solid wrappers. It is translated to Vietnamese, Indonesian, Thai, Malay and Filipino.
+1. **One component.** A web component with React, Vue, Svelte and Solid wrappers.
 2. **Pathway planner.** It chooses one or two legs at run time, for example "VietQR to USDC, then Relay to Arbitrum". Every leg shows its quote, fee and status.
 3. **Self-hosted server.** A single web-standard handler that runs on Cloudflare Workers with Durable Objects. It has signed sessions, idempotency, signed webhooks with retries, and a background sweep.
 4. **OpenRampSettlement (new, on Arbitrum).** A contract that:

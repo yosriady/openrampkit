@@ -20,13 +20,13 @@ Open-source, unified deposit infrastructure for crypto apps. Solving the onboard
 
 ## Insight (why now)
 
-- Stablecoins won the rails. The last mile did not. Most people in the world pay from a bank app (Pix, UPI, SEPA, national QR codes), not with a card. Global ramps are card-first and cover only a few local methods. We start in Southeast Asia, where six national QR rails and five languages make the gap largest.
+- Stablecoins won the rails. The last mile did not. Most people in the world pay from a bank app (Pix, UPI, SEPA, national QR codes), not with a card. Global ramps are card-first and cover only a few local methods. We start in Southeast Asia, where six national QR rails make the gap largest.
 - The best route changes per country, per amount and per day. So an app must not hard-code a provider. It must choose a pathway at run time. Wallets solved the same problem with one standard UI over many connectors (RainbowKit). Ramps have no such standard. Closed aggregators (fun.xyz, Unifold, D0) take a fee and own the user relationship.
 - AI agents now hold wallets but cannot use a bank app. They need a human to pay by QR once, then they act. That needs a pay link, guardrails and a status stream. We built it.
 
 ## Product
 
-- One component: a web component with React, Vue, Svelte and Solid wrappers. It is translated to en, vi, id, th, ms and fil. The axe accessibility checks pass on desktop, Android and iPhone.
+- One component: a web component with React, Vue, Svelte and Solid wrappers. The axe accessibility checks pass on desktop, Android and iPhone.
 - A pathway planner across 10 provider adapters: Relay, Swapped, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Peer, Xendit, and a mock.
 - A self-hosted server: one web-standard handler on Cloudflare Workers with Durable Objects. It has signed sessions, idempotency, signed webhooks with retries, and deposit and withdraw flows. A security review is done, and `SECURITY.md` is published.
 - Solana: a Wallet Standard adapter (about 13 KB). Relay routes to and from Solana USDC. Solana payments are checked onchain (one signature completes one payment).

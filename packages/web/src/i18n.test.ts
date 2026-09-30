@@ -96,30 +96,30 @@ describe('locale resolution', () => {
     expect(catalogFor('')).toBeUndefined()
   })
 
-  it('explicit locale > session locale > browser language > en', () => {
-    expect(resolveLocale({ locale: 'th', sessionLocale: 'vi', navigatorLanguage: 'id-ID' })).toEqual({ catalog: 'th', tag: 'th' })
-    expect(resolveLocale({ sessionLocale: 'vi', navigatorLanguage: 'id-ID' })).toEqual({ catalog: 'vi', tag: 'vi' })
-    expect(resolveLocale({ navigatorLanguage: 'id-ID' })).toEqual({ catalog: 'id', tag: 'id-ID' })
-    expect(resolveLocale({ navigatorLanguage: undefined })).toEqual({ catalog: 'en', tag: 'en' })
-    expect(resolveLocale({ navigatorLanguage: 'de-DE' })).toEqual({ catalog: 'en', tag: 'en' })
+  it('explicit locale > session locale > en', () => {
+    expect(resolveLocale({ locale: 'th', sessionLocale: 'vi' })).toEqual({ catalog: 'th', tag: 'th' })
+    expect(resolveLocale({ sessionLocale: 'vi' })).toEqual({ catalog: 'vi', tag: 'vi' })
+    expect(resolveLocale({})).toEqual({ catalog: 'en', tag: 'en' })
   })
 
   it('an explicit locale without a catalog keeps its tag for formatting and English strings', () => {
-    expect(resolveLocale({ locale: 'fr-FR', navigatorLanguage: 'vi' })).toEqual({ catalog: 'en', tag: 'fr-FR' })
+    expect(resolveLocale({ locale: 'fr-FR', sessionLocale: 'vi' })).toEqual({ catalog: 'en', tag: 'fr-FR' })
   })
 
-  it('a session locale without a catalog falls through to the browser; a session "en" is an explicit choice', () => {
-    expect(resolveLocale({ sessionLocale: 'de', navigatorLanguage: 'ms-MY' })).toEqual({ catalog: 'ms', tag: 'ms-MY' })
-    expect(resolveLocale({ navigatorLanguage: 'th-TH' })).toEqual({ catalog: 'th', tag: 'th-TH' })
-    // The server sends a locale only when the app set one, so `en` wins over the browser
-    expect(resolveLocale({ sessionLocale: 'en', navigatorLanguage: 'th-TH' })).toEqual({ catalog: 'en', tag: 'en' })
-    // A regional English session locale is an explicit choice by the app
-    expect(resolveLocale({ sessionLocale: 'en-GB', navigatorLanguage: 'th-TH' })).toEqual({ catalog: 'en', tag: 'en-GB' })
+  it('a session locale without a catalog gives English; a session "en" keeps its tag', () => {
+    expect(resolveLocale({ sessionLocale: 'de' })).toEqual({ catalog: 'en', tag: 'en' })
+    expect(resolveLocale({ sessionLocale: 'en-GB' })).toEqual({ catalog: 'en', tag: 'en-GB' })
   })
 
-  it('reads navigator.language when no browser language is given', () => {
-    // Node and happy-dom report en-US
-    expect(resolveLocale({}).catalog).toBe('en')
+  it('ignores the browser language: English unless the app sets a locale', () => {
+    const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    Object.defineProperty(globalThis, 'navigator', { value: { language: 'th-TH' }, configurable: true })
+    try {
+      expect(resolveLocale({})).toEqual({ catalog: 'en', tag: 'en' })
+    } finally {
+      if (nav) Object.defineProperty(globalThis, 'navigator', nav)
+      else delete (globalThis as { navigator?: unknown }).navigator
+    }
   })
 
   it('resolveMessages: explicit overrides > locale catalog', () => {
@@ -127,7 +127,7 @@ describe('locale resolution', () => {
     expect(m.title).toBe('Nạp USDC')
     expect(m.tabCrypto).toBe('Dùng tiền mã hóa')
     expect(m.locale).toBe('vi-VN')
-    expect(resolveMessages({ navigatorLanguage: undefined })).toEqual(en)
+    expect(resolveMessages({})).toEqual(en)
     expect(mergeMessages({ close: 'X' }).close).toBe('X')
     expect(mergeMessages()).toBe(en)
   })

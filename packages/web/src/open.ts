@@ -61,7 +61,7 @@ export type OpenDepositOptions = {
   messages?: Partial<Messages>
   /**
    * BCP 47 locale, e.g. `vi`, `id`, `th`, `ms`, `fil` or `en`. Picks the built-in catalog and the number format.
-   * Default: the session locale from the server, then the browser language, then English.
+   * Default: the session locale from the server, then English.
    */
   locale?: string
   /** Where to mount the element. Default: `document.body` */

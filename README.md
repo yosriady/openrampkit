@@ -95,7 +95,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 - User wallet custody, or app custody with your own treasury hook. Address checks, `allowedTargets` and `screenAddress` (fails closed).
 
 **i18n**
-- Built-in catalogs: English, Vietnamese, Indonesian, Thai, Malay and Filipino. Override any string with `messages`.
+- English by default. Override any string with `messages`. Optional built-in translations (vi, id, th, ms, fil) turn on only when your app sets `locale`.
 
 **Accessibility**
 - The modal is a `dialog` with `aria-modal`. It traps focus, closes on Escape, moves focus to each new screen and announces progress in a live region.

@@ -34,26 +34,22 @@ export type LocaleSources = {
   locale?: string | undefined
   /** `PublicSession.locale` from the server */
   sessionLocale?: string | undefined
-  /** Browser language. Default: `navigator.language` when there is a navigator */
-  navigatorLanguage?: string | undefined
 }
 
 /**
  * Pick the catalog and the formatting tag.
- * Order: explicit locale > session locale > browser language > English.
+ * Order: explicit locale > session locale > English. The browser language is not used,
+ * so the modal is in English unless the app asks for another language.
  *
  * - An explicit locale always sets the formatting tag, even without a built-in catalog
  *   (for example `fr` together with French `messages` overrides). Its strings fall back to English.
- * - A session or browser locale counts only when a built-in catalog matches it.
+ * - A session locale counts only when a built-in catalog matches it.
  * - The server sends a session locale only when the app set one, so a session `en` is a real choice.
  */
 export function resolveLocale(src: LocaleSources = {}): { catalog: CatalogLocale; tag: string } {
   if (src.locale) return { catalog: catalogFor(src.locale) ?? 'en', tag: src.locale }
-  const nav = 'navigatorLanguage' in src ? src.navigatorLanguage : typeof navigator !== 'undefined' ? navigator.language : undefined
-  for (const tag of [src.sessionLocale, nav]) {
-    const catalog = catalogFor(tag)
-    if (catalog) return { catalog, tag: tag! }
-  }
+  const catalog = catalogFor(src.sessionLocale)
+  if (catalog) return { catalog, tag: src.sessionLocale! }
   return { catalog: 'en', tag: 'en' }
 }
 

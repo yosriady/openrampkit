@@ -84,7 +84,7 @@ export class OpenRampModal extends LitElement {
   declare messages: Partial<Messages> | undefined
   /**
    * BCP 47 locale, e.g. `vi` or `th-TH`. Picks the built-in catalog (en, vi, id, th, ms, fil) and the
-   * number format. Default: the session locale, then the browser language, then English.
+   * number format. Default: the session locale, then English.
    */
   declare locale: string | undefined
   /** Error shown when there is no controller (for example the client secret could not load) */

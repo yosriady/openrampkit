@@ -117,8 +117,7 @@ The locale is picked in this order:
 
 1. The explicit `locale` option (`openDeposit`, `OpenRampProvider`, `OpenRampEmbedded`, or the element's `locale` property or attribute).
 2. The session locale, when your backend passed `locale` to `sessions.create()`.
-3. The browser language (`navigator.language`).
-4. English.
+3. English. The modal does not follow the browser language, so it stays in English unless your app asks for another language.
 
 Only the language subtag counts for the catalog (`vi-VN` uses `vi`). An explicit locale without a built-in catalog (for example `fr`) still sets the number and currency format, and its strings fall back to English, so pair it with `messages`.
 
