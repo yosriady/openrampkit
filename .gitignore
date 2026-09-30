@@ -15,3 +15,5 @@ e2e/screens
 .playwright-mcp
 docs/.vitepress/cache
 docs/.vitepress/dist
+launch/media/*.webm
+launch/media/*.mp4
