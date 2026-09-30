@@ -72,3 +72,13 @@ curl -X POST http://localhost:8787/sessions -H 'x-app-key: dev-app-key' -H 'cont
 ## Web component demo
 
 `packages/web` has a Vite demo of the bare element (`pnpm --filter @openrampkit/web demo`).
+
+## Agent (MCP)
+
+[`examples/agent`](https://github.com/yosriady/openrampkit/tree/main/examples/agent) shows an AI agent that funds a wallet through `@openrampkit/mcp`. A script calls the MCP tools like an agent. It creates a deposit session, shows the pay link, and waits until the payment completes. The README has the Claude Desktop and Claude Code config. See [Agents (MCP)](./agents.md).
+
+```bash
+pnpm build
+node examples/agent/agent.mjs           # a script plays the person
+node examples/agent/agent.mjs --serve   # you open the pay link in a browser
+```

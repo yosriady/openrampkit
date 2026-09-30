@@ -31,6 +31,7 @@ export default defineConfig({
             { text: 'Withdrawals', link: '/guide/withdraw' },
             { text: 'Theming', link: '/guide/theming' },
             { text: 'Webhooks to your backend', link: '/guide/webhooks' },
+            { text: 'Agents (MCP)', link: '/guide/agents' },
             { text: 'Testing with mocks', link: '/guide/testing' },
             { text: 'Examples', link: '/guide/examples' },
           ],

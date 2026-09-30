@@ -9,7 +9,7 @@ export default defineConfig({
       { find: /^@openrampkit\/adapter\/testing$/, replacement: r('./packages/adapter/src/testing.ts') },
       { find: /^@openrampkit\/web\/theme$/, replacement: r('./packages/web/src/theme.ts') },
       { find: /^@openrampkit\/adapter-(.*)$/, replacement: r('./packages/adapters/$1/src/index.ts') },
-      { find: /^@openrampkit\/(core|adapter|server|client|web|react|wagmi)$/, replacement: r('./packages/$1/src/index.ts') },
+      { find: /^@openrampkit\/(core|adapter|server|client|web|react|wagmi|mcp)$/, replacement: r('./packages/$1/src/index.ts') },
     ],
   },
   test: {
