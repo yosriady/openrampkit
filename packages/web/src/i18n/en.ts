@@ -40,6 +40,7 @@ export const en = {
     min && max ? `Min ${min}, max ${max}` : min ? `Minimum ${min}` : max ? `Maximum ${max}` : '',
   continue: 'Continue',
   enterAmount: 'Enter an amount',
+  overBalance: 'This is more than your balance.',
 
   // quotes
   quotesTitle: 'Choose a quote',
@@ -79,6 +80,7 @@ export const en = {
   redirectHint: (provider: string) => `You will finish this step on ${provider}. Come back here when you are done.`,
   redirectWaiting: (provider: string) => `Waiting for ${provider}. Keep this window open.`,
   openAgain: 'Open again',
+  opensInNewTab: 'opens in a new tab',
   iframeTitle: (provider: string) => `${provider} checkout`,
   iframeClosed: 'Payment window closed',
   iframeClosedBody: 'Open it again to finish paying, or choose another method.',

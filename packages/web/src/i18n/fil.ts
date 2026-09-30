@@ -36,6 +36,7 @@ export const fil: Messages = {
   minMax: (min, max) => (min && max ? `Min ${min}, max ${max}` : min ? `Minimum na ${min}` : max ? `Maximum na ${max}` : ''),
   continue: 'Magpatuloy',
   enterAmount: 'Ilagay ang halaga',
+  overBalance: 'Lampas ito sa iyong balanse.',
 
   quotesTitle: 'Pumili ng quote',
   transferTitle: 'Mag-transfer ng crypto',
@@ -73,6 +74,7 @@ export const fil: Messages = {
   redirectHint: (provider) => `Tatapusin mo ang hakbang na ito sa ${provider}. Bumalik dito kapag tapos ka na.`,
   redirectWaiting: (provider) => `Hinihintay ang ${provider}. Huwag isara ang window na ito.`,
   openAgain: 'Buksan ulit',
+  opensInNewTab: 'magbubukas sa bagong tab',
   iframeTitle: (provider) => `Checkout ng ${provider}`,
   iframeClosed: 'Naisara ang payment window',
   iframeClosedBody: 'Buksan ulit para tapusin ang bayad, o pumili ng ibang paraan.',

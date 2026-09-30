@@ -21,6 +21,8 @@ const DESTINATIONS: Record<string, { label: string; destination: Destination }> 
   merchant: { label: 'Merchant fiat account', destination: { type: 'merchant', currency: 'LOCAL' } },
 }
 
+const LOCALES = [['', 'Browser'], ['en', 'English'], ['vi', 'Tiếng Việt'], ['id', 'Bahasa Indonesia'], ['th', 'ไทย'], ['ms', 'Bahasa Melayu'], ['fil', 'Filipino']] as const
+
 const CURRENCY: Record<string, string> = { VN: 'VND', ID: 'IDR', TH: 'THB', PH: 'PHP', MY: 'MYR', SG: 'SGD', IN: 'INR', US: 'USD', DE: 'EUR' }
 
 type WalletMode = 'none' | 'mock' | 'wagmi'
@@ -34,6 +36,7 @@ export function Playground({ mock }: { mock: boolean }) {
   const [dest, setDest] = useState('base')
   const [mode, setMode] = useState<'light' | 'dark' | 'auto'>('light')
   const [accent, setAccent] = useState('#2744C4')
+  const [locale, setLocale] = useState('')
   const [walletMode, setWalletMode] = useState<WalletMode>('mock')
   const [embedded, setEmbedded] = useState(true)
   const [embedSecret, setEmbedSecret] = useState<string>()
@@ -106,7 +109,7 @@ export function Playground({ mock }: { mock: boolean }) {
 </OpenRampProvider>`
 
   return (
-    <OpenRampProvider baseUrl="/api/openramp" theme={theme} {...(wallet ? { wallet } : {})} onEvent={onEvent}>
+    <OpenRampProvider baseUrl="/api/openramp" theme={theme} {...(wallet ? { wallet } : {})} {...(locale ? { locale } : {})} onEvent={onEvent}>
       <header className="top">
         <div className="brand">OpenRamp<span>Kit</span> <em>playground</em>{mock && <b className="pill">mock providers</b>}</div>
         <ConnectButton showBalance={false} chainStatus="icon" />
@@ -153,6 +156,11 @@ export function Playground({ mock }: { mock: boolean }) {
           <label>Theme
             <select id="theme" value={mode} onChange={(e) => setMode(e.target.value as 'light' | 'dark' | 'auto')}>
               <option value="light">Light</option><option value="dark">Dark</option><option value="auto">System</option>
+            </select>
+          </label>
+          <label>Language
+            <select id="locale" value={locale} onChange={(e) => setLocale(e.target.value)}>
+              {LOCALES.map(([c, n]) => <option key={c} value={c}>{n}</option>)}
             </select>
           </label>
           <label>Accent

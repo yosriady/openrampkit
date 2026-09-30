@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_FONT, DEFAULT_MONO, RADII, autoTheme, darkColors, darkTheme, lightColors, lightTheme, themeVariables } from './theme.js'
+import { DEFAULT_FONT, DEFAULT_MONO, RADII, autoTheme, contrastRatio, darkColors, darkTheme, lightColors, lightTheme, themeVariables } from './theme.js'
 
 describe('theme factories', () => {
   it('build themes with the large radius by default', () => {
@@ -44,10 +44,34 @@ describe('themeVariables', () => {
     expect(themeVariables(t, undefined, 'light')['--ork-color-background']).toBe(lightColors.background)
   })
 
-  it('accent sets focus, a soft tint and readable text', () => {
+  it('accent sets focus when it has 3:1 contrast with the card, else keeps the default ring', () => {
+    expect(themeVariables(lightTheme({ accent: '#12805C' }), undefined, 'light')['--ork-color-focus']).toBe('#12805C')
+    // Yellow on white is too faint for a focus ring
+    expect(themeVariables(lightTheme({ accent: '#ffcc00' }), undefined, 'light')['--ork-color-focus']).toBe(lightColors.focus)
+    // Dark blue on the dark card is too faint as well
+    expect(themeVariables(darkTheme({ accent: '#2744C4' }), undefined, 'dark')['--ork-color-focus']).toBe(darkColors.focus)
+    expect(themeVariables(darkTheme({ accent: '#ffcc00' }), undefined, 'dark')['--ork-color-focus']).toBe('#ffcc00')
+    // A non-hex accent cannot be measured, so it is used as is
+    expect(themeVariables(lightTheme({ accent: 'rebeccapurple' }), undefined, 'light')['--ork-color-focus']).toBe('rebeccapurple')
+  })
+
+  it('default palettes meet WCAG AA contrast for text', () => {
+    for (const c of [lightColors, darkColors]) {
+      for (const bg of [c.background, c.surface, c.surfaceHover]) {
+        expect(contrastRatio(c.text, bg)).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(c.textSecondary, bg)).toBeGreaterThanOrEqual(4.5)
+        expect(contrastRatio(c.textMuted, bg)).toBeGreaterThanOrEqual(4.5)
+      }
+      expect(contrastRatio(c.accentText, c.accent)).toBeGreaterThanOrEqual(4.5)
+      expect(contrastRatio(c.focus, c.background)).toBeGreaterThanOrEqual(3)
+    }
+    expect(contrastRatio('#fff', '#000')).toBeCloseTo(21)
+    expect(contrastRatio('red', '#000')).toBeUndefined()
+  })
+
+  it('accent sets a soft tint and readable text', () => {
     const light = themeVariables(lightTheme({ accent: '#ffcc00' }), undefined, 'light')
     expect(light['--ork-color-accent']).toBe('#ffcc00')
-    expect(light['--ork-color-focus']).toBe('#ffcc00')
     expect(light['--ork-color-accent-soft']).toBe('rgba(255, 204, 0, 0.1)')
     expect(light['--ork-color-accent-text']).toBe('#0B0D12') // yellow is light: dark text
     const dark = themeVariables(darkTheme({ accent: '#123' }), undefined, 'dark')

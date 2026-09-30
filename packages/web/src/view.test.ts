@@ -83,6 +83,16 @@ describe('liveText', () => {
     expect(liveText(snap({ screen: 'step', session: session('WEIRD' as never) }), undefined, en)).toBe('')
     expect(liveText(snap(), undefined, en)).toBe('')
   })
+
+  it('announces the result', () => {
+    const done = session(step({ state: 'COMPLETED' }))
+    const failed = session(step({ state: 'FAILED' }))
+    expect(liveText(snap({ screen: 'result', session: done }), undefined, en)).toBe('Deposit complete')
+    expect(liveText(snap({ screen: 'result', session: done, direction: 'withdraw' }), undefined, en)).toBe('Withdrawal complete')
+    expect(liveText(snap({ screen: 'result', session: failed }), undefined, en)).toBe('Payment failed')
+    expect(liveText(snap({ screen: 'result', session: failed, direction: 'withdraw' }), undefined, en)).toBe('Withdrawal failed')
+    expect(liveText(snap({ screen: 'result', session: session(step({ state: 'EXPIRED' })) }), undefined, en)).toBe('Session expired')
+  })
 })
 
 describe('methods', () => {

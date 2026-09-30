@@ -69,11 +69,14 @@ describe('PROVIDER_SDK surfaces', () => {
   })
 
   it('without a renderer: uses redirectUrl when given, else says the SDK is not supported', async () => {
-    const open = vi.spyOn(window, 'open').mockReturnValue(null)
     const { root } = await mount(SDK)
-    const btn = [...root.querySelectorAll('button')].find((b) => b.textContent?.includes('Continue to Stripe'))!
-    btn.click()
-    expect(open).toHaveBeenCalledWith('https://crypto.link.com/x', '_blank')
+    // A real link (it navigates), opened in a new tab without access to this page
+    const link = root.querySelector<HTMLAnchorElement>('a.btn')!
+    expect(link.textContent).toContain('Continue to Stripe')
+    expect(link.textContent).toContain('opens in a new tab')
+    expect(link.getAttribute('href')).toBe('https://crypto.link.com/x')
+    expect(link.target).toBe('_blank')
+    expect(link.rel).toBe('noopener noreferrer')
     document.body.innerHTML = ''
     const bare = await mount({ kind: 'PROVIDER_SDK', provider: 'other', params: {} })
     expect(bare.root.querySelector('.notice.info')!.textContent).toContain('Other SDK')

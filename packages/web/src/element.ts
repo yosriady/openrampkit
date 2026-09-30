@@ -116,6 +116,7 @@ export class OpenRampModal extends LitElement {
   private _hadFocus = false
   private _returnFocus: HTMLElement | null = null
   private _listening = false
+  private _docKeys = false
   private _sdkMounted: string | undefined
   private _sdkCleanup: (() => void) | undefined
 
@@ -149,6 +150,7 @@ export class OpenRampModal extends LitElement {
     this._tick = undefined
     clearTimeout(this._copyTimer)
     this._syncMessageListener(false)
+    this._syncDocKeys(false)
     this._unmountSdk()
   }
 
@@ -191,6 +193,7 @@ export class OpenRampModal extends LitElement {
 
   protected override updated(changed: PropertyValues): void {
     this._syncMessageListener(!!this._iframeSurface)
+    this._syncDocKeys(this.open && !this.embedded && this.isConnected)
     this._syncProviderSdk()
     if (!this._visible) return
     const screen = this._screen
@@ -317,7 +320,7 @@ export class OpenRampModal extends LitElement {
     )
     const back = this._returnFocus
     this._returnFocus = null
-    if (back?.isConnected) back.focus()
+    if (back) restoreFocus(back)
   }
 
   // ---------- helpers ----------
@@ -364,7 +367,8 @@ export class OpenRampModal extends LitElement {
   private _focusables(): HTMLElement[] {
     const card = this.renderRoot.querySelector('.card')
     if (!card) return []
-    return [...card.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.getClientRects().length > 0)
+    // Visible and in the Tab order (roving tabindex leaves unselected tabs and quotes out)
+    return [...card.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0 && el.getClientRects().length > 0)
   }
 
   private _onKeydown = (e: KeyboardEvent) => {
@@ -383,14 +387,33 @@ export class OpenRampModal extends LitElement {
       e.preventDefault()
       return
     }
-    const active = (this.renderRoot as ShadowRoot).activeElement
-    const inside = !!active && items.includes(active as HTMLElement)
-    if (e.shiftKey && (active === first || !inside)) {
+    // The dialog moves focus itself: it stays inside, and every control is reached even where the
+    // browser's own Tab skips buttons (Safari without "Press Tab to highlight each item").
+    e.preventDefault()
+    const i = items.indexOf((this.renderRoot as ShadowRoot).activeElement as HTMLElement)
+    const next = i < 0 ? (e.shiftKey ? last : first) : items[(i + (e.shiftKey ? items.length - 1 : 1)) % items.length]!
+    next.focus()
+  }
+
+  /** Page-level keys while the modal is open, for when focus is outside the card (for example on the page body). */
+  private _syncDocKeys(on: boolean) {
+    if (typeof document === 'undefined' || on === this._docKeys) return
+    this._docKeys = on
+    if (on) document.addEventListener('keydown', this._onDocKeydown)
+    else document.removeEventListener('keydown', this._onDocKeydown)
+  }
+
+  private _onDocKeydown = (e: KeyboardEvent) => {
+    // Keys inside the element go through the card's own handler.
+    if (!this.open || this.embedded || e.defaultPrevented || e.composedPath().includes(this)) return
+    if (e.key === 'Escape') {
       e.preventDefault()
-      last.focus()
-    } else if (!e.shiftKey && (active === last || !inside)) {
+      this.close()
+    } else if (e.key === 'Tab') {
+      // Bring focus back into the dialog instead of the page behind it.
       e.preventDefault()
-      first.focus()
+      const items = this._focusables()
+      ;(e.shiftKey ? items[items.length - 1] : items[0])?.focus()
     }
   }
 
@@ -414,6 +437,7 @@ export class OpenRampModal extends LitElement {
         role=${this.embedded ? 'region' : 'dialog'}
         aria-modal=${this.embedded ? nothing : 'true'}
         aria-labelledby="ork-title"
+        lang=${m.locale}
         aria-busy=${this._snap?.busy || this._screen === 'loading' ? 'true' : 'false'}
         tabindex="-1"
         @keydown=${this._onKeydown}
@@ -422,7 +446,8 @@ export class OpenRampModal extends LitElement {
         ${this._renderHeader(m)}
         <div class="body" part="body">${this._renderScreen(m)}</div>
         ${a?.hideFooter ? nothing : html`<div class="footer" part="footer">${m.poweredBy}</div>`}
-        <div class="sr-only" aria-live="polite">${liveText(this._snap, this.error, m)}</div>
+        <div class="sr-only" role="status">${liveText(this._snap, this.error, m)}</div>
+        <div class="sr-only" role="status">${this._copied ? m.copied : ''}</div>
       </div>
     `
     if (this.embedded) return card
@@ -489,9 +514,9 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  private _renderErrorNotice(error: OrkError | undefined) {
+  private _renderErrorNotice(error: OrkError | undefined, id?: string) {
     if (!error) return nothing
-    return html`<div class="notice error" role="alert">${icons.alert}<span>${error.message}</span></div>`
+    return html`<div class="notice error" role="alert" id=${id ?? nothing}>${icons.alert}<span>${error.message}</span></div>`
   }
 
   // ---------- methods ----------
@@ -630,7 +655,7 @@ export class OpenRampModal extends LitElement {
       ${this._renderErrorNotice(s.error)}
       <div class="stack">
         <button class="btn" type="button" ?disabled=${!valid || s.busy} @click=${submit}>
-          ${s.busy ? html`<span class="spinner"></span>` : nothing}${m.continue}
+          ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>` : nothing}${m.continue}
         </button>
       </div>
     `
@@ -680,6 +705,7 @@ export class OpenRampModal extends LitElement {
   private _renderAmount(m: Messages, s: Snapshot) {
     const c = this.controller!
     const { isWallet, isWithdraw, overBalance, currency, prefix, boundsText, balance, chips, valid, width } = amountModel(s, m)
+    const describedBy = [boundsText && 'ork-amount-bounds', balance && 'ork-amount-balance', overBalance && 'ork-amount-error'].filter(Boolean).join(' ')
     const t = s.target
     const summary = !isWithdraw
       ? ''
@@ -700,6 +726,8 @@ export class OpenRampModal extends LitElement {
             enterkeyhint="done"
             placeholder=${m.amountPlaceholder}
             aria-label=${`${m.amountLabel} (${currency})`}
+            aria-invalid=${overBalance ? 'true' : 'false'}
+            aria-describedby=${describedBy || nothing}
             style=${`width:${width}ch`}
             .value=${live(s.amount)}
             @input=${(e: Event) => c.setAmount((e.target as HTMLInputElement).value)}
@@ -709,12 +737,13 @@ export class OpenRampModal extends LitElement {
           />
           ${prefix ? nothing : html`<span class="amount-suffix">${currency}</span>`}
         </label>
-        ${boundsText ? html`<div class="hint">${boundsText}</div>` : nothing}
+        ${boundsText ? html`<div class="hint" id="ork-amount-bounds">${boundsText}</div>` : nothing}
         ${balance
-          ? html`<div class="hint" style=${overBalance ? 'color:var(--ork-color-danger)' : nothing}>
+          ? html`<div class="hint" id="ork-amount-balance" style=${overBalance ? 'color:var(--ork-color-danger)' : nothing}>
               ${(isWithdraw ? m.available : m.balance)(formatToken(balance.amount, balance.symbol, m.locale))}
             </div>`
           : nothing}
+        ${overBalance ? html`<div class="field-error" id="ork-amount-error">${m.overBalance}</div>` : nothing}
         ${summary ? html`<div class="target-summary">${summary}</div>` : nothing}
       </div>
       ${chips.length
@@ -783,8 +812,8 @@ export class OpenRampModal extends LitElement {
       if (o) c.setSource({ chain: src.chain, ...o })
     }
     return html`
-      <span class="field-label">${m.sendFrom}</span>
-      <div class="select-row">
+      <span class="field-label" id="ork-sendfrom">${m.sendFrom}</span>
+      <div class="select-row" role="group" aria-labelledby="ork-sendfrom">
         <select class="input" aria-label=${m.network} @change=${(e: Event) => setChain((e.target as HTMLSelectElement).value)}>
           ${chains.map((ch) => html`<option value=${ch} ?selected=${src?.chain === ch}>${displayChain(ch)}</option>`)}
         </select>
@@ -812,7 +841,7 @@ export class OpenRampModal extends LitElement {
     let list: unknown
     if (s.quotesLoading && !s.quotes.length) {
       list = html`<div aria-hidden="true"><div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div></div>
-        <div class="status-line"><span class="spinner"></span>${m.gettingQuotes}</div>`
+        <div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.gettingQuotes}</div>`
     } else if (!s.quotes.length) {
       list = html`<div class="notice info">${m.noQuotes}</div>
         ${errors.map((e) => html`<div class="notice info">${e}</div>`)}
@@ -821,7 +850,7 @@ export class OpenRampModal extends LitElement {
       list = html`<div class="rows" role="radiogroup" aria-label=${m.quotesLabel} @keydown=${onKey}>
           ${s.quotes.map((q) => this._renderQuoteRow(m, s, q))}
         </div>
-        ${s.quotesLoading ? html`<div class="status-line"><span class="spinner"></span>${m.gettingQuotes}</div>` : nothing}
+        ${s.quotesLoading ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.gettingQuotes}</div>` : nothing}
         ${errors.length ? html`<div class="hint" style="text-align:left">${errors.join(' ')}</div>` : nothing}`
     }
     const canConfirm = !!s.selectedQuoteId && !s.busy && s.quotes.length > 0
@@ -830,7 +859,7 @@ export class OpenRampModal extends LitElement {
       ${s.quotes.length
         ? html`<div class="stack">
             <button class="btn" type="button" ?disabled=${!canConfirm} @click=${() => void c.confirm()}>
-              ${s.busy ? html`<span class="spinner"></span>${m.confirming}` : isTransfer ? m.continue : m.confirm}
+              ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>${m.confirming}` : isTransfer ? m.continue : m.confirm}
             </button>
           </div>`
         : nothing}
@@ -877,7 +906,7 @@ export class OpenRampModal extends LitElement {
     const extra = formSurface ? submits.slice(1) : submits
     const hasPrimary = !!surface && ['REDIRECT', 'DEEPLINK', 'WALLET_TX', 'FORM', 'OTP'].includes(surface.kind)
     const showProgress = !!step.progress && (step.progress.legs.length > 1 || step.state === 'PROCESSING')
-    const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined]
+    const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined].filter((e): e is OrkError => !!e)
 
     return html`
       ${surface ? this._renderSurface(m, s, step, surface, submits[0]) : this._renderProcessing(m, step, s.direction === 'withdraw')}
@@ -897,9 +926,9 @@ export class OpenRampModal extends LitElement {
             )}
           </div>`
         : nothing}
-      ${errors.map((e) => this._renderErrorNotice(e))}
+      ${errors.map((e, i) => this._renderErrorNotice(e, i === 0 ? 'ork-step-error' : undefined))}
       ${showProgress ? this._renderProgress(m, step) : nothing}
-      ${awaiting && surface ? html`<div class="status-line"><span class="spinner"></span>${m.checkingStatus}</div>` : nothing}
+      ${awaiting && surface ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.checkingStatus}</div>` : nothing}
       ${step.state === 'PAYMENT' && !(s.surfaceClosed && surface?.kind === 'IFRAME')
         ? html`<div class="stack">
             <button class="btn ghost" type="button" ?disabled=${s.busy} @click=${() => void c.fire('restart')}>${m.chooseOther}</button>
@@ -1024,7 +1053,9 @@ export class OpenRampModal extends LitElement {
         const redirectUrl = isWebUrl(surface.params.redirectUrl, { allowHttp: true }) ? surface.params.redirectUrl : undefined
         if (redirectUrl) {
           return html`<p class="hint">${m.redirectHint(name)}</p>
-            <button class="btn" type="button" @click=${() => window.open(redirectUrl, '_blank')}>${m.continueTo(name)}</button>`
+            <a class="btn" href=${redirectUrl} target="_blank" rel="noopener noreferrer"
+              >${m.continueTo(name)}<span class="sr-only"> (${m.opensInNewTab})</span></a
+            >`
         }
         return html`<div class="notice info">${m.sdkUnsupported(name)}</div>`
       }
@@ -1065,7 +1096,7 @@ export class OpenRampModal extends LitElement {
           </div>
           <div class="stack">
             <button class="btn" type="button" ?disabled=${s.busy} @click=${() => void c.sendWalletTransactions()}>
-              ${s.busy ? html`<span class="spinner"></span>${m.checkWallet}` : m.confirmInWallet}
+              ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>${m.checkWallet}` : m.confirmInWallet}
             </button>
           </div>`
       case 'BANK_FIELDS':
@@ -1090,6 +1121,8 @@ export class OpenRampModal extends LitElement {
   private _renderForm(m: Messages, fields: FieldSpec[], submit: Extract<Transition, { kind: 'SUBMIT' }> | undefined, otp = false) {
     const c = this.controller!
     const busy = !!this._snap?.busy
+    // Fields point at the step error, so screen readers read it with the field.
+    const errorId = this._snap?.session?.step.error || this._snap?.error ? 'ork-step-error' : nothing
     const set = (id: string, v: unknown) => {
       this._form = { ...this._form, [id]: v }
     }
@@ -1109,6 +1142,7 @@ export class OpenRampModal extends LitElement {
               type="checkbox"
               id=${fid}
               ?required=${!!f.required}
+              aria-describedby=${errorId}
               .checked=${!!this._form[f.id]}
               @change=${(e: Event) => set(f.id, (e.target as HTMLInputElement).checked)}
             />${f.label}</label
@@ -1117,7 +1151,7 @@ export class OpenRampModal extends LitElement {
         if (f.type === 'select') {
           return html`<div>
             <label class="field-label" for=${fid}>${f.label}</label>
-            <select class="input" id=${fid} ?required=${!!f.required} @change=${(e: Event) => set(f.id, (e.target as HTMLSelectElement).value)}>
+            <select class="input" id=${fid} ?required=${!!f.required} aria-describedby=${errorId} @change=${(e: Event) => set(f.id, (e.target as HTMLSelectElement).value)}>
               <option value="" ?selected=${!this._form[f.id]}></option>
               ${(f.options ?? []).map((o) => html`<option value=${o.value} ?selected=${this._form[f.id] === o.value}>${o.label}</option>`)}
             </select>
@@ -1132,6 +1166,7 @@ export class OpenRampModal extends LitElement {
             inputmode=${f.type === 'number' || otp ? 'numeric' : nothing}
             autocomplete=${otp ? 'one-time-code' : f.type === 'email' ? 'email' : f.type === 'tel' ? 'tel' : 'off'}
             ?required=${!!f.required}
+            aria-describedby=${errorId}
             .value=${String(this._form[f.id] ?? '')}
             @input=${(e: Event) => set(f.id, (e.target as HTMLInputElement).value)}
           />
@@ -1139,7 +1174,7 @@ export class OpenRampModal extends LitElement {
       })}
       ${submit
         ? html`<button class="btn" type="submit" ?disabled=${busy}>
-            ${busy ? html`<span class="spinner"></span>` : nothing}${submit.label || m.submit}
+            ${busy ? html`<span class="spinner" aria-hidden="true"></span>` : nothing}${submit.label || m.submit}
           </button>`
         : nothing}
     </form>`
@@ -1191,6 +1226,20 @@ export class OpenRampModal extends LitElement {
           : html`<button class="btn ${canRetry ? 'secondary' : ''}" type="button" @click=${() => this.close()}>${m.close}</button>`}
       </div>`
   }
+}
+
+/**
+ * Focus the element that opened the modal. The opener can still be disabled at this moment (the React
+ * DepositButton is disabled while the modal is open), so try again for a short time while focus is nowhere.
+ */
+function restoreFocus(el: HTMLElement, tries = 5) {
+  if (!el.isConnected) return
+  el.focus()
+  if (document.activeElement === el || tries <= 0) return
+  setTimeout(() => {
+    const active = document.activeElement
+    if (!active || active === document.body) restoreFocus(el, tries - 1)
+  }, 20)
 }
 
 function dedupe(list: string[]): string[] {

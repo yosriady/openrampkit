@@ -124,7 +124,7 @@ describe('registration', () => {
     const h = helpers(el)
     expect(h.$('.skeleton')).not.toBeNull()
     expect(h.$('.card')!.getAttribute('aria-busy')).toBe('true')
-    expect(h.$('[aria-live]')!.textContent).toBe('Loading')
+    expect(h.$('.sr-only[role="status"]')!.textContent).toBe('Loading')
     el.error = orkError('UNAUTHORIZED')
     await settle(el)
     expect(h.text()).toContain('Something went wrong')
@@ -326,7 +326,7 @@ describe('amount and quotes', () => {
     await settle(el)
     const h = helpers(el)
     expect(h.text()).toContain('Getting quotes')
-    expect(h.$('[aria-live]')!.textContent).toBe('Getting quotes')
+    expect(h.$('.sr-only[role="status"]')!.textContent).toBe('Getting quotes')
     release()
     await settle(el)
     expect(h.$('[data-quote="a"]')).not.toBeNull()
@@ -414,6 +414,8 @@ describe('payment steps (real server)', () => {
     Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn(async () => Promise.reject(new Error('denied'))) }, configurable: true })
     await h.click(h.$('.copy-btn')!)
     expect(h.$('.copy-btn')!.getAttribute('aria-label')).toBe('Copied')
+    // Screen readers hear "Copied" through a status region
+    expect(h.$$('.sr-only[role="status"]').map((x) => x.textContent)).toContain('Copied')
 
     await h.click(h.button('Simulate deposit'))
     await h.until(() => h.c.getSnapshot().screen === 'result')
@@ -612,7 +614,7 @@ describe('other surfaces (fake client)', () => {
     await c.confirm()
     await settle(el)
     expect(helpers(el).$('.secondary-text')!.textContent).toBe('Processing')
-    expect(helpers(el).$('[aria-live]')!.textContent).toBe('Processing')
+    expect(helpers(el).$('.sr-only[role="status"]')!.textContent).toBe('Processing')
   })
 })
 
@@ -704,7 +706,7 @@ describe('keyboard, focus and closing', () => {
     const h = await mount()
     const root = h.root
     expect(root.activeElement?.classList.contains('title')).toBe(true)
-    const focusables = h.$$('button:not([disabled])')
+    const focusables = h.$$('button:not([disabled])').filter((b) => b.tabIndex >= 0)
     const first = focusables[0]!
     const last = focusables[focusables.length - 1]!
     last.focus()
@@ -715,13 +717,69 @@ describe('keyboard, focus and closing', () => {
     const e2 = await h.key(h.$('.card')!, 'Tab', { shiftKey: true })
     expect(e2.defaultPrevented).toBe(true)
     expect(root.activeElement).toBe(last)
-    // In the middle, Tab is left to the browser
+    // In the middle, Tab moves to the next control
     focusables[1]!.focus()
     const e3 = await h.key(h.$('.card')!, 'Tab')
-    expect(e3.defaultPrevented).toBe(false)
+    expect(e3.defaultPrevented).toBe(true)
+    expect(root.activeElement).toBe(focusables[2])
+    await h.key(h.$('.card')!, 'Tab', { shiftKey: true })
+    expect(root.activeElement).toBe(focusables[1])
     // Other keys are ignored
     const e4 = await h.key(h.$('.card')!, 'a')
     expect(e4.defaultPrevented).toBe(false)
+  })
+
+  it('focus returns to an opener that is disabled while the modal is open, once it is enabled again', async () => {
+    const opener = document.createElement('button')
+    document.body.appendChild(opener)
+    opener.focus()
+    const h = await mount()
+    opener.disabled = true
+    h.el.addEventListener('openramp-close', () => setTimeout(() => (opener.disabled = false), 5))
+    h.el.close()
+    expect(document.activeElement).not.toBe(opener)
+    await waitFor(() => document.activeElement === opener, 500)
+    opener.remove()
+  })
+
+  it('dialog semantics: role, aria-modal, label and language', async () => {
+    const h = await mount()
+    const card = h.$('.card')!
+    expect(card.getAttribute('role')).toBe('dialog')
+    expect(card.getAttribute('aria-modal')).toBe('true')
+    expect(h.$(`#${card.getAttribute('aria-labelledby')}`)!.textContent?.trim()).toBe(h.title())
+    expect(card.getAttribute('lang')).toMatch(/^en/)
+    h.el.locale = 'vi'
+    await settle(h.el)
+    expect(card.getAttribute('lang')).toBe('vi')
+  })
+
+  it('keys outside the card: Escape closes, Tab brings focus back into the dialog', async () => {
+    const outside = document.createElement('button')
+    document.body.appendChild(outside)
+    const h = await mount()
+    outside.focus()
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    outside.dispatchEvent(tab)
+    expect(tab.defaultPrevented).toBe(true)
+    expect(h.root.activeElement).toBe(h.$$('button:not([disabled])')[0])
+    outside.focus()
+    const back = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    outside.dispatchEvent(back)
+    const all = h.$$('button:not([disabled])')
+    expect(h.root.activeElement).toBe(all[all.length - 1])
+    outside.focus()
+    const other = new KeyboardEvent('keydown', { key: 'a', bubbles: true, cancelable: true })
+    outside.dispatchEvent(other)
+    expect(other.defaultPrevented).toBe(false)
+    outside.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+    await settle(h.el)
+    expect(h.el.open).toBe(false)
+    // The listener goes away with the modal
+    const later = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    outside.dispatchEvent(later)
+    expect(later.defaultPrevented).toBe(false)
+    outside.remove()
   })
 
   it('overlay click closes on the methods screen, but a click inside the card does not', async () => {
@@ -829,7 +887,7 @@ describe('controller swaps, theme and messages', () => {
     await h.c.submitAmount()
     await settle(h.el)
     expect(h.$('.notice.error')!.textContent).toContain('Enter an amount.')
-    expect(h.$('[aria-live]')!.textContent).toBe('Enter an amount.')
+    expect(h.$('.sr-only[role="status"]')!.textContent).toBe('Enter an amount.')
   })
 })
 
