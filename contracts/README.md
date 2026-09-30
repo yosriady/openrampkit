@@ -4,6 +4,10 @@
 
 Read the concept page: [docs/concepts/settlement.md](../docs/concepts/settlement.md).
 
+## Deployments
+
+Live on Arbitrum Sepolia and Robinhood Chain Testnet at `0xBF66696115128B8f9f794780061348b4213A7132`. See [deployments.md](deployments.md) for the explorer links and the demo settlements.
+
 ## Design
 
 | Property | How |

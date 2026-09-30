@@ -331,6 +331,15 @@ The method vocabulary is in `packages/core/src/codes.ts`. Which methods a user s
 - `Ownable2Step`, `Pausable`, no upgradeability, `ReentrancyGuardTransient`. Unit, fuzz and invariant tests in Foundry.
 - Deploy targets: Arbitrum Sepolia, Arbitrum One and Robinhood Chain Testnet.
 
+**Live on testnets** (verified source, same address on both):
+
+| Chain | Address |
+|---|---|
+| Arbitrum Sepolia | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132) |
+| Robinhood Chain Testnet | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132) |
+
+Demo settlements (a plain one, and one into a vault in the same transaction) and their transactions are in [contracts/deployments.md](contracts/deployments.md).
+
 TypeScript helpers (`buildSettlementTxs`, `verifySettlement`, the ABI) are in `@openrampkit/adapter`. Today the Relay `wallet` leg can pay into the contract.
 
 Read the [settlement docs](https://yosriady.github.io/openrampkit/concepts/settlement) and [contracts/README.md](contracts/README.md).
@@ -428,7 +437,7 @@ Next:
 - DuitNow QR and VietQR through a live provider.
 - Fiat payouts to banks and e-wallets in Southeast Asia (Xendit).
 - A React Native package, and more wallet adapters (Privy).
-- Deploy `OpenRampSettlement` to public networks.
+- Deploy `OpenRampSettlement` to mainnets behind a multisig, after an external review.
 
 Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [market landscape](docs/design/landscape.md).
 
