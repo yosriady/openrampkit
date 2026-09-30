@@ -1,0 +1,1144 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1080, height=1920" />
+    <title>OpenRampKit pitch (15s, vertical)</title>
+    <script src="https://cdn.jsdelivr.net/npm/gsap@3.14.2/dist/gsap.min.js"></script>
+    <style>
+      /* Brand tokens: navy #10163A, mint #2BE3A0. Display: Archivo Black. Voice for data: JetBrains Mono. */
+      :root {
+        --navy: #10163a;
+        --navy-deep: #0a0e29;
+        --navy-2: #1a2257;
+        --navy-3: #252e6e;
+        --mint: #2be3a0;
+        --mint-dim: rgba(43, 227, 160, 0.35);
+        --ink: #eef1ff;
+        --muted: #a6aedb;
+        --display: "Archivo Black", "Montserrat", sans-serif;
+        --mono: "JetBrains Mono", "IBM Plex Mono", monospace;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--navy);
+      }
+      #root {
+        position: relative;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: var(--navy);
+        color: var(--ink);
+        font-family: var(--display);
+      }
+      .layer {
+        position: absolute;
+        inset: 0;
+      }
+      .scene {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
+      .abs {
+        position: absolute;
+      }
+
+      /* ---------- persistent background ---------- */
+      #bg-grid {
+        position: absolute;
+        inset: -120px;
+        background-image: radial-gradient(rgba(166, 174, 219, 0.32) 2px, transparent 2.5px);
+        background-size: 56px 56px;
+        opacity: 0.55;
+      }
+      #bg-glow {
+        position: absolute;
+        width: 1500px;
+        height: 1500px;
+        left: 50%;
+        top: 50%;
+        margin-left: -750px;
+        margin-top: -750px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(43, 227, 160, 0.22) 0%, rgba(43, 227, 160, 0.06) 38%, rgba(16, 22, 58, 0) 68%);
+      }
+      #bg-vignette {
+        position: absolute;
+        inset: 0;
+        background: radial-gradient(ellipse at center, rgba(10, 14, 41, 0) 55%, rgba(10, 14, 41, 0.85) 100%);
+      }
+      .hud {
+        position: absolute;
+        font-family: var(--mono);
+        font-size: 22px;
+        letter-spacing: 0.12em;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      #hud-brand {
+        left: 72px;
+        top: 52px;
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+      #hud-brand .dot {
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: var(--mint);
+        display: block;
+      }
+      #hud-count {
+        right: 72px;
+        top: 52px;
+      }
+      #hud-count .hc {
+        position: absolute;
+        right: 0;
+        top: 0;
+        white-space: nowrap;
+      }
+      #hud-count b {
+        color: var(--mint);
+        font-weight: 700;
+      }
+      #progress {
+        position: absolute;
+        left: 72px;
+        right: 72px;
+        bottom: 56px;
+        height: 4px;
+        background: rgba(166, 174, 219, 0.18);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      #progress-fill {
+        width: 100%;
+        height: 100%;
+        background: var(--mint);
+        transform-origin: 0 50%;
+        display: block;
+      }
+
+      /* ---------- shared type ---------- */
+      .label {
+        font-family: var(--mono);
+        font-size: 26px;
+        letter-spacing: 0.14em;
+        color: var(--mint);
+        text-transform: uppercase;
+      }
+      .w {
+        display: inline-block;
+        overflow: hidden;
+        vertical-align: top;
+        padding-bottom: 0.08em;
+        margin-bottom: -0.08em;
+      }
+      .w > span {
+        display: inline-block;
+      }
+      .mint {
+        color: var(--mint);
+      }
+
+      /* ---------- scene 1: hook ---------- */
+      #s1-ghost {
+        position: absolute;
+        right: -60px;
+        bottom: 90px;
+        font-size: 330px;
+        line-height: 1;
+        color: rgba(166, 174, 219, 0.1);
+        letter-spacing: -0.04em;
+        white-space: nowrap;
+      }
+      #s1-copy {
+        position: absolute;
+        left: 140px;
+        top: 250px;
+        width: 1640px;
+      }
+      #s1-label {
+        margin-bottom: 36px;
+      }
+      #s1-head {
+        font-size: 168px;
+        line-height: 1;
+        letter-spacing: -0.035em;
+      }
+      #s1-sub {
+        margin-top: 64px;
+        font-size: 76px;
+        line-height: 1.1;
+        letter-spacing: -0.02em;
+        color: var(--ink);
+        position: relative;
+        display: inline-block;
+      }
+      #s1-strike-wrap {
+        position: relative;
+        display: inline-block;
+      }
+      #s1-strike {
+        position: absolute;
+        left: -8px;
+        right: -8px;
+        top: 52%;
+        height: 10px;
+        background: var(--mint);
+        border-radius: 5px;
+        transform-origin: 0 50%;
+        display: block;
+      }
+
+      /* ---------- scene 2: rails -> one component -> chains ---------- */
+      #s2-top {
+        position: absolute;
+        left: 140px;
+        top: 130px;
+      }
+      #s2-head {
+        margin-top: 18px;
+        font-size: 76px;
+        line-height: 1.02;
+        letter-spacing: -0.025em;
+      }
+      .chip {
+        position: absolute;
+        left: 0;
+        top: 0;
+        height: 92px;
+        padding: 0 30px 0 26px;
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        border-radius: 46px;
+        background: var(--navy-2);
+        border: 3px solid var(--mint-dim);
+        white-space: nowrap;
+        box-shadow: 0 18px 40px rgba(5, 8, 26, 0.55);
+      }
+      .chip .nm {
+        font-size: 38px;
+        letter-spacing: -0.01em;
+        color: var(--ink);
+      }
+      .chip .cc {
+        font-family: var(--mono);
+        font-size: 22px;
+        font-weight: 700;
+        color: var(--navy);
+        background: var(--mint);
+        border-radius: 8px;
+        padding: 4px 10px;
+      }
+      #modal {
+        position: absolute;
+        width: 520px;
+        height: 456px;
+        left: 700px;
+        top: 390px;
+        border-radius: 34px;
+        background: #f6f7fb;
+        color: var(--navy);
+        box-shadow: 0 40px 90px rgba(3, 6, 22, 0.6), 0 0 0 4px rgba(43, 227, 160, 0.55);
+        padding: 36px 36px 0;
+      }
+      #modal .m-title {
+        font-size: 36px;
+        text-align: center;
+        letter-spacing: -0.01em;
+      }
+      #modal .m-row {
+        margin-top: 26px;
+        border-radius: 18px;
+        background: #e8ebf5;
+        padding: 20px 22px;
+      }
+      #modal .m-k {
+        font-family: var(--mono);
+        font-size: 20px;
+        font-weight: 700;
+        color: #3a4380;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+      #modal .m-v {
+        margin-top: 8px;
+        font-size: 28px;
+        white-space: nowrap;
+        color: var(--navy);
+      }
+      #m-btn {
+        margin-top: 26px;
+        height: 78px;
+        border-radius: 18px;
+        background: var(--navy);
+        color: var(--mint);
+        font-size: 32px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      #s2-wires {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 100%;
+        height: 100%;
+        overflow: visible;
+      }
+      #s2-wires path {
+        fill: none;
+        stroke: var(--mint);
+        stroke-width: 4;
+        stroke-linecap: round;
+        opacity: 0.8;
+      }
+      .coin {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 96px;
+        height: 96px;
+        margin-left: -48px;
+        margin-top: -48px;
+        border-radius: 50%;
+        background: var(--mint);
+        border: 6px solid #bff7e2;
+        box-shadow: 0 0 40px rgba(43, 227, 160, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-family: var(--mono);
+        font-weight: 700;
+        font-size: 22px;
+        color: var(--navy);
+      }
+      .coin.small {
+        width: 48px;
+        height: 48px;
+        margin-left: -24px;
+        margin-top: -24px;
+        border-width: 4px;
+        font-size: 0;
+        box-shadow: 0 0 24px rgba(43, 227, 160, 0.8);
+      }
+      .badge {
+        position: absolute;
+        left: 0;
+        top: 0;
+        width: 330px;
+        height: 90px;
+        border-radius: 20px;
+        background: var(--navy-deep);
+        border: 3px solid var(--navy-3);
+        display: flex;
+        align-items: center;
+        padding: 0 26px;
+        gap: 18px;
+        font-size: 36px;
+        color: var(--ink);
+        letter-spacing: -0.01em;
+      }
+      .badge .led {
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--navy-3);
+        display: block;
+        flex: none;
+      }
+      .badge .fill {
+        position: absolute;
+        inset: -3px;
+        border-radius: 20px;
+        border: 3px solid var(--mint);
+        background: rgba(43, 227, 160, 0.14);
+        opacity: 0;
+      }
+      .badge .led-on {
+        position: absolute;
+        left: 26px;
+        top: 50%;
+        margin-top: -9px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: var(--mint);
+        box-shadow: 0 0 16px var(--mint);
+        opacity: 0;
+      }
+      .badge.more {
+        background: transparent;
+        border-style: dashed;
+        color: var(--muted);
+        font-family: var(--mono);
+        font-size: 28px;
+      }
+      #s2-foot {
+        position: absolute;
+        left: 140px;
+        bottom: 120px;
+        font-family: var(--mono);
+        font-size: 28px;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+      }
+      #s2-foot b {
+        color: var(--ink);
+        font-weight: 700;
+      }
+
+      /* ---------- scene 3: proof montage ---------- */
+      #s3-copy {
+        position: absolute;
+        left: 140px;
+        top: 250px;
+        width: 900px;
+      }
+      #s3-lines {
+        margin-top: 34px;
+      }
+      .s3-line {
+        font-size: 88px;
+        line-height: 1.14;
+        letter-spacing: -0.03em;
+        white-space: nowrap;
+      }
+      .s3-line > .w > span {
+        color: var(--ink);
+      }
+      #s3-note {
+        margin-top: 44px;
+        font-family: var(--mono);
+        font-size: 28px;
+        color: var(--muted);
+        letter-spacing: 0.03em;
+      }
+      #explorer {
+        position: absolute;
+        left: 1290px;
+        top: 200px;
+        width: 590px;
+        height: 370px;
+        border-radius: 22px;
+        overflow: hidden;
+        background: #ffffff;
+        border: 3px solid var(--navy-3);
+        box-shadow: 0 40px 80px rgba(3, 6, 22, 0.6);
+      }
+      #explorer .bar {
+        height: 44px;
+        background: #e8ebf5;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 0 18px;
+      }
+      #explorer .bar i {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        background: #c3c8dd;
+        display: block;
+      }
+      #explorer img {
+        display: block;
+        width: 1040px;
+        margin-left: -60px;
+        margin-top: -60px;
+      }
+      #explorer-cap {
+        position: absolute;
+        left: 1560px;
+        top: 598px;
+        font-family: var(--mono);
+        font-size: 24px;
+        line-height: 1.4;
+        color: var(--muted);
+        letter-spacing: 0.03em;
+        white-space: nowrap;
+      }
+      #explorer-cap b {
+        color: var(--mint);
+        font-weight: 700;
+      }
+      #device {
+        position: absolute;
+        left: 1080px;
+        top: 150px;
+        width: 448px;
+        height: 780px;
+        border-radius: 58px;
+        background: var(--navy-deep);
+        border: 4px solid #3a4380;
+        padding: 20px;
+        box-shadow: 0 50px 110px rgba(3, 6, 22, 0.75), 0 0 0 10px rgba(43, 227, 160, 0.08);
+      }
+      #screen {
+        position: relative;
+        width: 400px;
+        height: 732px;
+        border-radius: 40px;
+        overflow: hidden;
+        background: #eef0f5;
+      }
+      #screen .notch {
+        position: absolute;
+        left: 50%;
+        top: 12px;
+        width: 120px;
+        height: 30px;
+        margin-left: -60px;
+        border-radius: 15px;
+        background: var(--navy-deep);
+        z-index: 5;
+      }
+      .shot {
+        position: absolute;
+        left: 0;
+        top: 56px;
+        width: 400px;
+      }
+      .shot img {
+        display: block;
+        width: 400px;
+      }
+      #device-tag {
+        position: absolute;
+        left: 1080px;
+        top: 956px;
+        width: 448px;
+        height: 60px;
+        text-align: center;
+      }
+      .tag {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 0;
+        font-family: var(--mono);
+        font-size: 26px;
+        font-weight: 700;
+        color: var(--ink);
+        letter-spacing: 0.04em;
+      }
+      .tag em {
+        font-style: normal;
+        color: var(--mint);
+      }
+
+      /* ---------- scene 4: lockup ---------- */
+      #s4-halo {
+        position: absolute;
+        width: 900px;
+        height: 900px;
+        left: 50%;
+        top: 43%;
+        margin-left: -450px;
+        margin-top: -450px;
+        border-radius: 50%;
+        background: radial-gradient(circle, rgba(43, 227, 160, 0.26) 0%, rgba(43, 227, 160, 0) 62%);
+      }
+      #lockup {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 300px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 48px;
+      }
+      #mark {
+        width: 230px;
+        height: 230px;
+        display: block;
+        overflow: visible;
+        flex: none;
+      }
+      #wordmark-clip {
+        overflow: hidden;
+        padding: 10px 6px 18px;
+      }
+      #wordmark {
+        font-size: 158px;
+        line-height: 1;
+        letter-spacing: -0.04em;
+        white-space: nowrap;
+        display: block;
+      }
+      #tagline {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 600px;
+        text-align: center;
+        font-size: 60px;
+        letter-spacing: -0.02em;
+        line-height: 1.15;
+      }
+      #s4-foot {
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 760px;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        gap: 36px;
+      }
+      .pill {
+        font-family: var(--mono);
+        font-weight: 700;
+        font-size: 32px;
+        color: var(--navy);
+        background: var(--mint);
+        border-radius: 40px;
+        padding: 16px 30px;
+        white-space: nowrap;
+      }
+      .url {
+        font-family: var(--mono);
+        font-size: 36px;
+        color: var(--ink);
+        white-space: nowrap;
+        padding: 14px 28px;
+        border: 3px solid var(--navy-3);
+        border-radius: 40px;
+        background: var(--navy-deep);
+      }
+
+      /* =========================================================
+         VERTICAL CUT (1080 x 1920): same scenes, restacked.
+         ========================================================= */
+      #root[data-width="1080"] #hud-brand {
+        left: 60px;
+        top: 70px;
+      }
+      #root[data-width="1080"] #hud-count {
+        right: 60px;
+        top: 70px;
+      }
+      #root[data-width="1080"] #progress {
+        left: 60px;
+        right: 60px;
+        bottom: 80px;
+      }
+      #root[data-width="1080"] #s1-ghost {
+        right: auto;
+        left: -40px;
+        bottom: 260px;
+        font-size: 250px;
+      }
+      #root[data-width="1080"] #s1-copy {
+        left: 80px;
+        top: 520px;
+        width: 920px;
+      }
+      #root[data-width="1080"] #s1-head {
+        font-size: 138px;
+      }
+      #root[data-width="1080"] #s1-sub {
+        font-size: 70px;
+        margin-top: 70px;
+      }
+      #root[data-width="1080"] #s2-top {
+        left: 80px;
+        top: 190px;
+        width: 920px;
+      }
+      #root[data-width="1080"] #s2-head {
+        font-size: 72px;
+      }
+      #root[data-width="1080"] #modal {
+        left: 280px;
+        top: 900px;
+      }
+      #root[data-width="1080"] #s2-foot {
+        display: none;
+        left: 80px;
+        right: 80px;
+        bottom: 170px;
+        text-align: center;
+        font-size: 26px;
+      }
+      #root[data-width="1080"] .badge {
+        width: 300px;
+      }
+      #root[data-width="1080"] #s3-copy {
+        left: 80px;
+        top: 190px;
+        width: 920px;
+      }
+      #root[data-width="1080"] .s3-line {
+        font-size: 84px;
+      }
+      #root[data-width="1080"] #s3-note {
+        margin-top: 30px;
+        font-size: 26px;
+      }
+      #root[data-width="1080"] #device {
+        left: 180px;
+        top: 880px;
+      }
+      #root[data-width="1080"] #device-tag {
+        left: 180px;
+        top: 1690px;
+      }
+      #root[data-width="1080"] #explorer {
+        left: 560px;
+        top: 960px;
+        width: 560px;
+        height: 330px;
+      }
+      #root[data-width="1080"] #explorer-cap {
+        left: 650px;
+        top: 1310px;
+        font-size: 22px;
+        width: 380px;
+      }
+      #root[data-width="1080"] #lockup {
+        top: 560px;
+        flex-direction: column;
+        gap: 44px;
+      }
+      #root[data-width="1080"] #mark {
+        width: 260px;
+        height: 260px;
+      }
+      #root[data-width="1080"] #wordmark {
+        font-size: 112px;
+      }
+      #root[data-width="1080"] #tagline {
+        top: 1130px;
+        left: 90px;
+        right: 90px;
+        font-size: 60px;
+      }
+      #root[data-width="1080"] #s4-foot {
+        top: 1400px;
+        flex-direction: column;
+        gap: 30px;
+      }
+      #root[data-width="1080"] .url {
+        font-size: 32px;
+      }
+      #root[data-width="1080"] #s4-halo {
+        top: 38%;
+      }
+    </style>
+  </head>
+  <body>
+    <div
+      id="root"
+      data-composition-id="main"
+      data-start="0"
+      data-duration="15"
+      data-fps="30"
+      data-width="1080"
+      data-height="1920"
+    >
+      <!-- persistent background + HUD (whole film) -->
+      <div id="bg" class="clip layer" data-start="0" data-duration="15" data-track-index="0">
+        <div id="bg-grid"></div>
+        <div id="bg-glow"></div>
+        <div id="bg-vignette"></div>
+      </div>
+
+      <!-- ================= SCENE 1 : hook (0 to 3.0) ================= -->
+      <section id="s1" class="clip scene" data-start="0" data-duration="3.0" data-track-index="1">
+        <div id="s1-ghost">ONCHAIN</div>
+        <div id="s1-copy">
+          <div id="s1-label" class="label">// The onboarding chasm</div>
+          <div id="s1-head">
+            <span class="w" data-layout-allow-overflow><span>Billions</span></span>
+            <span class="w" data-layout-allow-overflow><span>want</span></span>
+            <span class="w" data-layout-allow-overflow><span class="mint">onchain.</span></span>
+          </div>
+          <div id="s1-sub">
+            <span class="w" data-layout-allow-overflow><span>Most can't pay with</span></span>
+            <span id="s1-strike-wrap"
+              ><span class="w" data-layout-allow-overflow><span>a card.</span></span><i id="s1-strike"></i
+            ></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= SCENE 2 : many rails, one component, many chains (3.0 to 7.0) ================= -->
+      <section id="s2" class="clip scene" data-start="3.0" data-duration="4.0" data-track-index="1">
+        <div id="s2-top">
+          <div class="label">// One component</div>
+          <div id="s2-head">
+            <span class="w" data-layout-allow-overflow><span>Local rails in.</span></span>
+            <span class="w" data-layout-allow-overflow><span class="mint">Stablecoins out.</span></span>
+          </div>
+        </div>
+
+        <svg id="s2-wires" viewBox="0 0 1920 1080" preserveAspectRatio="none">
+          <path id="wire-0" d="" />
+          <path id="wire-1" d="" />
+          <path id="wire-2" d="" />
+          <path id="wire-3" d="" />
+          <path id="wire-4" d="" />
+          <path id="wire-main" d="" />
+        </svg>
+
+        <div class="chip" id="chip-0"><span class="nm">VietQR</span><span class="cc">VN</span></div>
+        <div class="chip" id="chip-1"><span class="nm">QRIS</span><span class="cc">ID</span></div>
+        <div class="chip" id="chip-2"><span class="nm">PromptPay</span><span class="cc">TH</span></div>
+        <div class="chip" id="chip-3"><span class="nm">Pix</span><span class="cc">BR</span></div>
+        <div class="chip" id="chip-4"><span class="nm">UPI</span><span class="cc">IN</span></div>
+        <div class="chip" id="chip-5"><span class="nm">Card</span><span class="cc">ANY</span></div>
+
+        <div id="modal">
+          <div class="m-title">Deposit</div>
+          <div class="m-row">
+            <div class="m-k">Pay with</div>
+            <div class="m-v" id="m-method">Card, bank or local QR</div>
+          </div>
+          <div class="m-row">
+            <div class="m-k">Best route</div>
+            <div class="m-v">Planner picks 1 of 10</div>
+          </div>
+          <div id="m-btn">Deposit USDC</div>
+        </div>
+
+        <div class="badge" id="badge-0"><span class="led"></span>Arbitrum<i class="fill"></i><i class="led-on"></i></div>
+        <div class="badge" id="badge-1"><span class="led"></span>Base<i class="fill"></i><i class="led-on"></i></div>
+        <div class="badge" id="badge-2"><span class="led"></span>Solana<i class="fill"></i><i class="led-on"></i></div>
+        <div class="badge" id="badge-3"><span class="led"></span>Tempo<i class="fill"></i><i class="led-on"></i></div>
+        <div class="badge more" id="badge-4">+ more chains</div>
+
+        <div class="coin small" id="coin-s0"></div>
+        <div class="coin small" id="coin-s1"></div>
+        <div class="coin small" id="coin-s2"></div>
+        <div class="coin small" id="coin-s3"></div>
+        <div class="coin" id="coin">USDC</div>
+
+        <div id="s2-foot">Cards <b>·</b> bank transfers <b>·</b> VietQR, QRIS, PromptPay, PayNow, Pix, UPI</div>
+      </section>
+
+      <!-- ================= SCENE 3 : proof montage (7.0 to 11.0) ================= -->
+      <section id="s3" class="clip scene" data-start="7.0" data-duration="4.0" data-track-index="1">
+        <div id="s3-copy">
+          <div class="label">// Real UI, live on testnet</div>
+          <div id="s3-lines">
+            <div class="s3-line" id="s3-l0"><span class="w" data-layout-allow-overflow><span><span class="mint">10</span> providers.</span></span></div>
+            <div class="s3-line" id="s3-l1"><span class="w" data-layout-allow-overflow><span>One component.</span></span></div>
+            <div class="s3-line" id="s3-l2"><span class="w" data-layout-allow-overflow><span>Self-hosted.</span></span></div>
+          </div>
+          <div id="s3-note">Deposits and withdrawals. AI agents top up via MCP pay links.</div>
+        </div>
+
+        <div id="explorer-wrap">
+          <div id="explorer" data-layout-allow-overflow>
+            <div class="bar"><i></i><i></i><i></i></div>
+            <img src="assets/explorer-settled.png" alt="" />
+          </div>
+          <div id="explorer-cap"><div><b>OpenRampSettlement</b></div><div>Settled event</div><div>Arbitrum Sepolia</div></div>
+        </div>
+
+        <div id="device">
+          <div id="screen" data-layout-allow-overflow>
+            <div class="notch"></div>
+            <div class="shot" id="shot-0"><img src="assets/modal-03-vietqr.png" alt="" /></div>
+            <div class="shot" id="shot-1"><img src="assets/modal-06-indonesia-qris.png" alt="" /></div>
+            <div class="shot" id="shot-2"><img src="assets/modal-07-withdraw-payout.png" alt="" /></div>
+          </div>
+        </div>
+        <div id="device-tag">
+          <div class="tag" id="tag-0">VietQR <em>·</em> Vietnam</div>
+          <div class="tag" id="tag-1">QRIS <em>·</em> Indonesia</div>
+          <div class="tag" id="tag-2">Withdraw <em>·</em> Thailand</div>
+        </div>
+      </section>
+
+      <!-- ================= SCENE 4 : lockup (11.0 to 15.0) ================= -->
+      <section id="s4" class="clip scene" data-start="11.0" data-duration="4.0" data-track-index="1">
+        <div id="s4-halo"></div>
+        <div id="lockup">
+          <svg id="mark" viewBox="0 0 64 64">
+            <rect id="mk-block" x="1" y="1" width="62" height="62" rx="15" fill="#1a2257" stroke="#2be3a0" stroke-opacity="0.45" stroke-width="1.5" />
+            <path id="mk-ramp" d="M10 51 L54 51 L54 20 Z" fill="#2be3a0" />
+            <g id="mk-coin">
+              <circle cx="32.5" cy="25.5" r="7" fill="#2be3a0" />
+              <circle cx="32.5" cy="25.5" r="3" fill="#10163a" />
+            </g>
+          </svg>
+          <div id="wordmark-clip">
+            <div id="wordmark">OpenRamp<span class="mint">Kit</span></div>
+          </div>
+        </div>
+        <div id="tagline">
+          <span class="w" data-layout-allow-overflow><span>The RainbowKit for</span></span>
+          <span class="w" data-layout-allow-overflow><span class="mint">onramps and deposits.</span></span>
+        </div>
+        <div id="s4-foot">
+          <div class="pill" id="pill">Open source · MIT</div>
+          <div class="url" id="url">github.com/yosriady/openrampkit</div>
+        </div>
+      </section>
+
+      <!-- HUD on top of every scene -->
+      <div id="hud" class="clip layer" data-start="0" data-duration="15" data-track-index="2">
+        <div id="hud-brand" class="hud"><i class="dot"></i>OpenRampKit</div>
+        <div id="hud-count" class="hud">
+          <span class="hc" id="hc-0"><b>01</b> / 04</span><span class="hc" id="hc-1"><b>02</b> / 04</span><span class="hc" id="hc-2"><b>03</b> / 04</span><span class="hc" id="hc-3"><b>04</b> / 04</span>
+        </div>
+        <div id="progress"><i id="progress-fill"></i></div>
+      </div>
+
+      <!-- AUDIO: pre-mixed bed (music + SFX [+ voiceover]); rebuilt by scripts/build-audio.sh -->
+      <audio id="mix" src="assets/audio-mix.wav" data-start="0" data-duration="15" data-track-index="9" data-volume="1"></audio>
+    </div>
+
+    <script>
+      (function () {
+        const root = document.getElementById("root");
+        const V = root.dataset.width === "1080"; // vertical cut
+        const tl = gsap.timeline({ paused: true });
+        const q = (s) => document.querySelector(s);
+        const qa = (s) => Array.from(document.querySelectorAll(s));
+
+        // ---------------- layout constants (fixed per orientation) ----------------
+        const L = V
+          ? {
+              modal: { x: 280, y: 900, w: 520, h: 456 },
+              chips: [
+                [270, 470],
+                [760, 450],
+                [300, 610],
+                [790, 600],
+                [250, 760],
+                [770, 760],
+              ],
+              chipFrom: [
+                [-300, 380],
+                [1380, 300],
+                [-320, 700],
+                [1400, 640],
+                [-300, 900],
+                [1380, 880],
+              ],
+              hub: [540, 1420],
+              badges: [
+                [70, 1490],
+                [710, 1490],
+                [70, 1610],
+                [710, 1610],
+                [390, 1730],
+              ],
+              badgeW: 300,
+            }
+          : {
+              modal: { x: 700, y: 390, w: 520, h: 456 },
+              chips: [
+                [290, 400],
+                [470, 520],
+                [250, 640],
+                [520, 760],
+                [270, 880],
+                [520, 290],
+              ],
+              chipFrom: [
+                [-300, 300],
+                [-260, 1180],
+                [-360, 640],
+                [640, 1240],
+                [-300, 1000],
+                [700, -160],
+              ],
+              hub: [1330, 605],
+              badges: [
+                [1480, 330],
+                [1480, 450],
+                [1480, 570],
+                [1480, 690],
+                [1480, 810],
+              ],
+              badgeW: 330,
+            };
+        const BADGE_H = 90;
+        const mcx = L.modal.x + L.modal.w / 2;
+        const mcy = L.modal.y + L.modal.h / 2;
+        const btn = [mcx, L.modal.y + L.modal.h - 70];
+        const coinStart = V ? [mcx, L.modal.y + L.modal.h + 40] : [L.modal.x + L.modal.w + 20, mcy];
+        const badgeAnchor = (i) => {
+          const [bx, by] = L.badges[i];
+          return V ? [bx + L.badgeW / 2, by] : [bx, by + BADGE_H / 2];
+        };
+
+        // place chips/badges (static end-state positions)
+        L.badges.forEach(([x, y], i) => gsap.set("#badge-" + i, { x, y }));
+        // wires: main (modal -> hub) + fan (hub -> badges)
+        const [hx, hy] = L.hub;
+        q("#wire-main").setAttribute("d", `M${coinStart[0]},${coinStart[1]} L${hx},${hy}`);
+        for (let i = 0; i < 5; i++) {
+          const [ax, ay] = badgeAnchor(i);
+          const d = V
+            ? `M${hx},${hy} C${hx},${hy + 40} ${ax},${ay - 60} ${ax},${ay}`
+            : `M${hx},${hy} C${hx + 70},${hy} ${ax - 80},${ay} ${ax},${ay}`;
+          q("#wire-" + i).setAttribute("d", d);
+        }
+        if (V) q("#s2-wires").setAttribute("viewBox", "0 0 1080 1920");
+        const wireLen = {};
+        qa("#s2-wires path").forEach((p) => {
+          const len = p.getTotalLength() || 1;
+          wireLen[p.id] = len;
+          p.style.strokeDasharray = len;
+        });
+
+        // ---------------- persistent layer ----------------
+        tl.fromTo("#progress-fill", { scaleX: 0 }, { scaleX: 1, duration: 15, ease: "none" }, 0);
+        tl.fromTo("#bg-grid", { x: 0, y: 0 }, { x: -56, y: -28, duration: 15, ease: "none" }, 0);
+        tl.fromTo("#bg-glow", { scale: 0.9, opacity: 0.75 }, { scale: 1.08, opacity: 1, duration: 3.5, ease: "sine.inOut", yoyo: true, repeat: 3 }, 0);
+        tl.fromTo("#hud-brand, #hud-count", { opacity: 0 }, { opacity: 1, duration: 0.5, ease: "power1.out" }, 0.15);
+        // beat counter
+        tl.set("#hc-1, #hc-2, #hc-3", { opacity: 0 }, 0);
+        [3.0, 7.0, 11.0].forEach((t, i) => {
+          tl.set("#hc-" + i, { opacity: 0 }, t);
+          tl.set("#hc-" + (i + 1), { opacity: 1 }, t);
+        });
+
+        // ================= SCENE 1 =================
+        tl.fromTo("#s1-ghost", { xPercent: 6, opacity: 0 }, { xPercent: -4, opacity: 1, duration: 3.0, ease: "none" }, 0);
+        tl.fromTo("#s1-label", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.4, ease: "power2.out" }, 0.15);
+        tl.fromTo("#s1-head .w > span", { yPercent: 110 }, { yPercent: 0, duration: 0.55, ease: "expo.out", stagger: 0.12 }, 0.25);
+        tl.fromTo("#s1-sub .w > span", { yPercent: 110 }, { yPercent: 0, duration: 0.5, ease: "power3.out", stagger: 0.14 }, 1.1);
+        tl.fromTo("#s1-strike", { scaleX: 0 }, { scaleX: 1, duration: 0.35, ease: "power4.inOut" }, 1.85);
+        tl.to("#s1-strike-wrap .w > span", { color: "#a6aedb", duration: 0.3, ease: "power1.out" }, 1.95);
+        // exit
+        tl.to("#s1-copy", { y: -60, opacity: 0, duration: 0.3, ease: "power3.in" }, 2.7);
+
+        // ================= SCENE 2 =================
+        tl.fromTo("#s2-top .label", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, 3.05);
+        tl.fromTo("#s2-head .w > span", { yPercent: 110 }, { yPercent: 0, duration: 0.5, ease: "expo.out", stagger: 0.18 }, 3.1);
+        tl.fromTo("#s2-foot", { opacity: 0, y: 20 }, { opacity: 1, y: 0, duration: 0.4, ease: "power2.out" }, 4.75);
+
+        // chips fly in from the edges, scattered
+        L.chips.forEach(([x, y], i) => {
+          const [fx, fy] = L.chipFrom[i];
+          tl.fromTo(
+            "#chip-" + i,
+            { x: fx, y: fy, rotation: i % 2 ? 14 : -12, opacity: 0 },
+            { x, y, rotation: i % 2 ? 3 : -3, opacity: 1, duration: 0.6, ease: "back.out(1.4)" },
+            3.1 + i * 0.07,
+          );
+          // tiny hover drift while they wait
+          tl.to("#chip-" + i, { y: y + (i % 2 ? -10 : 10), duration: 0.5, ease: "sine.inOut" }, 3.72);
+        });
+        // modal pops in
+        tl.fromTo("#modal", { scale: 0.7, opacity: 0, rotationX: 18, transformPerspective: 1400 }, { scale: 1, opacity: 1, rotationX: 0, duration: 0.55, ease: "expo.out" }, 3.95);
+        // THE MOMENT: every rail pours into one component
+        L.chips.forEach((_, i) => {
+          tl.to(
+            "#chip-" + i,
+            { x: mcx - 130, y: mcy - 46, scale: 0.35, rotation: 0, opacity: 0, duration: 0.42, ease: "power3.in" },
+            4.3 + i * 0.045,
+          );
+        });
+        tl.to("#modal", { scale: 1.045, duration: 0.14, ease: "power2.out", yoyo: true, repeat: 1 }, 4.72);
+        // button press
+        tl.to("#m-btn", { scale: 0.94, backgroundColor: "#2be3a0", color: "#10163a", duration: 0.1, ease: "power2.in" }, 4.98);
+        tl.to("#m-btn", { scale: 1, duration: 0.2, ease: "back.out(2)" }, 5.08);
+        // coin emerges and rides the wire to the hub
+        tl.fromTo("#coin", { x: btn[0], y: btn[1], scale: 0.2, opacity: 0 }, { x: coinStart[0], y: coinStart[1], scale: 1, opacity: 1, duration: 0.25, ease: "back.out(2)" }, 5.08);
+        tl.fromTo("#wire-main", { strokeDashoffset: wireLen["wire-main"] }, { strokeDashoffset: 0, duration: 0.3, ease: "power2.inOut" }, 5.25);
+        tl.to("#coin", { x: hx, y: hy, rotation: 360, duration: 0.35, ease: "power2.inOut" }, 5.34);
+        // fan out to chains
+        for (let i = 0; i < 5; i++) {
+          tl.fromTo("#wire-" + i, { strokeDashoffset: wireLen["wire-" + i] }, { strokeDashoffset: 0, duration: 0.35, ease: "power2.out" }, 5.6 + i * 0.05);
+        }
+        tl.to("#coin", { scale: 0.55, opacity: 0.0, duration: 0.25, ease: "power2.in" }, 5.62);
+        for (let i = 0; i < 4; i++) {
+          const [ax, ay] = badgeAnchor(i);
+          tl.fromTo("#coin-s" + i, { x: hx, y: hy, opacity: 0, scale: 0.5 }, { x: ax, y: ay, opacity: 1, scale: 1, duration: 0.38, ease: "power3.inOut" }, 5.62 + i * 0.07);
+          tl.to("#coin-s" + i, { scale: 0, opacity: 0, duration: 0.16, ease: "power2.in" }, 6.0 + i * 0.07);
+          tl.fromTo("#badge-" + i + " .fill", { opacity: 0 }, { opacity: 1, duration: 0.2, ease: "power1.out" }, 5.98 + i * 0.07);
+          tl.fromTo("#badge-" + i + " .led-on", { opacity: 0, scale: 0.4 }, { opacity: 1, scale: 1, duration: 0.25, ease: "back.out(3)" }, 5.98 + i * 0.07);
+        }
+        // badges arrive with the headline, before the coin
+        L.badges.forEach((b, i) => {
+          tl.fromTo("#badge-" + i, { opacity: 0, x: b[0] + (V ? 0 : 80), y: b[1] + (V ? 40 : 0) }, { opacity: 1, x: b[0], y: b[1], duration: 0.45, ease: "power3.out" }, 4.05 + i * 0.06);
+        });
+        tl.fromTo("#badge-4", { color: "#a6aedb" }, { color: "#2be3a0", duration: 0.3 }, 6.3);
+        // exit
+        tl.to("#s2 > *:not(#s2-wires)", { opacity: 0, duration: 0.25, ease: "power2.in" }, 6.75);
+        tl.to("#s2-wires", { opacity: 0, duration: 0.25, ease: "power2.in" }, 6.75);
+
+        // ================= SCENE 3 =================
+        tl.fromTo("#s3-copy .label", { opacity: 0, x: -30 }, { opacity: 1, x: 0, duration: 0.35, ease: "power2.out" }, 7.05);
+        ["#s3-l0", "#s3-l1", "#s3-l2"].forEach((id, i) => {
+          const t = 7.15 + i * 1.0;
+          tl.fromTo(id + " .w > span", { yPercent: 110 }, { yPercent: 0, duration: 0.5, ease: i === 1 ? "expo.out" : "power4.out" }, t);
+          if (i > 0) tl.to(["#s3-l0", "#s3-l1"].slice(0, i).map((s) => s + " .w > span"), { opacity: 0.38, duration: 0.3, ease: "power1.out" }, t);
+        });
+        tl.fromTo("#s3-note", { opacity: 0, y: 16 }, { opacity: 1, y: 0, duration: 0.45, ease: "power2.out" }, 9.6);
+        // device enters with a tilt, then settles
+        tl.fromTo(
+          "#device",
+          { y: 160, opacity: 0, rotationY: -22, rotationZ: 4, transformPerspective: 1600 },
+          { y: 0, opacity: 1, rotationY: -8, rotationZ: 0, duration: 0.8, ease: "expo.out" },
+          7.05,
+        );
+        tl.to("#device", { rotationY: 6, y: -14, duration: 3.1, ease: "sine.inOut" }, 7.85);
+        tl.fromTo("#explorer", { x: 120, opacity: 0, rotationY: 20, transformPerspective: 1600 }, { x: 0, opacity: 1, rotationY: 10, duration: 0.8, ease: "power3.out" }, 7.35);
+        tl.fromTo("#explorer img", { y: 0 }, { y: V ? -120 : -160, duration: 3.4, ease: "sine.inOut" }, 7.4);
+        tl.fromTo("#explorer-cap", { opacity: 0 }, { opacity: 1, duration: 0.4, ease: "power1.out" }, 7.9);
+        // screen swaps: VietQR -> QRIS -> withdraw payout
+        tl.set("#shot-1, #shot-2", { y: 760 }, 0);
+        tl.fromTo("#shot-0 img", { scale: 1.06 }, { scale: 1, duration: 1.2, ease: "power2.out" }, 7.05);
+        tl.to("#shot-0", { y: -760, duration: 0.45, ease: "power3.inOut" }, 8.15);
+        tl.fromTo("#shot-1", { y: 760 }, { y: 0, duration: 0.45, ease: "power3.inOut", immediateRender: false }, 8.15);
+        tl.to("#shot-1", { y: -760, duration: 0.45, ease: "power3.inOut" }, 9.15);
+        tl.fromTo("#shot-2", { y: 760 }, { y: 0, duration: 0.45, ease: "power3.inOut", immediateRender: false }, 9.15);
+        // tags under the device
+        tl.set("#tag-1, #tag-2", { opacity: 0 }, 0);
+        tl.fromTo("#tag-0", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.3, ease: "power2.out" }, 7.4);
+        tl.to("#tag-0", { opacity: 0, y: -14, duration: 0.2, ease: "power2.in" }, 8.15);
+        tl.fromTo("#tag-1", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.3, ease: "power2.out" }, 8.35);
+        tl.to("#tag-1", { opacity: 0, y: -14, duration: 0.2, ease: "power2.in" }, 9.15);
+        tl.fromTo("#tag-2", { opacity: 0, y: 14 }, { opacity: 1, y: 0, duration: 0.3, ease: "power2.out" }, 9.35);
+        // exit: everything collapses toward center
+        tl.to("#s3 > *", { opacity: 0, scale: 0.96, duration: 0.3, ease: "power2.in" }, 10.72);
+
+        // ================= SCENE 4 =================
+        tl.fromTo("#s4-halo", { scale: 0.4, opacity: 0 }, { scale: 1, opacity: 1, duration: 1.2, ease: "expo.out" }, 11.05);
+        tl.to("#s4-halo", { scale: 1.1, duration: 2.6, ease: "sine.inOut" }, 12.3);
+        tl.fromTo("#mk-block", { scale: 0, transformOrigin: "50% 50%" }, { scale: 1, duration: 0.5, ease: "back.out(1.8)" }, 11.1);
+        tl.fromTo("#mk-ramp", { scaleX: 0, scaleY: 0.2, svgOrigin: "10 51" }, { scaleX: 1, scaleY: 1, svgOrigin: "10 51", duration: 0.45, ease: "power3.out" }, 11.4);
+        // the coin rolls up the ramp
+        tl.fromTo(
+          "#mk-coin",
+          { x: -20, y: 22, rotation: -300, opacity: 0, svgOrigin: "32.5 25.5" },
+          { x: 0, y: 0, rotation: 0, opacity: 1, duration: 0.55, ease: "power2.out" },
+          11.6,
+        );
+        tl.fromTo("#mark", { scale: 1.12 }, { scale: 1, duration: 1.0, ease: "power2.out" }, 11.1);
+        // wordmark wipes out from behind the mark
+        tl.fromTo("#wordmark", V ? { yPercent: 110 } : { xPercent: -105 }, V ? { yPercent: 0, duration: 0.55, ease: "expo.out" } : { xPercent: 0, duration: 0.6, ease: "expo.out" }, 12.0);
+        tl.fromTo("#tagline .w > span", { yPercent: 110 }, { yPercent: 0, duration: 0.5, ease: "power3.out", stagger: 0.15 }, 12.45);
+        tl.fromTo("#pill", { opacity: 0, scale: 0.8 }, { opacity: 1, scale: 1, duration: 0.4, ease: "back.out(2)" }, 13.05);
+        tl.fromTo("#url", { opacity: 0, x: V ? 0 : 30, y: V ? 20 : 0 }, { opacity: 1, x: 0, y: 0, duration: 0.45, ease: "power3.out" }, 13.2);
+
+        window.__timelines["main"] = tl;
+      })();
+    </script>
+  </body>
+</html>

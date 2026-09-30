@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="OpenRampKit">
+  <title>OpenRampKit</title>
+  <!-- The block: the app or vault the funds land in -->
+  <rect width="64" height="64" rx="15" fill="#10163A"/>
+  <!-- The ramp: a wedge that rises left to right -->
+  <path d="M10 51 L54 51 L54 20 Z" fill="#2BE3A0"/>
+  <!-- The coin rolling up the ramp -->
+  <circle cx="32.5" cy="25.5" r="7" fill="#2BE3A0"/>
+  <circle cx="32.5" cy="25.5" r="3" fill="#10163A"/>
+</svg>
