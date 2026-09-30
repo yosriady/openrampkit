@@ -1,0 +1,60 @@
+{
+  "name": "@openrampkit/vue",
+  "version": "0.0.1",
+  "description": "Vue 3 wrapper for OpenRampKit: provider, Deposit and Withdraw buttons, composables (SSR-safe, works with Nuxt)",
+  "keywords": [
+    "nuxt",
+    "offramp",
+    "onramp",
+    "openrampkit",
+    "vue"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/api/vue.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/vue"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@openrampkit/client": "workspace:*",
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/web": "workspace:*"
+  },
+  "peerDependencies": {
+    "vue": ">=3.3"
+  },
+  "devDependencies": {
+    "vue": "^3.5.0",
+    "@testing-library/vue": "^8.1.0"
+  }
+}

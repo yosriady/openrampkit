@@ -14,6 +14,9 @@ The packages are at version `0.0.1` and the APIs will change. If a package is no
 | `@openrampkit/adapter-*` | Server | Provider adapters: `relay`, `swapped`, `coinbase`, `transak`, `xendit`, `mock` |
 | `@openrampkit/web` | Browser | `<openramp-modal>` and `openDeposit()` |
 | `@openrampkit/react` | Browser (SSR-safe) | `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, hooks |
+| `@openrampkit/vue` | Browser (SSR-safe) | Vue 3 and Nuxt: `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, composables |
+| `@openrampkit/svelte` | Browser (SSR-safe) | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, actions |
+| `@openrampkit/solid` | Browser (SSR-safe) | Solid and SolidStart: `OpenRampProvider`, `DepositButton`, `OpenRampEmbedded`, primitives |
 | `@openrampkit/client` | Browser or Node | HTTP client, `DepositController`, `createMockWallet` |
 | `@openrampkit/wagmi` | Browser | `wagmiWallet()`: a `WalletAdapter` for wagmi apps |
 | `@openrampkit/core` | Anywhere | Types, money math, codes, planner, flow table |
@@ -30,6 +33,15 @@ pnpm add @openrampkit/server @openrampkit/adapter-relay @openrampkit/adapter-moc
 pnpm add @openrampkit/react
 # optional: pay from a wagmi wallet
 pnpm add @openrampkit/wagmi
+```
+
+```bash [Vue, Svelte or Solid]
+# server
+pnpm add @openrampkit/server @openrampkit/adapter-relay @openrampkit/adapter-mock
+# browser: pick one
+pnpm add @openrampkit/vue
+pnpm add @openrampkit/svelte
+pnpm add @openrampkit/solid
 ```
 
 ```bash [Any framework]
@@ -62,6 +74,8 @@ pnpm add -D vitest
 :::
 
 `@openrampkit/react` depends on `@openrampkit/web` and `@openrampkit/client`, so you do not add them yourself. Its peer dependency is `react >= 18`.
+
+`@openrampkit/vue`, `@openrampkit/svelte` and `@openrampkit/solid` also include `@openrampkit/web` and `@openrampkit/client`. Their peer dependencies are `vue >= 3.3`, `svelte ^4 || ^5` and `solid-js ^1.8`. See [Vue](../api/vue.md), [Svelte](../api/svelte.md) and [Solid](../api/solid.md).
 
 `@openrampkit/wagmi` has peer dependencies `@wagmi/core ^2` and `viem ^2`.
 
