@@ -32,6 +32,9 @@ All flows run on mock providers in `examples/next-demo`. Recapture with `npx pla
 | `@openrampkit/client` | Framework-free client and `DepositController`; `createMockWallet` for tests |
 | `@openrampkit/web` | `<openramp-modal>` web component (Lit, Shadow DOM) and `openDeposit()` |
 | `@openrampkit/react` | `OpenRampProvider`, `DepositButton`, `useOpenRamp`, headless hooks |
+| `@openrampkit/vue` | Vue 3 and Nuxt: `OpenRampProvider`, `provideOpenRamp`, `DepositButton`, composables |
+| `@openrampkit/svelte` | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, `use:depositButton` and other actions |
+| `@openrampkit/solid` | Solid and SolidStart: `OpenRampProvider`, `DepositButton`, primitives |
 | `@openrampkit/wagmi` | Wallet adapter for wagmi apps |
 | `@openrampkit/adapter-relay` | Wallet pay, transfer to a deposit address, and the bridge hop (Relay) |
 | `@openrampkit/adapter-swapped` | Card, Apple Pay, Google Pay and SEA local methods (Swapped); payouts to bank transfer, Skrill, PIX and Interac for withdrawals |

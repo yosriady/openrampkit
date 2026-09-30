@@ -37,6 +37,9 @@ OpenRampKit has three runtime parts: the browser UI, your OpenRampKit server, an
 @openrampkit/client       HTTP client, DepositController, createMockWallet     (depends on core)
 @openrampkit/web          <openramp-modal> (Lit), openDeposit(), themes         (client, core)
 @openrampkit/react        OpenRampProvider, DepositButton, hooks                (web, client, core)
+@openrampkit/vue          OpenRampProvider, DepositButton, composables          (web, client, core)
+@openrampkit/svelte       createOpenRamp(), stores, actions                     (web, client, core)
+@openrampkit/solid        OpenRampProvider, DepositButton, primitives           (web, client, core)
 @openrampkit/wagmi        wagmiWallet(): WalletAdapter                          (core)
 ```
 

@@ -1,0 +1,41 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "baseUrl": "../..",
+    "paths": {
+      "@openrampkit/core": [
+        "packages/core/src/index.ts"
+      ],
+      "@openrampkit/adapter": [
+        "packages/adapter/src/index.ts"
+      ],
+      "@openrampkit/server": [
+        "packages/server/src/index.ts"
+      ],
+      "@openrampkit/client": [
+        "packages/client/src/index.ts"
+      ],
+      "@openrampkit/web": [
+        "packages/web/src/index.ts"
+      ],
+      "@openrampkit/react": [
+        "packages/react/src/index.ts"
+      ],
+      "@openrampkit/wagmi": [
+        "packages/wagmi/src/index.ts"
+      ],
+      "@openrampkit/adapter-*": [
+        "packages/adapters/*/src/index.ts"
+      ],
+      "@openrampkit/web/theme": [
+        "packages/web/src/theme.ts"
+      ],
+      "@openrampkit/svelte": [
+        "packages/svelte/src/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src"
+  ]
+}
