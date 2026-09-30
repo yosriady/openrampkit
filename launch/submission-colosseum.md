@@ -27,7 +27,7 @@ Open-source, unified deposit infrastructure for crypto apps. Solving the onboard
 ## Product
 
 - One component: a web component with React, Vue, Svelte and Solid wrappers. It is translated to en, vi, id, th, ms and fil. The axe accessibility checks pass on desktop, Android and iPhone.
-- A pathway planner across 11 provider adapters: Relay, Swapped, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Peer, Xendit, and a mock.
+- A pathway planner across 10 provider adapters: Relay, Swapped, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Peer, Xendit, and a mock.
 - A self-hosted server: one web-standard handler on Cloudflare Workers with Durable Objects. It has signed sessions, idempotency, signed webhooks with retries, and deposit and withdraw flows. A security review is done, and `SECURITY.md` is published.
 - Solana: a Wallet Standard adapter (about 13 KB). Relay routes to and from Solana USDC. Solana payments are checked onchain (one signature completes one payment).
 - An MCP server for agents, with signed pay links.

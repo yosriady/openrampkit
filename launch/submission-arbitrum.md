@@ -20,7 +20,7 @@ Alternative for the Arbitrum angle: Fiat in, onchain action out: pay with VietQR
 
 ## Short description (about 100 words)
 
-OpenRampKit is an open-source (MIT), self-hosted kit that lets any app take money in and pay money out. It targets Southeast Asia, where people pay with local QR rails, not cards. One component shows VietQR, QRIS, PromptPay, DuitNow, QR Ph and PayNow next to cards and wallets. A planner picks the best pathway at run time across 11 provider adapters. The new `OpenRampSettlement` contract on Arbitrum settles each session once, verifies it by event, and runs an allowlisted call bundle in the same transaction. So a user can pay in local currency and get a vault position on Arbitrum.
+OpenRampKit is an open-source (MIT), self-hosted kit that lets any app take money in and pay money out. It targets Southeast Asia, where people pay with local QR rails, not cards. One component shows VietQR, QRIS, PromptPay, DuitNow, QR Ph and PayNow next to cards and wallets. A planner picks the best pathway at run time across 10 provider adapters. The new `OpenRampSettlement` contract on Arbitrum settles each session once, verifies it by event, and runs an allowlisted call bundle in the same transaction. So a user can pay in local currency and get a vault position on Arbitrum.
 
 ## Problem
 
@@ -104,4 +104,4 @@ Not applicable. OpenRampKit has no token. Settlement uses existing USDC (Arbitru
 
 **Which parts of your code have been produced during the Buildathon?**
 
-All of it. The first commit is on 29 September 2026, after the start on 14 September: the contract, server, 11 adapters, UI, SDKs, MCP server and tests. Git history: https://github.com/yosriady/openrampkit/commits/main
+All of it. The first commit is on 29 September 2026, after the start on 14 September: the contract, server, 10 provider adapters, UI, SDKs, MCP server and tests. Git history: https://github.com/yosriady/openrampkit/commits/main
