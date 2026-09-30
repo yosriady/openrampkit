@@ -3,7 +3,8 @@
 import { OrkException, isTerminal, orkError } from '@openrampkit/core'
 import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
-import { clientIp, errorResponse, geoOf, json, readJson, withIdempotency } from './http.js'
+import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
+import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
 import { applyEvent, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
 import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
@@ -13,12 +14,37 @@ import { createSession, loadAuthed } from './sessions.js'
 import { sweep } from './tasks.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
-import { checkAllowed, parseTarget, screenTarget, targetDestination } from './withdraw.js'
+import { CAIP2, checkAllowed, isValidToken, parseTarget, screenTarget, targetDestination } from './withdraw.js'
 
 const RETURN_PAGE =
   '<!doctype html><meta charset="utf-8"><title>Payment</title><body style="font-family:system-ui;padding:32px">You can close this tab and go back to the app.<script>setTimeout(()=>window.close(),800)</script>'
 
 const inProgress = () => errorResponse(orkError('BAD_REQUEST', { message: 'A payment is already in progress.' }), 409)
+
+const WALLET_ADDRESS = /^[\x21-\x7e]{8,128}$/
+const AMOUNT = /^\d{1,30}(\.\d{1,36})?$/
+
+/** A wallet address from the browser: optional, else a printable string of 8 to 128 characters. */
+function walletAddressOf(v: unknown): string | undefined {
+  if (v === undefined || v === null || v === '') return undefined
+  if (typeof v !== 'string' || !WALLET_ADDRESS.test(v)) throw new OrkException(orkError('BAD_REQUEST', { message: '`walletAddress` is not valid.' }), 400)
+  return v
+}
+
+/** Check the body of `POST /sessions/:id/quotes`. Throws a 400 when it is not valid. */
+function checkQuotesBody(body: QuotesBody): void {
+  const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  if (typeof body?.method !== 'string' || !body.method || body.method.length > 64 || typeof body.amount !== 'string') throw bad('method and amount are required.')
+  if (!AMOUNT.test(body.amount)) throw bad('`amount` must be a decimal string, e.g. "25.50".')
+  if (body.amountSide !== undefined && body.amountSide !== 'source' && body.amountSide !== 'destination') throw bad('`amountSide` must be "source" or "destination".')
+  if (body.source !== undefined) {
+    const { chain, token } = (body.source ?? {}) as { chain?: unknown; token?: unknown }
+    if (typeof chain !== 'string' || !CAIP2.test(chain) || typeof token !== 'string' || !isValidToken(chain, token)) throw bad('`source` must have a CAIP-2 `chain` and a token address or "native".')
+  }
+}
+
+/** Routes that change the session. They are refused after the session deadline (see `sessionRoute`). */
+const CHANGES_BEFORE_PAYMENT = new Set(['plan', 'target', 'quotes', 'select'])
 
 export async function route(rt: Runtime, req: Request): Promise<Response> {
   const url = new URL(req.url)
@@ -54,16 +80,24 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
 
   if (!action && method === 'GET') return json(publicSession(rec))
 
+  // Past the deadline, a session cannot start (or restart) a payment. A payment in progress can still finish.
+  const restart = action === 'transitions' && arg === 'restart'
+  if (method === 'POST' && (CHANGES_BEFORE_PAYMENT.has(action ?? '') || restart) && Date.now() > rec.expiresAt) {
+    return errorResponse(orkError('SESSION_EXPIRED'), 410)
+  }
+
   if (action === 'step' && method === 'GET') {
     if (await refreshActive(rt, rec)) await saveSession(rt, rec)
     return json(publicSession(rec))
   }
 
-  if ((action === 'plan' || action === 'quotes' || action === 'target') && method === 'POST') await checkRate(rt, rec.id)
+  // These call provider APIs (quote, start, transition), so they count against the per-session limit.
+  if (method === 'POST' && (action === 'plan' || action === 'quotes' || action === 'target' || action === 'select' || action === 'transitions')) await checkRate(rt, rec.id)
 
   if (action === 'plan' && method === 'POST') {
     const body = await readJson<{ walletConnected?: boolean; walletAddress?: string; surfaces?: SurfaceKind[] }>(req, {})
-    if (body.walletAddress) rec.walletAddress = body.walletAddress
+    const walletAddress = walletAddressOf(body.walletAddress)
+    if (walletAddress) rec.walletAddress = walletAddress
     const result = await plan(rt, rec, body)
     await saveSession(rt, rec)
     return json(result)
@@ -74,16 +108,17 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
   if (action === 'quotes' && method === 'POST') {
     if (rec.active && !isTerminal(rec.step.state)) return inProgress()
     const body = await readJson<QuotesBody>(req)
-    if (!body?.method || typeof body.amount !== 'string') throw new OrkException(orkError('BAD_REQUEST', { message: 'method and amount are required.' }), 400)
+    checkQuotesBody(body)
     const result = await quotes(rt, rec, body)
     await saveSession(rt, rec)
     return json(result)
   }
 
-  if (action === 'select' && method === 'POST') return withIdempotency(rt, rec.id, req, () => selectRoute(rt, req, rec))
+  if (action === 'select' && method === 'POST') return withIdempotency(rt, rec.id, 'select', req, () => selectRoute(rt, req, rec))
 
   if (action === 'transitions' && arg && method === 'POST') {
-    return withIdempotency(rt, rec.id, req, () => transitionRoute(rt, req, rec, decodeURIComponent(arg)))
+    const name = decodeURIComponent(arg)
+    return withIdempotency(rt, rec.id, `transitions/${name}`, req, () => transitionRoute(rt, req, rec, name))
   }
   return errorResponse(orkError('NOT_FOUND'), 404)
 }
@@ -104,7 +139,8 @@ async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   await screenTarget(rt, target)
   rec.destination = targetDestination(target)
   rec.quotes = {}
-  if (typeof body.walletAddress === 'string') rec.walletAddress = body.walletAddress
+  const walletAddress = walletAddressOf(body.walletAddress)
+  if (walletAddress) rec.walletAddress = walletAddress
   const result = await plan(rt, rec, {
     walletConnected: typeof body.walletConnected === 'boolean' ? body.walletConnected : !!rec.walletConnected,
     ...(Array.isArray(body.surfaces) ? { surfaces: body.surfaces as SurfaceKind[] } : {}),
@@ -115,13 +151,15 @@ async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
 
 async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
   const body = await readJson<{ quoteId: string; walletAddress?: string }>(req)
-  const stored = rec.quotes[body.quoteId]
+  // Own keys only: a quote id such as `__proto__` must not find an inherited value.
+  const stored = typeof body?.quoteId === 'string' && Object.hasOwn(rec.quotes, body.quoteId) ? rec.quotes[body.quoteId] : undefined
   if (!stored) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (stored.quote.expiresAt && Date.parse(stored.quote.expiresAt) < Date.now()) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
   const bounds = boundsError(rec, stored.quote.input)
   if (bounds) return errorResponse(bounds, 422)
-  if (body.walletAddress) rec.walletAddress = body.walletAddress
+  const walletAddress = walletAddressOf(body.walletAddress)
+  if (walletAddress) rec.walletAddress = walletAddress
   await beginPayment(rt, rec, body.quoteId, stored)
   await saveSession(rt, rec)
   return json(publicSession(rec))
@@ -177,7 +215,7 @@ async function startRoute(rt: Runtime, param: string): Promise<Response> {
 async function webhookRoute(rt: Runtime, req: Request, adapterId: string): Promise<Response> {
   const a = rt.adapters.get(adapterId)
   if (!a?.webhook) return errorResponse(orkError('NOT_FOUND'), 404)
-  const raw = await req.text()
+  const raw = await readText(req, MAX_WEBHOOK_BODY_BYTES)
   const ctx = { log: rt.log, fetch: rt.fetch, shared: scopedKV(rt.store, `a:${a.id}`) }
   if (!(await a.webhook.verify(req, raw, ctx))) return errorResponse(orkError('UNAUTHORIZED'), 401)
   for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) await applyEvent(rt, a.id, ev)

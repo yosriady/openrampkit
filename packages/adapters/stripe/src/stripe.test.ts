@@ -192,6 +192,9 @@ describe('stripe adapter', () => {
     expect(await a.webhook!.verify(req(`t=${t},v0=${v1(t)}`), body, wctx)).toBe(false)
     expect(await a.webhook!.verify(req(), body, wctx)).toBe(false)
     expect(await a.webhook!.verify(req(`t=${t - 301},v1=${v1(t - 301)}`), body, wctx)).toBe(false)
+    // An unset secret (e.g. a missing environment variable) must not accept a signature made with an empty key.
+    const unset = stripe({ ...opts, webhookSecret: undefined as unknown as string })
+    expect(await unset.webhook!.verify(req(`t=${t},v1=${v1(t, body, '')}`), body, wctx)).toBe(false)
     expect(parseStripeSignature('t=1,v1=a,v1=b')).toEqual({ t: '1', v1: ['a', 'b'] })
     // Known vector: HMAC-SHA256("whsec_test_secret", "1700000000.{}")
     expect(v1(1700000000, '{}')).toBe('ceb8863f7208fa249a6cd8f951e993c7563412aca65866f6272283debe143ab3')

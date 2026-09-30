@@ -2,7 +2,7 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, cmp, currencyForCountry, isTerminal, orkError } from '@openrampkit/core'
+import { CHAINS, USDC, cmp, currencyForCountry, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
 import type {
   Direction,
   MethodOption,
@@ -496,6 +496,8 @@ export class RampController {
     if (!s) return
     this.emit('surface.opened', { kind: s.kind })
     if (s.kind === 'REDIRECT' || s.kind === 'DEEPLINK') {
+      // Never open a `javascript:` or `data:` URL. A deep link may use an app scheme (e.g. gcash://).
+      if (s.kind === 'REDIRECT' ? !isWebUrl(s.url, { allowHttp: true }) : !isSafeLinkUrl(s.url)) return
       // Must run inside the click handler so the browser allows the popup.
       // Do not pass 'noopener' in the features: then window.open returns null even on success.
       const w = typeof window !== 'undefined' ? window.open(s.url, '_blank') : null

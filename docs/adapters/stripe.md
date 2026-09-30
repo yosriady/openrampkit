@@ -61,7 +61,7 @@ By default the adapter returns a `PROVIDER_SDK` surface for Stripe's embedded on
 
 ## Webhooks
 
-Add a webhook endpoint in the Stripe dashboard for `crypto.onramp_session.updated` with the URL `{baseUrl}/webhooks/stripe`, and pass its secret as `webhookSecret`.
+Add a webhook endpoint in the Stripe dashboard for `crypto.onramp_session.updated` with the URL `{baseUrl}/webhooks/stripe`, and pass its secret as `webhookSecret`. When `webhookSecret` is empty or not set, the adapter refuses every webhook (`401`).
 
 - Verification: `Stripe-Signature: t=...,v1=...`, hex HMAC-SHA256 of `{t}.{body}`, 5 minute tolerance. Any matching `v1` passes.
 

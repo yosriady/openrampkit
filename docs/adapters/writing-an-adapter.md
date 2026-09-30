@@ -98,6 +98,8 @@ Return a `LegQuote` with decimal strings, every fee you know, an `eta`, and `exp
 
 Create the order and return the first `LegStep`: a state, a surface, the transitions, the leg status, and a `ref`. The `ref` is how webhooks and status checks find the leg later. Always return one.
 
+Surface URLs must be safe for the browser. `REDIRECT`, `IFRAME` (`url` and `origin`) and a `PROVIDER_SDK` `redirectUrl` must use `https:` (`http:` is accepted in test mode only). A `DEEPLINK` can use an app scheme such as `gcash://`. The server fails the leg with `PROVIDER_UNAVAILABLE` when a URL uses `javascript:`, `data:` or another unsafe scheme.
+
 If the pathway has two legs and your leg is the first, deliver to `input.deliverTo.address` when it is set. Otherwise deliver to `ctx.destination.address`.
 
 ## status() and transition()

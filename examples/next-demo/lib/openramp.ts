@@ -24,7 +24,7 @@ export const openramp =
         ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]
         : []),
     ],
-    webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_dev' },
+    webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_dev_only_not_a_secret' },
     // Withdraw: screen target addresses. Connect a sanctions API here (e.g. Chainalysis) in production.
     // The demo refuses the well-known burn address.
     screenAddress: async (address) => address.toLowerCase() !== BURN,

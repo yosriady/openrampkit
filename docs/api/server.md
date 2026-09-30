@@ -28,8 +28,8 @@ const openramp = createOpenRamp({
 | `policy.methodPriority` | `Record<country, string[]>` | built-in | Method order per country |
 | `policy.disabledMethods` | `string[]` | none | Methods never offered |
 | `policy.hopPreference` | `CryptoAsset[]` | USDC on Base, Arbitrum, Polygon, Optimism, Ethereum | Hop assets for two-leg pathways, most preferred first. See [Hops](../concepts/pathways.md#hops). |
-| `webhooks` | `{ url: string; secret: string; maxAttempts?: number }` | none | Signed webhooks to your backend. `sweep()` retries failed deliveries up to `maxAttempts` (default `8`) times in all. See [Delivery](../guide/webhooks.md#delivery). |
-| `tasksToken` | `string` | none | Bearer token for `POST /tasks/sweep` and `GET /health?deep=1`. Without it, those two are off. |
+| `webhooks` | `{ url: string; secret: string; maxAttempts?: number }` | none | Signed webhooks to your backend. `secret` must have at least 16 characters (use 32 random bytes). `sweep()` retries failed deliveries up to `maxAttempts` (default `8`) times in all. See [Delivery](../guide/webhooks.md#delivery). |
+| `tasksToken` | `string` | none | Bearer token for `POST /tasks/sweep` and `GET /health?deep=1`. At least 16 characters. Without it, those two are off. |
 | `geo` | `(req) => { country?, region? } \| undefined` | Cloudflare / Vercel headers | Country and region for `POST /sessions` |
 | `authorize` | `(req, body) => Promise<CreateSessionInput \| null>` | none | Enables `POST /sessions` from the browser or another service |
 | `cors` | `{ origins: string[] \| '*' }` | same origin only | Allowed origins for CORS |
@@ -38,6 +38,7 @@ const openramp = createOpenRamp({
 | `fetch` | `typeof fetch` | global `fetch` | Used by the server and passed to adapters |
 | `timeouts.quote` | `number` (ms) | `9000` | Per quoted pathway |
 | `timeouts.webhook` | `number` (ms) | `4000` | Per outgoing webhook |
+| `limits.providerCallsPerMinute` | `number` | `60` | Per session: requests to `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` in one minute. More get `429 RATE_LIMITED`. |
 | `screenAddress` | `(address, chain) => Promise<boolean>` | none | Withdraw: check a "To wallet" address. `false` or an error refuses it (fail closed). See [Screen addresses](../guide/withdraw.md#screen-addresses). |
 | `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. See [Custody](../guide/withdraw.md#custody-app). |
 
@@ -112,8 +113,17 @@ The server tracks only the sessions it creates, and keeps up to the last 1,000 o
 | `locale` | `string` | none | BCP 47. Picks the modal language; adapters get `en` when unset. |
 | `amountBounds` | `{ min?, max?, currency }` | none | Shown on the amount screen and enforced by the server on what the user pays (see below) |
 | `allowedMethods` | `string[]` | all | Only these methods are planned and quoted |
-| `metadata` | `Record<string, string>` | none | Echoed in every webhook |
-| `ttlMinutes` | `number` | `30` | Session lifetime |
+| `metadata` | `Record<string, string>` | none | Echoed in every webhook. At most 50 keys. A key has at most 40 characters, a value at most 500. |
+| `ttlMinutes` | `number` | `30` | Session lifetime. More than 0 and at most 10080 (7 days). |
+
+The server checks the input and throws a `400` (`BAD_REQUEST`) when a field is not valid:
+
+- `userId`: a string of 1 to 256 characters.
+- `country`: two letters. `region`: at most 16 characters. `email`: at most 254. `locale`: at most 35.
+- `amountBounds.min` and `amountBounds.max`: decimal strings, for example `"25.50"`.
+- `destination` of type `crypto`: a CAIP-2 `chain`, a token address or `native`, and an `address` that is valid for the chain (an EVM address must not be the zero address). Other types: an ISO 4217 `currency`.
+
+These checks also apply to the input that `authorize` returns for `POST /sessions`.
 
 ```ts
 type Destination =

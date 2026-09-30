@@ -70,11 +70,11 @@ When the source and the destination are the same token on the same chain, Relay 
 
 | Leg | Check |
 |---|---|
-| `wallet` | After `submit_tx`, the leg is `PROCESSING` (sub-state `confirming`) until the receipt exists (`eth_getTransactionReceipt`). The leg succeeds only when the transaction succeeded and paid the recipient at least the quoted amount: the value of a native transfer (`eth_getTransactionByHash`), or the sum of the token's `Transfer` logs to the recipient. Otherwise it fails with `DELIVERY_FAILED`. |
+| `wallet` | After `submit_tx`, the leg is `PROCESSING` (sub-state `confirming`) until the receipt exists (`eth_getTransactionReceipt`). The leg succeeds only when the transaction succeeded, was mined after the payment started (the block time from `eth_getBlockByNumber`, with 5 minutes of clock tolerance), paid the recipient at least the quoted amount (the value of a native transfer from `eth_getTransactionByHash`, or the sum of the token's `Transfer` logs to the recipient), and did not complete another payment before. Otherwise it fails with `DELIVERY_FAILED`. |
 | `transfer` | At start, the adapter records the current block (`eth_blockNumber`). Status looks for the token's `Transfer` logs to the destination since that block (`eth_getLogs`), and completes with their sum as the output. Native tokens are not detected: the leg stays in `PAYMENT`. |
 
 ::: warning What the check does not cover
-The `wallet` check proves that the transaction paid the recipient. It does not check who sent it, or that no other session used the same hash. The `transfer` check counts every transfer to the destination after the start block, from any sender. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
+The `wallet` check proves that a new transaction paid the recipient, and that no other session of this adapter used the same hash (the record lives in the store for 90 days). It does not check who sent it. The `transfer` check counts every transfer to the destination after the start block, from any sender. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
 :::
 
 ## Status mapping

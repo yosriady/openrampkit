@@ -563,7 +563,12 @@ export function swapped(opts: SwappedOptions) {
     },
 
     webhook: {
-      async verify(req, rawBody) {
+      async verify(req, rawBody, ctx) {
+        // An empty key would let anyone sign (for example an unset environment variable).
+        if (!opts.secretKey) {
+          ctx.log.warn('swapped: secretKey is not set; rejecting webhook')
+          return false
+        }
         const sig = req.headers.get('signature')
         if (!sig) return false
         const expected = await hmacSha256(opts.secretKey, rawBody, 'base64')

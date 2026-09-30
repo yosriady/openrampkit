@@ -24,6 +24,13 @@ export type Runtime = {
 
 export function createRuntime(config: OpenRampConfig): Runtime {
   if (!config.secret || config.secret.length < 32) throw new Error('OpenRamp: `secret` must be at least 32 characters')
+  // An empty or short key makes a signature or a bearer token easy to guess.
+  if (config.webhooks && (typeof config.webhooks.secret !== 'string' || config.webhooks.secret.length < 16)) {
+    throw new Error('OpenRamp: `webhooks.secret` must be at least 16 characters')
+  }
+  if (config.tasksToken !== undefined && (typeof config.tasksToken !== 'string' || config.tasksToken.length < 16)) {
+    throw new Error('OpenRamp: `tasksToken` must be at least 16 characters')
+  }
   const ids = new Set<string>()
   for (const a of config.adapters) {
     if (a.apiVersion !== ADAPTER_API_VERSION) throw new Error(`OpenRamp: adapter ${a.id} targets API v${a.apiVersion}, server supports v${ADAPTER_API_VERSION}`)

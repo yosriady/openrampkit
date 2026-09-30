@@ -95,7 +95,7 @@ The deposit address and the amount of the `WALLET_TX` come from the verified Swa
 
 Swapped sends order notifications (buy and sell) to the `responseUrl` that the adapter puts in the widget URL: `{baseUrl}/webhooks/swapped`. You do not need to configure it in a dashboard.
 
-- Verification: the `signature` header must equal the base64 HMAC-SHA256 of the raw body with the secret key.
+- Verification: the `signature` header must equal the base64 HMAC-SHA256 of the raw body with the secret key. An empty `secretKey` refuses every notification. The signature has no timestamp, so the adapter cannot refuse a replay. A replay cannot change a leg that is already final.
 - Status mapping for buy orders (sell orders: see [Sell flow](#sell-flow)):
 
 | `order_status` | Leg |

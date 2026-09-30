@@ -221,6 +221,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     legs,
 
     async quote({ leg, amountIn, amountOut }, ctx): Promise<LegQuote> {
+      refuseLive(ctx)
       const spec = legs.find((l) => l.id === leg.legId)
       if (!spec) throw unknownLeg(leg.legId)
       const now = Date.now()
@@ -288,6 +289,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     },
 
     async start({ leg, quote, deliverTo }, ctx): Promise<LegStep> {
+      refuseLive(ctx)
       const ref = `mock_${ctx.session.id.slice(4, 14)}_${leg.legId}_${Date.now().toString(36)}`
       const order: MockOrder = { status: 'awaiting', output: quote.output, kind: leg.legId }
       await ctx.shared.put(orderKey(ref), order, ORDER_TTL_SEC)
@@ -389,7 +391,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (subpath === 'checkout' && req.method === 'GET') {
         const amount = escapeHtml(url.searchParams.get('amount') ?? '')
         const currency = escapeHtml(url.searchParams.get('currency') ?? '')
-        return new Response(checkoutPage(name, amount, currency, escapeHtml(ref), `${ctx.baseUrl}/adapters/mock/pay`), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        return new Response(checkoutPage(escapeHtml(name), amount, currency, escapeHtml(ref), `${ctx.baseUrl}/adapters/mock/pay`), { headers: { 'content-type': 'text/html; charset=utf-8' } })
       }
       if (subpath === 'pay' && req.method === 'POST') {
         const form = await req.formData()
@@ -409,6 +411,14 @@ export function mockAdapter(opts: MockOptions = {}) {
       return undefined
     },
   })
+}
+
+/**
+ * The mock moves no money, and anyone who knows an order ref can mark it paid on the checkout page.
+ * So it never runs in a live session: a live app must not credit a mock payment.
+ */
+function refuseLive(ctx: AdapterContext) {
+  if (ctx.session.livemode) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'The mock provider is for test mode only.' }), 503)
 }
 
 function unknownLeg(legId: string) {

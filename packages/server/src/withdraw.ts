@@ -9,7 +9,7 @@ const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
 const EVM_ZERO = /^0x0{40}$/
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 const OTHER_ADDRESS = /^[\x21-\x7e]{8,128}$/
-const CAIP2 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/
+export const CAIP2 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/
 const CURRENCY = /^[A-Z]{3}$/
 const SYMBOL = /^[A-Za-z0-9.$_-]{1,12}$/
 
@@ -22,7 +22,7 @@ export function isValidAddress(chain: string, address: string): boolean {
   return OTHER_ADDRESS.test(address)
 }
 
-function isValidToken(chain: string, token: string): boolean {
+export function isValidToken(chain: string, token: string): boolean {
   if (token === 'native') return true
   if (chain.startsWith('eip155:')) return EVM_ADDRESS.test(token)
   if (chain.startsWith('solana:')) return SOLANA_ADDRESS.test(token)

@@ -51,6 +51,19 @@ describe('mock adapter', () => {
     expect(report.steps.find((s) => s.txHash === '0xabc')).toBeDefined()
   })
 
+  it('refuses live sessions, and escapes the provider name on the checkout page', async () => {
+    const a = mockAdapter({ name: '<img src=x onerror=alert(1)>' })
+    const live = makeCtx({ fetch: fakeFetch([]).fetch, session: { livemode: true } })
+    await expect(a.quote({ leg: cardLeg, amountIn: fiat('USD', '10') }, live)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    const test = makeCtx({ fetch: fakeFetch([]).fetch })
+    const q = await a.quote({ leg: cardLeg, amountIn: fiat('USD', '10') }, test)
+    await expect(a.start({ leg: cardLeg, quote: q }, live)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    const { ctx } = routeCtx()
+    const page = await (await a.routes!(new Request('https://app.test/api/openramp/adapters/mock/checkout?ref=r'), 'checkout', ctx))!.text()
+    expect(page).not.toContain('<img')
+    expect(page).toContain('&lt;img')
+  })
+
   it('quotes fiat onramps with FX and fees, pay-ins in fiat, crypto legs 1:1 minus 5 bps', async () => {
     const a = mockAdapter({ crypto: true, bridge: true })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })

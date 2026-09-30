@@ -157,7 +157,8 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
     } else {
       const reason = s.reason as unknown
       const message = reason instanceof Error ? reason.message : String(reason)
-      errors.push(reason instanceof OrkException ? reason.error : orkError('PROVIDER_UNAVAILABLE', { message: message.slice(0, 200) }))
+      // Only OrkErrors reach the browser: a raw error can quote a provider response.
+      errors.push(reason instanceof OrkException ? reason.error : orkError('PROVIDER_UNAVAILABLE'))
       rt.log.warn('quote failed', { error: message })
     }
   }

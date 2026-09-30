@@ -20,7 +20,7 @@ function setup(opts: { webhooks?: boolean } = {}) {
     baseUrl: BASE,
     adapters: [mockAdapter({ settleMs: 30, crypto: true, bridge: true })],
     logger: { debug() {}, info() {}, warn() {}, error() {} },
-    ...(opts.webhooks ? { webhooks: { url: 'http://app.local/hooks', secret: 'whsec_test' }, fetch: appFetch } : {}),
+    ...(opts.webhooks ? { webhooks: { url: 'http://app.local/hooks', secret: 'whsec_test_0123456789' }, fetch: appFetch } : {}),
   })
   // The client calls the handler directly (no network).
   const fetchToHandler: typeof fetch = async (input, init) => ramp.handle(new Request(String(input), init))
@@ -184,7 +184,7 @@ describe('server + controller, mock provider', () => {
     expect(types).toContain('session.created')
     expect(types).toContain('session.completed')
     const last = delivered.find((d) => JSON.parse(d.body).type === 'session.completed')!
-    expect(await verifyWebhook('whsec_test', last.headers, last.body)).toBe(true)
+    expect(await verifyWebhook('whsec_test_0123456789', last.headers, last.body)).toBe(true)
     expect(await verifyWebhook('whsec_wrong', last.headers, last.body)).toBe(false)
     expect(JSON.parse(last.body).data.object.metadata).toEqual({ order: 'o1' })
     c.destroy()

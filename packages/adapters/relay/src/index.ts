@@ -55,6 +55,9 @@ export const DEFAULT_RPC_URLS: Record<string, string> = {
   'eip155:137': 'https://polygon-rpc.com',
 }
 
+/** Allowed difference between our clock and block timestamps when a direct payment checks its tx age */
+const DIRECT_TX_CLOCK_SKEW_MS = 5 * 60_000
+
 const TRANSFER_TOPIC = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 const topicAddress = (a: string) => `0x${a.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`
 
@@ -219,7 +222,8 @@ function requestIdOf(q: RelayQuoteResponse): string | undefined {
 
 // ---------------- stored state ----------------
 
-type WalletRecord = { mode: 'relay' | 'direct'; requestId?: string; txHash?: string; output?: Amount; chain?: string; token?: string; recipient?: string; amountBase?: string }
+/** `since`: when the direct payment started (ms). A transaction mined before it cannot pay this session. */
+type WalletRecord = { mode: 'relay' | 'direct'; requestId?: string; txHash?: string; output?: Amount; chain?: string; token?: string; recipient?: string; amountBase?: string; since?: number }
 type DepositRecord = { address: string; since: number; mode: 'relay' | 'direct'; output?: Amount; chain?: string; token?: string; fromBlock?: string }
 
 export function relay(opts: RelayOptions = {}) {
@@ -571,7 +575,7 @@ export function relay(opts: RelayOptions = {}) {
     return res.result as T
   }
 
-  type Receipt = { status?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
+  type Receipt = { status?: string; blockNumber?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
 
   /** A same-chain wallet payment counts only when the receipt shows it paid the recipient at least the amount. */
   async function verifyDirectWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
@@ -581,6 +585,13 @@ export function relay(opts: RelayOptions = {}) {
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
     const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
+    // The transaction must be newer than this payment: an older transfer to the same recipient (for
+    // example a shared merchant address) must not complete a new session.
+    if (rec.since !== undefined) {
+      const block = receipt.blockNumber ? await rpc<{ timestamp?: string } | null>(ctx, chain, 'eth_getBlockByNumber', [receipt.blockNumber, false]) : null
+      if (!block?.timestamp) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+      if (Number(BigInt(block.timestamp)) * 1000 < rec.since - DIRECT_TX_CLOCK_SKEW_MS) return fail('The transaction was sent before this payment started.')
+    }
     const need = BigInt(rec.amountBase ?? '0')
     const recipient = (rec.recipient ?? '').toLowerCase()
     let paid = 0n
@@ -636,7 +647,7 @@ export function relay(opts: RelayOptions = {}) {
       const ref = `direct:${ctx.session.id}:${randomHex()}`
       await ctx.store.put(
         `w:${ref}`,
-        { mode: 'direct', output: input.quote.output, chain: origin.chain, token: origin.token, recipient, amountBase } satisfies WalletRecord,
+        { mode: 'direct', output: input.quote.output, chain: origin.chain, token: origin.token, recipient, amountBase, since: Date.now() } satisfies WalletRecord,
         RECORD_TTL_SEC,
       )
       return payStep(origin.chain, [tx], ref)

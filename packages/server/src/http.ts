@@ -1,5 +1,6 @@
+import { OrkException, orkError } from '@openrampkit/core'
 import type { OrkError } from '@openrampkit/core'
-import { IDEMPOTENCY_TTL_SEC } from './config.js'
+import { IDEMPOTENCY_TTL_SEC, MAX_JSON_BODY_BYTES } from './config.js'
 import type { Runtime } from './runtime.js'
 
 export const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -41,11 +42,17 @@ export function clientIp(req: Request): string | undefined {
   return h.get('cf-connecting-ip') ?? h.get('x-real-ip') ?? h.get('x-forwarded-for')?.split(',')[0]?.trim() ?? undefined
 }
 
-/** Replay the stored response for a repeated `Idempotency-Key` within the same session. */
-export async function withIdempotency(rt: Runtime, sessionId: string, req: Request, run: () => Promise<Response>): Promise<Response> {
+const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/
+
+/**
+ * Replay the stored response for a repeated `Idempotency-Key` within the same session and route.
+ * `scope` names the route (e.g. `select`), so one key cannot replay the answer of another route.
+ */
+export async function withIdempotency(rt: Runtime, sessionId: string, scope: string, req: Request, run: () => Promise<Response>): Promise<Response> {
   const key = req.headers.get('idempotency-key')
   if (!key) return run()
-  const k = `idem:${sessionId}:${key}`
+  if (!IDEMPOTENCY_KEY.test(key)) throw new OrkException(orkError('BAD_REQUEST', { message: '`Idempotency-Key` must be 1 to 255 printable ASCII characters.' }), 400)
+  const k = `idem:${sessionId}:${scope}:${key}`
   const hit = await rt.store.kv.get<{ status: number; body: string }>(k)
   if (hit) return new Response(hit.body, { status: hit.status, headers: { 'content-type': 'application/json', 'idempotent-replay': 'true' } })
   const res = await run()
@@ -53,11 +60,43 @@ export async function withIdempotency(rt: Runtime, sessionId: string, req: Reque
   return res
 }
 
+/**
+ * Read the body as text, up to `max` bytes. A larger body gets a 413 before it is read in full:
+ * the `Content-Length` header is checked first, then the bytes as they arrive.
+ */
+export async function readText(req: Request, max: number): Promise<string> {
+  const tooLarge = () => new OrkException(orkError('BAD_REQUEST', { message: `The request body is larger than ${max} bytes.` }), 413)
+  const declared = Number(req.headers.get('content-length'))
+  if (Number.isFinite(declared) && declared > max) throw tooLarge()
+  if (!req.body) return ''
+  const reader = req.body.getReader()
+  const chunks: Uint8Array[] = []
+  let size = 0
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > max) {
+      await reader.cancel().catch(() => {})
+      throw tooLarge()
+    }
+    chunks.push(value)
+  }
+  const all = new Uint8Array(size)
+  let at = 0
+  for (const c of chunks) {
+    all.set(c, at)
+    at += c.byteLength
+  }
+  return new TextDecoder().decode(all)
+}
+
 export async function readJson<T>(req: Request, fallback?: T): Promise<T> {
+  const text = await readText(req, MAX_JSON_BODY_BYTES)
   try {
-    return (await req.json()) as T
+    return JSON.parse(text) as T
   } catch {
     if (fallback !== undefined) return fallback
-    throw new SyntaxError('Request body must be JSON')
+    throw new OrkException(orkError('BAD_REQUEST', { message: 'Request body must be JSON' }), 400)
   }
 }

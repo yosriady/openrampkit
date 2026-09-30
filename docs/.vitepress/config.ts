@@ -32,6 +32,7 @@ export default defineConfig({
             { text: 'Theming', link: '/guide/theming' },
             { text: 'Webhooks to your backend', link: '/guide/webhooks' },
             { text: 'Testing with mocks', link: '/guide/testing' },
+            { text: 'Security', link: '/guide/security' },
             { text: 'Examples', link: '/guide/examples' },
           ],
         },

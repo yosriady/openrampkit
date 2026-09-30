@@ -6,11 +6,62 @@ import { trackOpenSession } from './tasks.js'
 import { normalizeDestination, saveSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
-import { normalizeSource } from './withdraw.js'
+import { CAIP2, isValidAddress, isValidToken, normalizeSource } from './withdraw.js'
 
 export type CreatedSession = { id: string; clientSecret: string; expiresAt: string }
 
+/** Limits for `CreateSessionInput`. The input can come from the browser through the `authorize` hook. */
+export const SESSION_LIMITS = {
+  userIdLength: 256,
+  metadataKeys: 50,
+  metadataKeyLength: 40,
+  metadataValueLength: 500,
+  /** Longest session: 7 days, the default session TTL of the KV stores */
+  ttlMinutes: 7 * 24 * 60,
+} as const
+
+const DECIMAL = /^\d{1,30}(\.\d{1,36})?$/
+
+/** Check the parts of the input that are stored or sent to providers. Throws a 400 when one is not valid. */
+function checkInput(input: CreateSessionInput): void {
+  const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  const L = SESSION_LIMITS
+  if (typeof input.userId !== 'string' || !input.userId || input.userId.length > L.userIdLength) throw bad(`\`userId\` must be a string of 1 to ${L.userIdLength} characters.`)
+  if (input.ttlMinutes !== undefined && (typeof input.ttlMinutes !== 'number' || !(input.ttlMinutes > 0) || input.ttlMinutes > L.ttlMinutes)) {
+    throw bad(`\`ttlMinutes\` must be more than 0 and at most ${L.ttlMinutes}.`)
+  }
+  if (input.metadata !== undefined) {
+    const entries = input.metadata && typeof input.metadata === 'object' && !Array.isArray(input.metadata) ? Object.entries(input.metadata) : undefined
+    if (!entries || entries.length > L.metadataKeys) throw bad(`\`metadata\` must be an object with at most ${L.metadataKeys} keys.`)
+    for (const [k, v] of entries) {
+      if (k.length > L.metadataKeyLength || typeof v !== 'string' || v.length > L.metadataValueLength) {
+        throw bad(`\`metadata\` keys must be at most ${L.metadataKeyLength} characters, and values strings of at most ${L.metadataValueLength} characters.`)
+      }
+    }
+  }
+  for (const [name, v, max] of [['email', input.email, 254], ['locale', input.locale, 35], ['region', input.region, 16]] as const) {
+    if (v !== undefined && (typeof v !== 'string' || v.length > max)) throw bad(`\`${name}\` must be a string of at most ${max} characters.`)
+  }
+  if (input.country !== undefined && (typeof input.country !== 'string' || !/^[A-Za-z]{2}$/.test(input.country))) throw bad('`country` must be an ISO 3166-1 alpha-2 code, e.g. VN.')
+  if (input.allowedMethods !== undefined && (!Array.isArray(input.allowedMethods) || !input.allowedMethods.every((m) => typeof m === 'string'))) {
+    throw bad('`allowedMethods` must be an array of method ids.')
+  }
+  const b = input.amountBounds
+  if (b !== undefined && (typeof b?.currency !== 'string' || (b.min !== undefined && !DECIMAL.test(b.min)) || (b.max !== undefined && !DECIMAL.test(b.max)))) {
+    throw bad('`amountBounds` needs `currency`, and `min` and `max` must be decimal strings.')
+  }
+  const d = input.destination
+  if (d?.type === 'crypto') {
+    if (typeof d.chain !== 'string' || !CAIP2.test(d.chain)) throw bad('`destination.chain` must be a CAIP-2 chain id, e.g. eip155:8453.')
+    if (typeof d.token !== 'string' || !isValidToken(d.chain, d.token)) throw bad('`destination.token` must be a token address or "native".')
+    if (typeof d.address !== 'string' || !isValidAddress(d.chain, d.address)) throw bad('`destination.address` is not a valid address for this chain.')
+  } else if (d && (typeof (d as { currency?: unknown }).currency !== 'string' || !/^[A-Za-z]{3}$/.test((d as { currency: string }).currency))) {
+    throw bad('`destination.currency` must be an ISO 4217 code, e.g. PHP.')
+  }
+}
+
 export async function createSession(rt: Runtime, input: CreateSessionInput): Promise<CreatedSession> {
+  checkInput(input)
   const id = `ors_${randomHex(12)}`
   const secret = randomHex(24)
   const now = Date.now()

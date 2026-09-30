@@ -260,7 +260,7 @@ describe('relay adapter', () => {
     const TX = `0x${'cd'.repeat(32)}`
     const transferLog = (to: string, amount: bigint) => ({ address: BASE_USDC.token, topics: [TRANSFER, `0x${'0'.repeat(24)}${'11'.repeat(20)}`, `0x${'0'.repeat(24)}${to.slice(2).toLowerCase()}`], data: `0x${amount.toString(16).padStart(64, '0')}` })
     const run = async (receipt: unknown) => {
-      const { fetch, calls } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ jsonrpc: '2.0', id: 1, result: (c.body as { method: string }).method === 'eth_getTransactionReceipt' ? receipt : null }) }])
+      const { fetch, calls } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ jsonrpc: '2.0', id: 1, result: rpcReply((c.body as { method: string }).method, receipt, null) }) }])
       const a = relay()
       const ctx = makeCtx({ fetch })
       const q = await a.quote({ leg: walletLeg, amountIn: { amount: '12.5', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER }, deliverTo: { address: DEST } }, ctx)
@@ -268,20 +268,20 @@ describe('relay adapter', () => {
       await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
       return { status: await a.status!({ leg: walletLeg, ref: step.ref! }, ctx), calls }
     }
-    const ok = await run({ status: '0x1', logs: [transferLog(DEST, 12_500_000n)] })
+    const ok = await run({ status: '0x1', blockNumber: '0x10', logs: [transferLog(DEST, 12_500_000n)] })
     expect(ok.status).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: TX })
     expect(ok.calls[0]!.body).toMatchObject({ method: 'eth_getTransactionReceipt', params: [TX] })
     expect((await run(null)).status).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
     expect((await run({ status: '0x0', logs: [] })).status).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
-    expect((await run({ status: '0x1', logs: [transferLog(USER, 12_500_000n)] })).status).toMatchObject({ state: 'FAILED' })
-    expect((await run({ status: '0x1', logs: [transferLog(DEST, 12_000_000n)] })).status).toMatchObject({ state: 'FAILED' })
+    expect((await run({ status: '0x1', blockNumber: '0x10', logs: [transferLog(USER, 12_500_000n)] })).status).toMatchObject({ state: 'FAILED' })
+    expect((await run({ status: '0x1', blockNumber: '0x10', logs: [transferLog(DEST, 12_000_000n)] })).status).toMatchObject({ state: 'FAILED' })
   })
 
   it('wallet same chain, native: checks the tx recipient and value; a chain without an RPC is refused', async () => {
     const TX = `0x${'ef'.repeat(32)}`
     const nativeLeg: PathwayLeg = { ...walletLeg, to: { asset: { kind: 'crypto', chain: 'eip155:8453', token: 'native' }, location: { kind: 'address', address: DEST } } }
     const { fetch } = fakeFetch([
-      { method: 'POST', match: 'custom-rpc', reply: (c) => ({ result: (c.body as { method: string }).method === 'eth_getTransactionReceipt' ? { status: '0x1', logs: [] } : { to: DEST, value: '0x2386f26fc10000' } }) },
+      { method: 'POST', match: 'custom-rpc', reply: (c) => ({ result: rpcReply((c.body as { method: string }).method, { status: '0x1', blockNumber: '0x10', logs: [] }, { to: DEST, value: '0x2386f26fc10000' }) }) },
     ])
     const a = relay({ rpcUrls: { 'eip155:8453': 'https://custom-rpc.test' } })
     const ctx = makeCtx({ fetch, destination: { type: 'crypto', chain: 'eip155:8453', token: '0x0000000000000000000000000000000000000000', address: DEST } })
@@ -752,11 +752,36 @@ describe('relay live API', () => {
   }, 30_000)
 })
 
+/** Fake JSON-RPC answer: the receipt, a block mined `ageSec` ago, or `other` for any other method. */
+function rpcReply(method: string, receipt: unknown, other: unknown, ageSec = 0): unknown {
+  if (method === 'eth_getTransactionReceipt') return receipt
+  if (method === 'eth_getBlockByNumber') return { timestamp: `0x${Math.floor(Date.now() / 1000 - ageSec).toString(16)}` }
+  return other
+}
+
 describe('relay same-chain tx reuse', () => {
+  it('a transaction mined before the payment started cannot complete it', async () => {
+    const TX = `0x${'ac'.repeat(32)}`
+    const log = { address: USDC['eip155:8453']!, topics: [TRANSFER, `0x${'0'.repeat(64)}`, `0x${'0'.repeat(24)}${DEST.slice(2).toLowerCase()}`], data: `0x${(12_500_000n).toString(16).padStart(64, '0')}` }
+    const pay = async (ageSec: number) => {
+      const { fetch } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ result: rpcReply((c.body as { method: string }).method, { status: '0x1', blockNumber: '0x10', logs: [log] }, null, ageSec) }) }])
+      const a = relay()
+      const ctx = makeCtx({ fetch, shared: memoryKV() })
+      const q = await a.quote({ leg: walletLeg, amountIn: { amount: '12.5', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER }, deliverTo: { address: DEST } }, ctx)
+      const step = await a.start({ leg: walletLeg, quote: q }, ctx)
+      await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
+      return a.status!({ leg: walletLeg, ref: step.ref! }, ctx)
+    }
+    // An old transfer of the same amount to the same (shared) address
+    expect(await pay(24 * 3600)).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED', message: 'The transaction was sent before this payment started.' } })
+    expect(await pay(0)).toMatchObject({ state: 'COMPLETED' })
+  })
+
+
   it('one transaction hash completes one payment only', async () => {
     const TX = `0x${'ab'.repeat(32)}`
     const log = { address: USDC['eip155:8453']!, topics: [TRANSFER, `0x${'0'.repeat(64)}`, `0x${'0'.repeat(24)}${DEST.slice(2).toLowerCase()}`], data: `0x${(12_500_000n).toString(16).padStart(64, '0')}` }
-    const { fetch } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: () => ({ result: { status: '0x1', logs: [log] } }) }])
+    const { fetch } = fakeFetch([{ method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ result: rpcReply((c.body as { method: string }).method, { status: '0x1', blockNumber: '0x10', logs: [log] }, null) }) }])
     const shared = memoryKV()
     const a = relay()
     const pay = async () => {
