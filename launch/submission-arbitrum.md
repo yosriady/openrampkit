@@ -81,3 +81,25 @@ Open core. The kit is free and self-hosted. Revenue comes from:
 2. Settlement for cross-chain Relay routes and onramp routes, so fiat lands directly in the contract.
 3. Arbitrum One deployment behind a multisig owner, with an external review of the contract.
 4. The hosted version in beta.
+
+## HackQuest form fields (each 300 characters or fewer)
+
+**Link to frontend/UI/website**
+
+https://yosriady.github.io/openrampkit/playground/ (live demo, mock providers). Docs: https://yosriady.github.io/openrampkit/
+
+**Core Protocol / Smart Contract Addresses**
+
+OpenRampSettlement on Arbitrum Sepolia: [0x...] (verified on Arbiscan). OpenRampSettlement on Robinhood Chain testnet: [0x...]. Source and tests: https://github.com/yosriady/openrampkit/tree/main/contracts
+
+**Factory / Pool Contracts**
+
+Not applicable. OpenRampKit has no factory or pool contracts. One settlement contract per chain.
+
+**Token Contract Address**
+
+Not applicable. OpenRampKit has no token. Settlement uses existing USDC (Arbitrum Sepolia: 0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d).
+
+**Which parts of your code have been produced during the Buildathon?**
+
+All of it. The first commit is on 29 September 2026, after the start on 14 September: the contract, server, 11 adapters, UI, SDKs, MCP server and tests. Git history: https://github.com/yosriady/openrampkit/commits/main
