@@ -11,6 +11,7 @@
   "dependencies": {
     "@openrampkit/adapter-mock": "workspace:*",
     "@openrampkit/adapter-relay": "workspace:*",
+    "@openrampkit/adapter-xendit": "workspace:*",
     "@openrampkit/client": "workspace:*",
     "@openrampkit/core": "workspace:*",
     "@openrampkit/react": "workspace:*",
@@ -24,10 +25,10 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "viem": "^2.30.0",
-    "wagmi": "^2.15.0",
-    "@openrampkit/adapter-xendit": "workspace:*"
+    "wagmi": "^2.15.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.55.0",
     "@types/node": "^22.10.0",
     "@types/react": "^19.1.0",

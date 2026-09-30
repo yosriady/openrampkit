@@ -70,9 +70,9 @@ export const lightColors: ThemeColors = {
   border: 'rgba(15, 23, 42, 0.10)',
   text: '#0F172A',
   textSecondary: '#475467',
-  textMuted: '#8A94A6',
-  success: '#12805C',
-  successSoft: 'rgba(18, 128, 92, 0.12)',
+  textMuted: '#5F6B7F',
+  success: '#0A6A4B',
+  successSoft: 'rgba(10, 106, 75, 0.12)',
   danger: '#C8322B',
   dangerSoft: 'rgba(200, 50, 43, 0.10)',
   warning: '#9A5B00',
@@ -92,7 +92,7 @@ export const darkColors: ThemeColors = {
   border: 'rgba(255, 255, 255, 0.09)',
   text: '#F2F4F7',
   textSecondary: '#B4BBC7',
-  textMuted: '#7D8594',
+  textMuted: '#8B93A2',
   success: '#3DD68C',
   successSoft: 'rgba(61, 214, 140, 0.14)',
   danger: '#FF6B61',
@@ -150,7 +150,13 @@ export function themeVariables(theme: Theme | undefined, appearance: Appearance 
   const colors: ThemeColors = {
     ...base,
     ...(theme?.accent
-      ? { accent: theme.accent, focus: theme.accent, accentSoft: soft(theme.accent, mode === 'dark' ? 0.16 : 0.1), accentText: readableText(theme.accent) ?? base.accentText }
+      ? {
+          accent: theme.accent,
+          // The focus ring needs 3:1 against the card (WCAG 1.4.11). Keep the default ring when the accent is too faint.
+          focus: (contrastRatio(theme.accent, base.background) ?? 3) >= 3 ? theme.accent : base.focus,
+          accentSoft: soft(theme.accent, mode === 'dark' ? 0.16 : 0.1),
+          accentText: readableText(theme.accent) ?? base.accentText,
+        }
       : {}),
     ...(theme?.accentText ? { accentText: theme.accentText } : {}),
     ...theme?.colors,
@@ -180,8 +186,8 @@ function soft(color: string, alpha: number): string {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`
 }
 
-/** Black or white text for a hex background, by relative luminance. Undefined when the color is not hex. */
-function readableText(color: string): string | undefined {
+/** Relative luminance (WCAG) of a hex color. Undefined when the color is not hex. */
+function luminance(color: string): number | undefined {
   const m = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(color.trim())
   if (!m) return undefined
   let hex = m[1]!
@@ -191,6 +197,20 @@ function readableText(color: string): string | undefined {
     const c = v / 255
     return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
   }
-  const l = 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255)
+  return 0.2126 * lin((n >> 16) & 255) + 0.7152 * lin((n >> 8) & 255) + 0.0722 * lin(n & 255)
+}
+
+/** WCAG contrast ratio of two hex colors. Undefined when one of them is not hex. */
+export function contrastRatio(a: string, b: string): number | undefined {
+  const la = luminance(a)
+  const lb = luminance(b)
+  if (la === undefined || lb === undefined) return undefined
+  return (Math.max(la, lb) + 0.05) / (Math.min(la, lb) + 0.05)
+}
+
+/** Black or white text for a hex background, by relative luminance. Undefined when the color is not hex. */
+function readableText(color: string): string | undefined {
+  const l = luminance(color)
+  if (l === undefined) return undefined
   return l > 0.4 ? '#0B0D12' : '#FFFFFF'
 }

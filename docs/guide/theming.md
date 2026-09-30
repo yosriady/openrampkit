@@ -28,7 +28,7 @@ autoTheme({ accent: '#12805C', radius: 'medium', fontFamily: 'Inter, sans-serif'
 | `fontFamily` | `string` | System UI stack | Body font |
 | `colors` | `Partial<ThemeColors>` | | Overrides for any color. With `autoTheme` they apply to both modes. |
 
-When `accent` is a hex color, the theme also derives `accentSoft` (a transparent tint) and `focus`.
+When `accent` is a hex color, the theme also derives `accentSoft` (a transparent tint) and `focus`. The focus ring uses the accent only when it has at least 3:1 contrast with the card background. Otherwise it keeps the default ring, so keyboard focus stays visible. Text on soft accent backgrounds (selected chips, badges) uses the text color, so any accent keeps text readable.
 
 The radius scales are:
 

@@ -113,8 +113,15 @@ describe('withdraw: to wallet screens', () => {
     expect(h.$('.target-summary')!.textContent).toMatch(/^To 0x2222.*2222 on Arbitrum$/)
     expect(h.$$('.chip').map((c) => c.textContent?.trim())).toEqual(['25%', '50%', 'Max'])
     expect(h.$$('[role="radio"]')).toHaveLength(0) // no pay-with picker for withdrawals
-    await h.type(h.$<HTMLInputElement>('.amount-input')!, '41')
+    const amountInput = h.$<HTMLInputElement>('.amount-input')!
+    expect(amountInput.getAttribute('aria-invalid')).toBe('false')
+    expect(amountInput.getAttribute('aria-describedby')).toBe('ork-amount-balance')
+    await h.type(amountInput, '41')
     expect(h.button(/Continue|Enter an amount/).disabled).toBe(true)
+    // Over the balance: said in text, not only in color, and tied to the input
+    expect(amountInput.getAttribute('aria-invalid')).toBe('true')
+    expect(amountInput.getAttribute('aria-describedby')).toBe('ork-amount-balance ork-amount-error')
+    expect(h.$('#ork-amount-error')!.textContent).toBe('This is more than your balance.')
     await h.click(h.$$('.chip')[2]!)
     expect(h.c.getSnapshot().amount).toBe('40')
     await h.type(h.$<HTMLInputElement>('.amount-input')!, '25')

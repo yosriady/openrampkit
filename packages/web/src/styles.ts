@@ -139,6 +139,11 @@ export const styles = css`
     * {
       transition: none !important;
     }
+    .row:active:not(:disabled),
+    .btn:active:not(:disabled),
+    .icon-btn:active {
+      transform: none;
+    }
   }
 
   /* header */
@@ -335,13 +340,7 @@ export const styles = css`
     margin-top: 2px;
     font-size: 13px;
     color: var(--ork-color-text-secondary);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .row-sub.reason,
-  .row-sub.wrap {
-    white-space: normal;
+    overflow-wrap: anywhere;
   }
   .row-end {
     flex: none;
@@ -370,7 +369,7 @@ export const styles = css`
     font-weight: 650;
     line-height: 16px;
     background: var(--ork-color-accent-soft);
-    color: var(--ork-color-accent);
+    color: var(--ork-color-text);
   }
   .badge.success {
     background: var(--ork-color-success-soft);
@@ -456,7 +455,7 @@ export const styles = css`
   .chip[aria-pressed='true'] {
     border-color: var(--ork-color-accent);
     background: var(--ork-color-accent-soft);
-    color: var(--ork-color-accent);
+    color: var(--ork-color-text);
   }
 
   .field-label {
@@ -481,6 +480,14 @@ export const styles = css`
     background: var(--ork-color-surface);
     color: var(--ork-color-text);
     font: inherit;
+  }
+  select.input {
+    -webkit-appearance: none;
+    appearance: none;
+    padding-right: 34px;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238B93A2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
   }
   .input:focus {
     border-color: var(--ork-color-accent);
@@ -763,13 +770,13 @@ export const styles = css`
   .dot.succeeded {
     background: var(--ork-color-success);
     border-color: var(--ork-color-success);
-    color: #fff;
+    color: var(--ork-color-background);
   }
   .dot.processing,
   .dot.awaiting_user {
     background: var(--ork-color-accent-soft);
     border-color: var(--ork-color-accent);
-    color: var(--ork-color-accent);
+    color: var(--ork-color-text);
   }
   .dot.failed,
   .dot.expired {
@@ -818,5 +825,41 @@ export const styles = css`
     clip: rect(0, 0, 0, 0);
     white-space: nowrap;
     border: 0;
+  }
+
+  /* Touch targets: at least 44 by 44 px on phones and touch screens */
+  @media (pointer: coarse), (max-width: 479px) {
+    .header {
+      grid-template-columns: 44px 1fr 44px;
+    }
+    .icon-btn {
+      width: 44px;
+      height: 44px;
+    }
+    .tab,
+    .chip,
+    .btn.ghost {
+      min-height: 44px;
+    }
+    .copy-btn {
+      min-width: 44px;
+      min-height: 44px;
+      padding: 6px 14px;
+    }
+    .checkbox {
+      min-height: 44px;
+    }
+    .amount-input {
+      min-width: 44px;
+    }
+  }
+
+  /* Windows high contrast: keep the selected state visible without background colors */
+  @media (forced-colors: active) {
+    .tab[aria-selected='true'],
+    .chip[aria-pressed='true'],
+    .row[aria-checked='true'] {
+      outline: 2px solid Highlight;
+    }
   }
 `

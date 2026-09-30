@@ -35,6 +35,7 @@ export const vi: Messages = {
   minMax: (min, max) => (min && max ? `Tối thiểu ${min}, tối đa ${max}` : min ? `Tối thiểu ${min}` : max ? `Tối đa ${max}` : ''),
   continue: 'Tiếp tục',
   enterAmount: 'Nhập số tiền',
+  overBalance: 'Số tiền vượt quá số dư của bạn.',
 
   quotesTitle: 'Chọn báo giá',
   transferTitle: 'Chuyển tiền mã hóa',
@@ -72,6 +73,7 @@ export const vi: Messages = {
   redirectHint: (provider) => `Bạn sẽ hoàn tất bước này trên ${provider}. Hãy quay lại đây khi xong.`,
   redirectWaiting: (provider) => `Đang chờ ${provider}. Vui lòng giữ cửa sổ này mở.`,
   openAgain: 'Mở lại',
+  opensInNewTab: 'mở trong thẻ mới',
   iframeTitle: (provider) => `Thanh toán ${provider}`,
   iframeClosed: 'Cửa sổ thanh toán đã đóng',
   iframeClosedBody: 'Mở lại để hoàn tất thanh toán, hoặc chọn phương thức khác.',

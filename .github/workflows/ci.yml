@@ -111,7 +111,7 @@ jobs:
           OPENRAMP_MOCK: '1'
           OPENRAMP_SECRET: ci-secret-ci-secret-ci-secret-ci-secret
           PUBLIC_URL: http://localhost:3000
-        run: pnpm exec playwright test e2e/deposit.spec.ts e2e/withdraw.spec.ts
+        run: pnpm exec playwright test e2e/deposit.spec.ts e2e/withdraw.spec.ts e2e/a11y.spec.ts e2e/keyboard.spec.ts e2e/locales.spec.ts
       - name: Run playground browser tests (static build, desktop and Pixel 7)
         if: success() || failure()
         working-directory: examples/playground

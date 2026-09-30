@@ -36,6 +36,7 @@ export const th: Messages = {
   minMax: (min, max) => (min && max ? `ขั้นต่ำ ${min} สูงสุด ${max}` : min ? `ขั้นต่ำ ${min}` : max ? `สูงสุด ${max}` : ''),
   continue: 'ดำเนินการต่อ',
   enterAmount: 'กรอกจำนวนเงิน',
+  overBalance: 'จำนวนนี้มากกว่ายอดคงเหลือของคุณ',
 
   quotesTitle: 'เลือกข้อเสนอราคา',
   transferTitle: 'โอนคริปโต',
@@ -73,6 +74,7 @@ export const th: Messages = {
   redirectHint: (provider) => `คุณจะทำขั้นตอนนี้ให้เสร็จบน ${provider} แล้วกลับมาที่นี่เมื่อเสร็จ`,
   redirectWaiting: (provider) => `กำลังรอ ${provider} โปรดเปิดหน้าต่างนี้ไว้`,
   openAgain: 'เปิดอีกครั้ง',
+  opensInNewTab: 'เปิดในแท็บใหม่',
   iframeTitle: (provider) => `หน้าชำระเงิน ${provider}`,
   iframeClosed: 'หน้าต่างชำระเงินถูกปิด',
   iframeClosedBody: 'เปิดอีกครั้งเพื่อชำระเงินให้เสร็จ หรือเลือกวิธีอื่น',

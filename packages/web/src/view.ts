@@ -61,6 +61,12 @@ export function liveText(s: Snapshot | undefined, error: OrkError | undefined, m
     const legs = step.progress?.legs.map((l, i) => `${i + 1}. ${l.provider ?? titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
     return [m.stepTitle[step.state] ?? '', ...legs].join('. ')
   }
+  if (s.screen === 'result' && s.session) {
+    const state = s.session.step.state
+    const withdraw = s.direction === 'withdraw'
+    if (state === 'COMPLETED') return withdraw ? m.withdrawSuccessTitle : m.successTitle
+    return withdraw && state === 'FAILED' ? m.withdrawFailedTitle : m.failedTitle[state] ?? m.failedBody
+  }
   return ''
 }
 

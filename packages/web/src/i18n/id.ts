@@ -35,6 +35,7 @@ export const id: Messages = {
   minMax: (min, max) => (min && max ? `Min ${min}, maks ${max}` : min ? `Minimal ${min}` : max ? `Maksimal ${max}` : ''),
   continue: 'Lanjutkan',
   enterAmount: 'Masukkan jumlah',
+  overBalance: 'Jumlah ini melebihi saldo Anda.',
 
   quotesTitle: 'Pilih penawaran',
   transferTitle: 'Transfer kripto',
@@ -72,6 +73,7 @@ export const id: Messages = {
   redirectHint: (provider) => `Anda akan menyelesaikan langkah ini di ${provider}. Kembali ke sini setelah selesai.`,
   redirectWaiting: (provider) => `Menunggu ${provider}. Jangan tutup jendela ini.`,
   openAgain: 'Buka lagi',
+  opensInNewTab: 'terbuka di tab baru',
   iframeTitle: (provider) => `Pembayaran ${provider}`,
   iframeClosed: 'Jendela pembayaran ditutup',
   iframeClosedBody: 'Buka lagi untuk menyelesaikan pembayaran, atau pilih metode lain.',
