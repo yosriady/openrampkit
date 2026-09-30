@@ -25,6 +25,16 @@ export type Endpoint = { asset: Asset; location: Location }
 
 export type ContractCall = { to: string; data: string; value?: string }
 
+/**
+ * An OpenRampSettlement contract (see `contracts/` in the repo) on the destination chain.
+ * The payment goes through the contract: it records the session id on chain, pays `address`,
+ * and runs the destination `calls` (if any) in the same transaction.
+ */
+export type SettlementTarget = {
+  /** The OpenRampSettlement contract address, on the destination chain */
+  contract: string
+}
+
 export type Destination =
   | {
       type: 'crypto'
@@ -33,8 +43,14 @@ export type Destination =
       address: string
       symbol?: string
       decimals?: number
-      /** Not supported yet (planned): contract calls after delivery. The server rejects sessions that set it. */
+      /**
+       * Contract calls after delivery, e.g. an ERC-4626 `deposit(amount, address)`. Needs `settlement`:
+       * the settlement contract runs them atomically, with an allowance of the settled amount to each
+       * `to` (which must be on the contract's allowlist). `value` must be absent: no native value.
+       */
       calls?: ContractCall[]
+      /** Settle through an OpenRampSettlement contract. Only pathways whose last leg supports it are offered. */
+      settlement?: SettlementTarget
     }
   | { type: 'merchant'; currency: string; accountRef?: string }
   /** Withdraw to cash: the user's own bank or e-wallet account, paid out in `currency` */
@@ -124,7 +140,8 @@ export type LegSpec = {
   eta: { min: number; max: number }
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods'>
+  /** `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`) */
+  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement'>
 }
 
 export type Fee = {

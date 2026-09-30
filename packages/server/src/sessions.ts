@@ -1,4 +1,6 @@
+import { isEvmAddress, settlementCallsFrom } from '@openrampkit/adapter'
 import { OrkException, isTerminal, orkError } from '@openrampkit/core'
+import type { Destination } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
@@ -69,9 +71,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   const expiresAt = now + (input.ttlMinutes ?? 30) * 60_000
   const direction = input.direction ?? 'deposit'
   if (direction !== 'deposit' && direction !== 'withdraw') throw new OrkException(orkError('BAD_REQUEST', { message: '`direction` must be "deposit" or "withdraw".' }), 400)
-  if (input.destination?.type === 'crypto' && input.destination.calls?.length) {
-    throw new OrkException(orkError('BAD_REQUEST', { message: 'Contract calls after delivery (`destination.calls`) are not supported yet.' }), 400)
-  }
+  if (input.destination?.type === 'crypto') checkSettlement(input.destination)
   if (direction === 'deposit' && !input.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'A deposit session needs `destination`.' }), 400)
   if (direction === 'withdraw' && input.destination) {
     throw new OrkException(orkError('BAD_REQUEST', { message: 'A withdraw session takes `source`, not `destination`: the user picks the target.' }), 400)
@@ -105,6 +105,23 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   await trackOpenSession(rt, rec.id)
   await notify(rt, rec, 'session.created')
   return { id, clientSecret: `${id}.${secret}`, expiresAt: new Date(expiresAt).toISOString() }
+}
+
+/**
+ * `destination.calls` run inside an OpenRampSettlement contract, so they need `destination.settlement`.
+ * The settlement contract must be on an EVM destination chain, and the recipient an EVM address.
+ */
+function checkSettlement(d: Extract<Destination, { type: 'crypto' }>): void {
+  const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  if (!d.settlement) {
+    if (d.calls?.length) throw bad('Contract calls after delivery (`destination.calls`) need `destination.settlement`.')
+    return
+  }
+  if (!d.chain.startsWith('eip155:')) throw bad('`destination.settlement` needs an EVM destination chain.')
+  if (!isEvmAddress(d.settlement.contract)) throw bad('`destination.settlement.contract` must be a contract address.')
+  if (!isEvmAddress(d.address)) throw bad('A settlement destination needs an EVM `address` (the recipient).')
+  if (!isEvmAddress(d.token)) throw bad('A settlement destination needs an ERC-20 `token` (not the native token).')
+  settlementCallsFrom(d.calls)
 }
 
 /** Load a session from a `Bearer <id>.<secret>` header. Expires an open session past its deadline. */
