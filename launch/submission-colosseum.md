@@ -16,7 +16,7 @@ We also ask to be considered for the **Public Goods Award**: MIT licence, self-h
 
 ## One line
 
-The open-source money layer for every app: pay with a card, a bank transfer or a local rail (Pix, UPI, SEPA, VietQR, QRIS, PromptPay and more), and receive stablecoins on Solana, Tempo or any EVM chain. Southeast Asia is our first market.
+Open-source, unified deposit infrastructure for crypto apps. Solving the onboarding chasm of getting billions of users onchain. The RainbowKit for onramps and deposits: pay with a card, a bank transfer or a local rail (Pix, UPI, SEPA, VietQR, QRIS and more), and receive stablecoins on Solana, Tempo or any EVM chain.
 
 ## Insight (why now)
 

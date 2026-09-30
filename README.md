@@ -1,6 +1,6 @@
 # OpenRampKit
 
-RainbowKit for money movement. An open-source deposit and withdraw kit: one modal (a web component that works in any framework), a server you host yourself, and provider adapters that anyone can write.
+The RainbowKit for onramps and deposits. Open-source, unified deposit infrastructure for crypto apps, to get billions of users onchain with the way they already pay. It also does withdrawals. The kit has one modal (a web component that works in any framework), a server you host yourself, and provider adapters that anyone can write.
 
 - **Open and self-hosted.** MIT. Your provider keys, your server, no platform fee.
 - **Any destination.** A token on any chain (crypto apps), or your own fiat account (any app).

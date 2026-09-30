@@ -8,7 +8,9 @@ OpenRampKit
 
 ## Tagline (one line)
 
-Fiat in, onchain action out: pay with VietQR, QRIS or PromptPay and land in an Arbitrum vault in one step.
+The RainbowKit for onramps and deposits: open-source, unified deposit infrastructure that gets users onchain.
+
+Alternative for the Arbitrum angle: Fiat in, onchain action out: pay with VietQR, QRIS or PromptPay and land in an Arbitrum vault in one step.
 
 ## Tracks
 
