@@ -8,8 +8,25 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, fetchJson, httpErrorToOrk, randomHex, topicAddress } from '@openrampkit/adapter'
-import type { AdapterContext, EvmReceipt, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import {
+  ERC20_TRANSFER_TOPIC,
+  POLL,
+  awaitPoll,
+  buildSettlementTxs,
+  createAdapter,
+  erc20PaidTo,
+  erc20TransferData,
+  evmRpc,
+  fetchJson,
+  hashSettlementCalls,
+  httpErrorToOrk,
+  randomHex,
+  settlementCallsFrom,
+  settlementIntentTypedData,
+  topicAddress,
+  verifySettlement,
+} from '@openrampkit/adapter'
+import type { AdapterContext, EvmReceipt, Logger, QuoteInput, SettlementIntent, SettlementIntentTypedData, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
   OrkException,
@@ -44,6 +61,14 @@ export type RelayOptions = {
    * for production. A chain without an RPC URL cannot use same-chain moves.
    */
   rpcUrls?: Record<string, string>
+  /**
+   * Signs the EIP-712 intent for a settlement contract that has an `intentSigner` (destination
+   * `settlement`). Return the signature, e.g. from viem `signTypedData` or a KMS. Leave it out when
+   * the contract has no intent signer.
+   */
+  signSettlementIntent?: (typedData: SettlementIntentTypedData) => Promise<string>
+  /** Seconds a signed settlement intent stays valid. Default 1800. */
+  settlementIntentTtlSec?: number
 }
 
 /** Public RPCs for on-chain verification. Rate-limited: use your own in production. */
@@ -53,6 +78,8 @@ export const DEFAULT_RPC_URLS: Record<string, string> = {
   'eip155:42161': 'https://arb1.arbitrum.io/rpc',
   'eip155:10': 'https://mainnet.optimism.io',
   'eip155:137': 'https://polygon-rpc.com',
+  'eip155:421614': 'https://sepolia-rollup.arbitrum.io/rpc',
+  'eip155:46630': 'https://rpc.testnet.chain.robinhood.com',
 }
 
 export const RELAY_SOLANA_CHAIN_ID = 792703809
@@ -212,7 +239,18 @@ function requestIdOf(q: RelayQuoteResponse): string | undefined {
 
 // ---------------- stored state ----------------
 
-type WalletRecord = { mode: 'relay' | 'direct'; requestId?: string; txHash?: string; output?: Amount; chain?: string; token?: string; recipient?: string; amountBase?: string }
+type WalletRecord = {
+  mode: 'relay' | 'direct'
+  requestId?: string
+  txHash?: string
+  output?: Amount
+  chain?: string
+  token?: string
+  recipient?: string
+  amountBase?: string
+  /** Direct payment through an OpenRampSettlement contract: its address, the calls hash and the start block */
+  settlement?: { contract: string; callsHash: string; fromBlock: string }
+}
 type DepositRecord = { address: string; since: number; mode: 'relay' | 'direct'; output?: Amount; chain?: string; token?: string; fromBlock?: string }
 
 export function relay(opts: RelayOptions = {}) {
@@ -269,6 +307,15 @@ export function relay(opts: RelayOptions = {}) {
       ...(opts.referrer ? { referrer: opts.referrer } : {}),
       ...(opts.appFee && opts.appFee.bps > 0 ? { appFees: [{ recipient: opts.appFee.recipient, fee: String(Math.round(opts.appFee.bps)) }] } : {}),
     }
+  }
+
+  /** The settlement contract of the destination, when this leg delivers to the destination itself */
+  function settlementOf(ctx: AdapterContext, deliverTo?: { address: string }): { contract: string } | undefined {
+    const d = ctx.destination
+    if (d.type !== 'crypto' || !d.settlement) return undefined
+    // A hop leg delivers to the next leg's deposit address, not to the destination.
+    if (deliverTo?.address && deliverTo.address.toLowerCase() !== d.address.toLowerCase()) return undefined
+    return d.settlement
   }
 
   function recipientOf(ctx: AdapterContext, deliverTo?: { address: string }): string {
@@ -390,7 +437,8 @@ export function relay(opts: RelayOptions = {}) {
       eta: { min: 5, max: 60 },
       surfaces: ['WALLET_TX'],
       requires: ['wallet'],
-      capabilities: ['polling'],
+      // `settlement`: same chain and token only (approve + settle on the destination chain)
+      capabilities: ['polling', 'settlement'],
     },
     {
       id: 'transfer',
@@ -432,7 +480,14 @@ export function relay(opts: RelayOptions = {}) {
     const originMeta = withMeta(origin, inDec)
     const legEta = legs[0]!.eta
 
-    // Same chain and token: a plain transfer, no Relay.
+    const settling = settlementOf(ctx, input.deliverTo)
+    if (settling && !sameAsset(origin.chain, origin.token, dest.chain, dest.token)) {
+      throw new OrkException(
+        orkError('BAD_REQUEST', { message: `This payment settles on ${chainName(dest.chain)}. Pay with ${dest.symbol ?? 'the destination token'} on ${chainName(dest.chain)}.`, recovery: 'choose_other' }),
+      )
+    }
+
+    // Same chain and token: a plain transfer (or a settlement contract call), no Relay.
     if (sameAsset(origin.chain, origin.token, dest.chain, dest.token)) {
       const amount = input.amountIn?.amount ?? input.amountOut?.amount ?? '0'
       return {
@@ -583,6 +638,86 @@ export function relay(opts: RelayOptions = {}) {
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
   }
 
+  /**
+   * Same chain and token, through an OpenRampSettlement contract: the wallet approves the contract and
+   * calls `settle`. The contract records the session id, so the leg is verified by session id, not by tx hash.
+   */
+  async function startSettlement(
+    input: StartInput,
+    ctx: AdapterContext,
+    p: { contract: string; chainId: number; recipient: string; amountBase: string },
+  ): Promise<LegStep> {
+    const origin = cryptoAsset(input.quote.input, 'input')
+    const calls = settlementCallsFrom(ctx.destination.type === 'crypto' ? ctx.destination.calls : undefined)
+    const amount = BigInt(p.amountBase)
+    let intent: SettlementIntent | undefined
+    if (opts.signSettlementIntent) {
+      const typed = settlementIntentTypedData({
+        chainId: p.chainId,
+        contract: p.contract,
+        sessionId: ctx.session.id,
+        token: origin.token,
+        recipient: p.recipient,
+        minAmount: amount,
+        calls,
+        deadline: BigInt(Math.floor(Date.now() / 1000) + (opts.settlementIntentTtlSec ?? 1800)),
+        ...(input.source?.address ? { payer: input.source.address } : {}),
+      })
+      intent = { payer: typed.message.payer, minAmount: amount, deadline: typed.message.deadline, signature: await opts.signSettlementIntent(typed) }
+    }
+    const txs = buildSettlementTxs({ chainId: p.chainId, contract: p.contract, sessionId: ctx.session.id, token: origin.token, amount, recipient: p.recipient, calls, ...(intent ? { intent } : {}) })
+    const fromBlock = await rpc<string>(ctx, origin.chain, 'eth_blockNumber', [])
+    const ref = `settle:${ctx.session.id}:${randomHex()}`
+    await ctx.store.put(
+      `w:${ref}`,
+      {
+        mode: 'direct',
+        output: input.quote.output,
+        chain: origin.chain,
+        token: origin.token,
+        recipient: p.recipient,
+        amountBase: p.amountBase,
+        settlement: { contract: p.contract, callsHash: hashSettlementCalls(calls), fromBlock },
+      } satisfies WalletRecord,
+      RECORD_TTL_SEC,
+    )
+    return payStep(origin.chain, txs, ref)
+  }
+
+  /** A settlement counts when the contract has a receipt for this session that pays the quoted amount. */
+  async function verifySettlementWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
+    const chain = rec.chain!
+    const s = rec.settlement!
+    const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
+    if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
+    const r = await verifySettlement({
+      rpcUrl: url,
+      contract: s.contract,
+      sessionId: ctx.session.id,
+      fetch: ctx.fetch,
+      log: ctx.log,
+      fromBlock: s.fromBlock,
+      expect: { token: rec.token!, recipient: rec.recipient!, minAmount: BigInt(rec.amountBase ?? '0'), callsHash: s.callsHash },
+    })
+    const fail = (message: string, txHash?: string): LegStep => ({
+      state: 'FAILED',
+      status: 'failed',
+      transitions: [],
+      error: orkError('DELIVERY_FAILED', { message }),
+      ref,
+      ...(txHash ? { txHash } : {}),
+    })
+    if (r.settled) {
+      if (!r.ok) return fail(r.problem!, r.record.txHash)
+      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref, txHash: r.record.txHash, ...(rec.output ? { output: rec.output } : {}) }
+    }
+    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
+    const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
+    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: rec.txHash }
+    if (receipt.status !== '0x1') return fail('The transaction failed on chain.', rec.txHash)
+    return fail('The transaction did not settle this session.', rec.txHash)
+  }
+
   /** Transfer to the destination itself (same chain and token): find ERC20 Transfer logs to it since the start block. */
   async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
     if (!rec.chain || !rec.token || !rec.fromBlock || isNative(rec.chain, rec.token)) return undefined
@@ -610,6 +745,8 @@ export function relay(opts: RelayOptions = {}) {
       const recipient = String(data.recipient)
       const amountBase = String(data.amountBase)
       const chainId = evmChainId(origin.chain)!
+      const settling = settlementOf(ctx, input.deliverTo)
+      if (settling) return startSettlement(input, ctx, { contract: settling.contract, chainId, recipient, amountBase })
       const tx: TxRequest = isNative(origin.chain, origin.token)
         ? { to: recipient, value: amountBase, chainId }
         : { to: origin.token, data: erc20TransferData(recipient, amountBase), chainId }
@@ -756,6 +893,7 @@ export function relay(opts: RelayOptions = {}) {
       const { legId } = input.leg
       if (legId === 'wallet') {
         const rec = await ctx.store.get<WalletRecord>(`w:${input.ref}`)
+        if (rec?.mode === 'direct' && rec.settlement) return verifySettlementWallet(ctx, input.ref, rec)
         if (rec?.mode === 'direct') {
           // Same-chain transfer: the wallet's tx hash is checked on chain before the leg counts.
           if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }

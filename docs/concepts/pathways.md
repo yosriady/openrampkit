@@ -39,7 +39,8 @@ For a deposit, your backend sets the destination when it creates the session. Fo
 
 ```ts
 type Destination =
-  | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number; calls?: ContractCall[] }
+  | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number;
+      calls?: ContractCall[]; settlement?: { contract: string } }
   | { type: 'merchant'; currency: string; accountRef?: string }
   | { type: 'fiat'; currency: string } // withdraw to cash
 ```
@@ -50,7 +51,7 @@ The planner turns it into the target endpoint:
 - merchant: `{ asset: { kind: 'fiat', currency }, location: { kind: 'merchant_account' } }`
 - fiat: `{ asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } }`
 
-`calls` is reserved for contract calls after delivery. No adapter uses it yet.
+`settlement` sends the payment through an on-chain settlement contract, and `calls` runs contract calls after delivery (for example a vault deposit). `calls` needs `settlement`. See [On-chain settlement](./settlement.md).
 
 ## Leg specs
 

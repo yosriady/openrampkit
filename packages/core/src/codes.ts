@@ -110,7 +110,7 @@ export const DEFAULT_METHOD_PRIORITY: Record<string, string[]> = {
   '*': ['apple_pay', 'card', 'google_pay', 'sepa', 'bank_transfer'],
 }
 
-export type ChainInfo = { id: string; chainId?: number; name: string; nativeSymbol: string }
+export type ChainInfo = { id: string; chainId?: number; name: string; nativeSymbol: string; /** True for test networks */ testnet?: boolean }
 
 export const CHAINS: Record<string, ChainInfo> = {
   'eip155:1': { id: 'eip155:1', chainId: 1, name: 'Ethereum', nativeSymbol: 'ETH' },
@@ -121,6 +121,11 @@ export const CHAINS: Record<string, ChainInfo> = {
   'eip155:56': { id: 'eip155:56', chainId: 56, name: 'BNB Chain', nativeSymbol: 'BNB' },
   'eip155:143': { id: 'eip155:143', chainId: 143, name: 'Monad', nativeSymbol: 'MON' },
   'eip155:999': { id: 'eip155:999', chainId: 999, name: 'HyperEVM', nativeSymbol: 'HYPE' },
+  // Robinhood Chain (Arbitrum Orbit L2). Source: docs.robinhood.com/chain/connecting
+  'eip155:4663': { id: 'eip155:4663', chainId: 4663, name: 'Robinhood Chain', nativeSymbol: 'ETH' },
+  // Test networks
+  'eip155:421614': { id: 'eip155:421614', chainId: 421614, name: 'Arbitrum Sepolia', nativeSymbol: 'ETH', testnet: true },
+  'eip155:46630': { id: 'eip155:46630', chainId: 46630, name: 'Robinhood Chain Testnet', nativeSymbol: 'ETH', testnet: true },
   'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp': { id: 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp', name: 'Solana', nativeSymbol: 'SOL' },
 }
 
@@ -141,4 +146,7 @@ export const USDC: Record<string, string> = {
   'eip155:42161': '0xaf88d065e77c8cc2239327c5edb3a432268e5831',
   'eip155:10': '0x0b2c639c533813f4aa9d7837caf62653d097ff85',
   'eip155:137': '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  // Circle testnet USDC on Arbitrum Sepolia (developers.circle.com/stablecoins/usdc-contract-addresses)
+  'eip155:421614': '0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d',
+  // TODO: Robinhood Chain (4663) and its testnet (46630): Circle lists no USDC deployment yet.
 }

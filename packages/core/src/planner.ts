@@ -272,6 +272,15 @@ export function planPathways(input: PlannerInput): PlanResult {
   const priority = (policy.methodPriority ?? {})[user.country ?? ''] ??
     DEFAULT_METHOD_PRIORITY[user.country ?? ''] ?? DEFAULT_METHOD_PRIORITY['*']!
 
+  // A settlement destination needs a last leg that can pay into the settlement contract.
+  if (destination.type === 'crypto' && destination.settlement) {
+    for (const c of candidates) {
+      if (!c.reason && !c.specs[c.specs.length - 1]!.capabilities?.includes('settlement')) {
+        c.reason = orkError('PROVIDER_UNAVAILABLE', { message: 'This method cannot pay into the settlement contract.', recovery: 'choose_other' })
+      }
+    }
+  }
+
   const pathways: Pathway[] = []
   const byMethod = new Map<string, Pathway[]>()
   for (const c of candidates) {

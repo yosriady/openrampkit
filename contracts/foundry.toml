@@ -1,0 +1,35 @@
+[profile.default]
+src = "src"
+test = "test"
+script = "script"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.28"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 10_000
+bytecode_hash = "none"
+remappings = [
+  "@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/",
+  "forge-std/=lib/forge-std/src/",
+]
+
+[profile.default.fuzz]
+runs = 1024
+
+[profile.ci.fuzz]
+runs = 4096
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = false
+int_types = "long"
+quote_style = "double"
+number_underscore = "thousands"
+
+[rpc_endpoints]
+anvil = "http://127.0.0.1:8545"
+arbitrum_sepolia = "https://sepolia-rollup.arbitrum.io/rpc"
+arbitrum = "https://arb1.arbitrum.io/rpc"
+robinhood_testnet = "https://rpc.testnet.chain.robinhood.com"

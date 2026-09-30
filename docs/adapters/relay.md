@@ -22,7 +22,9 @@ relay({
 | `appFee` | `{ bps: number; recipient: string }` | none | Your fee in basis points. It accrues as a claimable balance at Relay. |
 | `referrer` | `string` | none | Relay `referrer`, for attribution |
 | `refundTo` | `'origin' \| string` | `'origin'` | Where Relay refunds failed deposit-address requests. `'origin'` turns on automatic refund to the original sender. |
-| `rpcUrls` | `Record<string, string>` | public RPCs for Ethereum, Base, Arbitrum, Optimism, Polygon | JSON-RPC URL per CAIP-2 chain. The adapter uses it to check same-chain, same-token moves on chain. Set your own in production: the public RPCs have rate limits. |
+| `rpcUrls` | `Record<string, string>` | public RPCs for Ethereum, Base, Arbitrum, Optimism, Polygon, Arbitrum Sepolia, Robinhood Chain Testnet | JSON-RPC URL per CAIP-2 chain. The adapter uses it to check same-chain, same-token moves on chain. Set your own in production: the public RPCs have rate limits. |
+| `signSettlementIntent` | `(typedData) => Promise<string>` | none | Signs the EIP-712 intent for a settlement contract that has an intent signer. See [On-chain settlement](../concepts/settlement.md). |
+| `settlementIntentTtlSec` | `number` | `1800` | How long a signed settlement intent stays valid, in seconds |
 
 ::: warning No API key
 Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24. The adapter logs a warning once. Set an API key.
@@ -71,6 +73,7 @@ When the source and the destination are the same token on the same chain, Relay 
 | Leg | Check |
 |---|---|
 | `wallet` | After `submit_tx`, the leg is `PROCESSING` (sub-state `confirming`) until the receipt exists (`eth_getTransactionReceipt`). The leg succeeds only when the transaction succeeded and paid the recipient at least the quoted amount: the value of a native transfer (`eth_getTransactionByHash`), or the sum of the token's `Transfer` logs to the recipient. Otherwise it fails with `DELIVERY_FAILED`. |
+| `wallet` with `destination.settlement` | The wallet sends `approve` and `settle` to the settlement contract. The adapter reads the contract receipt of the session (`eth_call`) and its `Settled` log (`eth_getLogs`). The leg succeeds when the token, the recipient, the amount and the calls agree with the quote. It does not need the transaction hash. See [On-chain settlement](../concepts/settlement.md). |
 | `transfer` | At start, the adapter records the current block (`eth_blockNumber`). Status looks for the token's `Transfer` logs to the destination since that block (`eth_getLogs`), and completes with their sum as the output. Native tokens are not detected: the leg stays in `PAYMENT`. |
 
 ::: warning What the check does not cover
