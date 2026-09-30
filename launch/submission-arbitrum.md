@@ -1,0 +1,83 @@
+# Arbitrum Open House Singapore: submission draft
+
+Fill the items in [brackets] before you submit. Due 4 October 2026.
+
+## Project name
+
+OpenRampKit
+
+## Tagline (one line)
+
+Fiat in, onchain action out: pay with VietQR, QRIS or PromptPay and land in an Arbitrum vault in one step.
+
+## Tracks
+
+- Open category
+- Promising Products (new financial primitive, agent-ready ramps)
+- Robinhood Chain (the contract is also on Robinhood Chain testnet)
+
+## Short description (about 100 words)
+
+OpenRampKit is an open-source (MIT), self-hosted kit that lets any app take money in and pay money out. It targets Southeast Asia, where people pay with local QR rails, not cards. One component shows VietQR, QRIS, PromptPay, DuitNow, QR Ph and PayNow next to cards and wallets. A planner picks the best pathway at run time across 11 provider adapters. The new `OpenRampSettlement` contract on Arbitrum settles each session once, verifies it by event, and runs an allowlisted call bundle in the same transaction. So a user can pay in local currency and get a vault position on Arbitrum.
+
+## Problem
+
+- In Vietnam, Indonesia, Thailand, Malaysia and the Philippines, most people pay with a bank app and a national QR code. Card-first ramps fail them.
+- Each ramp provider covers only a few local methods. An app that wants SEA users must integrate many providers, and handle KYC hand-offs, webhooks, retries and refunds.
+- After the money arrives, the user must still do more steps onchain (bridge, approve, deposit). Each step loses users.
+
+## Solution
+
+1. **One component.** A web component with React, Vue, Svelte and Solid wrappers. It is translated to Vietnamese, Indonesian, Thai, Malay and Filipino.
+2. **Pathway planner.** It chooses one or two legs at run time, for example "VietQR to USDC, then Relay to Arbitrum". Every leg shows its quote, fee and status.
+3. **Self-hosted server.** A single web-standard handler that runs on Cloudflare Workers with Durable Objects. It has signed sessions, idempotency, signed webhooks with retries, and a background sweep.
+4. **OpenRampSettlement (new, on Arbitrum).** A contract that:
+   - settles each session id at most once (replay-safe receipts),
+   - forwards funds to the user and can run an allowlisted call bundle atomically (for example an ERC-4626 vault deposit),
+   - can require an EIP-712 intent signed by the server, so a payer cannot redirect funds,
+   - lets the server verify a payment by reading one `Settled` event, not by trusting a transaction hash.
+5. **Agent-ready ramps (new).** An MCP server lets an AI agent create a session and send a person a signed pay link. The person pays by QR on a phone, and the agent acts when the payment completes. Guardrails: allowlisted destinations and amount caps.
+
+## What is new in this buildathon
+
+The project started on 29 September 2026. All code was written in the buildathon period. [Link to the commit history.]
+
+## How it uses Arbitrum
+
+- `OpenRampSettlement` is deployed on Arbitrum Sepolia: [address, Arbiscan link].
+- It is also deployed on Robinhood Chain testnet: [address, explorer link].
+- Arbitrum One is a default destination and a Relay RPC target. The Relay adapter builds the `approve` and `settle` calls, then verifies the settlement onchain.
+
+## Smart contract quality
+
+- Solidity 0.8.28 with OpenZeppelin 5.1: `Ownable2Step`, `Pausable`, `ReentrancyGuardTransient`, `EIP712`, `SignatureChecker` (EOA and ERC-1271). No proxy, no upgrade path.
+- The receipt is written before any external call. The allowance is reset to zero after each call. A balance invariant stops a call bundle from spending funds that do not belong to the session. Fee-on-transfer tokens are rejected.
+- 45 unit and fuzz tests (4096 runs in CI) and 3 invariant tests. There is a gas snapshot. A settle with a vault deposit costs about 236k gas.
+- The TypeScript encoding matches `cast calldata` byte for byte. An Anvil test deploys the real contract and settles with an intent signed by `eth_signTypedData_v4`.
+
+## Links
+
+- Repo: https://github.com/yosriady/openrampkit [make public]
+- Live demo: https://yosriady.github.io/openrampkit/playground/
+- Docs: https://yosriady.github.io/openrampkit/
+- Settlement docs: https://yosriady.github.io/openrampkit/concepts/settlement
+- Demo video: [link]
+- Pitch deck: [link]
+
+## Team
+
+[Name, role, background. Why you: payments or SEA experience.]
+
+## Business model
+
+Open core. The kit is free and self-hosted. Revenue comes from:
+
+- a hosted version (managed routing, analytics, compliance screening),
+- routing share from providers for volume that we send them.
+
+## Next 90 days (milestones for the 50% milestone payout)
+
+1. Live pilots with 2 Arbitrum apps in Vietnam and Indonesia.
+2. Settlement for cross-chain Relay routes and onramp routes, so fiat lands directly in the contract.
+3. Arbitrum One deployment behind a multisig owner, with an external review of the contract.
+4. The hosted version in beta.
