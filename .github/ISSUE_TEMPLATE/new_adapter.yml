@@ -1,0 +1,56 @@
+name: New adapter request
+description: Ask for a provider adapter (onramp, offramp, bridge, aggregator or wallet).
+labels: ["adapter"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read [Writing an adapter](https://openrampkit-getformo.vercel.app/adapters/writing-an-adapter) first. Anyone can write an adapter and test it with the conformance kit.
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      description: Name and website.
+      placeholder: Acme Ramp (https://acme.example)
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind
+      multiple: true
+      options:
+        - fiat onramp
+        - fiat offramp (payouts)
+        - bridge or swap
+        - aggregator
+        - merchant payments (fiat in)
+        - wallet adapter
+    validations:
+      required: true
+  - type: textarea
+    id: methods
+    attributes:
+      label: Payment methods and countries
+      description: Which methods (for example VietQR, Pix, SEPA Instant) in which countries? Which chains and tokens?
+    validations:
+      required: true
+  - type: textarea
+    id: api
+    attributes:
+      label: API and docs
+      description: Links to the API reference, the sandbox, the webhook docs and the KYC hand-off (redirect, iframe or SDK).
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why this provider
+      description: What does it add that the current adapters do not cover? Better coverage, lower fees, a local method?
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution
+      options:
+        - label: I can write this adapter.
+        - label: I have sandbox access to this provider.

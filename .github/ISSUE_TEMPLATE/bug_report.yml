@@ -1,0 +1,74 @@
+name: Bug report
+description: Something does not work as the docs say.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for the report. For a security problem, do not use this form. Read SECURITY.md and use private vulnerability reporting.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Tell us what you saw. Paste the error, the `OrkError` code, or a screenshot.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The smallest steps or code that shows the problem. A playground link with query parameters helps.
+      placeholder: |
+        1. Open the playground with country VN
+        2. Click Use Cash, then VietQR
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - core
+        - server
+        - client
+        - web component (modal)
+        - react / vue / svelte / solid wrapper
+        - adapter
+        - wallet adapter (wagmi / solana)
+        - mcp
+        - contracts
+        - docs or playground
+        - other
+    validations:
+      required: true
+  - type: input
+    id: adapter
+    attributes:
+      label: Adapter id (if any)
+      placeholder: relay, swapped, coinbase, mock, ...
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: Package versions, runtime (Node, Workers, Bun, Deno, browser), framework and session store.
+      placeholder: |
+        @openrampkit/server 0.0.1
+        Next.js 15 on Vercel, redisStore
+        Chrome 140
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I removed secrets (API keys, client secrets, webhook secrets) from this report.
+          required: true
