@@ -1,0 +1,18 @@
+[
+  {"id": "01-title", "text": "This is OpenRampKit. Unified deposits and withdrawals for any app. The RainbowKit for onramps and deposits."},
+  {"id": "02-intro", "text": "It is open-source deposit infrastructure for crypto apps. It solves the onboarding chasm: getting billions of users onchain. This playground runs the real server in your browser, with mock providers."},
+  {"id": "03-vn", "text": "Our user is in Vietnam. Under Use Cash, they see local methods. They pick VietQR and enter five hundred thousand dong."},
+  {"id": "04-quotes", "text": "The pathway planner asks each provider for a quote. Three providers answer. The best price comes first."},
+  {"id": "05-qr", "text": "They scan the VietQR code with any banking app. In test mode, we simulate the payment."},
+  {"id": "06-webhook", "text": "Deposit complete. Your page gets widget events. Your backend gets a signed webhook, and the signature checks out."},
+  {"id": "07-us", "text": "Now a user in the United States. Card, Apple Pay and Google Pay are there. They pick card and compare quotes."},
+  {"id": "08-card", "text": "They type the test card number, the expiry and the CVC right in the widget. Then they pay with the test card."},
+  {"id": "09-exchange", "text": "Some users keep their funds on an exchange. From an exchange shows a deposit address, with the network and the token. They send USDC from their exchange account."},
+  {"id": "10-custom", "text": "You choose which payment sources to offer. Turn off card, and it is gone. Then match your brand with theme, corners and font."},
+  {"id": "11-withdraw", "text": "The same kit handles the way out. The user withdraws USDC to a bank account. They get a payout quote in local currency."},
+  {"id": "12-withdraw-done", "text": "They enter their bank details. Then they approve one transaction in their wallet, and the provider pays out in dong."},
+  {"id": "13-code", "text": "For developers, it is a few lines. Create a session on your server. Open the widget on your page."},
+  {"id": "14-explorer", "text": "Ten provider adapters, from card onramps to local rails. Self-hosted, next to your own backend."},
+  {"id": "15-settled", "text": "Settlement is onchain. OpenRampSettlement is live on Arbitrum Sepolia and Robinhood Chain testnet. One transaction emits a Settled event that your app can verify."},
+  {"id": "16-end", "text": "AI agents can use it too. Through MCP, an agent creates a pay link, and a person pays. OpenRampKit. MIT licensed. Get your users onchain."}
+]

@@ -21,3 +21,5 @@ launch/media/.env
 launch/pitch-video/node_modules/
 launch/pitch-video/renders/
 launch/pitch-video/assets/**/*.wav
+launch/media/.vo/
+launch/media/.video-*/
