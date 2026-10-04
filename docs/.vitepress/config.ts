@@ -22,16 +22,12 @@ export default withMermaid(
         // The playground is a separate static app, copied to `dist/playground/`. `target: '_self'` makes a full page load.
         { text: 'Live demo', link: '/playground/', target: '_self' },
         { text: 'Why?', link: '/guide/why' },
-        { text: 'Guide', link: '/guide/introduction' },
-        { text: 'Concepts', link: '/concepts/architecture' },
-        { text: 'Adapters', link: '/adapters/' },
-        { text: 'API', link: '/api/server' },
-        { text: 'Deploy', link: '/deploy/cloudflare-workers' },
+        { text: 'Getting started', link: '/guide/introduction' },
       ],
-      sidebar: {
-        '/guide/': [
+      sidebar: [
           {
             text: 'Getting started',
+            collapsed: false,
             items: [
               { text: 'Why OpenRampKit?', link: '/guide/why' },
               { text: 'Introduction', link: '/guide/introduction' },
@@ -52,10 +48,9 @@ export default withMermaid(
               { text: 'Live demo (playground)', link: '/guide/playground' },
             ],
           },
-        ],
-        '/concepts/': [
           {
             text: 'Concepts',
+            collapsed: true,
             items: [
               { text: 'Architecture', link: '/concepts/architecture' },
               { text: 'Flows (sequence diagrams)', link: '/concepts/flows' },
@@ -68,10 +63,9 @@ export default withMermaid(
               { text: 'On-chain settlement', link: '/concepts/settlement' },
             ],
           },
-        ],
-        '/adapters/': [
           {
             text: 'Adapters',
+            collapsed: true,
             items: [
               { text: 'Overview', link: '/adapters/' },
               { text: 'Relay', link: '/adapters/relay' },
@@ -90,10 +84,9 @@ export default withMermaid(
               { text: 'Writing an adapter', link: '/adapters/writing-an-adapter' },
             ],
           },
-        ],
-        '/api/': [
           {
             text: 'API reference',
+            collapsed: true,
             items: [
               { text: '@openrampkit/server', link: '/api/server' },
               { text: 'HTTP routes', link: '/api/http' },
@@ -107,10 +100,9 @@ export default withMermaid(
               { text: '@openrampkit/adapter', link: '/api/adapter' },
             ],
           },
-        ],
-        '/deploy/': [
           {
             text: 'Deploy',
+            collapsed: true,
             items: [
               { text: 'Cloudflare Workers', link: '/deploy/cloudflare-workers' },
               { text: 'Host the docs and playground', link: '/deploy/docs-site' },
@@ -120,8 +112,7 @@ export default withMermaid(
               { text: 'Production checklist', link: '/deploy/checklist' },
             ],
           },
-        ],
-      },
+      ],
       socialLinks: [{ icon: 'github', link: 'https://github.com/yosriady/openrampkit' }],
       search: { provider: 'local' },
       editLink: { pattern: 'https://github.com/yosriady/openrampkit/edit/main/docs/:path' },
