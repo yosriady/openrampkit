@@ -141,6 +141,19 @@ In the modal, "To wallet" shows methods of kind `crypto` or `exchange` (for exam
 
 A deposit-only leg does not show up in a withdrawal, and an offramp leg does not show up in a deposit: offramp legs start from crypto and end in a `user_account`.
 
+## Crypto from an exchange
+
+The method `exchange_transfer` ("From an exchange") is for a user who sends crypto from an exchange account, for example Binance, Coinbase or OKX. It works like `transfer`:
+
+- The leg uses the `DEPOSIT_ADDRESS` surface. The user sends any amount to the address.
+- The user selects the network and the token to send from. The widget does not ask for an amount.
+- Its kind is `exchange`. Thus, the modal shows it under "Use Crypto", and the planner never makes it the recommended cash method.
+- The widget tells the user to withdraw from the exchange on the network that the address shows.
+
+`isAddressTransfer(method)` from `@openrampkit/core` is true for `transfer` and `exchange_transfer` (see `ADDRESS_TRANSFER_METHODS`).
+
+An adapter offers it in the `methods` of a leg with the `DEPOSIT_ADDRESS` surface. The mock adapter offers it with `exchange: true`. The method `exchange` ("Connect exchange") is a different method: it is for a flow where the user connects an exchange account (for example with OAuth). OpenRampKit does not have that flow yet. It is future work.
+
 ## Grouping
 
 The planner groups pathways by method and gives each method one group:

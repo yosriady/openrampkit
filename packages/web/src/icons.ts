@@ -33,6 +33,7 @@ const MOBILE_MONEY = new Set(['mpesa', 'mobile_money'])
 
 export function methodIcon(kind: string, method: string) {
   if (method === 'transfer') return icons.transfer
+  if (method === 'exchange_transfer') return icons.exchange
   if (INSTANT_BANK.has(method)) return icons.bankInstant
   if (MOBILE_MONEY.has(method)) return icons.mobileMoney
   switch (kind) {

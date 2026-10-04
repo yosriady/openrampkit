@@ -27,3 +27,11 @@ Check a session on chain:
 cast call 0xBF66696115128B8f9f794780061348b4213A7132 'isSettled(bytes32)(bool)' \
   $(cast format-bytes32-string ors_demo_vault) --rpc-url https://sepolia-rollup.arbitrum.io/rpc
 ```
+
+## More test settlements (4 October 2026, Arbitrum Sepolia)
+
+| Session | What | Transaction |
+|---|---|---|
+| `ors_judge_1` | 10 test USDC to the recipient | [0x01530a08…](https://sepolia.arbiscan.io/tx/0x01530a08f45b72dc9f0d0ea9ec20cdeb32c741ef7e1be1effb2953c2346c34e1) |
+| `ors_judge_2` | 20 test USDC to the recipient | [0x309cded7…](https://sepolia.arbiscan.io/tx/0x309cded7220c35d848eee938814747dcc1b17b7e64f53c1bd07a7428e0d6dcf7) |
+| `ors_judge_vault` | 15 test USDC into the vault, same transaction | [0xb105917d…](https://sepolia.arbiscan.io/tx/0xb105917d84e20c60129f0ea43c7f3453a1f194f7360cefa53574c18c8892b5ab) |

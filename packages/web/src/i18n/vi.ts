@@ -39,6 +39,7 @@ export const vi: Messages = {
 
   quotesTitle: 'Chọn báo giá',
   transferTitle: 'Chuyển tiền mã hóa',
+  exchangeTitle: 'Gửi từ sàn giao dịch',
   sendFrom: 'Gửi từ',
   network: 'Mạng',
   token: 'Token',
@@ -84,6 +85,7 @@ export const vi: Messages = {
   expiresIn: (time) => `Hết hạn sau ${time}`,
   expired: 'Đã hết hạn',
   depositAddressHint: (symbol, chain) => `Gửi ${symbol} trên mạng ${chain} đến địa chỉ này`,
+  exchangeHint: (symbol, chain) => `Gửi từ Binance, Coinbase, OKX hoặc bất kỳ sàn nào. Trên sàn, hãy rút ${symbol} và chọn mạng ${chain}.`,
   address: 'Địa chỉ',
   memo: 'Memo',
   minDeposit: (amount) => `Số tiền nạp tối thiểu: ${amount}`,

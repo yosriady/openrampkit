@@ -45,6 +45,7 @@ export const en = {
   // quotes
   quotesTitle: 'Choose a quote',
   transferTitle: 'Transfer crypto',
+  exchangeTitle: 'Send from an exchange',
   sendFrom: 'Send from',
   network: 'Network',
   token: 'Token',
@@ -91,6 +92,7 @@ export const en = {
   expiresIn: (time: string) => `Expires in ${time}`,
   expired: 'Expired',
   depositAddressHint: (symbol: string, chain: string) => `Send ${symbol} on ${chain} to this address`,
+  exchangeHint: (symbol: string, chain: string) => `Send from Binance, Coinbase, OKX or any exchange. In the exchange, withdraw ${symbol} and choose the ${chain} network.`,
   address: 'Address',
   memo: 'Memo',
   minDeposit: (amount: string) => `Minimum deposit: ${amount}`,

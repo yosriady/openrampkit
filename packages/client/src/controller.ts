@@ -2,7 +2,7 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
+import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
 import type {
   Direction,
   MethodOption,
@@ -372,7 +372,7 @@ export class RampController {
     if (!m || m.group === 'unavailable') return
     this.emit('method.selected', { method })
     this.set({ method: m, quotes: [], quoteErrors: [], error: undefined, selectedQuoteId: undefined })
-    if (method === 'transfer') {
+    if (isAddressTransfer(method)) {
       // No amount needed: the user sends any amount to a deposit address.
       this.set({ amount: '', screen: 'quotes' })
       return this.refreshQuotes()
@@ -391,7 +391,7 @@ export class RampController {
 
   setSource(source: NonNullable<Snapshot['source']>) {
     this.set({ source })
-    if (this.snap.method?.method === 'transfer' && this.snap.screen === 'quotes') void this.refreshQuotes()
+    if (isAddressTransfer(this.snap.method?.method) && this.snap.screen === 'quotes') void this.refreshQuotes()
   }
 
   /** Keeps digits and the first decimal point, so "1,000.50" becomes "1000.50". */
@@ -422,7 +422,7 @@ export class RampController {
         method: m.method,
         amount: this.snap.amount || '0',
         amountSide: this.snap.amountSide,
-        ...(this.snap.direction === 'deposit' && (m.method === 'wallet' || m.method === 'transfer') && this.snap.source
+        ...(this.snap.direction === 'deposit' && (m.method === 'wallet' || isAddressTransfer(m.method)) && this.snap.source
           ? { source: { chain: this.snap.source.chain, token: this.snap.source.token } }
           : {}),
       })
@@ -548,7 +548,7 @@ export class RampController {
   back() {
     const screen = this.snap.screen
     clearTimeout(this.quoteTimer)
-    if (screen === 'quotes') this.set({ screen: this.snap.method?.method === 'transfer' ? 'methods' : 'amount', error: undefined })
+    if (screen === 'quotes') this.set({ screen: isAddressTransfer(this.snap.method?.method) ? 'methods' : 'amount', error: undefined })
     else if (screen === 'amount') {
       const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto'
       this.set({ screen: toTarget ? 'target' : 'methods', error: undefined })

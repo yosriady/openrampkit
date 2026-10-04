@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { USDC, bps, cmp, fromBaseUnits, isRegionAllowed, planPathways, rankQuotes, roundTo, toBaseUnits, TRANSITION_TABLE, isTerminal } from './index.js'
+import { ADDRESS_TRANSFER_METHODS, METHODS, USDC, bps, isAddressTransfer, cmp, fromBaseUnits, isRegionAllowed, planPathways, rankQuotes, roundTo, toBaseUnits, TRANSITION_TABLE, isTerminal } from './index.js'
 import type { LegSpec, Quote } from './index.js'
 
 describe('money', () => {
@@ -100,5 +100,32 @@ describe('rankQuotes', () => {
     expect(r.map((x) => x.id)).toEqual(['b', 'a', 'c'])
     expect(r[0]!.badges).toEqual(['best_price'])
     expect(r[2]!.badges).toEqual(['fastest'])
+  })
+})
+
+describe('exchange_transfer method', () => {
+  it('is an exchange method that sends to a deposit address, like transfer', () => {
+    expect(METHODS.exchange_transfer).toEqual({ id: 'exchange_transfer', name: 'From an exchange', kind: 'exchange' })
+    expect(ADDRESS_TRANSFER_METHODS).toEqual(['transfer', 'exchange_transfer'])
+    expect(isAddressTransfer('exchange_transfer')).toBe(true)
+    expect(isAddressTransfer('transfer')).toBe(true)
+    expect(isAddressTransfer('exchange')).toBe(false)
+    expect(isAddressTransfer(undefined)).toBe(false)
+  })
+
+  it('is never the recommended cash method', () => {
+    const spec: LegSpec = {
+      id: 'x', kind: 'bridge_swap', methods: ['exchange_transfer'],
+      from: { asset: { kind: 'crypto', chains: '*' }, location: ['user_wallet'] },
+      to: { asset: { kind: 'crypto', chains: '*' }, location: ['address'] },
+      regions: { allow: ['*'], deny: [] }, eta: { min: 1, max: 2 }, surfaces: ['DEPOSIT_ADDRESS'],
+    }
+    const plan = planPathways({
+      direction: 'deposit',
+      destination: { type: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x000000000000000000000000000000000000beef' },
+      user: { country: 'VN' },
+      legs: [{ adapterId: 'm', provider: 'M', spec }],
+    })
+    expect(plan.methods).toEqual([expect.objectContaining({ method: 'exchange_transfer', kind: 'exchange', group: 'more', name: 'From an exchange' })])
   })
 })

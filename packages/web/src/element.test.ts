@@ -7,6 +7,7 @@ import { DepositController, createMockWallet } from '@openrampkit/client'
 import type { Destination, PublicSession, Surface, Transition, WalletAdapter } from '@openrampkit/core'
 import { USDC, orkError } from '@openrampkit/core'
 import { BASE, BASE_DEST, fakeClient, quote, session, setupServer, sleep, step, waitFor } from '../../client/src/testctx.js'
+import type { MockOptions } from '@openrampkit/adapter-mock'
 import { OpenRampModal, TAG_NAME, createDepositController, darkColors, defineOpenRampModal, lightColors } from './index.js'
 
 type Mounted = Awaited<ReturnType<typeof mount>>
@@ -60,8 +61,8 @@ function helpers(el: OpenRampModal) {
   return { root, $, $$, text, button, title, click, key, until, cashTab }
 }
 
-async function mount(opts: { country?: string; destination?: Destination; wallet?: WalletAdapter; embedded?: boolean; start?: boolean } = {}) {
-  const server = setupServer()
+async function mount(opts: { country?: string; destination?: Destination; wallet?: WalletAdapter; embedded?: boolean; start?: boolean; mock?: MockOptions } = {}) {
+  const server = setupServer(opts.mock)
   const s = await server.ramp.sessions.create({ userId: 'u', country: opts.country ?? 'US', destination: opts.destination ?? BASE_DEST })
   const events: string[] = []
   const c = createDepositController({
@@ -420,6 +421,25 @@ describe('payment steps (real server)', () => {
     await h.click(h.button('Simulate deposit'))
     await h.until(() => h.c.getSnapshot().screen === 'result')
     expect(h.$('.result-title')!.textContent).toBe('Deposit complete')
+  })
+
+  it('exchange_transfer: own title, exchange examples on the deposit address step, simulate deposit', async () => {
+    const h = await mount({ country: 'VN', mock: { settleMs: 0, crypto: true, bridge: true, exchange: true } })
+    h.c.setTab('crypto')
+    await settle(h.el)
+    expect(h.$('[data-method="exchange_transfer"]')!.textContent).toContain('From an exchange')
+    // The send-from picker has two sibling selects, which the happy-dom parser cannot render (see the transfer test above)
+    h.el.open = false
+    await settle(h.el)
+    await h.c.selectMethod('exchange_transfer')
+    await h.until(() => !h.c.getSnapshot().quotesLoading && h.c.getSnapshot().quotes.length > 0)
+    await h.c.confirm()
+    h.el.open = true
+    await settle(h.el)
+    expect(h.text()).toContain('Send from Binance, Coinbase, OKX or any exchange.')
+    expect(h.$('.notice.warning')!.textContent).toContain('In your exchange, withdraw')
+    await h.click(h.button('Simulate deposit'))
+    await h.until(() => h.c.getSnapshot().screen === 'result')
   })
 
   it('WALLET_TX step with createMockWallet: balance picker, chips, confirm in wallet, success', async () => {

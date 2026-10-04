@@ -31,6 +31,7 @@ export const METHODS: Record<string, MethodInfo> = {
   wallet: { id: 'wallet', name: 'Pay with wallet', kind: 'crypto' },
   transfer: { id: 'transfer', name: 'Transfer crypto', kind: 'crypto' },
   exchange: { id: 'exchange', name: 'Connect exchange', kind: 'exchange' },
+  exchange_transfer: { id: 'exchange_transfer', name: 'From an exchange', kind: 'exchange' },
   card: { id: 'card', name: 'Card', kind: 'card' },
   apple_pay: { id: 'apple_pay', name: 'Apple Pay', kind: 'wallet_pay' },
   google_pay: { id: 'google_pay', name: 'Google Pay', kind: 'wallet_pay' },
@@ -90,6 +91,17 @@ export const METHODS: Record<string, MethodInfo> = {
   mobile_money: { id: 'mobile_money', name: 'Mobile money', kind: 'ewallet' },
   astropay: { id: 'astropay', name: 'AstroPay', kind: 'ewallet' },
   alipay: { id: 'alipay', name: 'Alipay', kind: 'ewallet' },
+}
+
+/**
+ * Methods where the user sends crypto to a deposit address (surface DEPOSIT_ADDRESS), in any amount:
+ * `transfer` from their own wallet, `exchange_transfer` from an exchange account.
+ */
+export const ADDRESS_TRANSFER_METHODS = ['transfer', 'exchange_transfer']
+
+/** True for a method where the user sends crypto to a deposit address (see `ADDRESS_TRANSFER_METHODS`) */
+export function isAddressTransfer(method: string | undefined): boolean {
+  return !!method && ADDRESS_TRANSFER_METHODS.includes(method)
 }
 
 const EU = ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK']
