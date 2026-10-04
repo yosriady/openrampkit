@@ -8,6 +8,8 @@ Read [CONTRIBUTING.md](../CONTRIBUTING.md) before you start. Comment on the issu
 
 ## 1. Adapter: LI.FI for bridge and swap legs
 
+Issue: [#1](https://github.com/yosriady/openrampkit/issues/1)
+
 Labels: good first issue, help wanted, adapter
 
 ### Context
@@ -33,6 +35,8 @@ Today the Relay adapter is the only bridge and swap adapter. It runs the second 
 
 ## 2. Wallet adapter: Privy
 
+Issue: [#2](https://github.com/yosriady/openrampkit/issues/2)
+
 Labels: good first issue, help wanted, adapter
 
 ### Context
@@ -57,6 +61,8 @@ The modal pays from a connected wallet through a `WalletAdapter`. Today there ar
 
 ## 3. Example apps for Vue (Nuxt), Svelte (SvelteKit) and Solid (SolidStart)
 
+Issue: [#3](https://github.com/yosriady/openrampkit/issues/3)
+
 Labels: good first issue, help wanted, dx
 
 ### Context
@@ -79,6 +85,8 @@ Labels: good first issue, help wanted, dx
 ---
 
 ## 4. Accessibility: axe coverage for the BANK_FIELDS surface
+
+Issue: [#4](https://github.com/yosriady/openrampkit/issues/4)
 
 Labels: good first issue, help wanted
 
@@ -103,6 +111,8 @@ Labels: good first issue, help wanted
 ---
 
 ## 5. Withdraw: optional server-side balance check for user wallets
+
+Issue: [#5](https://github.com/yosriady/openrampkit/issues/5)
 
 Labels: good first issue, help wanted
 
@@ -130,6 +140,8 @@ For a withdraw session with `custody: 'user_wallet'`, the modal reads the wallet
 
 ## 6. Docs: API reference page for @openrampkit/solana
 
+Issue: [#6](https://github.com/yosriady/openrampkit/issues/6)
+
 Labels: good first issue, docs
 
 ### Context
@@ -152,6 +164,8 @@ Labels: good first issue, docs
 
 ## 7. Docs: full MCP config and CLI reference
 
+Issue: [#7](https://github.com/yosriady/openrampkit/issues/7)
+
 Labels: good first issue, docs
 
 ### Context
@@ -173,6 +187,8 @@ Labels: good first issue, docs
 ---
 
 ## 8. CI: bundle size budget for the browser packages
+
+Issue: [#8](https://github.com/yosriady/openrampkit/issues/8)
 
 Labels: good first issue, help wanted, dx
 
@@ -197,6 +213,8 @@ The modal ships to every user of an app, so its size matters. Today CI does not 
 
 ## 9. CI: nightly live provider checks
 
+Issue: [#9](https://github.com/yosriady/openrampkit/issues/9)
+
 Labels: good first issue, help wanted, dx
 
 ### Context
@@ -220,6 +238,8 @@ Unit tests use `fakeFetch`, so they do not see a change in a provider API. `pnpm
 ---
 
 ## 10. Spike: React Native package
+
+Issue: [#10](https://github.com/yosriady/openrampkit/issues/10)
 
 Labels: help wanted, dx
 
