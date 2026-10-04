@@ -223,6 +223,22 @@ contract OpenRampSettlementTest is Test {
         assertFalse(settlement.isSettled(SID));
     }
 
+    /// A standing approval to the contract cannot be used by another caller: funds come only from `msg.sender`.
+    function test_settle_pullsOnlyFromCaller() public {
+        address attacker = makeAddr("attacker");
+        uint256 payerBefore = usdc.balanceOf(payer);
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        s.recipient = attacker;
+        vm.prank(attacker);
+        vm.expectRevert(
+            abi.encodeWithSelector(IERC20Errors.ERC20InsufficientAllowance.selector, address(settlement), 0, AMOUNT)
+        );
+        settlement.settle(s, _noIntent());
+        assertEq(usdc.balanceOf(payer), payerBefore);
+        assertEq(usdc.balanceOf(attacker), 0);
+        assertFalse(settlement.isSettled(SID));
+    }
+
     function test_settle_rejectsFeeOnTransferToken() public {
         FeeOnTransferToken fee = new FeeOnTransferToken();
         fee.mint(payer, AMOUNT);

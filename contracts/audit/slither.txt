@@ -1,0 +1,48 @@
+# Slither 0.11.6, solc 0.8.28, forge 1.8.3
+# Run 1: all detectors, no exclusions. Only lib/, test/ and script/ are filtered.
+# Command: slither . --config-file <file with filter_paths and exclude_dependencies only>
+
+'forge clean' running (wd: contracts)
+'forge config --json' running
+'forge build --build-info --deny never --skip ./test/** ./script/** --force' running (wd: contracts)
+ERROR:ContractSolcParsing:Impossible to generate IR for OpenRampSettlement.constructor (lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol#66-75):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for OpenRampSettlement._EIP712Name (lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol#146-148):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for OpenRampSettlement._EIP712Version (lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol#157-159):
+ 'NoneType' object has no attribute 'parameters'
+INFO:Detectors:
+Detector: calls-loop
+OpenRampSettlement._deliver(OpenRampSettlement.Settlement,IERC20,uint256) (src/OpenRampSettlement.sol#312-333) has external calls inside a loop: (ok,reason) = target.call(c.data) (src/OpenRampSettlement.sol#325)
+	Calls stack containing the loop:
+		OpenRampSettlement.settle(OpenRampSettlement.Settlement,OpenRampSettlement.Intent)
+OpenRampSettlement._deliver(OpenRampSettlement.Settlement,IERC20,uint256) (src/OpenRampSettlement.sol#312-333) has external calls inside a loop: (ok,reason) = target.call(c.data) (src/OpenRampSettlement.sol#325)
+	Calls stack containing the loop:
+		OpenRampSettlement.settleFromBalance(OpenRampSettlement.Settlement,OpenRampSettlement.Intent)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation/#calls-inside-a-loop
+INFO:Detectors:
+Detector: timestamp
+OpenRampSettlement._checkAndRecord(OpenRampSettlement.Settlement,OpenRampSettlement.Intent,bool) (src/OpenRampSettlement.sol#277-308) uses timestamp for comparisons
+	Dangerous comparisons:
+	- block.timestamp > intent.deadline (src/OpenRampSettlement.sol#290)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#block-timestamp
+INFO:Detectors:
+Detector: low-level-calls
+Low level call in OpenRampSettlement._deliver(OpenRampSettlement.Settlement,IERC20,uint256) (src/OpenRampSettlement.sol#312-333):
+	- (ok,reason) = target.call(c.data) (src/OpenRampSettlement.sol#325)
+Reference: https://github.com/crytic/slither/wiki/Detector-Documentation#low-level-calls
+INFO:Slither:. analyzed (26 contracts with 102 detectors), 4 result(s) found
+
+# Run 2: with contracts/slither.config.json (the CI configuration)
+# Command: slither .
+
+'forge clean' running (wd: contracts)
+'forge config --json' running
+'forge build --build-info --deny never --skip ./test/** ./script/** --force' running (wd: contracts)
+ERROR:ContractSolcParsing:Impossible to generate IR for OpenRampSettlement.constructor (lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol#66-75):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for OpenRampSettlement._EIP712Name (lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol#146-148):
+ 'NoneType' object has no attribute 'parameters'
+ERROR:ContractSolcParsing:Impossible to generate IR for OpenRampSettlement._EIP712Version (lib/openzeppelin-contracts/contracts/utils/cryptography/EIP712.sol#157-159):
+ 'NoneType' object has no attribute 'parameters'
+INFO:Slither:. analyzed (26 contracts with 99 detectors), 0 result(s) found

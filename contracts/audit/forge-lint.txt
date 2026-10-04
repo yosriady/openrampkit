@@ -1,0 +1,78 @@
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/OpenRampSettlement.sol:353:49
+    │
+353 │         if (allowed && target.code.length == 0) revert NotAContract(target);
+    │                                                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/OpenRampSettlement.sol:181:9
+    │
+181 │         emit Settled(s.sessionId, msg.sender, s.recipient, s.token, s.amount, callsHash);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[incorrect-strict-equality]: dangerous strict equality check on an externally-influenced value
+    ╭▸ src/OpenRampSettlement.sol:178:13
+    │
+178 │         if (token.balanceOf(address(this)) != baseline + s.amount) revert UnsupportedToken(s.token);
+    │             ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/incorrect-strict-equality
+
+warning[reentrancy-events]: event emitted after an external call; reentrancy can reorder or fabricate logs that off-chain consumers rely on
+    ╭▸ src/OpenRampSettlement.sol:199:9
+    │
+199 │         emit Settled(s.sessionId, msg.sender, s.recipient, s.token, s.amount, callsHash);
+    │         ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/reentrancy-events
+
+warning[block-timestamp]: usage of `block.timestamp` in a comparison may be manipulated by validators
+    ╭▸ src/OpenRampSettlement.sol:290:17
+    │
+290 │             if (block.timestamp > intent.deadline) revert IntentExpired(intent.deadline);
+    │                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/block-timestamp
+
+warning[unsafe-typecast]: typecast can truncate values
+    ╭▸ src/OpenRampSettlement.sol:303:24
+    │
+303 │             settledAt: uint64(block.timestamp),
+    │                        ━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ├ note: consider disabling this lint if you're certain the cast is safe
+    │       
+    │       // casting to 'uint64' is safe because [explain why]
+    │       // forge-lint: disable-next-line(unsafe-typecast)
+    │       
+    │       
+    ╰ help: https://getfoundry.sh/forge/linting/unsafe-typecast
+
+warning[calls-loop]: external call inside a loop
+    ╭▸ src/OpenRampSettlement.sol:325:46
+    │
+325 │             (bool ok, bytes memory reason) = target.call(c.data);
+    │                                              ━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/calls-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/OpenRampSettlement.sol:322:17
+    │
+322 │                 revert TargetNotAllowed(target);
+    │                 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
+warning[require-revert-in-loop]: `require` or `revert` inside a loop
+    ╭▸ src/OpenRampSettlement.sol:326:22
+    │
+326 │             if (!ok) revert CallFailed(i, reason);
+    │                      ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    │
+    ╰ help: https://getfoundry.sh/forge/linting/require-revert-in-loop
+
