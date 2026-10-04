@@ -100,7 +100,14 @@ export const DEFAULT_DELIVER_ASSETS: MeldDeliverAsset[] = [
 
 /**
  * Meld `paymentMethod` code -> OpenRampKit method id. Unknown codes keep their lowercase name.
- * TO VERIFY: `UPI` and `BINANCE_PAY` codes (not in the docs; read them from the payment-methods endpoint).
+ * The quote API takes `paymentMethodType` as a free string; Meld lists the codes and their countries at
+ * https://www.meld.io/coverage/payment-methods (data: https://www.meld.io/api/network-partner/supported/payment-methods
+ * and .../supported/countries?paymentMethod=CODE, read 2026-10-04). Codes from that list: SEPA_INSTANT,
+ * UK_FASTER_PAYMENTS, FPS, OPEN_BANKING, IDEAL, BANCONTACT, SOFORT, BLIK (PL), PAYID (AU), SPEI and STP (MX),
+ * PSE, KHIPU, MPESA (KE), MOBILE_MONEY, IMPS (IN), ASTROPAY, PAYPAL, CASH_APP, ZELLE, VENMO, INTERAC,
+ * REVOLUT_PAY, REVOLUT, MERCADOPAGO.
+ * TO VERIFY: `UPI` (in the list, IN) and `BINANCE_PAY` (the list has BINANCE_P2P and BINANCE_CASH_BALANCE, not BINANCE_PAY).
+ * TO VERIFY: `MERCADO_PAGO` (older spelling; the list uses MERCADOPAGO, which is sent first).
  */
 export const MELD_METHOD_IDS: Record<string, string> = {
   CREDIT_DEBIT_CARD: 'card',
@@ -115,9 +122,30 @@ export const MELD_METHOD_IDS: Record<string, string> = {
   LOCAL_BANK_TRANSFER: 'bank_transfer',
   PAYPAL: 'paypal',
   VENMO: 'venmo',
+  CASH_APP: 'cash_app',
+  ZELLE: 'zelle',
   REVOLUT_PAY: 'revolut_pay',
+  REVOLUT: 'revolut',
+  MERCADOPAGO: 'mercadopago',
   MERCADO_PAGO: 'mercadopago',
   INTERAC: 'interac',
+  SEPA_INSTANT: 'sepa_instant',
+  UK_FASTER_PAYMENTS: 'faster_payments',
+  FPS: 'faster_payments',
+  OPEN_BANKING: 'open_banking',
+  IDEAL: 'ideal',
+  BANCONTACT: 'bancontact',
+  SOFORT: 'sofort',
+  BLIK: 'blik',
+  PAYID: 'payid',
+  SPEI: 'spei',
+  STP: 'spei',
+  PSE: 'pse',
+  KHIPU: 'khipu',
+  MPESA: 'mpesa',
+  MOBILE_MONEY: 'mobile_money',
+  IMPS: 'imps',
+  ASTROPAY: 'astropay',
 }
 
 export function meldMethodId(code: string): string {
@@ -129,16 +157,38 @@ export function meldCode(legId: string): string {
   return Object.entries(MELD_METHOD_IDS).find(([, id]) => id === legId)?.[0] ?? legId.toUpperCase()
 }
 
+const SEPA = ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK', 'NO', 'IS', 'LI', 'CH']
+/** Meld OPEN_BANKING countries (coverage list, 2026-10-04) */
+const OPEN_BANKING = ['AT', 'BE', 'BG', 'CY', 'CZ', 'DE', 'EE', 'ES', 'FI', 'FR', 'GB', 'GR', 'HR', 'HU', 'IE', 'IS', 'IT', 'LI', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'RO', 'SE', 'SI', 'SK']
+/** Meld MOBILE_MONEY countries (coverage list, 2026-10-04) */
+const MOBILE_MONEY = ['BD', 'BF', 'BJ', 'BW', 'CD', 'CG', 'CI', 'CM', 'DZ', 'EG', 'GA', 'GH', 'GM', 'ID', 'JO', 'KE', 'LR', 'ML', 'MW', 'PE', 'PH', 'PK', 'RW', 'SN', 'TG', 'TZ', 'UG', 'VN', 'ZM']
+const FAST = { min: 60, max: 1800 }
+const BANK_INSTANT = { min: 120, max: 3600 }
+
 /** Static legs, used when the catalog is not available. Countries follow core METHOD_COUNTRIES. */
 const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '*'; eta: { min: number; max: number } }> = [
-  { id: 'card', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'apple_pay', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'google_pay', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'upi', countries: ['IN'], currencies: ['INR'], eta: { min: 120, max: 3600 } },
-  { id: 'pix', countries: ['BR'], currencies: ['BRL'], eta: { min: 120, max: 3600 } },
-  { id: 'binance_pay', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'sepa', countries: ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK', 'NO', 'IS', 'LI', 'CH'], currencies: ['EUR'], eta: { min: 3600, max: 3 * 86400 } },
+  { id: 'card', currencies: '*', eta: FAST },
+  { id: 'apple_pay', currencies: '*', eta: FAST },
+  { id: 'google_pay', currencies: '*', eta: FAST },
+  { id: 'upi', countries: ['IN'], currencies: ['INR'], eta: BANK_INSTANT },
+  { id: 'pix', countries: ['BR'], currencies: ['BRL'], eta: BANK_INSTANT },
+  { id: 'binance_pay', currencies: '*', eta: FAST },
+  { id: 'sepa', countries: SEPA, currencies: ['EUR'], eta: { min: 3600, max: 3 * 86400 } },
   { id: 'ach', countries: ['US'], currencies: ['USD'], eta: { min: 3600, max: 5 * 86400 } },
+  { id: 'sepa_instant', countries: SEPA, currencies: ['EUR'], eta: BANK_INSTANT },
+  { id: 'faster_payments', countries: ['GB'], currencies: ['GBP'], eta: BANK_INSTANT },
+  { id: 'open_banking', countries: OPEN_BANKING, currencies: '*', eta: BANK_INSTANT },
+  { id: 'ideal', countries: ['NL'], currencies: ['EUR'], eta: BANK_INSTANT },
+  { id: 'bancontact', countries: ['BE'], currencies: ['EUR'], eta: BANK_INSTANT },
+  { id: 'blik', countries: ['PL'], currencies: ['PLN'], eta: BANK_INSTANT },
+  { id: 'payid', countries: ['AU'], currencies: ['AUD'], eta: BANK_INSTANT },
+  { id: 'interac', countries: ['CA'], currencies: ['CAD'], eta: BANK_INSTANT },
+  { id: 'spei', countries: ['MX'], currencies: ['MXN'], eta: BANK_INSTANT },
+  { id: 'pse', countries: ['CO'], currencies: ['COP'], eta: BANK_INSTANT },
+  { id: 'khipu', countries: ['CL'], currencies: ['CLP'], eta: BANK_INSTANT },
+  { id: 'imps', countries: ['IN'], currencies: ['INR'], eta: BANK_INSTANT },
+  { id: 'mpesa', countries: ['KE'], currencies: ['KES'], eta: BANK_INSTANT },
+  { id: 'mobile_money', countries: MOBILE_MONEY, currencies: '*', eta: BANK_INSTANT },
 ]
 
 const dec = decimalFrom

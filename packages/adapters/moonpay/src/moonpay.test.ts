@@ -55,6 +55,32 @@ describe('moonpay adapter', () => {
     expect(() => moonpay({ ...opts, methods: ['nope'] })).toThrow(/selects no known leg/)
   })
 
+  it('UK legs: Faster Payments and open banking (GBP, GB only), quoted and started with their MoonPay ids', async () => {
+    const a = moonpay(opts)
+    const fps = a.legs.find((l) => l.id === 'gbp_bank')!
+    const ob = a.legs.find((l) => l.id === 'gbp_open_banking')!
+    expect(fps.methods).toEqual(['faster_payments'])
+    expect(ob.methods).toEqual(['open_banking'])
+    for (const l of [fps, ob]) {
+      expect(l.from.asset).toEqual({ kind: 'fiat', currencies: ['GBP'] })
+      expect(isRegionAllowed(l.regions, 'GB')).toBe(true)
+      expect(isRegionAllowed(l.regions, 'DE')).toBe(false)
+    }
+    for (const [legId, pm] of [['gbp_bank', 'gbp_bank_transfer'], ['gbp_open_banking', 'gbp_open_banking_payment']] as const) {
+      const { fetch, calls } = fakeFetch([{ match: '/buy_quote', reply: () => ({ ...QUOTE, baseCurrencyCode: 'gbp' }) }])
+      const ctx = makeCtx({ fetch, session: { country: 'GB' } })
+      const gbp = { amount: '100', asset: { kind: 'fiat' as const, currency: 'GBP' } }
+      const q = await a.quote({ leg: leg(legId, BASE_USDC, 'GBP'), amountIn: gbp }, ctx)
+      const qp = new URL(calls[0]!.url).searchParams
+      expect(qp.get('paymentMethod')).toBe(pm)
+      expect(qp.get('baseCurrencyCode')).toBe('gbp')
+      const step = await a.start({ leg: leg(legId, BASE_USDC, 'GBP'), quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
+      const url = new URL(step.surface!.kind === 'REDIRECT' ? step.surface!.url.split('&signature=')[0]! : '')
+      expect(url.searchParams.get('paymentMethod')).toBe(pm)
+      expect(url.searchParams.get('baseCurrencyCode')).toBe('gbp')
+    }
+  })
+
   it('quote: GET buy_quote with fees included, maps amounts and fees', async () => {
     const { fetch, calls } = fakeFetch([{ match: '/buy_quote', reply: () => QUOTE }])
     const a = moonpay(opts)

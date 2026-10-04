@@ -25,7 +25,7 @@ Solving the onboarding chasm of getting billions of users onchain.
   </tr>
 </table>
 
-OpenRampKit gives your app one deposit and withdraw modal, a server that you host, and provider adapters that anyone can write. Withdrawals are supported too. Local payment methods are first class: VietQR, QRIS, PromptPay, QR Ph, PayNow and GCash sit next to cards, Pix, UPI and SEPA.
+OpenRampKit gives your app one deposit and withdraw modal, a server that you host, and provider adapters that anyone can write. Withdrawals are supported too. Local payment methods are first class: VietQR, QRIS, PromptPay, QR Ph, PayNow and GCash sit next to cards, Pix, UPI, SEPA Instant, Faster Payments, iDEAL, BLIK, SPEI, PSE, Interac and M-Pesa.
 
 > [!NOTE]
 > **Status: prototype.** Packages are at `0.0.1` and APIs will change. The [live demo](https://openrampkit-getformo.vercel.app/playground/) uses mock providers and moves no real money.
@@ -268,14 +268,14 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | Id | Package | What it does | Status |
 |---|---|---|---|
 | `relay` | [`adapter-relay`](packages/adapters/relay) | Pay with wallet, transfer to a deposit address, bridge hop, withdraw to any address | Working. Live check with `pnpm live:relay` (moves no money) |
-| `swapped` | [`adapter-swapped`](packages/adapters/swapped) | Card, Apple Pay, Google Pay, SEPA and SEA local methods (VietQR, MoMo, GCash, PromptPay and more). Payouts for withdrawals | Working. Status polling TO VERIFY |
-| `coinbase` | [`adapter-coinbase`](packages/adapters/coinbase) | Coinbase Onramp: card, Apple Pay, Google Pay | Working. Some details TO VERIFY |
-| `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI | Working. Some details TO VERIFY |
-| `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
+| `swapped` | [`adapter-swapped`](packages/adapters/swapped) | Card, Apple Pay, Google Pay, EUR bank transfer, SEA local methods (VietQR, MoMo, GCash and more), BLIK, SPEI, mobile money. Payouts for withdrawals | Working. Status polling TO VERIFY |
+| `coinbase` | [`adapter-coinbase`](packages/adapters/coinbase) | Coinbase Onramp: card, Apple Pay, Google Pay, ACH (US) | Working. Some details TO VERIFY |
+| `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE | Working. Some details TO VERIFY |
+| `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Faster Payments, pay by bank (UK), Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
 | `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |
 | `xendit` | [`adapter-xendit`](packages/adapters/xendit) | QRIS, QR Ph, PromptPay, PayNow and e-wallets into your own merchant account | Working. Merchant destination only |
-| `meld` | [`adapter-meld`](packages/adapters/meld) | Aggregator: card, UPI, Pix, SEPA, ACH, Binance Pay and more | New. In progress |
-| `onramper` | [`adapter-onramper`](packages/adapters/onramper) | Aggregator: card, SEPA, ACH, Pix, UPI and more | New. In progress |
+| `meld` | [`adapter-meld`](packages/adapters/meld) | Aggregator: card, UPI, Pix, SEPA, SEPA Instant, ACH, iDEAL, Bancontact, BLIK, PayID, SPEI, PSE, Khipu, M-Pesa, mobile money and more | New. In progress |
+| `onramper` | [`adapter-onramper`](packages/adapters/onramper) | Aggregator: card, SEPA, SEPA Instant, ACH, Pix, UPI, IMPS, iDEAL, Bancontact, Faster Payments, SPEI, Khipu and more | New. In progress |
 | `peer` | [`adapter-peer`](packages/adapters/peer) | P2P rails (zkp2p): Venmo, Cash App, Zelle, Chime, PayPal, Revolut, Wise | New. Opt-in (`enabled: true`); read the warning |
 | `mock` | [`adapter-mock`](packages/adapters/mock) | Every surface type, for dev, tests and the demo | Mock. Moves no money. Refuses live sessions |
 
@@ -309,12 +309,22 @@ The method vocabulary is in `packages/core/src/codes.ts`. Which methods a user s
 | Malaysia | DuitNow QR, Touch 'n Go, GrabPay | Swapped (Touch 'n Go, GrabPay); Xendit\* (Touch 'n Go, GrabPay). DuitNow QR: mock only today |
 | Singapore | PayNow | Xendit\* |
 | Brazil | Pix | Swapped, MoonPay, Meld, Onramper |
-| India | UPI | Swapped, Transak, Meld, Onramper |
-| Europe | SEPA | Swapped, Transak, MoonPay, Meld, Onramper |
-| United States | ACH, Venmo, Cash App, Zelle, Chime, PayPal | MoonPay, Stripe, Meld, Onramper (ACH); MoonPay (PayPal, Venmo); Peer, opt-in |
-| Canada | Interac | MoonPay |
+| India | UPI, IMPS | Swapped, Transak, Meld, Onramper (UPI); Meld, Onramper (IMPS) |
+| Euro countries | SEPA, SEPA Instant, pay by bank | Transak, MoonPay, Meld, Onramper (SEPA); Meld, Onramper (SEPA Instant); Transak, Meld, Onramper (pay by bank) |
+| Netherlands, Belgium | iDEAL, Bancontact | Meld, Onramper |
+| United Kingdom | Faster Payments, pay by bank | MoonPay, Transak, Meld, Onramper |
+| Poland | BLIK | Meld, Swapped |
+| United States | ACH, Venmo, Cash App, Zelle, Chime, PayPal | Coinbase, MoonPay, Stripe, Meld, Onramper (ACH); MoonPay (PayPal, Venmo); Peer, opt-in |
+| Canada | Interac | MoonPay, Meld, Onramper |
+| Mexico | SPEI | Meld, Onramper, Swapped |
+| Colombia | PSE, Bancolombia | Transak, Meld (PSE); Onramper (Bancolombia) |
+| Chile | Khipu | Meld, Onramper |
+| Australia | PayID | Meld |
+| Kenya and Africa | M-Pesa, mobile money | Meld (M-Pesa, mobile money); Swapped (mobile money in KE, ZM) |
 | Global | Card, Apple Pay, Google Pay | Swapped, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper |
 | Crypto | Pay with wallet, Transfer crypto | Relay |
+
+The [payment methods](https://openrampkit-getformo.vercel.app/concepts/payment-methods) page lists every method, its countries and the adapters that support it.
 
 \* Xendit pays into your own merchant account (a [merchant fiat destination](https://openrampkit-getformo.vercel.app/guide/merchant-destination)). Swapped, Transak, Meld and Onramper also read a live catalog, so the exact list per country can change.
 

@@ -177,11 +177,29 @@ The default priority per country (`DEFAULT_METHOD_PRIORITY`):
 | MY | duitnow, touchngo, fpx, grabpay, card |
 | PH | qrph, gcash, maya, instapay, card |
 | SG | paynow, card, apple_pay, google_pay |
-| IN | upi, card |
+| IN | upi, imps, card |
 | BR | pix, card, mercadopago |
 | CA | interac, card, apple_pay |
 | US | apple_pay, card, google_pay, ach, venmo, cash_app, zelle, paypal, chime |
-| other | apple_pay, card, google_pay, sepa, bank_transfer |
+| GB | apple_pay, card, google_pay, faster_payments, open_banking, revolut_pay, paypal, bank_transfer |
+| NL | ideal, apple_pay, card, sepa_instant, sepa, open_banking, google_pay, paypal |
+| BE | bancontact, apple_pay, card, sepa_instant, sepa, open_banking, google_pay, paypal |
+| DE | apple_pay, card, paypal, sepa_instant, sepa, open_banking, google_pay, sofort |
+| FR, ES, IT, IE, PT, AT, FI | apple_pay, card, google_pay, sepa_instant, sepa, open_banking, paypal, revolut_pay |
+| PL | blik, card, apple_pay, google_pay, open_banking, paypal |
+| TR | card, apple_pay, google_pay, bank_transfer |
+| MX | spei, card, apple_pay, google_pay, mercadopago, astropay |
+| CO | pse, bancolombia, card, apple_pay, google_pay, mercadopago, astropay |
+| CL | khipu, card, apple_pay, google_pay, mercadopago, astropay |
+| AR | mercadopago, card, khipu, astropay |
+| AU | payid, apple_pay, card, google_pay |
+| JP | card, apple_pay, google_pay |
+| KR | card, apple_pay, google_pay, bank_transfer |
+| KE | mpesa, mobile_money, card, apple_pay, google_pay |
+| NG | bank_transfer, card, mobile_money, apple_pay, google_pay |
+| ZA | card, apple_pay, google_pay, bank_transfer |
+| GH, UG, TZ, ZM, RW | mobile_money, card, apple_pay, google_pay |
+| other | apple_pay, card, google_pay, sepa_instant, sepa, open_banking, bank_transfer |
 
 Override it per country with `policy.methodPriority` in `createOpenRamp`.
 
@@ -204,7 +222,22 @@ Local methods are offered only where they exist (`METHOD_COUNTRIES`). A method t
 | interac | CA |
 | ach, venmo, cash_app, zelle, chime | US |
 | mercadopago | AR, BR, CL, CO, MX, PE, UY |
-| sepa | EU member states, NO, IS, LI, CH |
+| sepa, sepa_instant | Euro countries, NO, IS, LI, CH |
+| faster_payments | GB |
+| open_banking | GB and the EEA |
+| ideal | NL |
+| bancontact | BE |
+| sofort | AT, BE, CH, DE, ES, IT, NL, PL |
+| blik | PL |
+| imps | IN |
+| payid | AU |
+| spei | MX |
+| pse, bancolombia | CO |
+| khipu | CL, AR |
+| mpesa | KE |
+| mobile_money | 29 countries in Africa and Asia (for example GH, UG, TZ, ZM, RW, KE) |
+
+The [payment methods](./payment-methods.md) page lists each method with the adapters that support it.
 
 Region policies use ISO 3166-1 countries and ISO 3166-2 regions (`US-TX`). The most specific entry wins; on a tie, deny wins. An unknown country is allowed only when `*` is allowed and not denied.
 

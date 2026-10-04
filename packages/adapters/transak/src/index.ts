@@ -55,14 +55,24 @@ export const TRANSAK_NETWORKS: Record<string, string> = {
 }
 const USDC_TOKENS: Record<string, string> = { ...USDC, [SOLANA]: SOLANA_USDC }
 
-/** Transak payment method id -> OpenRampKit method id */
+/**
+ * Transak payment method id -> OpenRampKit method id.
+ * - `gbp_bank_transfer` is UK Faster Payments and `pm_open_banking` is open banking ("Easy Bank Transfer",
+ *   GBP and EUR). Both are in the live list GET https://api.transak.com/api/v2/currencies/fiat-currencies.
+ * - `pm_pse` (Colombia, COP) and `pm_astropay` (ARS, BRL, CLP, MXN, PEN, UYU) are in the example response of
+ *   https://docs.transak.com/api/public/get-fiat-currencies. TO VERIFY: they are not in the live list
+ *   without a partner key, so they may depend on the partner account.
+ * - Open banking countries: https://transak.notion.site/On-Ramp-Payment-Methods-Fees-Other-Details-b0761634feed4b338a69f4f186d906a5
+ */
 export const TRANSAK_METHOD_IDS: Record<string, string> = {
   credit_debit_card: 'card',
   apple_pay: 'apple_pay',
   google_pay: 'google_pay',
   sepa_bank_transfer: 'sepa',
-  gbp_bank_transfer: 'bank_transfer',
-  pm_open_banking: 'bank_transfer',
+  gbp_bank_transfer: 'faster_payments',
+  pm_open_banking: 'open_banking',
+  pm_pse: 'pse',
+  pm_astropay: 'astropay',
   pm_wire: 'bank_transfer',
   inr_upi: 'upi',
   pm_upi: 'upi',
@@ -80,7 +90,13 @@ const LEG_PAYMENT_METHOD: Record<string, string> = {
   google_pay: 'google_pay',
   // TO VERIFY: UPI method id (not in the public fiat list; partner-specific)
   upi: 'inr_upi',
+  faster_payments: 'gbp_bank_transfer',
+  open_banking: 'pm_open_banking',
+  pse: 'pm_pse',
 }
+
+/** Transak open banking countries (Transak fee table, see TRANSAK_METHOD_IDS) */
+const OPEN_BANKING_COUNTRIES = ['GB', 'IE', 'FR', 'DE', 'IT', 'ES', 'NL', 'EE', 'LV', 'LT', 'PT', 'BE', 'PL', 'DK']
 
 function bankTransferId(currency: string): string {
   if (currency === 'EUR') return 'sepa_bank_transfer'
@@ -223,8 +239,12 @@ export function transak(opts: TransakOptions) {
     leg('card', 'card'),
     leg('apple_pay', 'apple_pay'),
     leg('google_pay', 'google_pay'),
-    leg('bank_transfer', 'bank_transfer', { from: { asset: { kind: 'fiat', currencies: ['EUR', 'GBP', 'USD'] }, location: ['user_account'] }, eta: { min: 600, max: 3 * 24 * 3600 } }),
+    // GBP bank transfers are the `faster_payments` leg
+    leg('bank_transfer', 'bank_transfer', { from: { asset: { kind: 'fiat', currencies: ['EUR', 'USD'] }, location: ['user_account'] }, eta: { min: 600, max: 3 * 24 * 3600 } }),
     leg('upi', 'upi', { from: { asset: { kind: 'fiat', currencies: ['INR'] }, location: ['user_account'] }, regions: { allow: ['IN'], deny: [] } }),
+    leg('faster_payments', 'faster_payments', { from: { asset: { kind: 'fiat', currencies: ['GBP'] }, location: ['user_account'] }, regions: { allow: ['GB'], deny: [] }, eta: { min: 300, max: 86400 } }),
+    leg('open_banking', 'open_banking', { from: { asset: { kind: 'fiat', currencies: ['GBP', 'EUR'] }, location: ['user_account'] }, regions: { allow: OPEN_BANKING_COUNTRIES, deny: [] }, eta: { min: 120, max: 3600 } }),
+    leg('pse', 'pse', { from: { asset: { kind: 'fiat', currencies: ['COP'] }, location: ['user_account'] }, regions: { allow: ['CO'], deny: [] }, eta: { min: 120, max: 3600 } }),
   ]
 
   function paymentMethodFor(legId: string, currency: string): string {

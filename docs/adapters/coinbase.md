@@ -39,7 +39,9 @@ The adapter signs a CDP JWT for each call with WebCrypto (EdDSA or ES256). The h
 | `card` | `card` | `CARD` | USD, EUR, GBP, CAD, AUD, SGD, CHF | USDC on Base, Ethereum, Arbitrum, Optimism, Polygon, Solana |
 | `apple_pay` | `apple_pay` | `APPLE_PAY` | same | same |
 | `google_pay` | `google_pay` | `CARD` | same | same |
+| `ach` | `ach` | `ACH` (`ACH_BANK_ACCOUNT` in Buy Config) | USD | same. US only |
 
+- The `paymentMethod` values come from the [session API](https://docs.cdp.coinbase.com/api-reference/v2/rest-api/onramp/create-an-onramp-session) (`CARD`, `ACH`, `APPLE_PAY`, `PAYPAL`, `FIAT_WALLET`, `CRYPTO_WALLET`). ACH is US only and PayPal is sell only ([payment methods](https://docs.cdp.coinbase.com/onramp/additional-resources/payment-methods)), so there is no PayPal leg.
 - Regions: every country except `JP` ("available in all countries in which Coinbase operates except Japan").
 - Surface: `REDIRECT` to `pay.coinbase.com`.
 - Live catalog: `GET /onramp/v1/buy/config`, cached for a day, sets the countries per payment method. If no country lists any method (an unexpected format), the static legs stay.

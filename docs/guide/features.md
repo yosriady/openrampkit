@@ -39,6 +39,7 @@ See the [withdraw flow](../concepts/flows.md#withdraw).
 | Pathway planner | A pure function builds every one-leg and two-leg pathway to the destination | [The planner algorithm](../concepts/pathways.md#the-planner-algorithm) |
 | Method groups | Methods show as Connected, Most popular, Other options and Not available | [Grouping](../concepts/pathways.md#grouping) |
 | Country rules | Region policy per leg, local methods first per country | [Method country rules](../concepts/pathways.md#method-country-rules) |
+| Global payment methods | SEPA Instant, Faster Payments, pay by bank, iDEAL, Bancontact, BLIK, SPEI, PSE, Khipu, Interac, IMPS, PayID, M-Pesa and mobile money, next to cards, Apple Pay, Google Pay, ACH, Pix and UPI | [Payment methods](../concepts/payment-methods.md) |
 | Policy | `maxLegs`, `regions`, `methodPriority`, `disabledMethods`, `hopPreference` | [createOpenRamp](../api/server.md#createopenramp-config) |
 | Per-session method list | `allowedMethods` hides and blocks other methods | [Sessions](../concepts/sessions.md#creating-a-session) |
 | Amount bounds | A min and a max per session, enforced on quotes and on select | [Amount bounds](../api/server.md#amount-bounds) |

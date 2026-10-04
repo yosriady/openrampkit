@@ -119,7 +119,7 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 | `METHOD_COUNTRIES`, `methodAvailableIn(method, country)` | Where local methods exist |
 | `DEFAULT_METHOD_PRIORITY` | Default method order per country |
 | `COUNTRY_CURRENCY`, `currencyForCountry(country)` | Local currency (USD when unknown) |
-| `CURRENCY_MINOR_UNITS`, `minorUnits(currency)` | Minor units (IDR, VND, JPY, KRW: 0; default 2) |
+| `CURRENCY_MINOR_UNITS`, `minorUnits(currency)` | Minor units (IDR, VND, JPY, KRW, CLP, UGX, RWF: 0; default 2) |
 | `CHAINS`, `chainName(chain)`, `evmChainId(chain)` | Known chains (Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Monad, HyperEVM, Tempo, Tempo Testnet, Solana, Solana Devnet, Robinhood Chain, Arbitrum Sepolia, Robinhood Chain Testnet). See [Chains and tokens](../concepts/chains.md). |
 | `SOLANA_MAINNET`, `SOLANA_DEVNET`, `TEMPO_MAINNET`, `TEMPO_TESTNET` | CAIP-2 ids |
 | `isEvmChain(chain)`, `isSolanaChain(chain)`, `nativeDecimals(chain)` | Chain helpers |

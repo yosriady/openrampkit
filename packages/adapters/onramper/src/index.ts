@@ -95,7 +95,11 @@ export const DEFAULT_DELIVER_ASSETS: OnramperDeliverAsset[] = [
 
 /**
  * Onramper `paymentTypeId` -> OpenRampKit method id. Unknown ids keep their name.
- * TO VERIFY: `pix` and `upi` ids (not in the pages we could read; the full list is in an embedded table).
+ * Every id here is in the live list GET https://api.onramper.com/supported/payment-types (read 2026-10-04).
+ * Per country (live GET /supported/payment-types/{fiat}?type=buy&country=..., 2026-10-04):
+ * NL `ideal`, BE `bancontact`, EUR countries `sepainstant` and `openbanking`, GB `fasterpaybank` and
+ * `fasterpayopen`, MX `spei`, CO `bancolombia`, CL `khipu`, IN `upi` and `imps`, CA `interacetransfer`,
+ * US `iach`, `venmo` and `paypal`, BR `pix`.
  */
 export const ONRAMPER_METHOD_IDS: Record<string, string> = {
   creditcard: 'card',
@@ -103,36 +107,71 @@ export const ONRAMPER_METHOD_IDS: Record<string, string> = {
   applepay: 'apple_pay',
   googlepay: 'google_pay',
   sepabanktransfer: 'sepa',
-  sepainstant: 'sepa',
+  sepainstant: 'sepa_instant',
   banktransfer: 'bank_transfer',
   ach: 'ach',
   iach: 'ach',
   pix: 'pix',
   upi: 'upi',
+  imps: 'imps',
   paypal: 'paypal',
   venmo: 'venmo',
   revolutpay: 'revolut_pay',
   interacetransfer: 'interac',
-  fasterpaybank: 'bank_transfer',
+  fasterpaybank: 'faster_payments',
+  openbanking: 'open_banking',
+  fasterpayopen: 'open_banking',
+  ideal: 'ideal',
+  bancontact: 'bancontact',
+  sofort: 'sofort',
+  spei: 'spei',
+  bancolombia: 'bancolombia',
+  khipu: 'khipu',
+  mpesa: 'mpesa',
+  alipay: 'alipay',
+}
+
+/** Methods whose Onramper id depends on the fiat currency (UK open banking is `fasterpayopen`) */
+const PAYMENT_TYPE_BY_CURRENCY: Record<string, Record<string, string>> = {
+  open_banking: { GBP: 'fasterpayopen' },
 }
 
 export function onramperMethodId(paymentTypeId: string): string {
   return ONRAMPER_METHOD_IDS[paymentTypeId.toLowerCase()] ?? paymentTypeId.toLowerCase()
 }
 
-/** Leg id -> Onramper paymentTypeId: the first id that maps to it, else the leg id itself */
-export function onramperPaymentType(legId: string): string {
-  return Object.entries(ONRAMPER_METHOD_IDS).find(([, id]) => id === legId)?.[0] ?? legId
+/**
+ * Leg id -> Onramper paymentTypeId: the id for this currency when it has its own, else the first id
+ * that maps to the leg, else the leg id itself.
+ */
+export function onramperPaymentType(legId: string, currency?: string): string {
+  const byCurrency = currency ? PAYMENT_TYPE_BY_CURRENCY[legId]?.[currency.toUpperCase()] : undefined
+  return byCurrency ?? Object.entries(ONRAMPER_METHOD_IDS).find(([, id]) => id === legId)?.[0] ?? legId
 }
 
+const SEPA = ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK', 'NO', 'IS', 'LI', 'CH']
+const INSTANT = { min: 60, max: 1800 }
+const BANK_INSTANT = { min: 120, max: 3600 }
+
+/** Static legs, used when the live catalog is not available. Countries follow core METHOD_COUNTRIES. */
 const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '*'; eta: { min: number; max: number } }> = [
-  { id: 'card', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'apple_pay', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'google_pay', currencies: '*', eta: { min: 60, max: 1800 } },
-  { id: 'sepa', countries: ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK', 'NO', 'IS', 'LI', 'CH'], currencies: ['EUR'], eta: { min: 3600, max: 3 * 86400 } },
+  { id: 'card', currencies: '*', eta: INSTANT },
+  { id: 'apple_pay', currencies: '*', eta: INSTANT },
+  { id: 'google_pay', currencies: '*', eta: INSTANT },
+  { id: 'sepa', countries: SEPA, currencies: ['EUR'], eta: { min: 3600, max: 3 * 86400 } },
   { id: 'ach', countries: ['US'], currencies: ['USD'], eta: { min: 3600, max: 5 * 86400 } },
-  { id: 'pix', countries: ['BR'], currencies: ['BRL'], eta: { min: 120, max: 3600 } },
-  { id: 'upi', countries: ['IN'], currencies: ['INR'], eta: { min: 120, max: 3600 } },
+  { id: 'pix', countries: ['BR'], currencies: ['BRL'], eta: BANK_INSTANT },
+  { id: 'upi', countries: ['IN'], currencies: ['INR'], eta: BANK_INSTANT },
+  { id: 'sepa_instant', countries: SEPA, currencies: ['EUR'], eta: BANK_INSTANT },
+  { id: 'faster_payments', countries: ['GB'], currencies: ['GBP'], eta: BANK_INSTANT },
+  { id: 'open_banking', countries: ['GB', ...SEPA], currencies: ['GBP', 'EUR'], eta: BANK_INSTANT },
+  { id: 'ideal', countries: ['NL'], currencies: ['EUR'], eta: BANK_INSTANT },
+  { id: 'bancontact', countries: ['BE'], currencies: ['EUR'], eta: BANK_INSTANT },
+  { id: 'interac', countries: ['CA'], currencies: ['CAD'], eta: BANK_INSTANT },
+  { id: 'spei', countries: ['MX'], currencies: ['MXN'], eta: BANK_INSTANT },
+  { id: 'bancolombia', countries: ['CO'], currencies: ['COP'], eta: BANK_INSTANT },
+  { id: 'khipu', countries: ['CL'], currencies: ['CLP'], eta: BANK_INSTANT },
+  { id: 'imps', countries: ['IN'], currencies: ['INR'], eta: BANK_INSTANT },
 ]
 
 const dec = decimalFrom
@@ -248,7 +287,7 @@ export function onramper(opts: OnramperOptions) {
       const target = deliverFor(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      const paymentMethod = onramperPaymentType(input.leg.legId)
+      const paymentMethod = onramperPaymentType(input.leg.legId, fiat)
       const q = new URLSearchParams({ amount: roundTo(input.amountIn.amount, 2), paymentMethod, type: 'buy', country, platform: 'web' })
       if (wallet) q.set('walletAddress', wallet)
       let res: OrQuote[] | { message?: string }
@@ -307,7 +346,7 @@ export function onramper(opts: OnramperOptions) {
         destination: data.cryptoId ?? target.cryptoId,
         amount: Number(roundTo(input.quote.input.amount, 2)),
         type: 'buy',
-        paymentMethod: data.paymentMethod ?? onramperPaymentType(input.leg.legId),
+        paymentMethod: data.paymentMethod ?? onramperPaymentType(input.leg.legId, input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : undefined),
         network: data.network ?? target.network,
         wallet: { address: wallet },
         endUserIpHash: await sha256Hex(ctx.session.ip),

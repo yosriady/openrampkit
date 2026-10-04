@@ -39,9 +39,12 @@ The adapter has one leg per Swapped `payment_group`. The leg id is the group nam
 | `google-pay`, `googlepay` | `google_pay` |
 | `bank-transfer`, `banktransfer` | `bank_transfer` |
 | `zalo`, `zalopay` | `zalopay` |
-| `sepa`, `vietqr`, `momo`, `gcash`, `maya`, `gopay`, `dana`, `ovo`, `grabpay`, `promptpay`, `touchngo`, `pix`, `upi` | same name |
+| `mobile-money` | `mobile_money` |
+| `sepa`, `vietqr`, `momo`, `gcash`, `maya`, `gopay`, `dana`, `ovo`, `grabpay`, `promptpay`, `touchngo`, `pix`, `upi`, `blik`, `spei`, `astropay` | same name |
 
 Other groups keep their own name as the method id.
+
+Groups outside Southeast Asia in the live list ([`get_payment_methods`](https://docs.swapped.com/swapped-ramp/endpoints/onramp-endpoints/get-payment-methods), 2026-10-04): `blik` (PL, PLN), `spei` (MX, MXN), `mobile-money` (KE in KES, ZM in ZMW) and `astropay` (31 countries, USD). These come from the live catalog only.
 
 - **Static legs**: `creditcard`, `apple-pay`, `google-pay`, used when the catalog is not available.
 - **Live catalog**: `GET /api/v1/merchant/get_payment_methods`, cached for one hour. For the user's country and currency, it builds one leg per group, with the countries where it exists and the min and max amounts (in EUR).

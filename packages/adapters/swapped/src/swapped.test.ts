@@ -118,6 +118,49 @@ describe('swapped adapter', () => {
     await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: no.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Swapped: Amount too low' } })
   })
 
+  it('regional groups: BLIK (PL), SPEI (MX) and mobile money (KE) from the catalog, planned, quoted and started', async () => {
+    expect(swappedMethodId('blik')).toBe('blik')
+    expect(swappedMethodId('spei')).toBe('spei')
+    expect(swappedMethodId('mobile-money')).toBe('mobile_money')
+    expect(swappedMethodId('astropay')).toBe('astropay')
+    const live = {
+      success: true,
+      data: {
+        PL: [m('blik', ['PLN']), m('creditcard', ['PLN', 'EUR'])],
+        MX: [m('spei', ['MXN']), m('creditcard', ['MXN'])],
+        KE: [m('mobile-money', ['KES']), m('creditcard', ['KES'])],
+      },
+    }
+    const cases: Array<[string, string, string, string]> = [
+      ['PL', 'PLN', 'blik', 'blik'],
+      ['MX', 'MXN', 'spei', 'spei'],
+      ['KE', 'KES', 'mobile-money', 'mobile_money'],
+    ]
+    for (const [country, currency, group, method] of cases) {
+      const { fetch, calls } = fakeFetch([
+        { match: '/get_payment_methods', reply: () => live },
+        { method: 'POST', match: '/pricing', reply: () => ({ ...PRICING, data: { ...PRICING.data, fiat_currency: currency, payment_group: group } }) },
+      ])
+      const a = swapped({ publicKey: PK, secretKey: SK })
+      const legs = await a.catalog!({ country, currency, direction: 'deposit' }, { fetch, log: silentLog, shared: memoryKV() })
+      expect(legs.map((l) => l.methods![0])).toEqual([method, 'card'])
+      const plan = planPathways({
+        direction: 'deposit',
+        destination: { type: 'crypto', chain: 'eip155:8453', token: BASE_USDC.token, address: '0x000000000000000000000000000000000000beef' },
+        user: { country },
+        legs: legs.map((spec) => ({ adapterId: 'swapped', provider: 'Swapped', spec })),
+      })
+      expect(plan.currency).toBe(currency)
+      expect(plan.methods[0]).toMatchObject({ method, group: 'recommended', providers: ['Swapped'] })
+      const leg: PathwayLeg = { ...cardLeg, legId: group, from: { asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } } }
+      const ctx = makeCtx({ fetch, session: { country } })
+      const q = await a.quote({ leg, amountIn: { amount: '100', asset: { kind: 'fiat', currency } } }, ctx)
+      expect(calls.find((c) => c.url.includes('/pricing'))!.body).toMatchObject({ payment_method: group, fiat_currency: currency, region: country })
+      const step = await a.start({ leg, quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
+      expect(new URL((step.surface as { url: string }).url).searchParams.get('method')).toBe(group)
+    }
+  })
+
   it('start: signed IFRAME URL (signature over the "?" query string, appended last)', async () => {
     const { fetch } = fakeFetch([{ method: 'POST', match: '/pricing', reply: () => PRICING }])
     const a = swapped({ publicKey: PK, secretKey: SK })

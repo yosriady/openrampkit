@@ -32,7 +32,26 @@ meld({
 
 ## Legs
 
-One leg per payment method. Static legs (used when the catalog fails): `card`, `apple_pay`, `google_pay`, `upi` (IN, INR), `pix` (BR, BRL), `binance_pay`, `sepa` (EUR countries), `ach` (US, USD). The live catalog (`GET /service-providers/properties/payment-methods`, cached for an hour per country and currency) builds the legs for the user's country and currency.
+One leg per payment method. Static legs (used when the catalog fails): `card`, `apple_pay`, `google_pay`, `upi` (IN, INR), `pix` (BR, BRL), `binance_pay`, `sepa` (EUR countries), `ach` (US, USD), and these regional methods:
+
+| Leg and method | Meld code | Countries | Fiat |
+|---|---|---|---|
+| `sepa_instant` | `SEPA_INSTANT` | EUR countries | EUR |
+| `faster_payments` | `UK_FASTER_PAYMENTS` (the catalog also maps `FPS`) | GB | GBP |
+| `open_banking` | `OPEN_BANKING` | EU, GB, IS, LI | any |
+| `ideal` | `IDEAL` | NL | EUR |
+| `bancontact` | `BANCONTACT` | BE | EUR |
+| `blik` | `BLIK` | PL | PLN |
+| `payid` | `PAYID` | AU | AUD |
+| `interac` | `INTERAC` | CA | CAD |
+| `spei` | `SPEI` (the catalog also maps `STP`) | MX | MXN |
+| `pse` | `PSE` | CO | COP |
+| `khipu` | `KHIPU` | CL | CLP |
+| `imps` | `IMPS` | IN | INR |
+| `mpesa` | `MPESA` | KE | KES |
+| `mobile_money` | `MOBILE_MONEY` | 29 countries in Africa and Asia | any |
+
+The catalog also maps `SOFORT`, `ASTROPAY`, `PAYPAL`, `VENMO`, `CASH_APP`, `ZELLE`, `REVOLUT_PAY`, `REVOLUT` and `MERCADOPAGO`. Meld lists the codes and their countries on its [payment method coverage page](https://www.meld.io/coverage/payment-methods) (read on 2026-10-04). The live catalog (`GET /service-providers/properties/payment-methods`, cached for an hour per country and currency) builds the legs for the user's country and currency.
 
 - Surface: `REDIRECT` to the chosen provider's widget (`serviceProviderWidgetUrl`, else Meld's hosted `widgetUrl`). The modal shows the provider's name.
 - Delivers to `deliverTo.address` (a hop) or the destination address.
@@ -62,5 +81,6 @@ Create a Meld webhook profile with the URL `{baseUrl}/webhooks/meld` and pass it
 
 - Verified: the `USDC` (Ethereum) and `USDC_BASE` currency codes.
 - **TO VERIFY**: `USDC_POLYGON` and `USDC_ARBITRUM`.
-- **TO VERIFY**: the `UPI` and `BINANCE_PAY` payment method codes.
+- **TO VERIFY**: the `UPI` and `BINANCE_PAY` payment method codes. The coverage list has `BINANCE_P2P` and `BINANCE_CASH_BALANCE`, not `BINANCE_PAY`.
+- **TO VERIFY**: `MERCADO_PAGO`. The coverage list spells it `MERCADOPAGO`, and the adapter sends that spelling.
 - **TO VERIFY**: Meld documents no timestamp tolerance for webhooks. The adapter rejects timestamps more than 5 minutes off.
