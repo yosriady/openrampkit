@@ -55,6 +55,7 @@ export default withMermaid(
               { text: 'Architecture', link: '/concepts/architecture' },
               { text: 'Flows (sequence diagrams)', link: '/concepts/flows' },
               { text: 'Pathways and legs', link: '/concepts/pathways' },
+              { text: 'Payment methods', link: '/concepts/payment-methods' },
               { text: 'Sessions and security', link: '/concepts/sessions' },
               { text: 'Flow state machine', link: '/concepts/flow' },
               { text: 'Surfaces', link: '/concepts/surfaces' },

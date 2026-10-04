@@ -66,8 +66,13 @@ describe('transak adapter', () => {
   it('passes the shape check; static legs include card, wallets, bank transfer and UPI (IN)', () => {
     const a = transak({ apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test' })
     expect(checkAdapterShape(a)).toEqual([])
-    expect(a.legs.map((l) => l.methods![0])).toEqual(['card', 'apple_pay', 'google_pay', 'bank_transfer', 'upi'])
+    expect(a.legs.map((l) => l.methods![0])).toEqual(['card', 'apple_pay', 'google_pay', 'bank_transfer', 'upi', 'faster_payments', 'open_banking', 'pse'])
     expect(a.legs.find((l) => l.id === 'upi')!.regions.allow).toEqual(['IN'])
+    expect(a.legs.find((l) => l.id === 'faster_payments')!.regions.allow).toEqual(['GB'])
+    expect(a.legs.find((l) => l.id === 'pse')!.from.asset).toEqual({ kind: 'fiat', currencies: ['COP'] })
+    expect(a.legs.find((l) => l.id === 'open_banking')!.regions.allow).toContain('NL')
+    // GBP bank transfers moved to the faster_payments leg
+    expect(a.legs.find((l) => l.id === 'bank_transfer')!.from.asset).toEqual({ kind: 'fiat', currencies: ['EUR', 'USD'] })
     expect(a.legs[0]!.surfaces).toEqual(['IFRAME'])
   })
 
@@ -223,13 +228,18 @@ describe('transak errors and edge cases', () => {
       ['bank_transfer', 'CHF', 'sepa_bank_transfer'],
       ['upi', 'INR', 'inr_upi'],
       ['pm_gcash', 'PHP', 'pm_gcash'],
+      ['faster_payments', 'GBP', 'gbp_bank_transfer'],
+      ['open_banking', 'GBP', 'pm_open_banking'],
+      ['open_banking', 'EUR', 'pm_open_banking'],
+      ['pse', 'COP', 'pm_pse'],
     ] as const) {
       const q = await a.quote({ leg: leg(legId, currency), amountOut: { amount: '20', asset: BASE_USDC } }, makeCtx({ fetch, session: { country: undefined } }))
       expect(params()).toMatchObject({ paymentMethod: pm, fiatCurrency: currency, cryptoAmount: '20', quoteCountryCode: 'GB' })
       expect(params().fiatAmount).toBeUndefined()
       expect(q.fees).toEqual([])
-      expect(q.eta).toEqual(legId === 'bank_transfer' ? { min: 600, max: 259200 } : { min: 120, max: 1800 })
+      expect(q.eta).toEqual(a.legs.find((l) => l.id === legId)?.eta ?? { min: 120, max: 1800 })
     }
+    expect(a.legs.find((l) => l.id === 'bank_transfer')!.eta).toEqual({ min: 600, max: 259200 })
     await transak(opts).quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:137', token: USDC['eip155:137']! }, location: { kind: 'address', address: DEST } } } }, makeCtx({ fetch, session: { country: undefined } }))
     expect(params().quoteCountryCode).toBeUndefined()
     expect(params().network).toBe('polygon')
@@ -250,6 +260,23 @@ describe('transak errors and edge cases', () => {
     await expect(start([TOKEN_ROUTE, { method: 'POST', match: '/auth/session', status: 500, reply: () => ({}) }])).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(start([TOKEN_ROUTE, { method: 'POST', match: '/auth/session', reply: () => ({ data: {} }) }])).rejects.toMatchObject({ error: { message: 'Transak did not return a widget URL.' } })
     await expect(start([TOKEN_ROUTE, { method: 'POST', match: '/auth/session', reply: () => ({ data: { widgetUrl: 'not a url' } }) }])).rejects.toMatchObject({ error: { message: 'Transak did not return a widget URL.' } })
+  })
+
+  it('start: regional legs send their Transak payment method (PSE, Faster Payments, open banking)', async () => {
+    for (const [legId, currency, pm] of [
+      ['pse', 'COP', 'pm_pse'],
+      ['faster_payments', 'GBP', 'gbp_bank_transfer'],
+      ['open_banking', 'EUR', 'pm_open_banking'],
+    ] as const) {
+      const { fetch, calls } = routes()
+      const shared = memoryKV()
+      await shared.put('accessToken', { token: 'STORED', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
+      const a = transak({ ...opts, env: 'staging' })
+      const quote = { ...QUOTE, input: { amount: '100', asset: { kind: 'fiat' as const, currency } }, data: {} }
+      await a.start({ leg: { ...cardLeg, legId }, quote }, makeCtx({ fetch, shared }))
+      const session = calls.find((c) => c.url.includes('/auth/session'))!
+      expect((session.body as { widgetParams: Record<string, unknown> }).widgetParams).toMatchObject({ fiatCurrency: currency, paymentMethod: pm })
+    }
   })
 
   it('start: REDIRECT surface; quote data missing uses the leg method; token from shared KV; refresh near expiry', async () => {
@@ -309,7 +336,8 @@ describe('transak errors and edge cases', () => {
     const legs = await a.catalog!({ currency: 'EUR', direction: 'deposit' }, { fetch, log: silentLog, shared })
     expect(legs.map((l) => [l.id, l.methods![0], l.limits])).toEqual([
       ['bank_transfer', 'sepa', { min: '20', currency: 'EUR' }],
-      ['pm_open_banking', 'bank_transfer', { currency: 'EUR' }],
+      ['faster_payments', 'faster_payments', { currency: 'EUR' }],
+      ['open_banking', 'open_banking', { currency: 'EUR' }],
       ['pm_something_new', 'something_new', { max: '99', currency: 'EUR' }],
     ])
     expect(legs[0]!.regions.allow).toEqual(['*'])

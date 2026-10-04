@@ -69,8 +69,18 @@ const USDC_TOKENS: Record<string, string> = { ...USDC, [SOLANA]: SOLANA_USDC }
 /** Fiat currencies for the hosted onramp. TO VERIFY per country with the Buy Options API. */
 const FIATS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'SGD', 'CHF']
 
-/** Our method id -> Coinbase paymentMethod. google_pay has no own value in the session API (TO VERIFY). */
-const PAYMENT_METHOD: Record<string, string> = { card: 'CARD', apple_pay: 'APPLE_PAY', google_pay: 'CARD' }
+/**
+ * Our method id -> Coinbase `paymentMethod` in the v2 session API. Its enum is CARD, ACH, APPLE_PAY, PAYPAL,
+ * FIAT_WALLET, CRYPTO_WALLET (https://docs.cdp.coinbase.com/api-reference/v2/rest-api/onramp/create-an-onramp-session).
+ * google_pay has no own value in the session API (TO VERIFY). PayPal is sell only at Coinbase, so it is not a leg
+ * (https://docs.cdp.coinbase.com/onramp/additional-resources/payment-methods).
+ */
+const PAYMENT_METHOD: Record<string, string> = { card: 'CARD', apple_pay: 'APPLE_PAY', google_pay: 'CARD', ach: 'ACH' }
+
+/** Our method id -> payment method id in the v1 Buy Config API (ACH is `ACH_BANK_ACCOUNT` there; match without case) */
+const CONFIG_METHOD: Record<string, string> = { ...PAYMENT_METHOD, ach: 'ACH_BANK_ACCOUNT' }
+
+type CoinbaseLeg = 'card' | 'apple_pay' | 'google_pay' | 'ach'
 
 type CbAmount = { value?: string; amount?: string; currency: string }
 type CbTransaction = {
@@ -134,7 +144,7 @@ export function coinbase(opts: CoinbaseOptions) {
       .map((c) => [c, [USDC_TOKENS[c]!.toLowerCase()]]),
   )
 
-  const leg = (method: 'card' | 'apple_pay' | 'google_pay'): LegSpec => ({
+  const leg = (method: CoinbaseLeg, extra: Partial<LegSpec> = {}): LegSpec => ({
     id: method,
     kind: 'fiat_onramp',
     methods: [method],
@@ -146,8 +156,15 @@ export function coinbase(opts: CoinbaseOptions) {
     surfaces: ['REDIRECT'],
     requires: ['provider_account', 'provider_kyc'],
     capabilities: ['webhooks', 'polling'],
+    ...extra,
   })
-  const legs: LegSpec[] = [leg('card'), leg('apple_pay'), leg('google_pay')]
+  const legs: LegSpec[] = [
+    leg('card'),
+    leg('apple_pay'),
+    leg('google_pay'),
+    // ACH_BANK_ACCOUNT: US only (Coinbase payment methods page, see PAYMENT_METHOD)
+    leg('ach', { from: { asset: { kind: 'fiat', currencies: ['USD'] }, location: ['user_account'] }, regions: { allow: ['US'], deny: [] }, eta: { min: 300, max: 5 * 86400 } }),
+  ]
 
   function target(asset: CryptoAsset | undefined): { chain: string; network: string; asset: CryptoAsset } {
     const chain = asset && asset.chain !== '*' && COINBASE_NETWORKS[asset.chain] ? asset.chain : 'eip155:8453'
@@ -238,8 +255,10 @@ export function coinbase(opts: CoinbaseOptions) {
       }
       const countries = cfg.countries ?? []
       const allowFor = (l: LegSpec) => {
-        const pm = PAYMENT_METHOD[l.id]!
-        return countries.filter((c) => (c.payment_methods ?? []).some((m) => m.id?.toUpperCase() === pm)).map((c) => c.id.toUpperCase())
+        const pm = CONFIG_METHOD[l.id]!
+        const ids = countries.filter((c) => (c.payment_methods ?? []).some((m) => m.id?.toUpperCase() === pm)).map((c) => c.id.toUpperCase())
+        // A leg with fixed countries (ACH: US) stays inside them
+        return l.regions.allow.includes('*') ? ids : ids.filter((c) => l.regions.allow.includes(c))
       }
       const refined = legs.map((l) => ({ ...l, regions: { allow: allowFor(l), deny: l.regions.deny } }))
       // No country lists any of our methods: the config format is not what we expect, so keep the static legs.
@@ -285,7 +304,7 @@ export function coinbase(opts: CoinbaseOptions) {
         input: { amount: q.paymentTotal, asset: { kind: 'fiat', currency: q.paymentCurrency } },
         output: { amount: q.purchaseAmount, asset: t.asset },
         fees,
-        eta: legs[0]!.eta,
+        eta: (legs.find((l) => l.id === input.leg.legId) ?? legs[0]!).eta,
         data: { ref, onrampUrl: res.session?.onrampUrl, createdAt: Date.now(), network: t.network, paymentMethod, country, ...(sub ? { subdivision: sub } : {}) },
       }
     },

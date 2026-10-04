@@ -42,13 +42,16 @@ moonpay({
 | `google_pay` | `google_pay` | `google_pay` | any | all allowed |
 | `ach` | `ach` | `ach_bank_transfer` | USD | US |
 | `sepa` | `sepa` | `sepa_bank_transfer` | EUR | EEA and CH |
-| `gbp_bank` | `bank_transfer` | `gbp_bank_transfer` | GBP | GB |
+| `gbp_bank` | `faster_payments` | `gbp_bank_transfer` | GBP | GB |
+| `gbp_open_banking` | `open_banking` | `gbp_open_banking_payment` | GBP | GB |
 | `pix` | `pix` | `pix_instant_payment` | BRL | BR |
 | `paypal` | `paypal` | `paypal` | any | all allowed |
 | `venmo` | `venmo` | `venmo` | USD | US |
 | `revolut_pay` | `revolut_pay` | `revolut_pay` | any | all allowed |
 | `interac` | `interac` | `interac` | CAD | CA |
 
+- `gbp_bank_transfer` is UK Faster Payments. `gbp_open_banking_payment` is UK open banking. Source: [widget parameters](https://dev.moonpay.com/widget/on-ramp/customization/parameters.md) and the [buy quote enum](https://dev.moonpay.com/api-reference/widget/getbuyquote.md).
+- SEPA Instant has no separate MoonPay id. It is part of `sepa_bank_transfer` ([supported payment methods](https://support.moonpay.com/en/articles/380823-moonpay-s-supported-payment-methods)).
 - Regions: a static deny list of countries where MoonPay does not allow buying (from the live API on 2026-09-29), plus `US-VI`. The live catalog (`GET /v3/countries`, cached for a day) replaces it with the current allowed countries and denied US states.
 - Some assets have extra limits: for example USDC on Base is not sold in New York or Canada. The quote then fails with `REGION_UNSUPPORTED`.
 

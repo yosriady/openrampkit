@@ -126,7 +126,12 @@ export const DEFAULT_DELIVER_ASSETS: SwappedDeliverAsset[] = [
   { chain: 'eip155:1', token: USDC['eip155:1']!, currencyCode: 'USDC_ETHEREUM', symbol: 'USDC', decimals: 6 },
 ]
 
-/** Swapped `payment_group` -> OpenRampKit method id. Unknown groups keep their own name. */
+/**
+ * Swapped `payment_group` -> OpenRampKit method id. Unknown groups keep their own name.
+ * Groups outside Southeast Asia in the live list (GET https://widget.swapped.com/api/v1/merchant/get_payment_methods,
+ * 2026-10-04; docs https://docs.swapped.com/swapped-ramp/endpoints/onramp-endpoints/get-payment-methods):
+ * `blik` (PL, PLN), `spei` (MX), `mobile-money` (KE in KES, ZM in ZMW), `astropay` (31 countries, USD).
+ */
 export const SWAPPED_METHOD_IDS: Record<string, string> = {
   creditcard: 'card',
   'apple-pay': 'apple_pay',
@@ -153,6 +158,10 @@ export const SWAPPED_METHOD_IDS: Record<string, string> = {
   skrill: 'skrill',
   interac: 'interac',
   'interac-extra': 'interac',
+  blik: 'blik',
+  spei: 'spei',
+  'mobile-money': 'mobile_money',
+  astropay: 'astropay',
 }
 
 /** Offramp payout methods from the docs (2026-09): used when the live payout catalog is not available. */

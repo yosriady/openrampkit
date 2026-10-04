@@ -72,10 +72,13 @@ describe('CDP JWT (WebCrypto)', () => {
 })
 
 describe('coinbase adapter', () => {
-  it('passes the shape check; one leg per method (card, Apple Pay, Google Pay), REDIRECT', () => {
+  it('passes the shape check; one leg per method (card, Apple Pay, Google Pay, ACH), REDIRECT', () => {
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: 'x' })
     expect(checkAdapterShape(a)).toEqual([])
-    expect(a.legs.map((l) => l.id)).toEqual(['card', 'apple_pay', 'google_pay'])
+    expect(a.legs.map((l) => l.id)).toEqual(['card', 'apple_pay', 'google_pay', 'ach'])
+    const ach = a.legs.find((l) => l.id === 'ach')!
+    expect(ach.regions.allow).toEqual(['US'])
+    expect(ach.from.asset).toEqual({ kind: 'fiat', currencies: ['USD'] })
     expect(a.legs[0]!.surfaces).toEqual(['REDIRECT'])
     expect(a.legs[0]!.regions.deny).toContain('JP')
   })
@@ -114,6 +117,19 @@ describe('coinbase adapter', () => {
     const step2 = await a.start({ leg: cardLeg, quote: stale, deliverTo: { address: DEST } }, ctx)
     expect(calls).toHaveLength(2)
     expect(step2.ref).not.toBe(step.ref)
+  })
+
+  it('quote: ACH sends paymentMethod ACH and has the bank ETA', async () => {
+    const { secret } = await ed25519Secret()
+    const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/platform/v2/onramp/sessions', reply: () => SESSION_RES }])
+    const a = coinbase({ apiKeyId: 'key-id', apiKeySecret: secret })
+    const ctx = makeCtx({ fetch, session: { country: 'US', region: 'US-CA' } as never })
+    const q = await a.quote({ leg: { ...cardLeg, legId: 'ach' }, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } }, deliverTo: { address: DEST } }, ctx)
+    expect(calls[0]!.body).toMatchObject({ paymentMethod: 'ACH', country: 'US', subdivision: 'CA' })
+    expect(q.eta).toEqual({ min: 300, max: 5 * 86400 })
+    const step = await a.start({ leg: { ...cardLeg, legId: 'ach' }, quote: { ...q, data: { ...q.data, createdAt: 0 } }, deliverTo: { address: DEST } }, ctx)
+    expect(calls[1]!.body).toMatchObject({ paymentMethod: 'ACH' })
+    expect(step.state).toBe('PAYMENT')
   })
 
   it('quote: passes the US state when the session region is known, maps 400 to NO_QUOTES', async () => {
@@ -175,13 +191,19 @@ describe('coinbase adapter', () => {
   it('catalog: regions from the Buy Config API (cached)', async () => {
     const { secret } = await ed25519Secret()
     const { fetch, calls } = fakeFetch([
-      { method: 'GET', match: '/onramp/v1/buy/config', reply: () => ({ countries: [{ id: 'US', payment_methods: [{ id: 'CARD' }, { id: 'APPLE_PAY' }] }, { id: 'GB', payment_methods: [{ id: 'CARD' }] }] }) },
+      {
+        method: 'GET',
+        match: '/onramp/v1/buy/config',
+        reply: () => ({ countries: [{ id: 'US', payment_methods: [{ id: 'CARD' }, { id: 'APPLE_PAY' }, { id: 'ACH_BANK_ACCOUNT' }] }, { id: 'GB', payment_methods: [{ id: 'CARD' }, { id: 'ACH_BANK_ACCOUNT' }] }] }),
+      },
     ])
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const shared = memoryKV()
     const legs = await a.catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, { fetch, log: silentLog, shared })
     expect(legs.find((l) => l.id === 'card')!.regions.allow).toEqual(['US', 'GB'])
     expect(legs.find((l) => l.id === 'apple_pay')!.regions.allow).toEqual(['US'])
+    // ACH is `ACH_BANK_ACCOUNT` in the config and stays in the US
+    expect(legs.find((l) => l.id === 'ach')!.regions.allow).toEqual(['US'])
     await a.catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, { fetch, log: silentLog, shared })
     expect(calls).toHaveLength(1)
     expect(await a.health!({ fetch, log: silentLog })).toEqual({ ok: true })

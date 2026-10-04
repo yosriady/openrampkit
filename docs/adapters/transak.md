@@ -31,9 +31,14 @@ transak({
 | `card` | `card` | any | `credit_debit_card` |
 | `apple_pay` | `apple_pay` | any | |
 | `google_pay` | `google_pay` | any | |
-| `bank_transfer` | `bank_transfer` | EUR, GBP, USD | `sepa_bank_transfer`, `gbp_bank_transfer` or `pm_wire` by currency; ETA 10 minutes to 3 days |
+| `bank_transfer` | `bank_transfer` | EUR, USD | `sepa_bank_transfer` or `pm_wire` by currency; ETA 10 minutes to 3 days |
 | `upi` | `upi` | INR | India only |
+| `faster_payments` | `faster_payments` | GBP | `gbp_bank_transfer` (UK Faster Payments). GB only |
+| `open_banking` | `open_banking` | GBP, EUR | `pm_open_banking` ("Easy Bank Transfer"). GB, IE, FR, DE, IT, ES, NL, EE, LV, LT, PT, BE, PL, DK |
+| `pse` | `pse` | COP | `pm_pse`. Colombia only |
 
+- The catalog also maps `pm_astropay` to `astropay`.
+- Sources: the live list [`GET /api/v2/currencies/fiat-currencies`](https://api.transak.com/api/v2/currencies/fiat-currencies), the [Get Fiat Currencies example](https://docs.transak.com/api/public/get-fiat-currencies) and the [Transak fee table](https://transak.notion.site/On-Ramp-Payment-Methods-Fees-Other-Details-b0761634feed4b338a69f4f186d906a5).
 - Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana.
 - Live catalog: `GET /fiat/public/v1/currencies/fiat-currencies`, cached for one hour. For the session currency, it builds one leg per active payment option, with the supporting countries and the min and max amounts. Common methods keep the static leg ids.
 - Surface: `IFRAME` (625 px high) by default.
@@ -70,5 +75,6 @@ Set the webhook URL in the Transak partner dashboard to `{baseUrl}/webhooks/tran
 
 - **TO VERIFY**: Transak network names for Arbitrum and Optimism (check with `GET /cryptocoins`).
 - **TO VERIFY**: the UPI payment method id (`inr_upi`; partner-specific).
+- **TO VERIFY**: `pm_pse` and `pm_astropay`. They are in the docs example, but not in the live list without a partner key. Your partner account may not have them.
 - **TO VERIFY**: the bank transfer method for currencies other than EUR, GBP and USD (falls back to `sepa_bank_transfer`).
 - The widget session call sends the end-user IP header `x-user-ip` when `ctx.session.ip` is known (the IP of the latest browser request).

@@ -60,7 +60,7 @@ export type MoonPayOptions = {
   surface?: 'redirect' | 'iframe'
   /** Assets MoonPay may deliver, most preferred first. Default: USDC on Base, Ethereum, Arbitrum, Optimism, Polygon. */
   deliverAssets?: MoonPayDeliverAsset[]
-  /** Limit the legs (leg ids: card, apple_pay, google_pay, ach, sepa, gbp_bank, pix, paypal, venmo, revolut_pay, interac) */
+  /** Limit the legs (leg ids: card, apple_pay, google_pay, ach, sepa, gbp_bank, gbp_open_banking, pix, paypal, venmo, revolut_pay, interac) */
   methods?: string[]
   /** Your fee on top, in percent (MoonPay `extraFeePercentage`, set up with MoonPay first) */
   extraFeePercentage?: number
@@ -151,6 +151,11 @@ const BANK = { min: 3600, max: 3 * 86400 }
  * Leg per payment method. Values from the buy_quote `paymentMethod` enum (live, 2026-09-29).
  * Currency rules seen in live quote errors: SEPA needs EUR, gbp_bank_transfer needs GBP, PIX needs BRL,
  * ACH does not take EUR.
+ * - `gbp_bank_transfer` is UK Faster Payments and `gbp_open_banking_payment` is UK open banking
+ *   (https://dev.moonpay.com/widget/on-ramp/customization/parameters.md and the buy_quote enum,
+ *   https://dev.moonpay.com/api-reference/widget/getbuyquote.md).
+ * - SEPA Instant has no own id: it is part of `sepa_bank_transfer`
+ *   (https://support.moonpay.com/en/articles/380823-moonpay-s-supported-payment-methods).
  */
 export const MOONPAY_METHODS: MethodDef[] = [
   { id: 'card', method: 'card', paymentMethod: 'credit_debit_card', currencies: '*', eta: INSTANT },
@@ -158,7 +163,8 @@ export const MOONPAY_METHODS: MethodDef[] = [
   { id: 'google_pay', method: 'google_pay', paymentMethod: 'google_pay', currencies: '*', eta: INSTANT },
   { id: 'ach', method: 'ach', paymentMethod: 'ach_bank_transfer', currencies: ['USD'], countries: ['US'], eta: BANK },
   { id: 'sepa', method: 'sepa', paymentMethod: 'sepa_bank_transfer', currencies: ['EUR'], countries: [...EEA, 'CH'], eta: { min: 3600, max: 2 * 86400 } },
-  { id: 'gbp_bank', method: 'bank_transfer', paymentMethod: 'gbp_bank_transfer', currencies: ['GBP'], countries: ['GB'], eta: { min: 300, max: 86400 } },
+  { id: 'gbp_bank', method: 'faster_payments', paymentMethod: 'gbp_bank_transfer', currencies: ['GBP'], countries: ['GB'], eta: { min: 300, max: 86400 } },
+  { id: 'gbp_open_banking', method: 'open_banking', paymentMethod: 'gbp_open_banking_payment', currencies: ['GBP'], countries: ['GB'], eta: { min: 120, max: 3600 } },
   { id: 'pix', method: 'pix', paymentMethod: 'pix_instant_payment', currencies: ['BRL'], countries: ['BR'], eta: { min: 120, max: 1800 } },
   { id: 'paypal', method: 'paypal', paymentMethod: 'paypal', currencies: '*', eta: INSTANT },
   // TO VERIFY: Venmo and Cash App through MoonPay are US-only (the enum has them; the docs do not list regions).

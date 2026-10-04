@@ -3,6 +3,7 @@
 export const CURRENCY_MINOR_UNITS: Record<string, number> = {
   USD: 2, EUR: 2, GBP: 2, SGD: 2, MYR: 2, PHP: 2, THB: 2, IDR: 0, VND: 0, INR: 2, BRL: 2,
   AUD: 2, CAD: 2, JPY: 0, KRW: 0, HKD: 2, TWD: 2, CHF: 2, MXN: 2, NGN: 2, KES: 2, TRY: 2,
+  PLN: 2, COP: 2, CLP: 0, GHS: 2, UGX: 0, TZS: 2, ZMW: 2, RWF: 0,
 }
 
 export function minorUnits(currency: string): number {
@@ -14,6 +15,9 @@ export const COUNTRY_CURRENCY: Record<string, string> = {
   IN: 'INR', BR: 'BRL', AU: 'AUD', CA: 'CAD', JP: 'JPY', KR: 'KRW', HK: 'HKD', TW: 'TWD',
   CH: 'CHF', MX: 'MXN', NG: 'NGN', KE: 'KES', TR: 'TRY',
   DE: 'EUR', FR: 'EUR', ES: 'EUR', IT: 'EUR', NL: 'EUR', IE: 'EUR', PT: 'EUR', AT: 'EUR', BE: 'EUR', FI: 'EUR',
+  GR: 'EUR', LU: 'EUR', SK: 'EUR', SI: 'EUR', EE: 'EUR', LV: 'EUR', LT: 'EUR', CY: 'EUR', MT: 'EUR', HR: 'EUR',
+  // Local currencies that local methods need: BLIK (PLN), PSE and Bancolombia (COP), Khipu (CLP), mobile money
+  PL: 'PLN', CO: 'COP', CL: 'CLP', GH: 'GHS', UG: 'UGX', TZ: 'TZS', ZM: 'ZMW', RW: 'RWF',
 }
 
 export function currencyForCountry(country: string | undefined): string {
@@ -67,9 +71,33 @@ export const METHODS: Record<string, MethodInfo> = {
   revolut: { id: 'revolut', name: 'Revolut', kind: 'ewallet' },
   binance_pay: { id: 'binance_pay', name: 'Binance Pay', kind: 'ewallet' },
   mercadopago: { id: 'mercadopago', name: 'Mercado Pago', kind: 'ewallet' },
+  // Global and regional bank rails and wallets (outside Southeast Asia). The adapters that offer each
+  // one, with sources, are listed in docs/concepts/payment-methods.md.
+  sepa_instant: { id: 'sepa_instant', name: 'SEPA Instant', kind: 'bank' },
+  faster_payments: { id: 'faster_payments', name: 'Faster Payments', kind: 'bank' },
+  open_banking: { id: 'open_banking', name: 'Pay by bank', kind: 'bank' },
+  ideal: { id: 'ideal', name: 'iDEAL', kind: 'bank' },
+  bancontact: { id: 'bancontact', name: 'Bancontact', kind: 'card' },
+  sofort: { id: 'sofort', name: 'Sofort', kind: 'bank' },
+  spei: { id: 'spei', name: 'SPEI', kind: 'bank' },
+  bancolombia: { id: 'bancolombia', name: 'Bancolombia', kind: 'bank' },
+  khipu: { id: 'khipu', name: 'Khipu', kind: 'bank' },
+  imps: { id: 'imps', name: 'IMPS', kind: 'bank' },
+  blik: { id: 'blik', name: 'BLIK', kind: 'bank' },
+  payid: { id: 'payid', name: 'PayID', kind: 'bank' },
+  pse: { id: 'pse', name: 'PSE', kind: 'bank' },
+  mpesa: { id: 'mpesa', name: 'M-Pesa', kind: 'ewallet' },
+  mobile_money: { id: 'mobile_money', name: 'Mobile money', kind: 'ewallet' },
+  astropay: { id: 'astropay', name: 'AstroPay', kind: 'ewallet' },
+  alipay: { id: 'alipay', name: 'Alipay', kind: 'ewallet' },
 }
 
 const EU = ['AT', 'BE', 'CY', 'DE', 'EE', 'ES', 'FI', 'FR', 'GR', 'HR', 'IE', 'IT', 'LT', 'LU', 'LV', 'MT', 'NL', 'PT', 'SI', 'SK']
+/** Euro countries plus the other EEA members */
+const EEA = [...EU, 'BG', 'CZ', 'DK', 'HU', 'PL', 'RO', 'SE', 'IS', 'LI', 'NO']
+const SEPA_EUR = [...EU, 'NO', 'IS', 'LI', 'CH']
+/** Mobile money countries (Meld MOBILE_MONEY coverage, https://www.meld.io/coverage/payment-methods, 2026-10-04) */
+const MOBILE_MONEY = ['BD', 'BF', 'BJ', 'BW', 'CD', 'CG', 'CI', 'CM', 'DZ', 'EG', 'GA', 'GH', 'GM', 'ID', 'JO', 'KE', 'LR', 'ML', 'MW', 'PE', 'PH', 'PK', 'RW', 'SN', 'TG', 'TZ', 'UG', 'VN', 'ZM']
 
 /** Countries where a local method exists. Methods not listed are available everywhere. */
 export const METHOD_COUNTRIES: Record<string, string[]> = {
@@ -82,7 +110,26 @@ export const METHOD_COUNTRIES: Record<string, string[]> = {
   upi: ['IN'], pix: ['BR'], interac: ['CA'], ach: ['US'], venmo: ['US'],
   cash_app: ['US'], zelle: ['US'], chime: ['US'],
   mercadopago: ['AR', 'BR', 'CL', 'CO', 'MX', 'PE', 'UY'],
-  sepa: [...EU, 'NO', 'IS', 'LI', 'CH'],
+  sepa: SEPA_EUR,
+  // Europe
+  sepa_instant: SEPA_EUR,
+  faster_payments: ['GB'],
+  open_banking: ['GB', ...EEA],
+  ideal: ['NL'],
+  bancontact: ['BE'],
+  sofort: ['AT', 'BE', 'CH', 'DE', 'ES', 'IT', 'NL', 'PL'],
+  blik: ['PL'],
+  // Asia Pacific
+  imps: ['IN'],
+  payid: ['AU'],
+  // Latin America
+  spei: ['MX'],
+  pse: ['CO'],
+  bancolombia: ['CO'],
+  khipu: ['CL', 'AR'],
+  // Africa and other mobile money markets
+  mpesa: ['KE'],
+  mobile_money: MOBILE_MONEY,
 }
 
 /** True when `method` can be offered to a user in `country` (unknown country: allow). */
@@ -95,6 +142,10 @@ export function methodName(id: string): string {
   return METHODS[id]?.name ?? id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
+/** Euro area default: cards and wallets first, then instant bank rails */
+const EURO_PRIORITY = ['apple_pay', 'card', 'google_pay', 'sepa_instant', 'sepa', 'open_banking', 'paypal', 'revolut_pay']
+const MOBILE_MONEY_PRIORITY = ['mobile_money', 'card', 'apple_pay', 'google_pay']
+
 /** Default "most popular first" order per country. Apps can override it. */
 export const DEFAULT_METHOD_PRIORITY: Record<string, string[]> = {
   ID: ['qris', 'gopay', 'dana', 'ovo', 'shopeepay', 'bank_transfer', 'card'],
@@ -103,11 +154,33 @@ export const DEFAULT_METHOD_PRIORITY: Record<string, string[]> = {
   MY: ['duitnow', 'touchngo', 'fpx', 'grabpay', 'card'],
   PH: ['qrph', 'gcash', 'maya', 'instapay', 'card'],
   SG: ['paynow', 'card', 'apple_pay', 'google_pay'],
-  IN: ['upi', 'card'],
+  IN: ['upi', 'imps', 'card'],
   BR: ['pix', 'card', 'mercadopago'],
   CA: ['interac', 'card', 'apple_pay'],
   US: ['apple_pay', 'card', 'google_pay', 'ach', 'venmo', 'cash_app', 'zelle', 'paypal', 'chime'],
-  '*': ['apple_pay', 'card', 'google_pay', 'sepa', 'bank_transfer'],
+  // Europe
+  GB: ['apple_pay', 'card', 'google_pay', 'faster_payments', 'open_banking', 'revolut_pay', 'paypal', 'bank_transfer'],
+  NL: ['ideal', 'apple_pay', 'card', 'sepa_instant', 'sepa', 'open_banking', 'google_pay', 'paypal'],
+  BE: ['bancontact', 'apple_pay', 'card', 'sepa_instant', 'sepa', 'open_banking', 'google_pay', 'paypal'],
+  DE: ['apple_pay', 'card', 'paypal', 'sepa_instant', 'sepa', 'open_banking', 'google_pay', 'sofort'],
+  FR: EURO_PRIORITY, ES: EURO_PRIORITY, IT: EURO_PRIORITY, IE: EURO_PRIORITY, PT: EURO_PRIORITY, AT: EURO_PRIORITY, FI: EURO_PRIORITY,
+  PL: ['blik', 'card', 'apple_pay', 'google_pay', 'open_banking', 'paypal'],
+  TR: ['card', 'apple_pay', 'google_pay', 'bank_transfer'],
+  // Latin America
+  MX: ['spei', 'card', 'apple_pay', 'google_pay', 'mercadopago', 'astropay'],
+  CO: ['pse', 'bancolombia', 'card', 'apple_pay', 'google_pay', 'mercadopago', 'astropay'],
+  CL: ['khipu', 'card', 'apple_pay', 'google_pay', 'mercadopago', 'astropay'],
+  AR: ['mercadopago', 'card', 'khipu', 'astropay'],
+  // Asia Pacific
+  AU: ['payid', 'apple_pay', 'card', 'google_pay'],
+  JP: ['card', 'apple_pay', 'google_pay'],
+  KR: ['card', 'apple_pay', 'google_pay', 'bank_transfer'],
+  // Africa
+  KE: ['mpesa', 'mobile_money', 'card', 'apple_pay', 'google_pay'],
+  NG: ['bank_transfer', 'card', 'mobile_money', 'apple_pay', 'google_pay'],
+  ZA: ['card', 'apple_pay', 'google_pay', 'bank_transfer'],
+  GH: MOBILE_MONEY_PRIORITY, UG: MOBILE_MONEY_PRIORITY, TZ: MOBILE_MONEY_PRIORITY, ZM: MOBILE_MONEY_PRIORITY, RW: MOBILE_MONEY_PRIORITY,
+  '*': ['apple_pay', 'card', 'google_pay', 'sepa_instant', 'sepa', 'open_banking', 'bank_transfer'],
 }
 
 export type ChainInfo = {

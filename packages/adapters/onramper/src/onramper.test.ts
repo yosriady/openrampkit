@@ -66,7 +66,10 @@ describe('onramper adapter', () => {
   it('static legs, method id mapping', () => {
     const a = onramper(opts)
     expect(checkAdapterShape(a)).toEqual([])
-    expect(a.legs.map((l) => l.id)).toEqual(['card', 'apple_pay', 'google_pay', 'sepa', 'ach', 'pix', 'upi'])
+    expect(a.legs.map((l) => l.id)).toEqual([
+      'card', 'apple_pay', 'google_pay', 'sepa', 'ach', 'pix', 'upi',
+      'sepa_instant', 'faster_payments', 'open_banking', 'ideal', 'bancontact', 'interac', 'spei', 'bancolombia', 'khipu', 'imps',
+    ])
     expect(isRegionAllowed(a.legs.find((l) => l.id === 'pix')!.regions, 'BR')).toBe(true)
     expect(isRegionAllowed(a.legs.find((l) => l.id === 'pix')!.regions, 'US')).toBe(false)
     expect(onramperMethodId('creditcard')).toBe('card')
@@ -74,6 +77,60 @@ describe('onramper adapter', () => {
     expect(onramperMethodId('ideal')).toBe('ideal')
     expect(onramperPaymentType('card')).toBe('creditcard')
     expect(onramperPaymentType('ideal')).toBe('ideal')
+  })
+
+  it('maps the global and regional bank rails both ways', () => {
+    const pairs: Array<[string, string]> = [
+      ['sepainstant', 'sepa_instant'], ['fasterpaybank', 'faster_payments'], ['openbanking', 'open_banking'], ['fasterpayopen', 'open_banking'],
+      ['ideal', 'ideal'], ['bancontact', 'bancontact'], ['spei', 'spei'], ['bancolombia', 'bancolombia'], ['khipu', 'khipu'],
+      ['imps', 'imps'], ['mpesa', 'mpesa'], ['iach', 'ach'], ['interacetransfer', 'interac'],
+    ]
+    for (const [id, method] of pairs) expect(onramperMethodId(id)).toBe(method)
+    expect(onramperPaymentType('sepa_instant')).toBe('sepainstant')
+    expect(onramperPaymentType('faster_payments')).toBe('fasterpaybank')
+    // UK open banking has its own id; elsewhere it is `openbanking`
+    expect(onramperPaymentType('open_banking', 'GBP')).toBe('fasterpayopen')
+    expect(onramperPaymentType('open_banking', 'EUR')).toBe('openbanking')
+    expect(onramperPaymentType('open_banking')).toBe('openbanking')
+    const a = onramper(opts)
+    const allowed = (id: string, c: string) => isRegionAllowed(a.legs.find((l) => l.id === id)!.regions, c)
+    expect(allowed('ideal', 'NL')).toBe(true)
+    expect(allowed('ideal', 'DE')).toBe(false)
+    expect(allowed('bancontact', 'BE')).toBe(true)
+    expect(allowed('faster_payments', 'GB')).toBe(true)
+    expect(allowed('spei', 'MX')).toBe(true)
+    expect(allowed('khipu', 'CL')).toBe(true)
+    expect(allowed('bancolombia', 'CO')).toBe(true)
+    expect(a.legs.find((l) => l.id === 'khipu')!.from.asset).toEqual({ kind: 'fiat', currencies: ['CLP'] })
+  })
+
+  it('quote and start send the regional payment type (iDEAL, SPEI, UK open banking)', async () => {
+    const cases: Array<[string, string, string, string]> = [
+      ['ideal', 'EUR', 'NL', 'ideal'],
+      ['spei', 'MXN', 'MX', 'spei'],
+      ['open_banking', 'GBP', 'GB', 'fasterpayopen'],
+      ['sepa_instant', 'EUR', 'DE', 'sepainstant'],
+      ['khipu', 'CLP', 'CL', 'khipu'],
+    ]
+    for (const [legId, cur, country, paymentType] of cases) {
+      const { fetch, calls } = fakeFetch([
+        { match: '/quotes/', reply: () => QUOTES.map((x) => ({ ...x, paymentMethod: paymentType })) },
+        { method: 'POST', match: '/checkout/v2/intent', reply: () => ({ redirectUrl: 'https://buy.onramper.com/checkout?session=s1' }) },
+      ])
+      const a = onramper(opts)
+      const ctx = makeCtx({ fetch, session: { ip: '203.0.113.9', country } })
+      const q = await a.quote({ leg: leg(legId, cur), amountIn: money('100', cur) }, ctx)
+      const u = new URL(calls[0]!.url)
+      expect(u.pathname).toBe(`/quotes/${cur.toLowerCase()}/usdc_base`)
+      expect(u.searchParams.get('paymentMethod')).toBe(paymentType)
+      expect(u.searchParams.get('country')).toBe(country)
+      await a.start({ leg: leg(legId, cur), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
+      expect(calls[1]!.body).toMatchObject({ paymentMethod: paymentType, source: cur.toLowerCase(), country })
+      // Without the quote data, start still finds the id from the leg and currency
+      calls.length = 0
+      await a.start({ leg: leg(legId, cur), quote: { ...q, data: { ...q.data, paymentMethod: undefined } }, deliverTo: { address: '0xd16e' } }, ctx)
+      expect(calls[0]!.body).toMatchObject({ paymentMethod: paymentType })
+    }
   })
 
   it('catalog: GET /supported/payment-types with aggregated limits, cached', async () => {

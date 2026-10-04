@@ -36,7 +36,10 @@ describe('meld adapter', () => {
   it('static legs: card, wallets and local methods with country rules', () => {
     const a = meld(opts)
     expect(checkAdapterShape(a)).toEqual([])
-    expect(a.legs.map((l) => l.id)).toEqual(['card', 'apple_pay', 'google_pay', 'upi', 'pix', 'binance_pay', 'sepa', 'ach'])
+    expect(a.legs.map((l) => l.id)).toEqual([
+      'card', 'apple_pay', 'google_pay', 'upi', 'pix', 'binance_pay', 'sepa', 'ach',
+      'sepa_instant', 'faster_payments', 'open_banking', 'ideal', 'bancontact', 'blik', 'payid', 'interac', 'spei', 'pse', 'khipu', 'imps', 'mpesa', 'mobile_money',
+    ])
     expect(a.legs.every((l) => l.surfaces.join() === 'REDIRECT')).toBe(true)
     const upi = a.legs.find((l) => l.id === 'upi')!
     expect(isRegionAllowed(upi.regions, 'IN')).toBe(true)
@@ -46,6 +49,52 @@ describe('meld adapter', () => {
     expect(meldMethodId('SOME_LOCAL_THING')).toBe('some_local_thing')
     expect(meldCode('card')).toBe('CREDIT_DEBIT_CARD')
     expect(meldCode('some_local_thing')).toBe('SOME_LOCAL_THING')
+  })
+
+  it('maps the global and regional codes both ways, with country rules', () => {
+    const pairs: Array<[string, string]> = [
+      ['SEPA_INSTANT', 'sepa_instant'], ['UK_FASTER_PAYMENTS', 'faster_payments'], ['FPS', 'faster_payments'], ['OPEN_BANKING', 'open_banking'],
+      ['IDEAL', 'ideal'], ['BANCONTACT', 'bancontact'], ['BLIK', 'blik'], ['PAYID', 'payid'], ['SPEI', 'spei'], ['STP', 'spei'],
+      ['PSE', 'pse'], ['KHIPU', 'khipu'], ['MPESA', 'mpesa'], ['MOBILE_MONEY', 'mobile_money'], ['IMPS', 'imps'], ['ASTROPAY', 'astropay'],
+      ['MERCADOPAGO', 'mercadopago'], ['MERCADO_PAGO', 'mercadopago'], ['CASH_APP', 'cash_app'], ['ZELLE', 'zelle'],
+    ]
+    for (const [code, id] of pairs) expect(meldMethodId(code)).toBe(id)
+    expect(meldCode('faster_payments')).toBe('UK_FASTER_PAYMENTS')
+    expect(meldCode('spei')).toBe('SPEI')
+    expect(meldCode('mercadopago')).toBe('MERCADOPAGO')
+    expect(meldCode('mobile_money')).toBe('MOBILE_MONEY')
+    const a = meld(opts)
+    const allowed = (id: string, c: string) => isRegionAllowed(a.legs.find((l) => l.id === id)!.regions, c)
+    expect(allowed('blik', 'PL')).toBe(true)
+    expect(allowed('blik', 'DE')).toBe(false)
+    expect(allowed('payid', 'AU')).toBe(true)
+    expect(allowed('pse', 'CO')).toBe(true)
+    expect(allowed('mpesa', 'KE')).toBe(true)
+    expect(allowed('mobile_money', 'GH')).toBe(true)
+    expect(allowed('mobile_money', 'US')).toBe(false)
+    expect(a.legs.find((l) => l.id === 'blik')!.from.asset).toEqual({ kind: 'fiat', currencies: ['PLN'] })
+  })
+
+  it('quote and start send the regional code (BLIK, PayID, M-Pesa, Faster Payments)', async () => {
+    const cases: Array<[string, string, string, string]> = [
+      ['blik', 'PLN', 'PL', 'BLIK'],
+      ['payid', 'AUD', 'AU', 'PAYID'],
+      ['mpesa', 'KES', 'KE', 'MPESA'],
+      ['faster_payments', 'GBP', 'GB', 'UK_FASTER_PAYMENTS'],
+      ['mobile_money', 'GHS', 'GH', 'MOBILE_MONEY'],
+    ]
+    for (const [legId, cur, country, code] of cases) {
+      const { fetch, calls } = fakeFetch([
+        { method: 'POST', match: '/payments/crypto/quote', reply: () => QUOTES },
+        { method: 'POST', match: '/crypto/session/widget', reply: () => ({ widgetUrl: 'https://meldcrypto.com/?token=t' }) },
+      ])
+      const a = meld(opts)
+      const ctx = makeCtx({ fetch, session: { country } })
+      const q = await a.quote({ leg: leg(legId, cur), amountIn: money('100', cur) }, ctx)
+      expect(calls[0]!.body).toMatchObject({ countryCode: country, sourceCurrencyCode: cur, paymentMethodType: code })
+      await a.start({ leg: leg(legId, cur), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
+      expect((calls[1]!.body as { sessionData: Record<string, unknown> }).sessionData).toMatchObject({ paymentMethodType: code, sourceCurrencyCode: cur, countryCode: country })
+    }
   })
 
   it('catalog: one leg per Meld payment method for the country and currency, cached', async () => {

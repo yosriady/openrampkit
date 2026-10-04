@@ -34,7 +34,24 @@ The signing helpers are exported: `signV2`, `canonicalJson`, `canonicalStringV2`
 
 ## Legs
 
-Static legs: `card`, `apple_pay`, `google_pay`, `sepa` (EUR countries), `ach` (US), `pix` (BR), `upi` (IN). The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) builds legs for the user's currency and country, with limits.
+Static legs: `card`, `apple_pay`, `google_pay`, `sepa` (EUR countries), `ach` (US), `pix` (BR), `upi` (IN), and these regional methods:
+
+| Leg and method | Onramper `paymentTypeId` | Countries | Fiat |
+|---|---|---|---|
+| `sepa_instant` | `sepainstant` | EUR countries | EUR |
+| `faster_payments` | `fasterpaybank` | GB | GBP |
+| `open_banking` | `fasterpayopen` (GBP), `openbanking` (EUR) | GB and EUR countries | GBP, EUR |
+| `ideal` | `ideal` | NL | EUR |
+| `bancontact` | `bancontact` | BE | EUR |
+| `interac` | `interacetransfer` | CA | CAD |
+| `spei` | `spei` | MX | MXN |
+| `bancolombia` | `bancolombia` | CO | COP |
+| `khipu` | `khipu` | CL | CLP |
+| `imps` | `imps` | IN | INR |
+
+The catalog also maps `sofort`, `mpesa`, `alipay`, `iach` (to `ach`), `paypal`, `venmo` and `revolutpay`. All ids are in the live list `GET /supported/payment-types`. The countries come from `GET /supported/payment-types/{fiat}?country=...` (both read on 2026-10-04).
+
+The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) builds legs for the user's currency and country, with limits.
 
 - Surface: `REDIRECT` to the checkout. The modal shows the chosen onramp's name.
 
@@ -61,4 +78,5 @@ Ask your Onramper contact to send webhooks to `{baseUrl}/webhooks/onramper`.
 
 ## Verified vs TO VERIFY
 
-- **TO VERIFY**: the `pix` and `upi` payment type ids.
+- **Verified** (live API, 2026-10-04): the `pix` and `upi` payment type ids, and the regional ids in the table above.
+- **TO VERIFY**: `mpesa` is in the global list, but no Kenya query returned it on 2026-10-04. It has no static leg.
