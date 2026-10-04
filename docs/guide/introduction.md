@@ -11,12 +11,12 @@ A deposit goes to a **destination** that your backend picks: a token on a chain 
 ![The playground in the Next.js example](../screenshots/00-playground.png)
 
 ::: warning Prototype
-OpenRampKit is a prototype (phases 0 to 3 of the [spec](../design/spec.md)). APIs will change.
+OpenRampKit is an early release. APIs can change before 1.0.
 :::
 
 ## When to use it
 
-OpenRampKit is not the only way to add deposits. Hosted players such as fun.xyz and Unifold give you one API key, one contract and a managed backend. The [market landscape](../design/landscape.md) has teardowns of them.
+OpenRampKit is not the only way to add deposits. Hosted players such as fun.xyz and Unifold give you one API key, one contract and a managed backend. See [Why OpenRampKit?](./why.md) for how we compare.
 
 | You want | Choose |
 |---|---|

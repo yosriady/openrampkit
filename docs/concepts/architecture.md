@@ -278,4 +278,4 @@ sequenceDiagram
 - **Adapters are data plus functions.** Static `LegSpec` declarations feed the planner. `quote`, `start`, `transition`, `status` and `webhook` run the leg.
 - **The server is the source of truth.** A redirect return, an iframe message or a wallet hash only starts a status check. The outcome comes from the provider or the chain.
 
-For the reasons behind these choices, read the [scope](../design/scope.md) and the [spec](../design/spec.md).
+For the reasons behind these choices, read [Why OpenRampKit?](../guide/why.md).

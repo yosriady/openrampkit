@@ -15,23 +15,25 @@ export default withMermaid(
     lastUpdated: true,
     // The design notes link to local files outside the site; do not fail the build on those.
     ignoreDeadLinks: [/^\.\.\/\.\.\//, /localhost/, /(^|\.\.\/)playground\/$/],
-    srcExclude: ['**/node_modules/**', 'README.md'],
+    // The design notes (docs/design) are internal: they stay in the repo but are not part of the site.
+    srcExclude: ['**/node_modules/**', 'README.md', 'design/**'],
     themeConfig: {
       nav: [
+        // The playground is a separate static app, copied to `dist/playground/`. `target: '_self'` makes a full page load.
+        { text: 'Live demo', link: '/playground/', target: '_self' },
+        { text: 'Why?', link: '/guide/why' },
         { text: 'Guide', link: '/guide/introduction' },
         { text: 'Concepts', link: '/concepts/architecture' },
         { text: 'Adapters', link: '/adapters/' },
         { text: 'API', link: '/api/server' },
         { text: 'Deploy', link: '/deploy/cloudflare-workers' },
-        { text: 'Design', link: '/design/scope' },
-        // The playground is a separate static app, copied to `dist/playground/`. `target: '_self'` makes a full page load.
-        { text: 'Live demo', link: '/playground/', target: '_self' },
       ],
       sidebar: {
         '/guide/': [
           {
             text: 'Getting started',
             items: [
+              { text: 'Why OpenRampKit?', link: '/guide/why' },
               { text: 'Introduction', link: '/guide/introduction' },
               { text: 'Features', link: '/guide/features' },
               { text: 'Prerequisites', link: '/guide/prerequisites' },
@@ -116,16 +118,6 @@ export default withMermaid(
               { text: 'Node, Bun, Deno', link: '/deploy/node' },
               { text: 'Session stores', link: '/deploy/stores' },
               { text: 'Production checklist', link: '/deploy/checklist' },
-            ],
-          },
-        ],
-        '/design/': [
-          {
-            text: 'Design notes',
-            items: [
-              { text: 'Scope', link: '/design/scope' },
-              { text: 'Spec and phases', link: '/design/spec' },
-              { text: 'Market landscape', link: '/design/landscape' },
             ],
           },
         ],

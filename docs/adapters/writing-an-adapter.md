@@ -146,7 +146,7 @@ Serve pages at `{baseUrl}/adapters/{id}/*`: a return page, or a hosted page like
 
 ## Rules
 
-From the [spec](../design/spec.md):
+From the project's design notes:
 
 - Adapters are pure server code. Do not read global environment variables; take all config from the factory options.
 - Use web-standard APIs only (`fetch`, WebCrypto), so the adapter runs on Cloudflare Workers.

@@ -2,29 +2,33 @@
 layout: home
 hero:
   name: OpenRampKit
-  text: Deposits and withdrawals for any app
-  tagline: One open-source modal, a server you host, and adapters anyone can write. Local rails first. No platform fee.
+  text: The RainbowKit for onramps and deposits
+  tagline: Open-source, unified deposit infrastructure for crypto apps. Users pay with a card, a bank transfer or a local QR rail, and stablecoins land on any chain. One modal, a server you host, no platform fee.
   actions:
     - theme: brand
+      text: Try the live demo
+      link: /playground/
+      target: _self
+    - theme: alt
+      text: Why OpenRampKit?
+      link: /guide/why
+    - theme: alt
       text: Get started
       link: /guide/introduction
-    - theme: alt
-      text: Adapters
-      link: /adapters/
     - theme: alt
       text: GitHub
       link: https://github.com/yosriady/openrampkit
 features:
-  - title: Any destination
-    details: A token on any chain for crypto apps, or your own fiat account for any app. One modal and one state machine serve both.
-  - title: Pathways, not vendors
-    details: The planner chains legs, for example VietQR, then an onramp to USDC on Base, then Relay to Monad. Every quote, fee and status is visible.
   - title: Local rails first
-    details: QRIS, QR Ph, PromptPay, DuitNow, VietQR, GCash, MoMo and more, next to cards and wallets.
-  - title: Adapters like wagmi connectors
-    details: createAdapter() plus a conformance test kit. Add a provider without forking.
-  - title: Self-hosted server
-    details: A single web-standard handler. Deploy it as a Cloudflare Worker, a Next.js route, or on Node, Bun or Deno.
-  - title: Works in any framework
-    details: A Lit web component in Shadow DOM, with a thin React wrapper, headless hooks, and themes.
+    details: VietQR, QRIS, PromptPay, PayNow, QR Ph, DuitNow, Pix, UPI and SEPA where providers support them, next to cards, Apple Pay and wallets.
+  - title: Pathways, not vendors
+    details: A planner picks the best route at run time across 10 providers, for example VietQR to USDC, then a Relay bridge to Arbitrum. Every quote, fee and status is visible.
+  - title: Onchain settlement
+    details: OpenRampSettlement settles each session once and can deposit into a vault in the same transaction. Live on Arbitrum Sepolia and Robinhood Chain Testnet.
+  - title: Any chain
+    details: USDC on Arbitrum, Base, Solana, Tempo and other chains. Withdrawals to a wallet or a bank account use the same kit.
+  - title: Agent-ready
+    details: An MCP server lets an AI agent send a person a pay link, wait for the payment, then act. Guardrails cap destinations and amounts.
+  - title: Self-hosted, any framework
+    details: One web-standard server (Cloudflare Workers, Next.js, Node, Bun, Deno) and a web component with React, Vue, Svelte and Solid wrappers. MIT licence.
 ---
