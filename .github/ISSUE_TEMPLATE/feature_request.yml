@@ -1,0 +1,47 @@
+name: Feature request
+description: Suggest a new feature or a change.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What do you want to do that you cannot do today? Who has this problem?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: The change that you suggest. Include an API sketch if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Other ways to solve the problem, and workarounds that you use now.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - core
+        - server
+        - client
+        - web component (modal)
+        - react / vue / svelte / solid wrapper
+        - adapter
+        - wallet adapter
+        - mcp
+        - contracts
+        - docs or playground
+        - dx or tooling
+        - other
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contribution
+      options:
+        - label: I can open a pull request for this.

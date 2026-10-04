@@ -87,6 +87,17 @@ jobs:
         env:
           OPENRAMP_REQUIRE_SETTLEMENT_CHAIN: '1'
         run: pnpm exec vitest run packages/adapter/src/settlement
+      # Last step: Slither runs `forge clean` before its own build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Slither (fails on high or medium findings, see contracts/audit/static-analysis.md)
+        working-directory: contracts
+        run: |
+          pip install slither-analyzer==0.11.6 solc-select==1.2.0
+          solc-select install 0.8.28
+          solc-select use 0.8.28
+          slither .
 
   e2e:
     name: Browser tests (desktop, Android, iPhone)
