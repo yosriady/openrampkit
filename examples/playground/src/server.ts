@@ -4,8 +4,9 @@
 
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { MockOptions } from '@openrampkit/adapter-mock'
+import type { Adapter } from '@openrampkit/adapter'
 import { createOpenRamp, memoryStore } from '@openrampkit/server'
-import type { CreateSessionInput } from '@openrampkit/server'
+import type { CreateSessionInput, OpenRamp } from '@openrampkit/server'
 
 /** Any absolute URL works: no request to it leaves the page. */
 const ORIGIN = 'https://playground.openrampkit.invalid'
@@ -61,31 +62,41 @@ export const MOCK_PROVIDERS: MockOptions[] = [
   },
 ]
 
-export const openramp = createOpenRamp({
-  // A new random secret per page load. It never leaves this tab.
-  secret: randomSecret(),
-  baseUrl: BASE_URL,
-  store: memoryStore(),
-  adapters: MOCK_PROVIDERS.map((p) => mockAdapter(p)),
-  webhooks: { url: HOOKS_URL, secret: webhookSecret },
-  logger: { debug: () => {}, info: () => {}, warn: (m, d) => console.warn(`[openramp] ${m}`, d ?? ''), error: (m, d) => console.error(`[openramp] ${m}`, d ?? '') },
-  // Outgoing requests from the server. The only one is the webhook to "your backend".
-  fetch: async (input, init) => {
-    const req = new Request(input, init)
-    if (req.url === HOOKS_URL) {
-      const body = await req.text()
-      const verified = await openramp.webhooks.verify(req, body)
-      const event = JSON.parse(body) as { type: string; sessionId?: string }
-      const w: ReceivedWebhook = { type: event.type, verified, at: new Date().toISOString(), ...(event.sessionId ? { sessionId: event.sessionId } : {}) }
-      for (const fn of listeners) fn(w)
-      return new Response('ok')
-    }
-    return new Response('The playground does not call external services.', { status: 502 })
-  },
-})
+/**
+ * An OpenRampKit server in this tab. Its outgoing requests go to the fake backend below; the only
+ * other requests that may leave the page are the ones that `passthrough` allows (testnet mode
+ * reads the public testnet RPC).
+ */
+export function createPlaygroundServer(opts: { adapters: Adapter[]; passthrough?: (url: string) => boolean }): { openramp: OpenRamp; fakeFetch: typeof fetch } {
+  const openramp: OpenRamp = createOpenRamp({
+    // A new random secret per page load. It never leaves this tab.
+    secret: randomSecret(),
+    baseUrl: BASE_URL,
+    store: memoryStore(),
+    adapters: opts.adapters,
+    webhooks: { url: HOOKS_URL, secret: webhookSecret },
+    logger: { debug: () => {}, info: () => {}, warn: (m, d) => console.warn(`[openramp] ${m}`, d ?? ''), error: (m, d) => console.error(`[openramp] ${m}`, d ?? '') },
+    // Outgoing requests from the server: the webhook to "your backend", and allowed RPC calls.
+    fetch: async (input, init) => {
+      const req = new Request(input, init)
+      if (req.url === HOOKS_URL) {
+        const body = await req.text()
+        const verified = await openramp.webhooks.verify(req, body)
+        const event = JSON.parse(body) as { type: string; sessionId?: string }
+        const w: ReceivedWebhook = { type: event.type, verified, at: new Date().toISOString(), ...(event.sessionId ? { sessionId: event.sessionId } : {}) }
+        for (const fn of listeners) fn(w)
+        return new Response('ok')
+      }
+      if (opts.passthrough?.(req.url)) return fetch(req)
+      return new Response('The playground does not call external services.', { status: 502 })
+    },
+  })
+  /** Give this to the widget as `fetch`. Every request goes to the in-page server. */
+  const fakeFetch: typeof fetch = (input, init) => openramp.handle(new Request(input, init))
+  return { openramp, fakeFetch }
+}
 
-/** Give this to the widget as `fetch`. Every request goes to the in-page server. */
-export const fakeFetch: typeof fetch = (input, init) => openramp.handle(new Request(input, init))
+export const { openramp, fakeFetch } = createPlaygroundServer({ adapters: MOCK_PROVIDERS.map((p) => mockAdapter(p)) })
 
 /** What your backend does in a real app: decide the user, then create the session. */
 export async function createSession(opts: { direction: 'deposit' | 'withdraw'; country: string; locale?: string; allowedMethods?: string[] }): Promise<string> {

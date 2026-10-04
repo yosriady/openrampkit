@@ -6,6 +6,8 @@ import type { DepositHandle, RadiusScale, Theme, ThemeOptions } from '@openrampk
 import { BASE_URL, createSession, fakeFetch, onWebhook } from './server.js'
 
 type Options = {
+  /** `mock`: mock providers (default). `testnet`: the visitor's wallet pays on a testnet for real. */
+  mode: 'mock' | 'testnet'
   direction: 'deposit' | 'withdraw'
   country: string
   locale: string
@@ -36,7 +38,7 @@ const FONTS: Record<Options['font'], string | undefined> = {
 }
 
 const DEFAULTS: Options = {
-  direction: 'deposit', country: 'VN', locale: 'en', theme: 'light', accent: '#2744c4', radius: 'large', font: 'system',
+  mode: 'mock', direction: 'deposit', country: 'VN', locale: 'en', theme: 'light', accent: '#2744c4', radius: 'large', font: 'system',
   display: 'embedded', sources: ALL_SOURCES.join(','),
 }
 const KEYS = Object.keys(DEFAULTS) as Array<keyof Options>
@@ -181,6 +183,23 @@ onWebhook((w) =>
 )
 
 let current: DepositHandle | undefined
+/** Testnet mode, when it is on (loaded on demand) */
+let testnet: { restyle(t: Theme): void; stop(): void } | undefined
+/** Increments on every render, to drop a testnet module that loads after the mode changed */
+let renderSeq = 0
+
+const banner = $('banner')
+const demoBanner = banner.innerHTML
+function setBanner(text?: string) {
+  banner.classList.toggle('testnet', !!text)
+  if (!text) {
+    banner.innerHTML = demoBanner
+    return
+  }
+  const strong = document.createElement('strong')
+  strong.textContent = 'Testnet:'
+  banner.replaceChildren(strong, text.replace(/^Testnet:/, ''))
+}
 
 function open(o: Options, container?: HTMLElement): DepositHandle {
   const opts = {
@@ -203,6 +222,31 @@ function render(o: Options) {
   applyPage(o)
   current?.close()
   current = undefined
+  testnet?.stop()
+  testnet = undefined
+  const seq = ++renderSeq
+  const isTestnet = o.mode === 'testnet'
+  $('testnet-setup').hidden = !isTestnet
+  $('mock-setup').hidden = isTestnet
+  $('mock-hint').hidden = isTestnet
+  if (isTestnet) {
+    $('open').hidden = true
+    $('widget').replaceChildren()
+    void import('./testnet/ui.js').then(({ startTestnet }) => {
+      if (seq !== renderSeq) return
+      testnet = startTestnet({
+        container: $('widget'),
+        theme: themeOf(o),
+        locale: o.locale,
+        onEvent: logEvent,
+        setBanner,
+        setCode: (text) => ($('code').textContent = text),
+      })
+    })
+    return
+  }
+  setBanner()
+  $('tn-result').hidden = true
   const btn = $<HTMLButtonElement>('open')
   btn.textContent = o.direction === 'withdraw' ? 'Withdraw' : 'Deposit'
   btn.hidden = o.display !== 'modal'
@@ -227,9 +271,13 @@ function onChange() {
   writeUrl(o)
   const restyleOnly = KEYS.every((x) => STYLE_KEYS.includes(x) || o[x] === prev[x])
   prev = o
-  if (restyleOnly && current) {
-    current.element.theme = themeOf(o)
+  if (restyleOnly && (current || testnet)) {
+    if (current) current.element.theme = themeOf(o)
+    testnet?.restyle(themeOf(o))
+    const code = $('code').textContent
     applyPage(o)
+    // Testnet mode shows its own code.
+    if (testnet) $('code').textContent = code
   } else {
     render(o)
   }

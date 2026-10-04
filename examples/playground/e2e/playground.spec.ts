@@ -13,6 +13,9 @@ test('Vietnam: VietQR compares mock providers, then the deposit completes with a
   const errors = trackErrors(page)
   await page.goto('/playground/')
   await expect(page.getByTestId('demo-banner')).toContainText('Demo mode: mock providers, no real money')
+  // Mock mode is the default; the testnet controls stay hidden.
+  await expect(page.locator('#mode')).toHaveValue('mock')
+  await expect(page.locator('#testnet-setup')).toBeHidden()
   const modal = page.locator('openramp-modal')
   await expect(modal).toContainText(/Most popular|Connected|Other options/)
 
@@ -117,7 +120,7 @@ test('Controls: payment sources, corners and font update the widget and the code
 
 test('Selects: no native arrow, one chevron centred 12px from the right', async ({ page }) => {
   await page.goto('/playground/')
-  for (const id of ['direction', 'country', 'locale', 'display', 'theme', 'radius', 'font']) {
+  for (const id of ['mode', 'direction', 'country', 'locale', 'display', 'theme', 'radius', 'font']) {
     const s = await page.locator(`#${id}`).evaluate((el) => {
       const cs = getComputedStyle(el)
       return { appearance: cs.appearance, x: cs.backgroundPositionX, y: cs.backgroundPositionY, image: cs.backgroundImage, height: el.getBoundingClientRect().height }

@@ -2,13 +2,15 @@
 
 [Open the playground](../playground/){target="_self"}
 
-::: warning Demo mode
-The playground uses mock providers. It moves no real money. You do not need an account or an API key.
+::: warning Two modes
+**Demo** is the default. It uses mock providers and moves no real money. You do not need an account or an API key.
+
+**Testnet (real wallet)** sends real transactions from your browser wallet on Arbitrum Sepolia or Robinhood Chain Testnet. It uses test tokens with no value. See [Testnet mode](#testnet-mode-real-wallet).
 :::
 
 ## What it is
 
-The playground is a static page. It runs the real `@openrampkit/server` in your browser tab, with four mock providers and `memoryStore()`. The widget sends its requests to that server through a custom `fetch`. No request leaves the page.
+The playground is a static page. It runs the real `@openrampkit/server` in your browser tab, with four mock providers and `memoryStore()`. The widget sends its requests to that server through a custom `fetch`. In demo mode, no request leaves the page.
 
 The server handler is a web-standard `Request -> Response` function. Thus, this line connects the widget to the server:
 
@@ -45,6 +47,7 @@ Methods and number of providers per country (deposit):
 
 | Control | Values |
 |---|---|
+| Mode | Demo (mock providers) or Testnet (real wallet) |
 | Flow | Deposit or withdraw |
 | User country | VN, ID, TH, MY, PH, SG, US. The country sets the local payment methods. |
 | Language | en, vi, id, th, ms, fil |
@@ -89,11 +92,75 @@ The static page cannot serve the hosted checkout page of the mock. Thus, the moc
 3. The widget shows the deposit address, the network and the token. It tells the user to send from an exchange, for example Binance, Coinbase or OKX, and to choose the correct network.
 4. Select **Simulate deposit (test mode)**.
 
+## Testnet mode (real wallet)
+
+Set **Mode** to **Testnet (real wallet)**. The banner changes to "Testnet: real transactions on Arbitrum Sepolia, test tokens with no value."
+
+In this mode, your own wallet pays a session through the [OpenRampSettlement contract](../concepts/settlement.md). The transactions are real. The tokens have no value.
+
+You need these items:
+
+- A browser wallet, for example MetaMask or Rabby (any EIP-1193 wallet).
+- A small amount of test ETH for gas on the network.
+- Test tokens. The page can mint them for you.
+
+### Steps
+
+1. Select the **Network**: Arbitrum Sepolia or Robinhood Chain Testnet.
+2. Select the **Token**:
+   - **Test token (free, mint in one click)**. Select **Mint 100 tUSDC**. Your wallet sends one `mint` transaction.
+   - **Circle test USDC** (Arbitrum Sepolia only). Get it from the [Circle faucet](https://faucet.circle.com/).
+3. Select the **Destination**:
+   - **Plain settlement**. The contract sends the tokens to the recipient.
+   - **Deposit into vault** (test token only). The contract deposits the tokens into a test ERC-4626 vault for the recipient, in the same transaction. The vault call has a fixed amount, so enter the same amount in the widget.
+4. Select **Connect wallet**. If your wallet is on another network, select **Switch to Arbitrum Sepolia**.
+5. In the widget, select **Pay with wallet**. Enter an amount, then select **Continue** and **Confirm**.
+6. Select **Confirm in wallet**. Your wallet asks you to sign two transactions: `approve` on the token, then `settle` on the contract.
+7. The server reads the contract over the public RPC and checks the session with `verifySettlement`. Then the widget shows **Deposit complete**. The page shows links to the transaction on Arbiscan and Blockscout.
+
+The recipient is your connected wallet. Thus, a plain settlement sends the tokens back to you, and a vault deposit gives you vault shares.
+
+### How it works
+
+The page creates the session that your backend would create:
+
+```ts
+await openramp.sessions.create({
+  userId: user.id,
+  destination: {
+    type: 'crypto',
+    chain: 'eip155:421614', // Arbitrum Sepolia
+    token: TOKEN,
+    address: user.address,
+    settlement: { contract: '0xBF66696115128B8f9f794780061348b4213A7132' },
+  },
+})
+```
+
+The wallet leg is the `localChain` leg of `@openrampkit/adapter-mock`. With a destination `settlement`, the leg asks for `approve` and `settle` (from `buildSettlementTxs`). It completes only when `verifySettlement` finds a receipt for the session id that pays the quoted amount. The leg does not call Relay or any other API. It reads the chain only.
+
+The wallet is `wagmiWallet` from `@openrampkit/wagmi`, with the wagmi injected connector.
+
+The page uses public testnet contracts and public RPCs. It has no secrets and needs no server.
+
+### What the page checks
+
+| Case | What you see |
+|---|---|
+| No wallet installed | "No browser wallet found. Install MetaMask or Rabby, then reload this page." |
+| Wrong network | A **Switch** button. The widget also asks the wallet to switch before it pays. |
+| You reject a request | "You rejected the request in your wallet. Nothing was sent." Select **Confirm in wallet** again. |
+| Balance too low | The page checks the balance before the wallet opens. It tells you the balance and the amount, and how to get more. |
+| Session already settled | The page checks the contract before the wallet opens. It tells you to start a new deposit. |
+| Not enough test ETH for gas | A message that tells you to get test ETH from a faucet. |
+
 ## Limits
 
 - The card checkout is a test form in the widget, not a hosted page. To try the hosted mock checkout in a new tab, run [`examples/next-demo`](./examples.md).
 - "From an exchange" shows a deposit address only. A "connect your exchange account" flow is not available yet.
 - The sessions are in memory. A page reload removes them.
+- Testnet mode supports deposits only, with **Pay with wallet**.
+- The testnet contracts have no intent signer. Do not use this setup in production. Read [Signed intents](../concepts/settlement.md#signed-intents).
 
 ## Run it locally
 
@@ -103,4 +170,10 @@ pnpm build
 pnpm --filter playground dev   # http://localhost:5175/playground/
 ```
 
-The source is in [`examples/playground`](https://github.com/yosriady/openrampkit/tree/main/examples/playground). The server setup is in `src/server.ts`.
+The source is in [`examples/playground`](https://github.com/yosriady/openrampkit/tree/main/examples/playground). The server setup is in `src/server.ts`. Testnet mode is in `src/testnet/`.
+
+The Playwright tests run testnet mode against a local Anvil chain. They deploy the real contract with Foundry and inject a test wallet into the page. They are skipped when `anvil` or `forge` is not installed.
+
+```bash
+pnpm --filter playground e2e
+```

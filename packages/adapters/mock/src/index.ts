@@ -1,7 +1,7 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { POLL as POLLS, awaitPoll, createAdapter, erc20PaidTo, erc20TransferData, evmRpc } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, buildSettlementTxs, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent } from '@openrampkit/adapter'
 import { CHAINS, OrkException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isUsdc, minorUnits, mulRatio, nativeDecimals, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
@@ -48,6 +48,11 @@ export type MockOptions = {
    * Anvil. It asks the wallet to send `token` to the destination address with a real ERC-20 transfer,
    * and completes only when the receipt, read over JSON-RPC from `rpcUrl`, shows that transfer.
    * Use it with a destination on `chain` in `token`. The quote is 1:1 with no fee.
+   *
+   * With a destination `settlement` contract, the leg pays through OpenRampSettlement instead:
+   * `approve` + `settle` (from `buildSettlementTxs`, with the destination `calls`), and it completes
+   * only when `verifySettlement` finds a receipt for the session that pays the quoted amount.
+   * This works on any EVM chain with a public RPC, for example a testnet.
    */
   localChain?: MockLocalChain
 }
@@ -123,6 +128,8 @@ type MockOrder = {
   account?: string
   /** Local chain: the hash the wallet reported */
   txHash?: string
+  /** Local chain through OpenRampSettlement: the contract, the calls hash and the block at start */
+  settlement?: { contract: string; callsHash: string; fromBlock: string }
 }
 
 const WORK = 18
@@ -262,6 +269,8 @@ export function mockAdapter(opts: MockOptions = {}) {
       eta: { min: 1, max: 30 },
       surfaces: ['WALLET_TX'],
       requires: ['wallet'],
+      // `settlement`: with a destination settlement contract, the leg pays with approve + settle.
+      capabilities: ['settlement'],
     })
   }
 
@@ -340,15 +349,54 @@ export function mockAdapter(opts: MockOptions = {}) {
     }
   }
 
-  /** The local chain leg's user step: one ERC-20 transfer to the destination address. */
-  function localStep(ref: string, o: MockOrder): LegStep {
+  /**
+   * The local chain leg's user step: one ERC-20 transfer to the destination address, or, with a
+   * settlement contract, `approve` + `settle` for this session.
+   */
+  function localStep(ref: string, o: MockOrder, ctx: Pick<AdapterContext, 'session' | 'destination'>): LegStep {
     const asset = localAsset!
-    const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo!, toBaseUnits(o.input!.amount, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain)! }
+    const amount = BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))
+    const chainId = evmChainId(asset.chain)!
+    const calls = ctx.destination.type === 'crypto' ? settlementCallsFrom(ctx.destination.calls) : []
+    const txs: TxRequest[] = o.settlement
+      ? buildSettlementTxs({ chainId, contract: o.settlement.contract, sessionId: ctx.session.id, token: asset.token, amount, recipient: o.payTo!, calls })
+      : [{ to: asset.token, data: erc20TransferData(o.payTo!, amount.toString()), value: '0', chainId }]
     return {
       state: 'PAYMENT', sub: 'SEND_CRYPTO', status: 'awaiting_user', ref,
-      surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
-      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+      surface: { kind: 'WALLET_TX', chain: asset.chain, txs },
+      // With a settlement, a poll also finds a session that the contract already settled.
+      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }, ...(o.settlement ? [awaitPoll(POLL)] : [])],
     }
+  }
+
+  /**
+   * The settlement leg completes when the contract has a receipt for this session that pays the
+   * recipient the quoted amount with the session's calls. The session id is the proof, not the hash.
+   */
+  async function verifyLocalSettlement(ref: string, o: MockOrder, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'session' | 'destination'>): Promise<LegStep> {
+    const asset = localAsset!
+    const s = o.settlement!
+    const fail = (message: string, txHash?: string): LegStep => ({
+      state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, ...(txHash ? { txHash } : {}),
+    })
+    const r = await verifySettlement({
+      rpcUrl: local!.rpcUrl,
+      contract: s.contract,
+      sessionId: ctx.session.id,
+      fetch: ctx.fetch,
+      log: ctx.log,
+      fromBlock: s.fromBlock,
+      expect: { token: asset.token, recipient: o.payTo!, minAmount: BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6)), callsHash: s.callsHash },
+    })
+    if (r.settled) {
+      if (!r.ok) return fail(r.problem!, r.record.txHash)
+      return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: r.record.txHash }
+    }
+    if (!o.txHash) return localStep(ref, o, ctx)
+    const receipt = await evmRpc<EvmReceipt | null>(ctx.fetch, local!.rpcUrl, 'eth_getTransactionReceipt', [o.txHash], { log: ctx.log })
+    if (!receipt) return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, txHash: o.txHash, transitions: [awaitPoll(POLL)] }
+    if (receipt.status !== '0x1') return fail('The transaction failed on chain.', o.txHash)
+    return fail('The transaction did not settle this session.', o.txHash)
   }
 
   /** The local chain leg completes only when the receipt pays the destination at least the quoted amount. */
@@ -517,9 +565,16 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'onchain': {
           const recipient = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
           if (!recipient) throw new OrkException(orkError('BAD_REQUEST', { message: 'The local chain leg needs a destination address.' }), 400)
-          const o: MockOrder = { ...order, input: quote.input, payTo: recipient }
+          const d = ctx.destination
+          let settlement: MockOrder['settlement']
+          if (d.type === 'crypto' && d.settlement) {
+            // Only blocks from now on can hold this session's settlement.
+            const fromBlock = await evmRpc<string>(ctx.fetch, local!.rpcUrl, 'eth_blockNumber', [], { log: ctx.log })
+            settlement = { contract: d.settlement.contract, callsHash: hashSettlementCalls(settlementCallsFrom(d.calls)), fromBlock }
+          }
+          const o: MockOrder = { ...order, input: quote.input, payTo: recipient, ...(settlement ? { settlement } : {}) }
           await ctx.shared.put(orderKey(ref), o, ORDER_TTL_SEC)
-          return localStep(ref, o)
+          return localStep(ref, o, ctx)
         }
         case 'offramp': {
           const offer: MockOrder = { ...order, ...(leg.method ? { method: leg.method } : {}), input: quote.input, payTo: fakeAddress(`offramp:${ref}`) }
@@ -557,7 +612,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
         const next: MockOrder = { ...o, txHash }
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
-        return verifyLocal(ref, next, ctx)
+        return next.settlement ? verifyLocalSettlement(ref, next, ctx) : verifyLocal(ref, next, ctx)
       }
       if (o.kind === 'card' && t === 'pay_card') {
         if (!cardForm) throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
@@ -589,7 +644,10 @@ export function mockAdapter(opts: MockOptions = {}) {
 
     async status({ ref }, ctx): Promise<LegStep> {
       const pending = await ctx.shared.get<MockOrder>(orderKey(ref))
-      if (pending?.kind === 'onchain') return pending.txHash ? verifyLocal(ref, pending, ctx) : localStep(ref, pending)
+      if (pending?.kind === 'onchain') {
+        if (pending.settlement) return verifyLocalSettlement(ref, pending, ctx)
+        return pending.txHash ? verifyLocal(ref, pending, ctx) : localStep(ref, pending, ctx)
+      }
       const done = await settled(ref, ctx)
       if (done) return done
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))

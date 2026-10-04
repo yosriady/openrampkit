@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { checkLegQuote, checkLegStep } from '@openrampkit/adapter'
+import { buildSettlementTxs, checkLegQuote, checkLegStep, hashSettlementCalls } from '@openrampkit/adapter'
 import type { LegEvent, RouteContext } from '@openrampkit/adapter'
 import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, isSolanaAddress, planPathways } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
@@ -313,6 +313,88 @@ describe('mock offramp (withdraw to cash)', () => {
       const ok = { status: '0x1', logs: [transferLog(DEST, 25_000_000n)] }
       await expect(run(ok, shared)).resolves.toMatchObject({ state: 'COMPLETED' })
       await expect(run(ok, shared, 'sess_2')).resolves.toMatchObject({ state: 'FAILED', error: { message: /already used/ } })
+    })
+
+    describe('with a destination settlement contract', () => {
+      const CONTRACT = '0xbf66696115128b8f9f794780061348b4213a7132'
+      const VAULT = '0xa83fe1b79ced7772f5d90d19833b2fdd844c7801'
+      const PAYER = `0x${'11'.repeat(20)}`
+      const word = (v: string | bigint) => (typeof v === 'bigint' ? v.toString(16) : v.toLowerCase().replace(/^0x/, '')).padStart(64, '0')
+      const depositCall = { to: VAULT, data: `0x6e553f65${word(25_000_000n)}${word(DEST)}` }
+
+      /** A fake chain: `settled` gives the stored receipt (amount, recipient, calls hash), `receipt` the tx receipt. */
+      function chainSetup(p: { settled?: { amount: bigint; recipient?: string; callsHash?: string }; receipt?: unknown; calls?: Array<{ to: string; data: string }> }) {
+        const rpc = fakeFetch([
+          {
+            method: 'POST',
+            match: RPC,
+            reply: (c) => {
+              const { method } = c.body as { method: string }
+              const st = p.settled
+              let result: unknown = null
+              if (method === 'eth_blockNumber') result = '0x10'
+              if (method === 'eth_call') result = `0x${word(st ? PAYER : 0n)}${word(st ? 1_700_000_000n : 0n)}${word(st ? TOKEN : 0n)}${word(st ? (st.recipient ?? DEST) : 0n)}${word(st ? st.amount : 0n)}`
+              if (method === 'eth_getLogs') result = st ? [{ data: `0x${word(DEST)}${word(TOKEN)}${word(st.callsHash ?? hashSettlementCalls((p.calls ?? []).map((x) => ({ target: x.to, data: x.data }))))}`, topics: [], transactionHash: HASH, blockNumber: '0x11' }] : []
+              if (method === 'eth_getTransactionReceipt') result = p.receipt ?? null
+              return { jsonrpc: '2.0', id: 1, result }
+            },
+          },
+        ])
+        const a = mockAdapter({ localChain: { chain: 'eip155:31337', rpcUrl: RPC, token: TOKEN } })
+        const ctx = makeCtx({ fetch: rpc.fetch, destination: { ...destination, settlement: { contract: CONTRACT }, ...(p.calls ? { calls: p.calls } : {}) } })
+        return { a, ctx, rpc }
+      }
+
+      async function begin(p: Parameters<typeof chainSetup>[0]) {
+        const { a, ctx, rpc } = chainSetup(p)
+        const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, ctx)
+        const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, ctx)
+        return { a, ctx, rpc, start }
+      }
+
+      it('declares the settlement capability on the onchain leg', () => {
+        const a = mockAdapter({ localChain: { chain: 'eip155:31337', rpcUrl: RPC, token: TOKEN } })
+        expect(a.legs.find((l) => l.id === 'onchain')!.capabilities).toContain('settlement')
+      })
+
+      it('asks for approve + settle for the session, with the destination calls', async () => {
+        const { ctx, start } = await begin({ calls: [depositCall] })
+        expect(checkLegStep(start)).toEqual([])
+        const expected = buildSettlementTxs({
+          chainId: 31337, contract: CONTRACT, sessionId: ctx.session.id, token: TOKEN, amount: 25_000_000n, recipient: DEST,
+          calls: [{ target: VAULT, data: depositCall.data }],
+        })
+        expect(start.surface).toEqual({ kind: 'WALLET_TX', chain: 'eip155:31337', txs: expected })
+        expect(start.transitions.map((t) => t.name)).toContain('submit_tx')
+      })
+
+      it('completes by session id when the contract has a matching receipt, even before a hash arrives', async () => {
+        const { a, ctx, start } = await begin({ settled: { amount: 25_000_000n } })
+        await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { amount: '25' } })
+        const done = await a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: `0x${'cd'.repeat(32)}` } }, ctx)
+        // The hash comes from the Settled log, not from the browser.
+        expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH })
+      })
+
+      it('waits without a receipt, and fails a reverted tx, a tx that did not settle, or a wrong settlement', async () => {
+        const submit = async (p: Parameters<typeof chainSetup>[0]) => {
+          const { a, ctx, start } = await begin(p)
+          return a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
+        }
+        await expect(submit({})).resolves.toMatchObject({ state: 'PROCESSING', txHash: HASH })
+        await expect(submit({ receipt: { status: '0x0', logs: [] } })).resolves.toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
+        await expect(submit({ receipt: { status: '0x1', logs: [] } })).resolves.toMatchObject({ state: 'FAILED', error: { message: /did not settle this session/ } })
+        await expect(submit({ settled: { amount: 24_000_000n } })).resolves.toMatchObject({ state: 'FAILED', error: { message: /less than the quoted amount/ } })
+        await expect(submit({ settled: { amount: 25_000_000n, recipient: `0x${'22'.repeat(20)}` } })).resolves.toMatchObject({ state: 'FAILED', error: { message: /different recipient/ } })
+        await expect(submit({ settled: { amount: 25_000_000n, callsHash: `0x${'33'.repeat(32)}` }, calls: [depositCall] })).resolves.toMatchObject({ state: 'FAILED', error: { message: /different destination calls/ } })
+      })
+
+      it('searches the Settled log from the block at which the leg started', async () => {
+        const { a, ctx, rpc, start } = await begin({ settled: { amount: 25_000_000n } })
+        await a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)
+        const logs = rpc.calls.find((c) => (c.body as { method: string }).method === 'eth_getLogs')!
+        expect((logs.body as { params: Array<{ fromBlock: string }> }).params[0]!.fromBlock).toBe('0x10')
+      })
     })
   })
 })

@@ -86,6 +86,17 @@ mockAdapter({
 
 This is the same check that the Relay adapter does for a same-chain wallet payment. See [Testing with mocks](../guide/testing.md#real-chain-test-with-anvil).
 
+### With a settlement contract
+
+When the destination has `settlement`, the leg pays through [OpenRampSettlement](../concepts/settlement.md) instead. The leg declares the `settlement` capability.
+
+- Step 1: `WALLET_TX` with two transactions from `buildSettlementTxs`: `approve` on the token, then `settle` for the session id. The destination `calls` go into `settle`.
+- Step 2: the adapter checks the session with `verifySettlement`. It searches the `Settled` log from the block at which the leg started. The leg is `COMPLETED` when the receipt pays the recipient at least the quoted amount with the session's calls. The transaction hash comes from the log, not from the browser.
+- A poll also completes the leg when the contract already has the receipt, for example after a lost `submit_tx`.
+- The leg is `FAILED` when the transaction reverted, did not settle this session, or settled a different amount, recipient or call bundle.
+
+This works on any EVM chain with an RPC, for example a testnet. The [playground](../guide/playground.md#testnet-mode-real-wallet) uses it on Arbitrum Sepolia and Robinhood Chain Testnet.
+
 ## Quotes
 
 - Fiat legs use fixed test FX rates to USD (USD, EUR, GBP, SGD, MYR, THB, PHP, IDR, VND, INR, BRL, AUD, CAD, JPY, KRW). Other currencies fail with `NO_QUOTES`.

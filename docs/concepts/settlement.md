@@ -77,7 +77,33 @@ Safety rules in the contract:
 
 The planner offers only pathways whose last leg can pay into the contract. The leg declares the `settlement` capability.
 
-Today the Relay `wallet` leg has this capability. It works when the user pays with the destination token on the destination chain. For other tokens or chains, the quote fails with a clear message.
+Today these legs have this capability:
+
+- The Relay `wallet` leg. It works when the user pays with the destination token on the destination chain. For other tokens or chains, the quote fails with a clear message.
+- The `localChain` leg of `@openrampkit/adapter-mock`. It is for tests and demos only. It pays one token on one chain, for example a testnet or a local Anvil chain. It reads the chain over JSON-RPC and calls no other API.
+
+## Try it in the playground
+
+The [playground](../guide/playground.md#testnet-mode-real-wallet) has a testnet mode. Your browser wallet pays a session on Arbitrum Sepolia or Robinhood Chain Testnet. It uses test tokens with no value.
+
+1. Open the playground. Set **Mode** to **Testnet (real wallet)**.
+2. Connect your wallet. Mint the free test token, or get Circle test USDC from the [Circle faucet](https://faucet.circle.com/).
+3. Pay with **Pay with wallet**. Your wallet sends `approve` and `settle`.
+4. The server checks the session with `verifySettlement`. The page links to the transaction on Arbiscan and Blockscout.
+
+Select **Deposit into vault** to run a destination call. The contract deposits the test token into the test ERC-4626 vault, in the same transaction.
+
+The page is static. The server runs in the browser tab, with the mock adapter's `localChain` leg:
+
+```ts
+mockAdapter({
+  settleMs: 0,
+  methods: ['wallet'],
+  localChain: { chain: 'eip155:421614', rpcUrl: 'https://sepolia-rollup.arbitrum.io/rpc', token: TOKEN, symbol: 'tUSDC', decimals: 6 },
+})
+```
+
+To run the same path from Node with a testnet key, use `pnpm testnet:settle` ([`scripts/testnet-settle.mjs`](https://github.com/yosriady/openrampkit/blob/main/scripts/testnet-settle.mjs)). It pays 5 Circle test USDC for a new session id. It prints the transaction and the result of `verifySettlement`.
 
 ## Signed intents
 
@@ -159,6 +185,8 @@ The contract has no upgrade path. Ownership moves in two steps (`transferOwnersh
 | Robinhood Chain Testnet | 46630 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | Not published yet |
 | Arbitrum One | 42161 | Not deployed yet | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (Circle) |
 
-The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. Demo settlements with a test token are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
+The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. Demo settlements, and a settlement through the TypeScript client, are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
+
+On both testnets, a test token with an open mint (no value) is at `0x9A38C55160186C3E1e770e193fA96997e60ed425`. A test ERC-4626 vault for it is at `0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801`. The vault is an allowed call target on both contracts.
 
 To deploy the contract, read [`contracts/README.md`](https://github.com/yosriady/openrampkit/tree/main/contracts#deploy).

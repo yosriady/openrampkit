@@ -27,7 +27,7 @@ export default defineConfig({
     projects: [
       {
         extends: true,
-        test: { name: 'unit', include: ['packages/**/*.test.ts'], exclude: ['**/node_modules/**', SOLID_DOM] },
+        test: { name: 'unit', include: ['packages/**/*.test.ts', 'examples/playground/src/**/*.test.ts'], exclude: ['**/node_modules/**', SOLID_DOM] },
       },
       {
         extends: true,
