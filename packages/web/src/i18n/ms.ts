@@ -39,6 +39,7 @@ export const ms: Messages = {
 
   quotesTitle: 'Pilih sebut harga',
   transferTitle: 'Pindahkan kripto',
+  exchangeTitle: 'Hantar dari bursa',
   sendFrom: 'Hantar dari',
   network: 'Rangkaian',
   token: 'Token',
@@ -84,6 +85,7 @@ export const ms: Messages = {
   expiresIn: (time) => `Tamat dalam ${time}`,
   expired: 'Tamat tempoh',
   depositAddressHint: (symbol, chain) => `Hantar ${symbol} di rangkaian ${chain} ke alamat ini`,
+  exchangeHint: (symbol, chain) => `Hantar dari Binance, Coinbase, OKX atau mana-mana bursa. Di bursa, keluarkan ${symbol} dan pilih rangkaian ${chain}.`,
   address: 'Alamat',
   memo: 'Memo',
   minDeposit: (amount) => `Deposit minimum: ${amount}`,

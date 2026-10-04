@@ -24,6 +24,7 @@ export const icons = {
 
 export function methodIcon(kind: string, method: string) {
   if (method === 'transfer') return icons.transfer
+  if (method === 'exchange_transfer') return icons.exchange
   switch (kind) {
     case 'card':
       return icons.card

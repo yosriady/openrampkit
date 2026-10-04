@@ -191,6 +191,22 @@ describe('tabs and methods', () => {
     })
   })
 
+  it('exchange_transfer works like transfer: no amount, the send-from source, back to methods', async () => {
+    const methods = [...plan().methods, method({ method: 'exchange_transfer', name: 'From an exchange', kind: 'exchange', group: 'more' })]
+    const client = fakeClient({ plan: vi.fn(async () => ({ ...plan(), methods })) as never })
+    const { c } = make({}, client)
+    await c.start()
+    expect(c.methodsForTab('crypto').map((m) => m.method)).toContain('exchange_transfer')
+    await c.selectMethod('exchange_transfer')
+    expect(c.getSnapshot()).toMatchObject({ screen: 'quotes', amount: '' })
+    expect(client.quotes).toHaveBeenCalledWith('ors_1.sig', expect.objectContaining({ method: 'exchange_transfer', amount: '0', source: { chain: 'eip155:42161', token: USDC['eip155:42161'] } }))
+    client.quotes.mockClear()
+    c.setSource({ chain: 'eip155:10', token: USDC['eip155:10']! })
+    await vi.waitFor(() => expect(client.quotes).toHaveBeenCalledOnce())
+    c.back()
+    expect(c.getSnapshot().screen).toBe('methods')
+  })
+
   it('setSource re-quotes only on the transfer quotes screen', async () => {
     const { c, client } = make()
     await c.start()

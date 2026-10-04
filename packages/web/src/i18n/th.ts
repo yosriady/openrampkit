@@ -40,6 +40,7 @@ export const th: Messages = {
 
   quotesTitle: 'เลือกข้อเสนอราคา',
   transferTitle: 'โอนคริปโต',
+  exchangeTitle: 'ส่งจากกระดานเทรด',
   sendFrom: 'ส่งจาก',
   network: 'เครือข่าย',
   token: 'โทเคน',
@@ -85,6 +86,7 @@ export const th: Messages = {
   expiresIn: (time) => `หมดอายุใน ${time}`,
   expired: 'หมดอายุแล้ว',
   depositAddressHint: (symbol, chain) => `ส่ง ${symbol} บนเครือข่าย ${chain} มาที่ที่อยู่นี้`,
+  exchangeHint: (symbol, chain) => `ส่งจาก Binance, Coinbase, OKX หรือกระดานเทรดใดก็ได้ ในกระดานเทรด ให้ถอน ${symbol} และเลือกเครือข่าย ${chain}`,
   address: 'ที่อยู่',
   memo: 'Memo',
   minDeposit: (amount) => `ฝากขั้นต่ำ: ${amount}`,

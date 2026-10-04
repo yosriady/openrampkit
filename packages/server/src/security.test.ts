@@ -225,3 +225,20 @@ describe('error messages', () => {
     expect(r).not.toContain('sk_live_123')
   })
 })
+
+describe('request bodies without a body stream (Firefox)', () => {
+  /** Firefox gives `Request.body` as undefined: only `text()` reads the body. */
+  const noStream = (body: string) => {
+    const req = new Request('https://app.test/x', { method: 'POST', body })
+    Object.defineProperty(req, 'body', { value: undefined })
+    return req
+  }
+
+  it('reads the body with text(), and still applies the size limit', async () => {
+    const { readJson, readText } = await import('./http.js')
+    expect(await readJson(noStream('{"a":1}'))).toEqual({ a: 1 })
+    await expect(readText(noStream('x'.repeat(20)), 10)).rejects.toMatchObject({ status: 413 })
+    const empty = new Request('https://app.test/x')
+    expect(await readText(empty, 10)).toBe('')
+  })
+})

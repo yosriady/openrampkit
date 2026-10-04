@@ -48,24 +48,53 @@
             <option value="fil">Filipino (fil)</option>
           </select>
         </label>
-        <label>Theme
-          <select id="theme">
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
-        </label>
-        <label>Accent
-          <input id="accent" type="color" value="#2744c4" />
-        </label>
         <label>Display
           <select id="display">
             <option value="embedded">Embedded (inline)</option>
             <option value="modal">Modal</option>
           </select>
         </label>
+
+        <h2>Payment sources</h2>
+        <fieldset class="sources">
+          <legend class="sr-only">Payment sources</legend>
+          <label class="check"><input type="checkbox" name="source" value="wallet" checked /><span>Pay with wallet<small>Connected wallet</small></span></label>
+          <label class="check"><input type="checkbox" name="source" value="transfer" checked /><span>Transfer crypto<small>Deposit address and QR</small></span></label>
+          <label class="check"><input type="checkbox" name="source" value="exchange" checked /><span>From an exchange<small>Send from an exchange account</small></span></label>
+          <label class="check"><input type="checkbox" name="source" value="cash" checked /><span>Local cash<small>QR, e-wallet and bank</small></span></label>
+          <label class="check"><input type="checkbox" name="source" value="card" checked /><span>Card<small>Card, Apple Pay, Google Pay</small></span></label>
+        </fieldset>
+
+        <h2>Appearance</h2>
+        <label>Theme
+          <select id="theme">
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="auto">Auto (system)</option>
+          </select>
+        </label>
+        <label>Accent
+          <input id="accent" type="color" value="#2744c4" />
+        </label>
+        <label>Corners
+          <select id="radius">
+            <option value="large">Large</option>
+            <option value="medium">Medium</option>
+            <option value="small">Small</option>
+            <option value="none">Square</option>
+          </select>
+        </label>
+        <label>Font
+          <select id="font">
+            <option value="system">System</option>
+            <option value="rounded">Rounded</option>
+            <option value="serif">Serif</option>
+            <option value="mono">Monospace</option>
+          </select>
+        </label>
         <p class="hint">
-          The page uses a mock wallet with 40 USDC on Base. In a QR step, press "Simulate payment". Card checkout is hidden
-          here because it needs a hosted page. Run <code>examples/next-demo</code> to try it.
+          Four mock providers compete for each route, so you can compare quotes. The page uses a mock wallet with 40 USDC on
+          Base. In a QR or deposit address step, press "Simulate". For card, use the test card 4242 4242 4242 4242.
         </p>
       </section>
 

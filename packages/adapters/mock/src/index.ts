@@ -3,7 +3,7 @@
 
 import { POLL as POLLS, awaitPoll, createAdapter, erc20PaidTo, erc20TransferData, evmRpc } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent } from '@openrampkit/adapter'
-import { CHAINS, OrkException, USDC, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isUsdc, minorUnits, mulRatio, nativeDecimals, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
+import { CHAINS, OrkException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isUsdc, minorUnits, mulRatio, nativeDecimals, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
@@ -22,6 +22,28 @@ export type MockOptions = {
   /** Name shown to users. Default "Test provider". */
   name?: string
   /**
+   * Adapter id. Default `mock`. Give each instance its own id when you configure more than one mock,
+   * for example to compare quotes from several mock providers in a demo.
+   */
+  id?: string
+  /** Fees in basis points per leg. Defaults: card 250, local 100, payin 70, offramp 100, crypto legs 5. */
+  feeBps?: MockFees
+  /** FX spread in basis points on the test rate of the onramp and offramp legs. Default 0. A higher spread gives a worse rate. */
+  spreadBps?: number
+  /** Time estimates in seconds per leg, shown before the user pays. Defaults: see the docs. */
+  eta?: Partial<Record<'card' | 'local' | 'payin' | 'offramp', { min: number; max: number }>>
+  /** Offer only these methods. A leg with methods that keeps none is left out. Default: all methods. */
+  methods?: string[]
+  /** Serve only these countries (ISO 3166-1 alpha-2) on the fiat legs. Default: the built-in regions of each leg. */
+  countries?: string[]
+  /**
+   * How the card leg checks out. `redirect` (default): a hosted checkout page in a new tab.
+   * `form`: test card fields in the widget (a FORM surface), for static demos that cannot serve the hosted page.
+   */
+  cardCheckout?: 'redirect' | 'form'
+  /** With `crypto`: also offer the `exchange_transfer` method ("From an exchange") on the transfer leg. */
+  exchange?: boolean
+  /**
    * Test only: add an `onchain` leg (method `wallet`, surface WALLET_TX) on a local dev chain such as
    * Anvil. It asks the wallet to send `token` to the destination address with a real ERC-20 transfer,
    * and completes only when the receipt, read over JSON-RPC from `rpcUrl`, shows that transfer.
@@ -29,6 +51,9 @@ export type MockOptions = {
    */
   localChain?: MockLocalChain
 }
+
+/** Fees in basis points per leg (see `MockOptions.feeBps`) */
+export type MockFees = { card?: number; local?: number; payin?: number; offramp?: number; crypto?: number }
 
 /** A local dev chain for the mock `onchain` leg (see `MockOptions.localChain`) */
 export type MockLocalChain = {
@@ -116,11 +141,24 @@ function payoutFields(method: string | undefined): FieldSpec[] {
   return [name, { id: 'phone', label: `${method === 'gcash' ? 'GCash' : method === 'momo' ? 'MoMo' : 'E-wallet'} phone number`, type: 'tel', required: true }]
 }
 
+/** Test card fields of the `form` card checkout. Labels are the provider's own (English). */
+const CARD_FIELDS: FieldSpec[] = [
+  { id: 'card_number', label: 'Card number (test: 4242 4242 4242 4242)', type: 'text', required: true },
+  { id: 'expiry', label: 'Expiry (MM/YY)', type: 'text', required: true },
+  { id: 'cvc', label: 'CVC', type: 'text', required: true },
+]
+/** The test card number that the `form` card checkout declines */
+export const MOCK_DECLINED_CARD = '4000000000000002'
+
 const mask = (v: string) => (v.length <= 4 ? v : `${'*'.repeat(Math.min(6, v.length - 4))}${v.slice(-4)}`)
 
 export function mockAdapter(opts: MockOptions = {}) {
   const settleMs = opts.settleMs ?? 3000
   const name = opts.name ?? 'Test provider'
+  const id = opts.id ?? 'mock'
+  const fees = { card: 250, local: 100, payin: 70, offramp: 100, crypto: 5, ...opts.feeBps }
+  const spread = opts.spreadBps ?? 0
+  const cardForm = opts.cardCheckout === 'form'
 
   const legs: LegSpec[] = [
     {
@@ -131,8 +169,8 @@ export function mockAdapter(opts: MockOptions = {}) {
       to: { asset: { kind: 'crypto', chains: { 'eip155:8453': [BASE_USDC.token] } }, location: ['address'] },
       regions: { allow: ['*'], deny: [] },
       limits: { min: '10', max: '20000', currency: 'USD' },
-      eta: { min: 60, max: 300 },
-      surfaces: ['REDIRECT'],
+      eta: opts.eta?.card ?? { min: 60, max: 300 },
+      surfaces: [cardForm ? 'FORM' : 'REDIRECT'],
       requires: ['provider_kyc'],
     },
     {
@@ -143,7 +181,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       to: { asset: { kind: 'crypto', chains: { 'eip155:8453': [BASE_USDC.token] } }, location: ['address'] },
       regions: { allow: ['VN', 'ID', 'PH', 'TH', 'MY', 'SG'], deny: [] },
       limits: { min: '5', max: '3000', currency: 'USD' },
-      eta: { min: 10, max: 120 },
+      eta: opts.eta?.local ?? { min: 10, max: 120 },
       surfaces: ['QR'],
       requires: ['provider_kyc'],
     },
@@ -154,7 +192,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       from: { asset: { kind: 'fiat', currencies: '*' }, location: ['user_account'] },
       to: { asset: { kind: 'fiat', currencies: '*' }, location: ['merchant_account'] },
       regions: { allow: ['*'], deny: [] },
-      eta: { min: 5, max: 60 },
+      eta: opts.eta?.payin ?? { min: 5, max: 60 },
       surfaces: ['QR'],
     },
   ]
@@ -174,7 +212,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       {
         id: 'transfer',
         kind: 'bridge_swap',
-        methods: ['transfer'],
+        methods: opts.exchange ? ['transfer', 'exchange_transfer'] : ['transfer'],
         from: { asset: { kind: 'crypto', chains: '*' }, location: ['user_wallet'] },
         to: { asset: { kind: 'crypto', chains: '*' }, location: ['address'] },
         regions: { allow: ['*'], deny: [] },
@@ -203,7 +241,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       to: { asset: { kind: 'fiat', currencies: Object.keys(USD_PER_UNIT) }, location: ['user_account'] },
       regions: { allow: ['*'], deny: [] },
       limits: { min: '5', max: '5000', currency: 'USD' },
-      eta: { min: 60, max: 900 },
+      eta: opts.eta?.offramp ?? { min: 60, max: 900 },
       surfaces: ['FORM', 'WALLET_TX'],
     })
   }
@@ -227,7 +265,32 @@ export function mockAdapter(opts: MockOptions = {}) {
     })
   }
 
-  const baseOf = (ctx: AdapterContext) => ctx.urls.webhookUrl.replace(/\/webhooks\/mock$/, '')
+  // Countries and methods narrow the legs.
+  if (opts.countries) {
+    const only = opts.countries.map((c) => c.toUpperCase())
+    for (const l of legs) {
+      if (l.kind !== 'fiat_onramp' && l.kind !== 'fiat_payin' && l.kind !== 'crypto_offramp') continue
+      l.regions = { ...l.regions, allow: l.regions.allow.includes('*') ? only : l.regions.allow.filter((c) => only.includes(c)) }
+    }
+  }
+  if (opts.methods) {
+    const only = new Set(opts.methods)
+    for (const l of legs) if (l.methods) l.methods = l.methods.filter((m) => only.has(m))
+  }
+  for (let i = legs.length - 1; i >= 0; i--) {
+    const l = legs[i]!
+    if ((l.methods && !l.methods.length) || !l.regions.allow.length) legs.splice(i, 1)
+  }
+
+  /** Test FX rate with the spread: the user gets less USD when buying and less fiat when selling. */
+  const rateOf = (fiat: string, side: 'buy' | 'sell'): string | undefined => {
+    const r = USD_PER_UNIT[fiat]
+    if (!r || !spread) return r
+    return side === 'buy' ? sub(r, bps(r, spread)) : add(r, bps(r, spread))
+  }
+
+  const webhookSuffix = `/webhooks/${id}`
+  const baseOf = (ctx: AdapterContext) => (ctx.urls.webhookUrl.endsWith(webhookSuffix) ? ctx.urls.webhookUrl.slice(0, -webhookSuffix.length) : ctx.urls.webhookUrl)
   const orderKey = (ref: string) => `order:${ref}`
 
   const fakeAddress = (seed: string) => fakeAddressFor('eip155:1', seed)
@@ -268,6 +331,15 @@ export function mockAdapter(opts: MockOptions = {}) {
     }
   }
 
+  /** The card leg's user step with `cardCheckout: 'form'`: test card fields in the widget. */
+  function cardFormStep(ref: string): LegStep {
+    return {
+      state: 'PAYMENT', sub: 'CARD_DETAILS', status: 'awaiting_user', ref,
+      surface: { kind: 'FORM', fields: CARD_FIELDS },
+      transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }],
+    }
+  }
+
   /** The local chain leg's user step: one ERC-20 transfer to the destination address. */
   function localStep(ref: string, o: MockOrder): LegStep {
     const asset = localAsset!
@@ -299,7 +371,7 @@ export function mockAdapter(opts: MockOptions = {}) {
   }
 
   return createAdapter({
-    id: 'mock',
+    id,
     name,
     legs,
 
@@ -312,14 +384,14 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (spec.kind === 'crypto_offramp') {
         // USDC in, fiat out: 1 USDC = 1 USD, minus 1%.
         const fiat = (leg.to.asset.kind === 'fiat' ? leg.to.asset.currency : ctx.destination.type === 'fiat' ? ctx.destination.currency : 'USD').toUpperCase()
-        const rate = USD_PER_UNIT[fiat]
+        const rate = rateOf(fiat, 'sell')
         if (!rate) throw new OrkException(orkError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
         const inAsset: CryptoAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : leg.from.asset.kind === 'crypto' ? leg.from.asset : BASE_USDC
-        const usdc = amountIn ? amountIn.amount : roundTo(div(mulRatio(amountOut?.amount ?? '0', rate), '0.99'), 6)
-        const fee = roundTo(bps(usdc, 100), 6)
+        const usdc = amountIn ? amountIn.amount : roundTo(div(mulRatio(amountOut?.amount ?? '0', rate), String((10_000 - fees.offramp) / 10_000)), 6)
+        const fee = roundTo(bps(usdc, fees.offramp), 6)
         const out = roundTo(div(sub(usdc, fee), rate), minorUnits(fiat))
         return {
-          adapterId: 'mock', legId: leg.legId,
+          adapterId: id, legId: leg.legId,
           input: { amount: usdc, asset: { ...inAsset, symbol: 'USDC', decimals: 6 } },
           output: { amount: out.startsWith('-') ? '0' : out, asset: { kind: 'fiat', currency: fiat } },
           fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: 'USDC' }],
@@ -328,14 +400,14 @@ export function mockAdapter(opts: MockOptions = {}) {
       }
       if (spec.kind === 'fiat_onramp' || spec.kind === 'fiat_payin') {
         const fiat = (amountIn?.asset.kind === 'fiat' ? amountIn.asset.currency : leg.from.asset.kind === 'fiat' ? leg.from.asset.currency : 'USD').toUpperCase()
-        const rate = USD_PER_UNIT[fiat]
+        const rate = rateOf(fiat, 'buy')
         if (!rate) throw new OrkException(orkError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
         const input = amountIn?.amount ?? '0'
-        const feePct = spec.id === 'card' ? 250 : 100 // bps
+        const feePct = spec.id === 'card' ? fees.card : fees.local
         if (spec.kind === 'fiat_payin') {
-          const fee = roundTo(bps(input, 70), minorUnits(fiat))
+          const fee = roundTo(bps(input, fees.payin), minorUnits(fiat))
           return {
-            adapterId: 'mock', legId: leg.legId,
+            adapterId: id, legId: leg.legId,
             input: { amount: input, asset: { kind: 'fiat', currency: fiat } },
             output: { amount: roundTo(sub(input, fee), minorUnits(fiat)), asset: { kind: 'fiat', currency: fiat } },
             fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: fiat }],
@@ -346,7 +418,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         const fee = bps(usd, feePct)
         const out = roundTo(sub(usd, fee), 6)
         return {
-          adapterId: 'mock', legId: leg.legId,
+          adapterId: id, legId: leg.legId,
           input: { amount: input, asset: { kind: 'fiat', currency: fiat } },
           output: { amount: out.startsWith('-') ? '0' : out, asset: leg.to.asset.kind === 'crypto' ? { ...BASE_USDC, ...leg.to.asset, symbol: 'USDC', decimals: 6 } : BASE_USDC },
           fees: [{ kind: 'provider', label: `${name} fee`, amount: roundTo(mulRatio(fee, String(1 / Number(rate))), minorUnits(fiat)), currency: fiat }],
@@ -357,7 +429,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         // A plain transfer on the local chain: what the user sends arrives.
         const amount = amountIn?.amount ?? amountOut?.amount ?? '0'
         return {
-          adapterId: 'mock', legId: leg.legId,
+          adapterId: id, legId: leg.legId,
           input: { amount, asset: localAsset },
           output: { amount, asset: localAsset },
           fees: [],
@@ -366,10 +438,10 @@ export function mockAdapter(opts: MockOptions = {}) {
       }
       // crypto legs: 1:1 minus 5 bps
       const input = amountIn?.amount ?? amountOut?.amount ?? '0'
-      const fee = bps(input, 5)
+      const fee = bps(input, fees.crypto)
       const inAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : BASE_USDC
       return {
-        adapterId: 'mock', legId: leg.legId,
+        adapterId: id, legId: leg.legId,
         input: { amount: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : nativeDecimals(inAsset.chain)) } },
         output: { amount: roundTo(sub(input, fee), 6), asset: destAsset(ctx) },
         fees: [{ kind: 'network', label: 'Network and bridge', amount: roundTo(fee, 6), currency: 'USDC' }],
@@ -390,9 +462,10 @@ export function mockAdapter(opts: MockOptions = {}) {
       const base = baseOf(ctx)
       switch (leg.legId) {
         case 'card':
+          if (cardForm) return cardFormStep(ref)
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
-            surface: { kind: 'REDIRECT', url: `${base}/adapters/mock/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.amount}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
+            surface: { kind: 'REDIRECT', url: `${base}/adapters/${id}/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.amount}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
             transitions: [awaitPoll(POLL)],
           }
         case 'local':
@@ -429,9 +502,12 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'transfer': {
           const src = quote.input.asset.kind === 'crypto' ? quote.input.asset : BASE_USDC
           const address = fakeAddressFor(src.chain, `${ctx.session.userId}:${src.chain}:${src.token}`)
+          const warning = leg.method === 'exchange_transfer'
+            ? `In your exchange, withdraw ${symbolOf(src)} and choose the ${chainName(src.chain)} network. This is a test address.`
+            : `Send only ${symbolOf(src)} on ${chainName(src.chain)}. This is a test address.`
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
-            surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning: `Send only ${symbolOf(src)} on ${chainName(src.chain)}. This is a test address.` },
+            surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning },
             transitions: [
               { name: 'simulate_deposit', kind: 'SUBMIT', label: 'Simulate deposit (test mode)' },
               awaitPoll(POLL),
@@ -483,6 +559,20 @@ export function mockAdapter(opts: MockOptions = {}) {
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
         return verifyLocal(ref, next, ctx)
       }
+      if (o.kind === 'card' && t === 'pay_card') {
+        if (!cardForm) throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+        if (o.status !== 'awaiting') throw new OrkException(orkError('BAD_REQUEST', { message: 'This card payment is already sent.' }), 409)
+        const v = (k: string) => (typeof inputs?.[k] === 'string' ? (inputs[k] as string).replace(/\s+/g, '') : '')
+        if (!/^[0-9]{12,19}$/.test(v('card_number'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid card number.' }), 400)
+        if (!/^(0[1-9]|1[0-2])\/?[0-9]{2}$/.test(v('expiry'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the expiry as MM/YY.' }), 400)
+        if (!/^[0-9]{3,4}$/.test(v('cvc'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid CVC.' }), 400)
+        if (v('card_number') === MOCK_DECLINED_CARD) {
+          await ctx.shared.put(orderKey(ref), { ...o, status: 'failed' }, ORDER_TTL_SEC)
+          return { state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message: 'The test card was declined.' }), ref }
+        }
+        await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
+        return { state: 'PROCESSING', sub: 'SETTLING', status: 'processing', ref, transitions: [awaitPoll(POLL)] }
+      }
       if (o.kind === 'offramp' && t === 'submit_tx' && !o.account) {
         throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
       }
@@ -504,6 +594,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (done) return done
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))
       if (o?.kind === 'offramp') return offrampStep(ref, o)
+      if (o?.kind === 'card' && cardForm && o.status === 'awaiting') return cardFormStep(ref)
       return { state: 'PAYMENT', status: 'awaiting_user', ref, transitions: [awaitPoll(POLL)] }
     },
 
@@ -513,7 +604,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (subpath === 'checkout' && req.method === 'GET') {
         const amount = escapeHtml(url.searchParams.get('amount') ?? '')
         const currency = escapeHtml(url.searchParams.get('currency') ?? '')
-        return new Response(checkoutPage(escapeHtml(name), amount, currency, escapeHtml(ref), `${ctx.baseUrl}/adapters/mock/pay`), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        return new Response(checkoutPage(escapeHtml(name), amount, currency, escapeHtml(ref), `${ctx.baseUrl}/adapters/${id}/pay`), { headers: { 'content-type': 'text/html; charset=utf-8' } })
       }
       if (subpath === 'pay' && req.method === 'POST') {
         const form = await req.formData()

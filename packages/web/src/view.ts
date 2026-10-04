@@ -36,7 +36,7 @@ export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: A
       if (withdraw && s.tab === 'crypto') return m.withdrawAmountTitle
       return s.method?.name ?? base
     case 'quotes':
-      return s.method?.method === 'transfer' ? m.transferTitle : m.quotesTitle
+      return s.method?.method === 'exchange_transfer' ? m.exchangeTitle : s.method?.method === 'transfer' ? m.transferTitle : m.quotesTitle
     case 'step': {
       const step = s.session?.step
       if (withdraw && step) {

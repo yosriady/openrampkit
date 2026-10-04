@@ -481,13 +481,27 @@ export const styles = css`
     color: var(--ork-color-text);
     font: inherit;
   }
+  /* One look in Chrome, Safari and Firefox: no native arrow, our chevron centred 12px from the right */
   select.input {
     -webkit-appearance: none;
+    -moz-appearance: none;
     appearance: none;
-    padding-right: 34px;
+    height: 44px;
+    padding-top: 0;
+    padding-bottom: 0;
+    padding-right: 36px;
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    cursor: pointer;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%238B93A2' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 12px center;
+    background-size: 12px 12px;
+  }
+  select.input::-ms-expand {
+    display: none;
   }
   .input:focus {
     border-color: var(--ork-color-accent);

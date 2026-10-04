@@ -40,6 +40,7 @@ export const fil: Messages = {
 
   quotesTitle: 'Pumili ng quote',
   transferTitle: 'Mag-transfer ng crypto',
+  exchangeTitle: 'Magpadala mula sa exchange',
   sendFrom: 'Ipadala mula sa',
   network: 'Network',
   token: 'Token',
@@ -85,6 +86,7 @@ export const fil: Messages = {
   expiresIn: (time) => `Mag-e-expire sa loob ng ${time}`,
   expired: 'Nag-expire na',
   depositAddressHint: (symbol, chain) => `Magpadala ng ${symbol} sa ${chain} sa address na ito`,
+  exchangeHint: (symbol, chain) => `Magpadala mula sa Binance, Coinbase, OKX o anumang exchange. Sa exchange, i-withdraw ang ${symbol} at piliin ang ${chain} network.`,
   address: 'Address',
   memo: 'Memo',
   minDeposit: (amount) => `Minimum na deposit: ${amount}`,

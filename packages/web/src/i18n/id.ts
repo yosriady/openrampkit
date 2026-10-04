@@ -39,6 +39,7 @@ export const id: Messages = {
 
   quotesTitle: 'Pilih penawaran',
   transferTitle: 'Transfer kripto',
+  exchangeTitle: 'Kirim dari exchange',
   sendFrom: 'Kirim dari',
   network: 'Jaringan',
   token: 'Token',
@@ -84,6 +85,7 @@ export const id: Messages = {
   expiresIn: (time) => `Kedaluwarsa dalam ${time}`,
   expired: 'Kedaluwarsa',
   depositAddressHint: (symbol, chain) => `Kirim ${symbol} di jaringan ${chain} ke alamat ini`,
+  exchangeHint: (symbol, chain) => `Kirim dari Binance, Coinbase, OKX, atau exchange mana pun. Di exchange, tarik ${symbol} dan pilih jaringan ${chain}.`,
   address: 'Alamat',
   memo: 'Memo',
   minDeposit: (amount) => `Setoran minimal: ${amount}`,

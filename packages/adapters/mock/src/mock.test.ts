@@ -359,3 +359,104 @@ describe('mock adapter: Solana', () => {
     expect(chains).toContain('eip155:8453')
   })
 })
+
+describe('mock adapter: several instances (demo options)', () => {
+  const VN_DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, address: DEST }
+
+  it('keeps the defaults when no new option is given', () => {
+    const a = mockAdapter({ crypto: true })
+    expect(a.id).toBe('mock')
+    expect(a.legs.find((l) => l.id === 'card')).toMatchObject({ surfaces: ['REDIRECT'], eta: { min: 60, max: 300 }, regions: { allow: ['*'] } })
+    expect(a.legs.find((l) => l.id === 'transfer')!.methods).toEqual(['transfer'])
+  })
+
+  it('id, fees, spread and eta: quotes carry the id and differ per instance', async () => {
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
+    const cheap = mockAdapter({ id: 'mock-b', name: 'Mock B', feeBps: { local: 40, card: 100, offramp: 50, crypto: 0, payin: 0 }, spreadBps: 100, eta: { local: { min: 5, max: 30 } } })
+    expect(cheap.id).toBe('mock-b')
+    expect(cheap.legs.find((l) => l.id === 'local')!.eta).toEqual({ min: 5, max: 30 })
+    const local = await cheap.quote({ leg: { ...localLeg, adapterId: 'mock-b' }, amountIn: fiat('VND', '1000000') }, ctx)
+    // 1,000,000 VND x 0.0000395 = 39.5 USD; spread 1% gives 39.105; fee 0.4% gives 38.94858
+    expect(local).toMatchObject({ adapterId: 'mock-b', output: { amount: '38.948580' }, fees: [{ label: 'Mock B fee' }] })
+    const card = await cheap.quote({ leg: { ...cardLeg, adapterId: 'mock-b' }, amountIn: fiat('USD', '100') }, ctx)
+    expect(card.output.amount).toBe('98.010000')
+    const payin = await cheap.quote({ leg: { ...payinLeg, adapterId: 'mock-b' }, amountIn: fiat('IDR', '150000') }, ctx)
+    expect(payin.output.amount).toBe('150000')
+    for (const q of [local, card, payin]) expect(checkLegQuote(q)).toEqual([])
+  })
+
+  it('methods and countries narrow the legs; legs with no methods left are dropped', () => {
+    const a = mockAdapter({ methods: ['vietqr', 'qris'], countries: ['VN', 'US'] })
+    expect(a.legs.map((l) => l.id)).toEqual(['local', 'payin'])
+    expect(a.legs[0]).toMatchObject({ methods: ['vietqr', 'qris'], regions: { allow: ['VN'] } })
+    expect(a.legs[1]).toMatchObject({ methods: ['qris', 'vietqr'], regions: { allow: ['VN', 'US'] } })
+    const cards = mockAdapter({ methods: ['card', 'apple_pay', 'google_pay'], crypto: true })
+    expect(cards.legs.map((l) => l.id)).toEqual(['card', 'payin'])
+    expect(mockAdapter({ countries: ['FR'] }).legs.map((l) => l.id)).toEqual(['card', 'payin'])
+  })
+
+  it('several instances give several VietQR pathways, one per provider', () => {
+    const adapters = [
+      mockAdapter({ id: 'mock', name: 'Mock Onramp A' }),
+      mockAdapter({ id: 'mock-b', name: 'Mock Onramp B', methods: ['card', 'vietqr'] }),
+      mockAdapter({ id: 'mock-local', name: 'Mock Local Rails', methods: ['vietqr'], countries: ['VN'] }),
+      mockAdapter({ id: 'mock-card', name: 'Mock Card Onramp', methods: ['card'] }),
+    ]
+    const legs = adapters.flatMap((a) => a.legs.map((spec) => ({ adapterId: a.id, provider: a.name, spec })))
+    const plan = planPathways({ direction: 'deposit', destination: VN_DEST, user: { country: 'VN' }, legs })
+    expect(plan.methods.find((m) => m.method === 'vietqr')!.providers).toEqual(['Mock Onramp A', 'Mock Onramp B', 'Mock Local Rails'])
+    expect(plan.methods.find((m) => m.method === 'card')!.providers).toEqual(['Mock Onramp A', 'Mock Onramp B', 'Mock Card Onramp'])
+  })
+
+  it('routes use the instance id: checkout URL and pay form action', async () => {
+    const a = mockAdapter({ id: 'mock-b' })
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch, urls: { webhookUrl: 'https://app.test/api/openramp/webhooks/mock-b' } })
+    const q = await a.quote({ leg: { ...cardLeg, adapterId: 'mock-b' }, amountIn: fiat('USD', '25') }, ctx)
+    const step = await a.start({ leg: { ...cardLeg, adapterId: 'mock-b' }, quote: q }, ctx)
+    const url = new URL((step.surface as { url: string }).url)
+    expect(url.origin + url.pathname).toBe('https://app.test/api/openramp/adapters/mock-b/checkout')
+    const { ctx: rctx } = routeCtx()
+    const page = await (await a.routes!(new Request(`https://app.test/api/openramp/adapters/mock-b/checkout?ref=${step.ref}`), 'checkout', rctx))!.text()
+    expect(page).toContain('action="https://app.test/api/openramp/adapters/mock-b/pay"')
+  })
+
+  it('cardCheckout form: test card fields in the widget, pay, decline and validation', async () => {
+    vi.useFakeTimers()
+    const a = mockAdapter({ cardCheckout: 'form', settleMs: 1000 })
+    expect(a.legs.find((l) => l.id === 'card')!.surfaces).toEqual(['FORM'])
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
+    const q = await a.quote({ leg: cardLeg, amountIn: fiat('USD', '50') }, ctx)
+    const step = await a.start({ leg: cardLeg, quote: q }, ctx)
+    expect(step).toMatchObject({ state: 'PAYMENT', sub: 'CARD_DETAILS', surface: { kind: 'FORM' }, transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }] })
+    expect((step.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['card_number', 'expiry', 'cvc'])
+    expect(checkLegStep(step)).toEqual([])
+    // A status poll keeps the form on screen
+    expect(await a.status!({ leg: cardLeg, ref: step.ref! }, ctx)).toMatchObject({ surface: { kind: 'FORM' } })
+    const pay = (inputs: Record<string, string>, ref = step.ref!) => a.transition!({ leg: cardLeg, ref, name: 'pay_card', inputs }, ctx)
+    await expect(pay({ card_number: '42', expiry: '12/30', cvc: '123' })).rejects.toMatchObject({ status: 400, error: { message: 'Enter a valid card number.' } })
+    await expect(pay({ card_number: '4242 4242 4242 4242', expiry: '13/30', cvc: '123' })).rejects.toMatchObject({ error: { message: 'Enter the expiry as MM/YY.' } })
+    await expect(pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '1' })).rejects.toMatchObject({ error: { message: 'Enter a valid CVC.' } })
+    expect(await pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '123' })).toMatchObject({ state: 'PROCESSING', sub: 'SETTLING' })
+    await expect(pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '123' })).rejects.toMatchObject({ status: 409 })
+    vi.advanceTimersByTime(1000)
+    expect(await a.status!({ leg: cardLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED' })
+    // The decline test card fails the payment
+    const s2 = await a.start({ leg: cardLeg, quote: q }, ctx)
+    expect(await pay({ card_number: '4000 0000 0000 0002', expiry: '12/30', cvc: '123' }, s2.ref!)).toMatchObject({ state: 'FAILED', error: { code: 'PAYMENT_FAILED' } })
+    // Without the form option the transition is refused
+    const r = mockAdapter()
+    const s3 = await r.start({ leg: cardLeg, quote: q }, ctx)
+    await expect(r.transition!({ leg: cardLeg, ref: s3.ref!, name: 'pay_card', inputs: {} }, ctx)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('exchange: the transfer leg also offers exchange_transfer, with exchange copy on the deposit address', async () => {
+    const a = mockAdapter({ crypto: true, exchange: true })
+    expect(a.legs.find((l) => l.id === 'transfer')!.methods).toEqual(['transfer', 'exchange_transfer'])
+    expect(mockAdapter({ exchange: true }).legs.some((l) => l.id === 'transfer')).toBe(false)
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
+    const q = await a.quote({ leg: transferLeg, amountIn: { amount: '1', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
+    const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
+    expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', warning: 'In your exchange, withdraw USDC and choose the Arbitrum network. This is a test address.' })
+    expect(await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)).toMatchObject({ state: 'PROCESSING' })
+  })
+})

@@ -47,7 +47,44 @@ body { margin: 0; background: var(--bg); color: var(--text); min-height: 100vh; 
 .panel h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); margin: 0 0 12px; }
 .panel h2:not(:first-child) { margin-top: 20px; }
 label { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin: 10px 0; font-size: 14px; }
-select { font: inherit; font-size: 14px; padding: 6px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--panel); color: var(--text); max-width: 60%; }
+/* Selects look the same in Chrome, Safari and Firefox: no native arrow, one chevron centred 12px from the right. */
+select {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1.25;
+  height: 36px;
+  padding: 0 34px 0 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text);
+  background-color: var(--panel);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%2364748b' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  background-size: 12px 12px;
+  width: 60%;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+select::-ms-expand { display: none; }
+select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body[data-mode='dark'] select {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12' fill='none' stroke='%2394a3b8' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M3 4.5 6 7.5 9 4.5'/%3E%3C/svg%3E");
+}
+@media (pointer: coarse), (max-width: 479px) { select { height: 44px; } }
+.sources { border: 0; margin: 0; padding: 0; display: grid; gap: 2px; }
+label.check { justify-content: flex-start; align-items: flex-start; gap: 10px; margin: 6px 0; cursor: pointer; }
+label.check input { width: 18px; height: 18px; margin: 1px 0 0; accent-color: var(--accent); flex: none; }
+label.check span { display: flex; flex-direction: column; gap: 1px; }
+label.check small { color: var(--muted); font-size: 12px; }
+@media (pointer: coarse), (max-width: 479px) { label.check { min-height: 44px; align-items: center; } }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 input[type='color'] { width: 44px; height: 30px; padding: 0; border: 1px solid var(--border); border-radius: 8px; background: none; }
 .hint { font-size: 13px; color: var(--muted); line-height: 1.5; }
 .stage { min-width: 0; display: flex; flex-direction: column; align-items: stretch; gap: 12px; }

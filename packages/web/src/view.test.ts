@@ -55,6 +55,7 @@ describe('screenTitle', () => {
     expect(screenTitle(snap({ screen: 'amount', method: method({ method: 'card', name: 'Card' }) }), en)).toBe('Card')
     expect(screenTitle(snap({ screen: 'amount' }), en)).toBe('Deposit')
     expect(screenTitle(snap({ screen: 'quotes', method: method({ method: 'transfer' }) }), en)).toBe('Transfer crypto')
+    expect(screenTitle(snap({ screen: 'quotes', method: method({ method: 'exchange_transfer' }) }), en)).toBe('Send from an exchange')
     expect(screenTitle(snap({ screen: 'quotes', method: method({ method: 'card' }) }), en)).toBe('Choose a quote')
     expect(screenTitle(snap({ screen: 'step', session: session('PAYMENT') }), en)).toBe('Complete payment')
     expect(screenTitle(snap({ screen: 'step', session: session('WEIRD' as never) }), en)).toBe('Deposit')

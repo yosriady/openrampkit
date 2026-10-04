@@ -4,7 +4,7 @@ import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
-import { isWebUrl, methodName } from '@openrampkit/core'
+import { isAddressTransfer, isWebUrl, methodName } from '@openrampkit/core'
 import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
@@ -828,7 +828,7 @@ export class OpenRampModal extends LitElement {
 
   private _renderQuotes(m: Messages, s: Snapshot) {
     const c = this.controller!
-    const isTransfer = s.method?.method === 'transfer'
+    const isTransfer = isAddressTransfer(s.method?.method)
     const errors = dedupe(s.quoteErrors.map((e) => e.message))
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return
@@ -1076,6 +1076,7 @@ export class OpenRampModal extends LitElement {
         const chain = surface.chainName ?? displayChain(surface.chain)
         const symbol = surface.symbol ?? 'tokens'
         return html`
+          ${s.method?.method === 'exchange_transfer' ? html`<div class="notice info">${icons.exchange}<span>${m.exchangeHint(symbol, chain)}</span></div>` : nothing}
           <div class="hint" style="margin-top:0">${m.depositAddressHint(symbol, chain)}</div>
           ${this._qr(surface.address, m.address)}
           <div class="kv">

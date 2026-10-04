@@ -68,7 +68,13 @@ export async function readText(req: Request, max: number): Promise<string> {
   const tooLarge = () => new OrkException(orkError('BAD_REQUEST', { message: `The request body is larger than ${max} bytes.` }), 413)
   const declared = Number(req.headers.get('content-length'))
   if (Number.isFinite(declared) && declared > max) throw tooLarge()
-  if (!req.body) return ''
+  if (req.body === null) return ''
+  if (req.body === undefined) {
+    // Firefox has no `Request.body` stream (for example for the playground's in-page server): read it whole.
+    const text = await req.text()
+    if (new TextEncoder().encode(text).byteLength > max) throw tooLarge()
+    return text
+  }
   const reader = req.body.getReader()
   const chunks: Uint8Array[] = []
   let size = 0
