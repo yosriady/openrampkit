@@ -10,11 +10,15 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@openrampkit/adapter": "workspace:*",
     "@openrampkit/adapter-mock": "workspace:*",
     "@openrampkit/client": "workspace:*",
     "@openrampkit/core": "workspace:*",
     "@openrampkit/server": "workspace:*",
-    "@openrampkit/web": "workspace:*"
+    "@openrampkit/wagmi": "workspace:*",
+    "@openrampkit/web": "workspace:*",
+    "@wagmi/core": "^2.17.0",
+    "viem": "^2.30.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",

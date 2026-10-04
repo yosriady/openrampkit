@@ -27,3 +27,22 @@ Check a session on chain:
 cast call 0xBF66696115128B8f9f794780061348b4213A7132 'isSettled(bytes32)(bool)' \
   $(cast format-bytes32-string ors_demo_vault) --rpc-url https://sepolia-rollup.arbitrum.io/rpc
 ```
+
+## Settlement through the TypeScript client
+
+`scripts/testnet-settle.mjs` runs one settlement through the same code path as the playground's testnet mode: the OpenRampKit server with the mock adapter's settlement leg, then plan, quote and select, then the WALLET_TX step (`approve` and `settle` from `buildSettlementTxs`), then `submit_tx`. The server checks the session with `verifySettlement`, and the script checks it again.
+
+It paid 5 Circle test USDC (`0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d`, no value) from the deployer to the deployer, on Arbitrum Sepolia (4 October 2026).
+
+| Session | Step | Transaction |
+|---|---|---|
+| `ors_3c1b83f06b31d3def280b8bd` | `approve` | [0x6ca35ca9…](https://sepolia.arbiscan.io/tx/0x6ca35ca9a7435ec1e975ea30a1b1a86fc1354bec25ffa70237134193bd7662b1) |
+| `ors_3c1b83f06b31d3def280b8bd` | `settle` | [0x803d429a…](https://sepolia.arbiscan.io/tx/0x803d429a38115a65b9f98616fb2e6ca442f3dfdc8ede73288acdc3febe548834) · [Blockscout](https://arbitrum-sepolia.blockscout.com/tx/0x803d429a38115a65b9f98616fb2e6ca442f3dfdc8ede73288acdc3febe548834) |
+
+Session state: `COMPLETED`. `verifySettlement`: settled, 5000000 base units, block 315642124.
+
+Run it again (it reads `DEPLOYER_PRIVATE_KEY` from `contracts/.env` and never prints it):
+
+```bash
+pnpm testnet:settle
+```

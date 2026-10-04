@@ -8,7 +8,7 @@
     <link rel="stylesheet" href="./src/style.css" />
   </head>
   <body data-mode="light">
-    <div class="banner" role="note" data-testid="demo-banner">
+    <div id="banner" class="banner" role="note" data-testid="demo-banner">
       <strong>Demo mode:</strong> mock providers, no real money. The OpenRampKit server runs in this browser tab.
     </div>
     <header class="top">
@@ -21,6 +21,40 @@
     <main class="grid">
       <section class="panel" aria-label="Setup">
         <h2>Setup</h2>
+        <label>Mode
+          <select id="mode">
+            <option value="mock">Demo (mock providers)</option>
+            <option value="testnet">Testnet (real wallet)</option>
+          </select>
+        </label>
+        <div id="testnet-setup" class="testnet" hidden>
+          <p class="hint">
+            Pay with your own browser wallet on a testnet. Your wallet sends <code>approve</code> and <code>settle</code> to the
+            OpenRampSettlement contract. The server checks the session on chain.
+          </p>
+          <label>Network <select id="tn-network"></select></label>
+          <label>Token <select id="tn-token"></select></label>
+          <label>Destination
+            <select id="tn-dest">
+              <option value="plain">Plain settlement</option>
+              <option value="vault">Deposit into vault</option>
+            </select>
+          </label>
+          <label id="tn-amount-row" hidden>Vault amount <input id="tn-amount" type="text" inputmode="decimal" value="5" /></label>
+          <div class="tn-wallet">
+            <span>Wallet</span>
+            <strong id="tn-status" data-testid="testnet-wallet">Not connected</strong>
+          </div>
+          <div class="tn-actions">
+            <button id="tn-connect" class="btn-small" type="button">Connect wallet</button>
+            <button id="tn-switch" class="btn-small" type="button" hidden>Switch network</button>
+            <button id="tn-mint" class="btn-small" type="button" hidden>Mint</button>
+            <a id="tn-faucet" class="btn-small" href="https://faucet.circle.com/" target="_blank" rel="noopener" hidden>Circle faucet</a>
+            <button id="tn-start" class="btn-small primary" type="button">Start deposit</button>
+          </div>
+          <p id="tn-message" class="tn-message" role="status" data-testid="testnet-message" hidden></p>
+        </div>
+        <div id="mock-setup">
         <label>Flow
           <select id="direction">
             <option value="deposit">Deposit</option>
@@ -64,6 +98,7 @@
           <label class="check"><input type="checkbox" name="source" value="cash" checked /><span>Local cash<small>QR, e-wallet and bank</small></span></label>
           <label class="check"><input type="checkbox" name="source" value="card" checked /><span>Card<small>Card, Apple Pay, Google Pay</small></span></label>
         </fieldset>
+        </div>
 
         <h2>Appearance</h2>
         <label>Theme
@@ -92,7 +127,7 @@
             <option value="mono">Monospace</option>
           </select>
         </label>
-        <p class="hint">
+        <p class="hint" id="mock-hint">
           Four mock providers compete for each route, so you can compare quotes. The page uses a mock wallet with 40 USDC on
           Base. In a QR or deposit address step, press "Simulate". For card, use the test card 4242 4242 4242 4242.
         </p>
@@ -100,6 +135,7 @@
 
       <section class="stage" aria-label="Widget">
         <div id="widget"></div>
+        <div id="tn-result" class="tn-result" role="status" data-testid="testnet-result" hidden></div>
         <button id="open" class="open" type="button" hidden>Deposit</button>
       </section>
 
