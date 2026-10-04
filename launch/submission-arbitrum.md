@@ -61,9 +61,9 @@ The project started on 29 September 2026. All code was written in the buildathon
 ## Links
 
 - Repo: https://github.com/yosriady/openrampkit [make public]
-- Live demo: https://yosriady.github.io/openrampkit/playground/
-- Docs: https://yosriady.github.io/openrampkit/
-- Settlement docs: https://yosriady.github.io/openrampkit/concepts/settlement
+- Live demo: https://openrampkit-getformo.vercel.app/playground/
+- Docs: https://openrampkit-getformo.vercel.app/
+- Settlement docs: https://openrampkit-getformo.vercel.app/concepts/settlement
 - Demo video: [link]
 - Pitch deck: [link]
 
@@ -89,7 +89,7 @@ Open core. The kit is free and self-hosted. Revenue comes from:
 
 **Link to frontend/UI/website**
 
-https://yosriady.github.io/openrampkit/playground/ (live demo, mock providers). Docs: https://yosriady.github.io/openrampkit/
+https://openrampkit-getformo.vercel.app/playground/ (live demo, mock providers). Docs: https://openrampkit-getformo.vercel.app/
 
 **Core Protocol / Smart Contract Addresses**
 

@@ -11,7 +11,7 @@ Solving the onboarding chasm of getting billions of users onchain.
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.9-3178c6?logo=typescript&logoColor=white)](tsconfig.base.json)
 
-**[Docs](https://yosriady.github.io/openrampkit/)** · **[Live demo](https://yosriady.github.io/openrampkit/playground/)** · **[Security](SECURITY.md)**
+**[Docs](https://openrampkit-getformo.vercel.app/)** · **[Live demo](https://openrampkit-getformo.vercel.app/playground/)** · **[Security](SECURITY.md)**
 
 </div>
 
@@ -28,7 +28,7 @@ Solving the onboarding chasm of getting billions of users onchain.
 OpenRampKit gives your app one deposit and withdraw modal, a server that you host, and provider adapters that anyone can write. Withdrawals are supported too. Local payment methods are first class: VietQR, QRIS, PromptPay, QR Ph, PayNow and GCash sit next to cards, Pix, UPI and SEPA.
 
 > [!NOTE]
-> **Status: prototype.** Packages are at `0.0.1` and APIs will change. The [live demo](https://yosriady.github.io/openrampkit/playground/) uses mock providers and moves no real money.
+> **Status: prototype.** Packages are at `0.0.1` and APIs will change. The [live demo](https://openrampkit-getformo.vercel.app/playground/) uses mock providers and moves no real money.
 
 ## Contents
 
@@ -107,7 +107,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 
 ## Quick start
 
-This example uses Next.js and the mock adapter, so you need no provider account. See the full [Quick start (Next.js)](https://yosriady.github.io/openrampkit/guide/quick-start-nextjs) guide.
+This example uses Next.js and the mock adapter, so you need no provider account. See the full [Quick start (Next.js)](https://openrampkit-getformo.vercel.app/guide/quick-start-nextjs) guide.
 
 ### 1. Install
 
@@ -211,7 +211,7 @@ export async function POST(req: Request) {
 }
 ```
 
-Next steps: [Webhooks](https://yosriady.github.io/openrampkit/guide/webhooks), [Withdrawals](https://yosriady.github.io/openrampkit/guide/withdraw), [Theming](https://yosriady.github.io/openrampkit/guide/theming), [Production checklist](https://yosriady.github.io/openrampkit/deploy/checklist).
+Next steps: [Webhooks](https://openrampkit-getformo.vercel.app/guide/webhooks), [Withdrawals](https://openrampkit-getformo.vercel.app/guide/withdraw), [Theming](https://openrampkit-getformo.vercel.app/guide/theming), [Production checklist](https://openrampkit-getformo.vercel.app/deploy/checklist).
 
 ## How it works
 
@@ -241,7 +241,7 @@ sequenceDiagram
 - **Server-driven steps.** The server tells the modal what to show next: a QR code, a redirect, a deposit address or a wallet transaction. The modal has no provider logic.
 - **Errors are fields.** A failed quote or payment is an `OrkError` with a code, a safe message and a recovery hint.
 
-Read more: [Architecture](https://yosriady.github.io/openrampkit/concepts/architecture), [Pathways and legs](https://yosriady.github.io/openrampkit/concepts/pathways), [Sessions and security](https://yosriady.github.io/openrampkit/concepts/sessions), [Surfaces](https://yosriady.github.io/openrampkit/concepts/surfaces).
+Read more: [Architecture](https://openrampkit-getformo.vercel.app/concepts/architecture), [Pathways and legs](https://openrampkit-getformo.vercel.app/concepts/pathways), [Sessions and security](https://openrampkit-getformo.vercel.app/concepts/sessions), [Surfaces](https://openrampkit-getformo.vercel.app/concepts/surfaces).
 
 ## Packages
 
@@ -279,7 +279,7 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | `peer` | [`adapter-peer`](packages/adapters/peer) | P2P rails (zkp2p): Venmo, Cash App, Zelle, Chime, PayPal, Revolut, Wise | New. Opt-in (`enabled: true`); read the warning |
 | `mock` | [`adapter-mock`](packages/adapters/mock) | Every surface type, for dev, tests and the demo | Mock. Moves no money. Refuses live sessions |
 
-"TO VERIFY" means the source marks a provider detail as not yet checked against the live API. See the [adapter docs](https://yosriady.github.io/openrampkit/adapters/) and [Writing an adapter](https://yosriady.github.io/openrampkit/adapters/writing-an-adapter).
+"TO VERIFY" means the source marks a provider detail as not yet checked against the live API. See the [adapter docs](https://openrampkit-getformo.vercel.app/adapters/) and [Writing an adapter](https://openrampkit-getformo.vercel.app/adapters/writing-an-adapter).
 
 ## Chains and payment methods
 
@@ -292,9 +292,9 @@ Chains use CAIP-2 ids. `CHAINS` in `@openrampkit/core` holds the metadata. A cha
 | Ethereum, Base, Optimism, Polygon | `eip155:1`, `eip155:8453`, `eip155:10`, `eip155:137` | Base is the default hop chain for two-leg pathways |
 | Arbitrum | `eip155:42161` | Settlement contract target. Arbitrum Sepolia (`eip155:421614`) for tests |
 | BNB Chain, Monad, HyperEVM | `eip155:56`, `eip155:143`, `eip155:999` | Chain metadata. Routes come from the adapters you configure |
-| Tempo | `eip155:4217` | Stablecoin fees, no native gas token. Through Relay. See [Tempo](https://yosriady.github.io/openrampkit/concepts/chains#tempo) |
+| Tempo | `eip155:4217` | Stablecoin fees, no native gas token. Through Relay. See [Tempo](https://openrampkit-getformo.vercel.app/concepts/chains#tempo) |
 | Robinhood Chain | `eip155:4663` | Arbitrum Orbit L2. Testnet `eip155:46630` is a settlement deploy target |
-| Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Destination and source. See [Solana](https://yosriady.github.io/openrampkit/guide/solana) |
+| Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | Destination and source. See [Solana](https://openrampkit-getformo.vercel.app/guide/solana) |
 
 ### Payment methods
 
@@ -316,7 +316,7 @@ The method vocabulary is in `packages/core/src/codes.ts`. Which methods a user s
 | Global | Card, Apple Pay, Google Pay | Swapped, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper |
 | Crypto | Pay with wallet, Transfer crypto | Relay |
 
-\* Xendit pays into your own merchant account (a [merchant fiat destination](https://yosriady.github.io/openrampkit/guide/merchant-destination)). Swapped, Transak, Meld and Onramper also read a live catalog, so the exact list per country can change.
+\* Xendit pays into your own merchant account (a [merchant fiat destination](https://openrampkit-getformo.vercel.app/guide/merchant-destination)). Swapped, Transak, Meld and Onramper also read a live catalog, so the exact list per country can change.
 
 **Withdraw targets:** a wallet address on any chain that Relay supports, or cash through Swapped payouts (bank transfer in EUR, DKK and GBP, Skrill, Pix in Brazil, Interac in Canada).
 
@@ -342,17 +342,17 @@ Demo settlements (a plain one, and one into a vault in the same transaction) and
 
 TypeScript helpers (`buildSettlementTxs`, `verifySettlement`, the ABI) are in `@openrampkit/adapter`. Today the Relay `wallet` leg can pay into the contract.
 
-Read the [settlement docs](https://yosriady.github.io/openrampkit/concepts/settlement) and [contracts/README.md](contracts/README.md).
+Read the [settlement docs](https://openrampkit-getformo.vercel.app/concepts/settlement) and [contracts/README.md](contracts/README.md).
 
 ## Deploy
 
 | Host | How | Guide |
 |---|---|---|
-| Cloudflare Workers | A Worker with `durableObjectStore` (strongly consistent, no extra service). A Cron Trigger calls `sweep()` | [Cloudflare Workers](https://yosriady.github.io/openrampkit/deploy/cloudflare-workers), [example](examples/cloudflare-worker) |
-| Next.js / Vercel | `openramp.nextHandlers()` in a catch-all route. A Vercel Cron Job calls `sweep()` | [Next.js](https://yosriady.github.io/openrampkit/deploy/nextjs), [example](examples/next-demo) |
-| Node, Bun, Deno | `openramp.handle(request)` | [Node, Bun, Deno](https://yosriady.github.io/openrampkit/deploy/node) |
+| Cloudflare Workers | A Worker with `durableObjectStore` (strongly consistent, no extra service). A Cron Trigger calls `sweep()` | [Cloudflare Workers](https://openrampkit-getformo.vercel.app/deploy/cloudflare-workers), [example](examples/cloudflare-worker) |
+| Next.js / Vercel | `openramp.nextHandlers()` in a catch-all route. A Vercel Cron Job calls `sweep()` | [Next.js](https://openrampkit-getformo.vercel.app/deploy/nextjs), [example](examples/next-demo) |
+| Node, Bun, Deno | `openramp.handle(request)` | [Node, Bun, Deno](https://openrampkit-getformo.vercel.app/deploy/node) |
 
-Also read: [Session stores](https://yosriady.github.io/openrampkit/deploy/stores) and the [Production checklist](https://yosriady.github.io/openrampkit/deploy/checklist). Schedule the sweep every minute. Without it, nothing runs after the user leaves.
+Also read: [Session stores](https://openrampkit-getformo.vercel.app/deploy/stores) and the [Production checklist](https://openrampkit-getformo.vercel.app/deploy/checklist). Schedule the sweep every minute. Without it, nothing runs after the user leaves.
 
 ## Development
 
@@ -445,14 +445,14 @@ Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [marke
 
 Contributions are welcome, especially new adapters.
 
-1. Read [Writing an adapter](https://yosriady.github.io/openrampkit/adapters/writing-an-adapter).
+1. Read [Writing an adapter](https://openrampkit-getformo.vercel.app/adapters/writing-an-adapter).
 2. Run the conformance kit from `@openrampkit/adapter/testing` against your adapter.
 3. Run `pnpm build && pnpm typecheck && pnpm test` before you open a pull request.
 4. Add a changeset with `pnpm changeset` when you change a published package.
 
 ## Security
 
-OpenRampKit moves money. Do not open a public issue for a vulnerability. Use GitHub private vulnerability reporting. Read [SECURITY.md](SECURITY.md) for the threat model and the controls, and the [security guide](https://yosriady.github.io/openrampkit/guide/security) for what your app must do.
+OpenRampKit moves money. Do not open a public issue for a vulnerability. Use GitHub private vulnerability reporting. Read [SECURITY.md](SECURITY.md) for the threat model and the controls, and the [security guide](https://openrampkit-getformo.vercel.app/guide/security) for what your app must do.
 
 ## License
 

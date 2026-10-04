@@ -59,9 +59,9 @@ Open core:
 ## Links
 
 - Repo: https://github.com/yosriady/openrampkit [make public]
-- Live demo: https://yosriady.github.io/openrampkit/playground/
-- Docs: https://yosriady.github.io/openrampkit/
-- Solana guide: https://yosriady.github.io/openrampkit/guide/solana
+- Live demo: https://openrampkit-getformo.vercel.app/playground/
+- Docs: https://openrampkit-getformo.vercel.app/
+- Solana guide: https://openrampkit-getformo.vercel.app/guide/solana
 - Demo video: [link, required]
 - Pitch video or deck: [link]
 
