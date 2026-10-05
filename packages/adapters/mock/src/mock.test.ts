@@ -548,11 +548,11 @@ describe('mock adapter: several instances (demo options)', () => {
     const q = await a.quote({ leg: transferLeg, amountIn: { amount: '0', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
     await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)
-    expect(await a.status({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', output: { amount: SIMULATED_DEPOSIT } })
+    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', output: { amount: SIMULATED_DEPOSIT } })
     // A quote with an amount keeps that amount.
     const q2 = await a.quote({ leg: transferLeg, amountIn: { amount: '10', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const s2 = await a.start({ leg: transferLeg, quote: q2 }, ctx)
     await a.transition!({ leg: transferLeg, ref: s2.ref!, name: 'simulate_deposit' }, ctx)
-    expect((await a.status({ leg: transferLeg, ref: s2.ref! }, ctx)).output?.amount).toBe(q2.output.amount)
+    expect((await a.status!({ leg: transferLeg, ref: s2.ref! }, ctx)).output?.amount).toBe(q2.output.amount)
   })
 })
