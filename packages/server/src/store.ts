@@ -32,6 +32,38 @@ export type StoredQuote = {
   deliverTo: Array<{ address: string } | undefined>
 }
 
+/** The payment in progress: the selected quote's pathway and its legs */
+export type ActivePayment = {
+  /** Attempt number in this session: 0 for the first payment, then 1, 2 and so on */
+  n?: number
+  quoteId: string
+  pathway: Pathway
+  legs: ActiveLeg[]
+  index: number
+}
+
+/** An earlier payment attempt, kept after a restart. Its provider refs stay indexed, so a late event still finds it. */
+export type PaymentAttempt = ActivePayment & { endedAt: number }
+
+/**
+ * One webhook event in the session's outbox. The server writes it in the same versioned `put` as the
+ * change that caused it, and delivers it only after that write succeeds.
+ */
+export type OutboxEvent = {
+  /** Deterministic event id (`evt_...`): the same change always gets the same id */
+  id: string
+  type: string
+  body: string
+  /** Delivery attempts so far. 0 means not tried yet. */
+  attempts: number
+  /** When the event was made (ms) */
+  firstAt: number
+  /** Earliest time of the next attempt (ms) */
+  nextAt: number
+  /** Set when the retries stopped. The event stays here as a dead letter (see `webhooks.replay`). */
+  deadAt?: number
+}
+
 export type SessionRecord = {
   id: string
   secretHash: string
@@ -61,11 +93,37 @@ export type SessionRecord = {
   walletAddress?: string
   plan?: PlanResult
   quotes: Record<string, StoredQuote>
-  active?: { quoteId: string; pathway: Pathway; legs: ActiveLeg[]; index: number }
+  active?: ActivePayment
+  /** Earlier attempts (after `restart`), oldest first */
+  attempts?: PaymentAttempt[]
   step: Step
   /** start-URL tokens -> provider URL */
   startUrls: Record<string, { url: string; exp: number; keepReferrer?: boolean }>
   notified: string[]
+  /** Webhook events not delivered yet, and dead letters */
+  outbox?: OutboxEvent[]
+}
+
+/**
+ * A work queue in the store. The server uses it for the webhook outbox and the open-session list.
+ * Each entry is an id with a due time. Every operation must be atomic, so that a `push` that runs at
+ * the same time as a `claim` or an `ack` is never lost.
+ */
+export interface StoreQueue {
+  /**
+   * Add `id`, due at `dueAt`. When `id` is already there and not claimed, keep the earlier due time.
+   * When it is claimed, set `dueAt` and remove the claim.
+   */
+  push(queue: string, id: string, dueAt: number): Promise<void>
+  /**
+   * Claim up to `limit` ids that are due at `now`, earliest due time first. Each claimed id gets the due
+   * time `now + leaseMs` (so other sweeps skip it until the lease ends) and the claim `token`.
+   */
+  claim(queue: string, opts: { now: number; limit: number; leaseMs: number; token: string }): Promise<string[]>
+  /** Remove `id` only when it still has the claim `token`, that is, no `push` came after the claim. */
+  ack(queue: string, id: string, token: string): Promise<boolean>
+  /** Number of ids in the queue */
+  size(queue: string): Promise<number>
 }
 
 export interface SessionStore {
@@ -76,9 +134,62 @@ export interface SessionStore {
     get<T = unknown>(key: string): Promise<T | undefined>
     put(key: string, value: unknown, ttlSec?: number): Promise<void>
   }
+  /**
+   * Optional atomic work queue. All built-in stores have one. A store without it gets a fallback that
+   * keeps each queue in one record, written with the version check of `put`.
+   */
+  queue?: StoreQueue
 }
 
 export class VersionConflictError extends Error {}
+
+type QueueEntry = { dueAt: number; token?: string }
+
+/** The queue rules on one entry map. Shared by the memory store and the Durable Object. */
+export const queueOps = {
+  push(cur: QueueEntry | undefined, dueAt: number): QueueEntry {
+    if (!cur || cur.token !== undefined) return { dueAt }
+    return { dueAt: Math.min(cur.dueAt, dueAt) }
+  },
+  due(entries: Iterable<[string, QueueEntry]>, now: number, limit: number): string[] {
+    return [...entries]
+      .filter(([, e]) => e.dueAt <= now)
+      .sort((a, b) => a[1].dueAt - b[1].dueAt || (a[0] < b[0] ? -1 : 1))
+      .slice(0, Math.max(0, limit))
+      .map(([id]) => id)
+  },
+}
+
+/** In-memory queue. Each call runs to the end with no `await`, so it is atomic in one process. */
+export function memoryQueue(): StoreQueue {
+  const queues = new Map<string, Map<string, QueueEntry>>()
+  const q = (name: string) => {
+    let m = queues.get(name)
+    if (!m) queues.set(name, (m = new Map()))
+    return m
+  }
+  return {
+    async push(name, id, dueAt) {
+      const m = q(name)
+      m.set(id, queueOps.push(m.get(id), dueAt))
+    },
+    async claim(name, { now, limit, leaseMs, token }) {
+      const m = q(name)
+      const ids = queueOps.due(m, now, limit)
+      for (const id of ids) m.set(id, { dueAt: now + leaseMs, token })
+      return ids
+    },
+    async ack(name, id, token) {
+      const m = q(name)
+      if (m.get(id)?.token !== token) return false
+      m.delete(id)
+      return true
+    },
+    async size(name) {
+      return q(name).size
+    },
+  }
+}
 
 /** In-memory store. For local development and tests only. */
 export function memoryStore(): SessionStore {
@@ -110,13 +221,62 @@ export function memoryStore(): SessionStore {
         kv.set(key, { v: JSON.stringify(value), ...(ttlSec ? { exp: Date.now() + ttlSec * 1000 } : {}) })
       },
     },
+    queue: memoryQueue(),
   }
 }
 
-/** Minimal shape of a Cloudflare Workers KV namespace. */
+/**
+ * Minimal shape of a Cloudflare Workers KV namespace. A real namespace also has `list` and `delete`;
+ * with them, the store keeps one key per queue entry, so a new entry is never lost.
+ */
 export type KVNamespaceLike = {
   get(key: string, type: 'text'): Promise<string | null>
-  put(key: string, value: string, opts?: { expirationTtl?: number }): Promise<void>
+  put(key: string, value: string, opts?: { expirationTtl?: number; metadata?: unknown }): Promise<void>
+  list?(opts: { prefix: string; cursor?: string }): Promise<{ keys: Array<{ name: string; metadata?: unknown }>; list_complete: boolean; cursor?: string }>
+  delete?(key: string): Promise<void>
+}
+
+/**
+ * Queue on Workers KV: one key per entry (`q:{queue}:{id}`), with the entry in the key metadata.
+ * A push never overwrites another id, so no add is lost. KV has no atomic update, so two sweeps at
+ * the same time can claim the same id, and a new key can take up to a minute to show in `list`.
+ */
+function kvQueue(ns: Required<KVNamespaceLike>): StoreQueue {
+  const key = (name: string, id: string) => `q:${name}:${id}`
+  const read = async (name: string, id: string) => {
+    const s = await ns.get(key(name, id), 'text')
+    return s ? (JSON.parse(s) as QueueEntry) : undefined
+  }
+  const write = (name: string, id: string, e: QueueEntry) => ns.put(key(name, id), JSON.stringify(e), { metadata: e })
+  const all = async (name: string) => {
+    const out: Array<[string, QueueEntry]> = []
+    const prefix = `q:${name}:`
+    let cursor: string | undefined
+    do {
+      const page = await ns.list({ prefix, ...(cursor ? { cursor } : {}) })
+      for (const k of page.keys) if (k.metadata) out.push([k.name.slice(prefix.length), k.metadata as QueueEntry])
+      cursor = page.list_complete ? undefined : page.cursor
+    } while (cursor)
+    return out
+  }
+  return {
+    async push(name, id, dueAt) {
+      await write(name, id, queueOps.push(await read(name, id), dueAt))
+    },
+    async claim(name, { now, limit, leaseMs, token }) {
+      const ids = queueOps.due(await all(name), now, limit)
+      for (const id of ids) await write(name, id, { dueAt: now + leaseMs, token })
+      return ids
+    },
+    async ack(name, id, token) {
+      if ((await read(name, id))?.token !== token) return false
+      await ns.delete(key(name, id))
+      return true
+    },
+    async size(name) {
+      return (await all(name)).length
+    },
+  }
 }
 
 /**
@@ -146,6 +306,7 @@ export function cloudflareKvStore(ns: KVNamespaceLike, opts: { sessionTtlSec?: n
         await ns.put(`k:${key}`, JSON.stringify(value), ttlSec ? { expirationTtl: Math.max(60, ttlSec) } : undefined)
       },
     },
+    ...(ns.list && ns.delete ? { queue: kvQueue(ns as Required<KVNamespaceLike>) } : {}),
   }
 }
 

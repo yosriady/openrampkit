@@ -84,6 +84,8 @@ describe('table and errors', () => {
     expect(ev).toMatchObject({ type: 'session.created', livemode: true, sessionId: 's', data: { object: { a: 1 } } })
     expect(ev.id).toMatch(/^evt_[0-9a-f]{24}$/)
     expect(createEvent('x', {}).livemode).toBe(false)
+    // a given id is kept (the server gives deterministic ids)
+    expect(createEvent('x', {}, { id: 'evt_fixed' }).id).toBe('evt_fixed')
   })
 })
 

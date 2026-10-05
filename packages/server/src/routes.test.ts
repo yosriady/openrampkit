@@ -267,7 +267,7 @@ describe('provider webhooks in', () => {
     },
   })
 
-  it('verifies, applies, completes, and ignores repeats and unknown refs', async () => {
+  it('verifies, applies, completes, ignores repeats, and asks for a retry on unknown refs', async () => {
     const sent: string[] = []
     const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('ok') } }, [hooked])
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
@@ -281,9 +281,13 @@ describe('provider webhooks in', () => {
     const pub = await (await call(`/sessions/${s.id}`, { secret: s.clientSecret })).json()
     expect(pub.step.state).toBe('COMPLETED')
     expect(pub.step.progress.legs[0].txHash).toBe('0xabc')
-    // repeat and unknown ref are harmless
+    // a repeat of a terminal status is verified and ignored: 200
     expect((await call('/webhooks/hooked', { method: 'POST', body, headers: { 'x-sig': 'good' } })).status).toBe(200)
-    expect((await call('/webhooks/hooked', { method: 'POST', body: JSON.stringify([{ ref: 'nope', status: 'failed' }]), headers: { 'x-sig': 'good' } })).status).toBe(200)
+    // an unknown ref is not applied: 503, so the provider sends it again
+    const unknown = await call('/webhooks/hooked', { method: 'POST', body: JSON.stringify([{ ref: 'nope', status: 'failed' }]), headers: { 'x-sig': 'good' } })
+    expect(unknown.status).toBe(503)
+    expect(unknown.headers.get('retry-after')).toBe('30')
+    expect((await unknown.json()).error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true })
     expect(sent.filter((t) => t === 'session.completed')).toHaveLength(1)
     expect(sent).toContain('leg.succeeded')
   })

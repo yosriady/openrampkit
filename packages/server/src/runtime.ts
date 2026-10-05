@@ -83,8 +83,8 @@ export function adapterContext(rt: Runtime, rec: SessionRecord, a: Adapter, path
   }
 }
 
-/** Persist with an optimistic version check. A concurrent change becomes a 409 the client can retry. */
-export async function saveSession(rt: Runtime, rec: SessionRecord): Promise<void> {
+/** Persist with an optimistic version check. A concurrent change becomes a 409 the client can retry. Use `saveSession` (outbox.ts), which also delivers new webhook events. */
+export async function putVersioned(rt: Runtime, rec: SessionRecord): Promise<void> {
   const expected = rec.version
   rec.version += 1
   try {

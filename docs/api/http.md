@@ -201,7 +201,7 @@ Headers: `Idempotency-Key: <random>` (recommended).
 
 Body: `{ "inputs": { "txHash": "0x..." } }` (`inputs` optional).
 
-- `restart`: back to `SELECT_METHOD`. Allowed with no active payment, during `PAYMENT`, or after a terminal state other than `COMPLETED`. Otherwise `409`.
+- `restart`: back to `SELECT_METHOD`. Allowed with no active payment, during `PAYMENT`, or after a terminal state other than `COMPLETED`. Otherwise `409`. The server keeps the left payment as an earlier attempt. When the provider later reports it as paid, the session completes with it, or sends `session.late_payment` when another payment is already in progress or complete.
 - Any other name must be a SUBMIT or SURFACE_RESULT transition of the current step, and the adapter must implement `transition()`. Otherwise `409`.
 
 Response `200`: the `PublicSession`.
@@ -255,7 +255,14 @@ A small HTML page: "You can close this tab and go back to the app." It tries `wi
 
 ## POST /webhooks/:adapterId
 
-For provider callbacks. The server reads the raw body, calls the adapter's `webhook.verify()` (`401` when false) and `webhook.parse()`, applies each event to the session that owns its `ref`, and answers `{ "received": true }`. `404` when the adapter has no webhook handler. Events for unknown refs are logged and ignored.
+For provider callbacks. The server reads the raw body, calls the adapter's `webhook.verify()` (`401` when false) and `webhook.parse()`, and applies each event to the session that owns its `ref`. `404` when the adapter has no webhook handler.
+
+| Answer | When |
+|---|---|
+| `200` `{ "received": true }` | Each event was applied, or is safe to ignore (for example a repeat of a final status that the leg already has). |
+| `503` with `retry-after: 30` and the code `PROVIDER_UNAVAILABLE` | At least one event could not be applied: no session has its `ref` yet (the reference index can lag behind), the session is not in the store, or the session changed at the same time on 3 tries. The provider sends the event again. An event that is applied two times has no other effect. |
+
+An event for a payment that the user left with `restart` still applies to that payment. See [Webhooks to your backend](../guide/webhooks.md#credit-exactly-once).
 
 ## /adapters/:adapterId/*
 

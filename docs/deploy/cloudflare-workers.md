@@ -174,7 +174,7 @@ The cron needs no token: Cloudflare calls `scheduled()` directly. Check the runs
 If you prefer HTTP (for example an external scheduler), set `tasksToken` and call `POST {PUBLIC_URL}/tasks/sweep` with `Authorization: Bearer {tasksToken}`. See [HTTP routes](../api/http.md#post-tasks-sweep).
 
 ::: tip Sweeps on Durable Objects
-The outbox and the open-session list are single keys, each in its own Durable Object, so one sweep's reads and writes of a list are consistent. Two sweeps at the same time can still deliver a webhook twice (webhooks are at-least-once): your backend must deduplicate by event id.
+The outbox queue and the open-session list are each one Durable Object, with one storage key per entry. Each add, claim and remove is atomic, so a session added during a sweep is never lost, and two sweeps at the same time do not take the same entry. A webhook can still arrive twice (webhooks are at-least-once), always with the same event id: your backend must deduplicate by event id.
 :::
 
 ## Provider webhooks

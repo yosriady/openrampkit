@@ -5,10 +5,12 @@ import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
 import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
-import { applyEvent, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
+import { applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
 import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
-import { adapterContext, publicSession, saveSession } from './runtime.js'
+import { saveSession } from './outbox.js'
+import { trackOpenSession } from './queue.js'
+import { adapterContext, publicSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { createSession, loadAuthed } from './sessions.js'
 import { createPayLink, isPayCredential, payRoute } from './pay.js'
@@ -184,9 +186,13 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     if (rec.step.state === 'COMPLETED') {
       return errorResponse(orkError('BAD_REQUEST', { message: rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.' }), 409)
     }
-    rec.active = undefined
+    // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
+    // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).
+    archiveActive(rec)
     rec.status = 'open'
     rec.step = { sessionId: rec.id, state: 'SELECT_METHOD', transitions: [], expiresAt: new Date(rec.expiresAt).toISOString() }
+    // The sweep polls the session again (it left the list when it reached a terminal state).
+    await trackOpenSession(rt, rec.id)
     await saveSession(rt, rec)
     return json(publicSession(rec))
   }
@@ -220,14 +226,26 @@ async function startRoute(rt: Runtime, param: string): Promise<Response> {
   })
 }
 
-/** POST /webhooks/:adapterId: provider webhooks, verified by the adapter. */
+/**
+ * POST /webhooks/:adapterId: provider webhooks, verified by the adapter. Answers 200 when every event
+ * was applied or is safe to ignore (for example a repeat). Answers 503 when an event could not be
+ * applied (unknown ref, or the session kept changing), so the provider sends it again. Applying an
+ * event twice is safe.
+ */
 async function webhookRoute(rt: Runtime, req: Request, adapterId: string): Promise<Response> {
   const a = rt.adapters.get(adapterId)
   if (!a?.webhook) return errorResponse(orkError('NOT_FOUND'), 404)
   const raw = await readText(req, MAX_WEBHOOK_BODY_BYTES)
   const ctx = { log: rt.log, fetch: rt.fetch, shared: scopedKV(rt.store, `a:${a.id}`) }
   if (!(await a.webhook.verify(req, raw, ctx))) return errorResponse(orkError('UNAUTHORIZED'), 401)
-  for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) await applyEvent(rt, a.id, ev)
+  let retry = false
+  for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
+    const r = await applyEvent(rt, a.id, ev)
+    if (r === 'unknown' || r === 'conflict') retry = true
+  }
+  if (retry) {
+    return json({ error: orkError('PROVIDER_UNAVAILABLE', { message: 'The event could not be applied yet. Send it again later.' }) }, 503, { 'retry-after': '30' })
+  }
   return json({ received: true })
 }
 
@@ -240,7 +258,9 @@ async function adapterRoute(rt: Runtime, req: Request, adapterId: string, subpat
         log: rt.log,
         shared: scopedKV(rt.store, `a:${a.id}`),
         baseUrl: rt.base,
-        applyEvent: (ev) => applyEvent(rt, a.id, ev),
+        applyEvent: async (ev) => {
+          await applyEvent(rt, a.id, ev)
+        },
       })
     : undefined
   return res ?? errorResponse(orkError('NOT_FOUND'), 404)

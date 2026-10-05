@@ -45,14 +45,14 @@ describe('webhook outbox and sweep', () => {
     expect(seen).toEqual(['session.created', 'session.created', 'session.created'])
   })
 
-  it('drops a webhook after maxAttempts', async () => {
+  it('moves a webhook to the dead letters after maxAttempts', async () => {
     const errors: string[] = []
     vi.useFakeTimers({ now: Date.now() })
     const { ramp } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32), maxAttempts: 2 }, fetch: async () => new Response('x', { status: 500 }), logger: { ...quiet, error: (m) => errors.push(m) } })
     await ramp.sessions.create({ userId: 'u', destination: DEST })
     vi.setSystemTime(Date.now() + 31_000)
     expect((await ramp.sweep()).webhooks).toMatchObject({ dropped: 1, pending: 0 })
-    expect(errors).toContain('webhook dropped after retries')
+    expect(errors).toContain('webhook moved to dead letter after retries')
   })
 
   it('expires idle sessions and notifies; completed sessions leave the open list', async () => {

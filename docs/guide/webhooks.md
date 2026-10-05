@@ -10,7 +10,8 @@ createOpenRamp({
   webhooks: {
     url: 'https://app.example.com/api/hooks',
     secret: process.env.OPENRAMP_WEBHOOK_SECRET!,
-    maxAttempts: 8, // optional: attempts in all before the server drops an event
+    retryHours: 24, // optional: how long the sweep retries a failed event (the default)
+    maxAttempts: 20, // optional: also stop after this many attempts in all
   },
 })
 ```
@@ -23,7 +24,7 @@ Each request is a `POST` with a JSON body and three headers:
 
 | Header | Value |
 |---|---|
-| `openramp-id` | The event id, `evt_...` |
+| `openramp-id` | The event id, `evt_...`. The same change always has the same id, also on a retry. |
 | `openramp-timestamp` | Unix seconds when it was sent |
 | `openramp-signature` | `v1=` plus the hex HMAC-SHA256 of `{id}.{timestamp}.{body}` with your secret |
 
@@ -129,12 +130,13 @@ The [webhooks flow](../concepts/flows.md#webhooks-to-your-backend) shows signing
 
 ## Credit exactly once
 
-Webhooks are delivered **at least once**. A retry after a timeout, or two sweeps at the same time, can send the same event twice. Follow these rules:
+Webhooks are delivered **at least once**. A retry after a timeout can send the same event twice. A repeat always has the same event id: the server makes the id from the session id and the event, not at random. Follow these rules:
 
 1. **Credit only on `session.completed`.** `leg.succeeded` on the first leg of a two-leg pathway does not mean the funds arrived.
 2. **Deduplicate by event id and by session id.** Store the event id (`openramp-id`, also `event.id`) and drop an event you already handled. Store the session id with a unique constraint when you credit, so a session is credited once.
-3. **Check the session state.** For extra safety, call `openramp.sessions.retrieve(event.sessionId)` and confirm `status === 'completed'` before you credit.
-4. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with `result.txHashes`, or at the provider), or credit the amount you expected on your order. For merchant destinations, the provider's report is the source of truth.
+3. **Handle `session.late_payment`.** The user can leave a payment (the `restart` transition) after they paid it, for example by bank transfer. When the provider reports that payment later, the session completes with it (you get `session.completed`). When the session already completed with another payment, or another payment is in progress, you get `session.late_payment` instead. Refund or credit it by hand.
+4. **Check the session state.** For extra safety, call `openramp.sessions.retrieve(event.sessionId)` and confirm `status === 'completed'` before you credit.
+5. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with `result.txHashes`, or at the provider), or credit the amount you expected on your order. For merchant destinations, the provider's report is the source of truth.
 
 ```ts
 async function handle(event: { id: string; type: string; sessionId?: string; data: { object: any } }) {
@@ -159,8 +161,10 @@ When the source token is the same as the destination token on the same chain, th
 
 ## Delivery
 
-- The server sends each webhook at once, with a 4 second timeout (`timeouts.webhook`). A failed delivery (no 2xx answer, or a timeout) is logged as `webhook delivery failed` or `webhook delivery error`, and goes to an outbox in the store.
-- The [background sweep](../api/server.md#background-sweep) retries the outbox. The wait starts at 30 seconds and doubles after each attempt, up to 1 hour. After `webhooks.maxAttempts` attempts in all (default 8), the server drops the event and logs `webhook dropped after retries`.
+- The server writes each event into the session record (the outbox), in the same save as the change that caused it. When that save fails (for example a `409` conflict), the event does not exist, and nothing is sent.
+- After the save, the server sends the new events at once, with a 4 second timeout (`timeouts.webhook`). A failed delivery (no 2xx answer, or a timeout) is logged as `webhook delivery failed` or `webhook delivery error`. The event stays in the outbox.
+- The [background sweep](../api/server.md#background-sweep) retries the outbox. The wait starts at 30 seconds and doubles after each attempt, up to 2 hours. The sweep retries for `webhooks.retryHours` (default 24 hours), or until `webhooks.maxAttempts` attempts when you set it.
+- Then the event becomes a **dead letter**: it stays in the session record, and the server logs `webhook moved to dead letter after retries` as an error. When your backend works again, call `openramp.webhooks.replay(sessionId)` to send the dead letters of that session again, with the same event ids.
 - A retry sends the same body with the same `openramp-id`, and a new timestamp and signature.
 - A delivery problem never breaks the user's flow.
 - Return any 2xx status to acknowledge.

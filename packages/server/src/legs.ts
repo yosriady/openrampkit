@@ -6,9 +6,11 @@ import type { LegStatus, LegStep, SessionStatus, StateName, Step } from '@openra
 import { DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
-import { adapterContext, saveSession } from './runtime.js'
+import { saveSession } from './outbox.js'
+import { trackOpenSession } from './queue.js'
+import { adapterContext } from './runtime.js'
 import type { Runtime } from './runtime.js'
-import type { ActiveLeg, SessionRecord, StoredQuote } from './store.js'
+import type { ActiveLeg, ActivePayment, SessionRecord, StoredQuote } from './store.js'
 import { withdrawSender } from './withdraw.js'
 
 const LEG_STATUS_TO_STATE: Record<LegStatus, StateName> = {
@@ -167,8 +169,10 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   }
   const sent = await treasuryStep(rt, rec, i, wrapped)
   if (sent) return setLegStep(rt, rec, i, sent)
-  if (wrapped.status === 'succeeded') await notify(rt, rec, 'leg.succeeded', { index: i, adapterId: leg.adapterId, legId: leg.legId })
-  if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error })
+  // Leg events of a later attempt get their own key (and so their own event id).
+  const scope = act.n ? `a${act.n}` : undefined
+  if (wrapped.status === 'succeeded') await notify(rt, rec, 'leg.succeeded', { index: i, adapterId: leg.adapterId, legId: leg.legId }, scope)
+  if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error }, scope)
   if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1) {
     act.index = i + 1
     await startLeg(rt, rec, act.index)
@@ -204,9 +208,27 @@ export async function startLeg(rt: Runtime, rec: SessionRecord, i: number): Prom
   await setLegStep(rt, rec, i, ls)
 }
 
+/** Most attempts kept per session. The oldest one goes first. */
+const MAX_ATTEMPTS_KEPT = 10
+
+/**
+ * Move the active payment to `rec.attempts`. Its provider refs stay indexed, so a late provider event
+ * for it still finds this session (see `applyEvent`).
+ */
+export function archiveActive(rec: SessionRecord): void {
+  if (!rec.active) return
+  const attempts = [...(rec.attempts ?? []), { ...rec.active, endedAt: Date.now() }]
+  rec.attempts = attempts.slice(-MAX_ATTEMPTS_KEPT)
+  rec.active = undefined
+}
+
 /** Begin the payment for a stored quote. Rolls back the active pathway when the first leg fails to start. */
 export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: string, stored: StoredQuote): Promise<void> {
+  const before = { active: rec.active, attempts: rec.attempts }
+  const n = Math.max(0, ...[...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])].map((a) => (a.n ?? 0) + 1))
+  archiveActive(rec)
   rec.active = {
+    n,
     quoteId,
     pathway: stored.pathway,
     index: 0,
@@ -223,7 +245,9 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
   try {
     await startLeg(rt, rec, 0)
   } catch (e) {
-    rec.active = undefined
+    rec.active = before.active
+    if (before.attempts) rec.attempts = before.attempts
+    else delete rec.attempts
     throw e
   }
 }
@@ -273,28 +297,116 @@ export function legStepFromEvent(cur: LegStep | undefined, ev: LegEvent): LegSte
   return ls
 }
 
+/**
+ * What happened to a provider event:
+ * - `applied`: the session changed.
+ * - `ignored`: verified, and nothing to do (for example a repeat of a terminal status).
+ * - `unknown`: no session for this ref yet (the ref index can lag), or the session is gone.
+ * - `conflict`: the session changed at the same time on every try.
+ * The webhook route answers 503 for `unknown` and `conflict`, so the provider sends the event again.
+ */
+export type ApplyResult = 'applied' | 'ignored' | 'unknown' | 'conflict'
+
+/** Legs whose status shows that money moved */
+const MONEY_MOVED: LegStatus[] = ['processing', 'succeeded', 'refunded']
+
+/**
+ * A status for a leg of an earlier attempt (one the user left with `restart`). When money moved on it
+ * and the session has no other payment under way, that attempt becomes the active payment again, so
+ * the session completes. When the session already completed or another payment is under way, a
+ * succeeded leg sends `session.late_payment` instead, so the app can refund or credit by hand.
+ */
+async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
+  const att = rec.attempts![k]!
+  const leg = att.legs[i]!
+  leg.step = ls
+  if (!MONEY_MOVED.includes(ls.status)) return
+  const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
+  if (rec.step.state === 'COMPLETED' || underway) {
+    rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
+    if (ls.status === 'succeeded') {
+      await notify(rt, rec, 'session.late_payment', { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+    }
+    return
+  }
+  rt.log.info('an earlier attempt was paid; it is the active payment again', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
+  rec.attempts!.splice(k, 1)
+  archiveActive(rec)
+  const { endedAt: _ended, ...payment } = att
+  rec.active = { ...payment, index: i }
+  await setLegStep(rt, rec, i, ls)
+}
+
+/** Find the leg that owns a provider ref: in the active payment first, then in earlier attempts (newest first). */
+function findLeg(rec: SessionRecord, adapterId: string, ref: string): { act: ActivePayment; k: number; i: number } | undefined {
+  const owns = (l: ActiveLeg) => l.adapterId === adapterId && l.ref === ref
+  const i = rec.active?.legs.findIndex(owns) ?? -1
+  if (i !== -1) return { act: rec.active!, k: -1, i }
+  const attempts = rec.attempts ?? []
+  for (let k = attempts.length - 1; k >= 0; k--) {
+    const j = attempts[k]!.legs.findIndex(owns)
+    if (j !== -1) return { act: attempts[k]!, k, i: j }
+  }
+  return undefined
+}
+
+/** Poll the legs of earlier attempts that still wait (sweep only). Returns true when the session changed. */
+export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<boolean> {
+  const attempts = rec.attempts ?? []
+  for (let k = attempts.length - 1; k >= 0; k--) {
+    const att = attempts[k]!
+    for (let i = 0; i < att.legs.length; i++) {
+      const leg = att.legs[i]!
+      if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) continue
+      const a = rt.adapters.get(leg.adapterId)
+      if (!a?.status) continue
+      try {
+        const ls = await a.status({ leg: att.pathway.legs[i]!, ref: leg.ref }, adapterContext(rt, rec, a, att.pathway, i))
+        if (ls.status === leg.step.status) continue
+        const { surface: _s, ...rest } = ls
+        await applyToAttempt(rt, rec, k, i, { ...rest, ref: ls.ref ?? leg.ref })
+        return true
+      } catch (e) {
+        rt.log.warn('status check failed', { adapter: a.id, error: String(e) })
+      }
+    }
+  }
+  return false
+}
+
 /** Apply a provider event (webhook or adapter route) to the session that owns `ev.ref`. Idempotent. */
-export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): Promise<void> {
+export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): Promise<ApplyResult> {
   const sid = await rt.store.kv.get<string>(`ref:${adapterId}:${ev.ref}`)
   if (!sid) {
-    rt.log.warn('event for unknown ref', { adapterId, ref: ev.ref })
-    return
+    rt.log.warn('event for unknown ref; the provider should send it again', { adapterId, ref: ev.ref })
+    return 'unknown'
   }
   for (let attempt = 0; attempt < 3; attempt++) {
     const rec = await rt.store.get(sid)
-    if (!rec?.active) return
-    const i = rec.active.legs.findIndex((l) => l.adapterId === adapterId && l.ref === ev.ref)
-    if (i === -1) return
-    const cur = rec.active.legs[i]!.step
-    if (cur && isLegTerminal(cur.status)) return
+    if (!rec) {
+      rt.log.warn('event for a session that is not in the store', { adapterId, ref: ev.ref, sessionId: sid })
+      return 'unknown'
+    }
+    const found = findLeg(rec, adapterId, ev.ref)
+    if (!found) {
+      rt.log.warn('event for a ref that no leg of the session has now; ignored', { adapterId, ref: ev.ref, sessionId: sid })
+      return 'ignored'
+    }
+    const cur = found.act.legs[found.i]!.step
+    if (cur && isLegTerminal(cur.status)) return 'ignored'
     try {
-      await setLegStep(rt, rec, i, legStepFromEvent(cur, ev))
+      const ls = legStepFromEvent(cur, ev)
+      if (found.k === -1) await setLegStep(rt, rec, found.i, ls)
+      else await applyToAttempt(rt, rec, found.k, found.i, ls)
       await saveSession(rt, rec)
-      return
+      // A session that became active again (or was dropped from the list) must be polled by the sweep.
+      if (!isTerminal(rec.step.state)) await trackOpenSession(rt, rec.id)
+      return 'applied'
     } catch (e) {
       if (e instanceof OrkException && e.status === 409) continue
       throw e
     }
   }
-  rt.log.warn('event dropped after retries', { adapterId, ref: ev.ref })
+  rt.log.warn('event not applied: the session kept changing; the provider should send it again', { adapterId, ref: ev.ref })
+  return 'conflict'
 }

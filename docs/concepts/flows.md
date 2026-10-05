@@ -469,7 +469,7 @@ A failed withdrawal sends `session.failed` and `withdrawal.failed`. When the tre
 
 ## Webhooks to your backend
 
-The server signs each event and sends it to `webhooks.url`. A failed delivery goes to the outbox. The sweep retries it.
+The server writes each event into the session record (the outbox) in the same save as the change. It sends the event only after that save succeeds. A failed delivery stays in the outbox, and the sweep retries it.
 
 ```mermaid
 sequenceDiagram
@@ -482,31 +482,36 @@ sequenceDiagram
   alt the key type plus extra is in rec.notified
     S->>S: skip: each event goes out once per session
   else new
-    S->>S: rec.notified.push(key), createEvent(type, { session, userId, metadata })
+    S->>S: rec.notified.push(key), id = evt_ + sha256(sessionId, key)
+    S->>S: rec.outbox.push({ id, body, attempts: 0 })
+  end
+  S->>St: queue.push(outbox, sessionId, now + 30 s)
+  S->>St: put(rec, version): the change and its events in one write
+  alt 409 conflict
+    S->>S: nothing is sent; a retry makes the same event ids
+  else saved
     S->>App: POST webhooks.url with headers openramp-id, openramp-timestamp, openramp-signature
     Note over S,App: openramp-signature = "v1=" + HMAC-SHA256(secret, id.timestamp.body), timeout 4 s
     App->>App: openramp.webhooks.verify(req, rawBody), 300 s tolerance
     App->>App: dedupe by event id or session id, then credit
-    alt 2xx
-      App-->>S: ok
-    else error, timeout or not 2xx
-      S->>St: enqueue(): outbox:eventId { body, attempts: 1, nextAt }
-    end
+    S->>St: put(rec, version): remove the sent events, or attempts + 1
   end
   loop every sweep
-    Sw->>St: read outbox entries where nextAt has passed
+    Sw->>St: queue.claim(outbox, limit, lease 10 min)
+    Sw->>St: get(sessionId), events where nextAt has passed
     Sw->>App: POST the same body with the same event id
     alt 2xx
-      Sw->>St: remove the entry
-    else fails, attempts below maxAttempts (default 8)
-      Sw->>St: attempts + 1, nextAt = now + backoff (30 s doubling, max 1 h)
-    else fails, attempts reach maxAttempts
-      Sw->>St: drop the entry and log an error
+      Sw->>St: remove the event
+    else fails, inside retryHours (default 24 h)
+      Sw->>St: attempts + 1, nextAt = now + backoff (30 s doubling, max 2 h)
+    else fails, retryHours passed (or maxAttempts reached)
+      Sw->>St: keep it as a dead letter (deadAt) and log an error
     end
+    Sw->>St: queue.ack(sessionId) when no event is left, else queue.push(sessionId, next due time)
   end
 ```
 
-Delivery is at least once. Two sweeps at the same time can send one event twice, and a retry has the same event id. Credit the user once per event id or session id. See [Webhooks to your backend](../guide/webhooks.md).
+Delivery is at least once. A retry, or a lease that ends during a slow sweep, can send one event twice, and a repeat has the same event id. Credit the user once per event id or session id. See [Webhooks to your backend](../guide/webhooks.md).
 
 ## Background sweep and session expiry
 
@@ -527,20 +532,20 @@ sequenceDiagram
     S-->>Cron: 401
   end
   S->>St: 1. retry the webhook outbox (see the webhooks flow)
-  S->>St: 2. read open-sessions
-  loop each open session, up to limit
+  S->>St: 2. queue.claim(open-sessions, limit, lease 10 min): the entries that waited longest
+  loop each claimed session
     S->>St: get(id)
     alt past expiresAt, and no payment, or the leg still waits for the user
       S->>S: expire(): status expired, step EXPIRED, SESSION_EXPIRED
       S->>St: save
       S->>App: session.expired
-    else payment in progress
-      S->>A: refreshActive(force): status({ leg, ref })
+    else payment in progress, or earlier attempts that still wait
+      S->>A: refreshActive(force), then refreshAttempts(): status({ leg, ref })
       A-->>S: new LegStep
       S->>St: save when changed (may start the next leg or complete)
     end
+    S->>St: queue.ack(id) when final, else queue.push(id, now): back of the line
   end
-  S->>St: write the ids that are still open
   S-->>Cron: SweepResult { webhooks, sessions }
 ```
 

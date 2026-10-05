@@ -22,6 +22,8 @@ function fakeNamespace() {
             put: async (k, v) => void data.set(k, v),
             deleteAll: async () => data.clear(),
             setAlarm: async (t) => void (entry.alarm = t),
+            list: async <T,>({ prefix }: { prefix: string }) => new Map([...data].filter(([k]) => k.startsWith(prefix)).sort(([a], [b]) => (a < b ? -1 : 1))) as Map<string, T>,
+            delete: async (k: string) => data.delete(k),
           },
         })
         objects.set(name, entry)

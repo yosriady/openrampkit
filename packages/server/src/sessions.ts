@@ -5,8 +5,9 @@ import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { checkPayCredential, isPayCredential } from './pay.js'
-import { trackOpenSession } from './tasks.js'
-import { normalizeDestination, saveSession } from './runtime.js'
+import { saveSession } from './outbox.js'
+import { trackOpenSession } from './queue.js'
+import { normalizeDestination } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
 import { CAIP2, isValidAddress, isValidToken, normalizeSource } from './withdraw.js'
@@ -101,9 +102,10 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     startUrls: {},
     notified: [],
   }
-  await rt.store.put(rec)
+  // On the open list before the write: a session is never stored without it.
   await trackOpenSession(rt, rec.id)
   await notify(rt, rec, 'session.created')
+  await saveSession(rt, rec, { create: true })
   return { id, clientSecret: `${id}.${secret}`, expiresAt: new Date(expiresAt).toISOString() }
 }
 
@@ -139,8 +141,8 @@ export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise
   if (Date.now() > rec.expiresAt && !isTerminal(rec.step.state) && rec.status === 'open') {
     rec.status = 'expired'
     rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: orkError('SESSION_EXPIRED') }
-    await saveSession(rt, rec)
     await notify(rt, rec, 'session.expired')
+    await saveSession(rt, rec)
   }
   return rec
 }
