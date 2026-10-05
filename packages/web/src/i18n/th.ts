@@ -117,6 +117,7 @@ export const th: Messages = {
   successTitle: 'ฝากเงินสำเร็จ',
   successBody: 'เงินของคุณกำลังเข้าบัญชี',
   youReceived: (amount) => `คุณจะได้รับประมาณ ${amount}`,
+  youDeposited: (amount) => `ฝาก ${amount} ให้คุณแล้วในธุรกรรมเดียวกัน`,
   failedTitle: {
     FAILED: 'ชำระเงินไม่สำเร็จ',
     EXPIRED: 'เซสชันหมดอายุ',

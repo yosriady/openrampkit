@@ -125,6 +125,7 @@ export const en = {
   successTitle: 'Deposit complete',
   successBody: 'Your funds are on the way to your account.',
   youReceived: (amount: string) => `You get about ${amount}`,
+  youDeposited: (amount: string) => `${amount} was deposited for you in the same transaction`,
   failedTitle: {
     FAILED: 'Payment failed',
     EXPIRED: 'Session expired',

@@ -928,7 +928,7 @@ export class OpenRampModal extends LitElement {
         : nothing}
       ${errors.map((e, i) => this._renderErrorNotice(e, i === 0 ? 'ork-step-error' : undefined))}
       ${showProgress ? this._renderProgress(m, step) : nothing}
-      ${awaiting && surface ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.checkingStatus}</div>` : nothing}
+      ${awaiting && surface && !errors.length ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.checkingStatus}</div>` : nothing}
       ${step.state === 'PAYMENT' && !(s.surfaceClosed && surface?.kind === 'IFRAME')
         ? html`<div class="stack">
             <button class="btn ghost" type="button" ?disabled=${s.busy} @click=${() => void c.fire('restart')}>${m.chooseOther}</button>
@@ -1192,7 +1192,7 @@ export class OpenRampModal extends LitElement {
       return html`<div class="center">
           <span class="result-icon success" aria-hidden="true">${icons.check}</span>
           <h3 class="result-title">${withdraw ? m.withdrawSuccessTitle : m.successTitle}</h3>
-          <p class="secondary-text">${q ? m.youReceived(formatAmount(q.output, m.locale)) : withdraw ? m.withdrawSuccessBody : m.successBody}</p>
+          <p class="secondary-text">${q ? (s.session!.destination?.type === 'crypto' && s.session!.destination.calls?.length ? m.youDeposited(formatAmount(q.output, m.locale)) : m.youReceived(formatAmount(q.output, m.locale))) : withdraw ? m.withdrawSuccessBody : m.successBody}</p>
         </div>
         ${step.progress && step.progress.legs.length > 1 ? this._renderProgress(m, step) : nothing}
         <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>`
