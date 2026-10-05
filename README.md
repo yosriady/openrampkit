@@ -285,6 +285,7 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | `lifi` | [`adapter-lifi`](packages/adapters/lifi) | Pay with wallet: any token on EVM chains or Solana, swapped and bridged by LI.FI. A second router next to Relay | New. Some details TO VERIFY |
 | `swapped` | [`adapter-swapped`](packages/adapters/swapped) | Card, Apple Pay, Google Pay, EUR bank transfer, SEA local methods (VietQR, MoMo, GCash and more), BLIK, SPEI, mobile money. Payouts for withdrawals | Working. Status polling TO VERIFY |
 | `coinbase` | [`adapter-coinbase`](packages/adapters/coinbase) | Coinbase Onramp: card, Apple Pay, Google Pay, ACH (US) | Working. Some details TO VERIFY |
+| `binance` | [`adapter-binance`](packages/adapters/binance) | Deposit from a Binance account balance (Binance Pay Onchain on-ramp) to any address | New. Needs Binance partner approval. Some details TO VERIFY |
 | `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE | Working. Some details TO VERIFY |
 | `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Faster Payments, pay by bank (UK), Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
 | `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |

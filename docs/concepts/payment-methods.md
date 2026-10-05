@@ -99,7 +99,7 @@ The [mock adapter](../adapters/mock.md) also has VietQR, QRIS, GoPay, DANA, QR P
 | Pay with wallet | `wallet` | Relay | The user signs a `WALLET_TX` in a connected wallet |
 | Transfer crypto | `transfer` | Relay | The user sends to a deposit address |
 | From an exchange | `exchange_transfer` | Mock | A deposit address, with exchange wording |
-| Connect exchange | `exchange` | None yet | Reserved for a "connect your exchange account" flow |
+| Connect exchange | `exchange` | Binance | The user pays from their exchange account, and the exchange sends the crypto to the address |
 | Binance Pay | `binance_pay` | Meld (catalog) | |
 | Bank transfer | `bank_transfer` | Swapped, Transak, Meld, Onramper | A local bank transfer in the user's currency |
 
