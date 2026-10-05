@@ -18,6 +18,8 @@ Read the concept page: [docs/concepts/settlement.md](../docs/concepts/settlement
 
 Live on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0xBF66696115128B8f9f794780061348b4213A7132`. See [deployments.md](deployments.md) for the explorer links and the demo settlements.
 
+> **Note:** The deployed testnet contracts are an older version. They do not have the `settleFromBalance` amount fix (`BalanceSettlementIntent`). In that version, `settleFromBalance` binds only a minimum amount, so a caller with a valid intent can take other funds that the contract holds. The testnet contracts have no intent signer, so `settleFromBalance` reverts there. A redeploy is necessary before any flow uses `settleFromBalance`.
+
 ## Design
 
 | Property | How |
@@ -27,7 +29,7 @@ Live on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0xBF6669
 | Safe call bundles | Owner allowlist of targets. The token and the contract itself are never targets. Allowance of the amount per call, reset to zero after. The balance of the contract must not drop below its balance before the settlement, so a bundle cannot spend other funds. Unused funds go to the recipient. |
 | Atomic | Any failed call reverts the whole settlement (`CallFailed(index, reason)`). |
 | Token checks | Fee-on-transfer and other tokens that deliver less than `amount` are rejected (`UnsupportedToken`). |
-| Pre-funded flows | `settleFromBalance` for a bridge or solver that fills the contract. Always needs a signed intent. |
+| Pre-funded flows | `settleFromBalance` for a bridge or solver that fills the contract. Always needs a signed intent of a different EIP-712 type (`BalanceSettlementIntent`) that binds the exact `amount`. |
 | Admin | `Ownable2Step`, `Pausable`, no renounce, no upgradeability. `sweep` recovers stray tokens only (the contract holds nothing between settlements). |
 | Reentrancy | `ReentrancyGuardTransient` (EIP-1153, Cancun). |
 
@@ -41,10 +43,11 @@ Stack: Solidity 0.8.28, EVM `cancun`, OpenZeppelin Contracts 5.1 and forge-std (
 |---|---|---|
 | Each session settles once | The receipt for `sessionId` is written before any external call. A second settlement reverts with `AlreadySettled`. | `test_settle_replayReverts`, `test_settleFromBalance_replayReverts`, `testFuzz_settle_eachSessionOnce` |
 | No redirection of funds when intents are on | The EIP-712 intent binds session id, payer (optional), token, recipient, minimum amount, call bundle and deadline. The domain binds the chain id and the contract address. | `test_intent_bindsRecipient`, `test_intent_bindsCalls`, `test_intent_bindsTokenAndSession`, `testFuzz_intent_onlyExactRecipientVerifies` |
+| No theft from the pooled balance | `settleFromBalance` pays from tokens already in the contract, which can belong to more than one session. Its intent (`BalanceSettlementIntent`) binds the exact `amount`, and `intent.minAmount` must equal it (`AmountMismatch`). A `settle` intent is not valid on this path, and the reverse is also true. | `test_settleFromBalance_cannotDrainPoolWithRaisedAmount`, `test_settleFromBalance_rejectsSettleIntent`, `test_settle_rejectsBalanceIntent`, `testFuzz_settleFromBalance_onlySignedAmount`, `testFuzz_settleFromBalance_raisedAmountReverts`, `invariant_balancePathPaysOnlySignedAmount`, `invariant_holdsOnlyStrayAndPendingFunds` |
 | Funds come only from the caller | `settle` pulls from `msg.sender` only. A standing approval can not be used by another caller. | `test_settle_pullsOnlyFromCaller` |
 | Allowlisted call targets only | A target must be on the owner allowlist. The token and the contract itself are never targets. | `test_settle_rejectsTargetNotAllowed`, `test_settle_rejectsTokenAsTarget`, `test_settle_rejectsSelfAsTarget` |
 | Allowance reset | The contract approves `amount` to a target for one call and sets the allowance to zero after. | `test_settle_callBundleCannotExceedAllowance`, `invariant_noStandingAllowance` |
-| A bundle can not spend other funds | After the bundle, the contract balance must not be below its balance before the settlement (`BalanceInvariant`). Unused funds go to the recipient. | `test_settle_callBundleCannotSpendStrayFunds`, `test_settle_leftoverGoesToRecipient`, `invariant_holdsOnlyStrayFunds`, `invariant_recipientGetsEverything` |
+| A bundle can not spend other funds | After the bundle, the contract balance must not be below its balance before the settlement (`BalanceInvariant`). Unused funds go to the recipient. | `test_settle_callBundleCannotSpendStrayFunds`, `test_settle_leftoverGoesToRecipient`, `invariant_holdsOnlyStrayAndPendingFunds`, `invariant_recipientGetsEverything` |
 | Fee-on-transfer tokens rejected | The contract must receive exactly `amount`, or the settlement reverts with `UnsupportedToken`. | `test_settle_rejectsFeeOnTransferToken` |
 | Reentrancy guard | `settle` and `settleFromBalance` use `ReentrancyGuardTransient`. | `test_settle_reentrancyBlocked` |
 | Pause | The owner can stop all new settlements. | `test_settle_whenPausedReverts` |
@@ -53,7 +56,8 @@ Stack: Solidity 0.8.28, EVM `cancun`, OpenZeppelin Contracts 5.1 and forge-std (
 
 ### What the contract does not cover
 
-- **Trust in the owner.** The owner can pause, change the allowlist, change or remove the intent signer, and sweep tokens that the contract holds outside a settlement. Use a multisig as owner in production.
+- **Trust in the owner.** The owner can pause, change the allowlist, change or remove the intent signer, and sweep tokens that the contract holds outside a settlement. Use a multisig as owner in production. See [RUNBOOK.md](RUNBOOK.md).
+- **Balance intents need care from the server.** A `BalanceSettlementIntent` says "this amount is in the contract for this session". Sign it only after the server sees the fill arrive for that session, or set `payer` to the solver that fills and settles in one transaction. If the server signs an amount that never arrives, the settlement uses funds of other sessions.
 - **Trust in the intent signer.** When intents are on, the server key decides which recipient, token and call bundle are valid. A stolen signer key can authorize bad settlements for payers who use them. When intents are off, any caller can settle any unused session id. The server must then check the receipt (payer, token, recipient, amount) before it accepts a deposit.
 - **Token behavior.** The contract assumes standard ERC-20 behavior. Fee-on-transfer tokens are rejected, but rebasing tokens, pausable or blocklist tokens, and tokens with hooks are not supported. The owner and the server must choose the tokens and the call targets.
 - **Testnet only.** The contract is deployed on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet only. It is not deployed on a mainnet.
@@ -126,7 +130,7 @@ The deploy script reads these environment variables. `forge` loads `contracts/.e
 |---|---|---|
 | `DEPLOYER_PRIVATE_KEY` | yes | The deployer key |
 | `SETTLEMENT_OWNER` | no | Owner. Default: the deployer. Use a multisig in production. |
-| `SETTLEMENT_INTENT_SIGNER` | no | The server intent signer. Default: none (intents off). |
+| `SETTLEMENT_INTENT_SIGNER` | on a mainnet | The server intent signer. On a known testnet (Anvil, Sepolia, Arbitrum Sepolia, Robinhood Chain Testnet, Tempo Testnet) the default is none (intents off). On every other chain id, the script stops when it is not set (`IntentSignerRequired`). |
 | `SETTLEMENT_ALLOWED_TARGETS` | no | Comma-separated call targets, for example ERC-4626 vaults |
 
 ### Local dry run (Anvil)
@@ -206,9 +210,11 @@ Tempo Moderato is the Tempo testnet. Tempo has no gas token. Fees are paid in a 
 |---|---|
 | `src/OpenRampSettlement.sol` | The contract |
 | `test/OpenRampSettlement.t.sol` | Unit and fuzz tests |
-| `test/OpenRampSettlement.invariant.t.sol` | Invariant tests (no funds kept, no standing allowance) |
+| `test/OpenRampSettlement.invariant.t.sol` | Invariant tests (no funds kept, no theft from the pooled balance, no standing allowance) |
+| `test/Deploy.t.sol` | Tests of the deploy script guard (no mainnet deploy without an intent signer) |
 | `test/mocks/Mocks.sol` | Mock USDC, ERC-4626 vault, fee-on-transfer token, hostile targets |
-| `script/Deploy.s.sol` | Deploy script |
+| `script/Deploy.s.sol` | Deploy script. It stops on a non-testnet chain when the intent signer is not set. |
+| `RUNBOOK.md` | Owner operations: pause, signer rotation, allowlist, ownership transfer to a Safe, incidents |
 | `script/Demo.s.sol` | Demo settlements on a testnet |
 | `slither.config.json` | Slither configuration (see `audit/static-analysis.md`) |
 | `audit/` | Static analysis, coverage and raw tool outputs |

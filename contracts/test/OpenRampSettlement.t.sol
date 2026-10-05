@@ -86,6 +86,16 @@ contract OpenRampSettlementTest is Test {
         i = OpenRampSettlement.Intent(intentPayer, minAmount, deadline, abi.encodePacked(r, sig, v));
     }
 
+    function _signBalance(OpenRampSettlement.Settlement memory s, address intentPayer, uint256 deadline)
+        internal
+        view
+        returns (OpenRampSettlement.Intent memory i)
+    {
+        bytes32 digest = settlement.balanceIntentDigest(s, intentPayer, deadline);
+        (uint8 v, bytes32 r, bytes32 sig) = vm.sign(signerKey, digest);
+        i = OpenRampSettlement.Intent(intentPayer, s.amount, deadline, abi.encodePacked(r, sig, v));
+    }
+
     // ------------------------------------------------------------------ constructor and admin
 
     function test_constructor_setsState() public view {
@@ -576,7 +586,7 @@ contract OpenRampSettlementTest is Test {
         _enableSigner();
         OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
         s.calls = _vaultCalls(AMOUNT);
-        OpenRampSettlement.Intent memory i = _sign(s, address(0), AMOUNT, block.timestamp + 600);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
 
         // A solver fills the contract, then anyone may complete the settlement exactly as signed.
         usdc.mint(address(settlement), AMOUNT);
@@ -592,7 +602,7 @@ contract OpenRampSettlementTest is Test {
     function test_settleFromBalance_insufficientBalance() public {
         _enableSigner();
         OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
-        OpenRampSettlement.Intent memory i = _sign(s, address(0), AMOUNT, block.timestamp + 600);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
         usdc.mint(address(settlement), AMOUNT - 1);
         vm.prank(solver);
         vm.expectRevert(abi.encodeWithSelector(OpenRampSettlement.InsufficientBalance.selector, AMOUNT - 1, AMOUNT));
@@ -602,7 +612,7 @@ contract OpenRampSettlementTest is Test {
     function test_settleFromBalance_replayReverts() public {
         _enableSigner();
         OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
-        OpenRampSettlement.Intent memory i = _sign(s, address(0), AMOUNT, block.timestamp + 600);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
         usdc.mint(address(settlement), 2 * AMOUNT);
         vm.startPrank(solver);
         settlement.settleFromBalance(s, i);
@@ -610,6 +620,128 @@ contract OpenRampSettlementTest is Test {
         settlement.settleFromBalance(s, i);
         vm.stopPrank();
         assertEq(usdc.balanceOf(address(settlement)), AMOUNT);
+    }
+
+    function test_balanceIntentDigest_matchesManualEip712() public view {
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        s.calls = _vaultCalls(AMOUNT);
+        assertEq(
+            settlement.BALANCE_INTENT_TYPEHASH(),
+            keccak256(
+                "BalanceSettlementIntent(bytes32 sessionId,address payer,address token,address recipient,uint256 amount,Call[] calls,uint256 deadline)Call(address target,bytes data)"
+            )
+        );
+        bytes32 structHash = keccak256(
+            abi.encode(
+                settlement.BALANCE_INTENT_TYPEHASH(),
+                SID,
+                solver,
+                address(usdc),
+                recipient,
+                AMOUNT,
+                settlement.hashCalls(s.calls),
+                99
+            )
+        );
+        assertEq(
+            settlement.balanceIntentDigest(s, solver, 99),
+            keccak256(abi.encodePacked("\x19\x01", settlement.domainSeparator(), structHash))
+        );
+        assertTrue(settlement.balanceIntentDigest(s, solver, 99) != settlement.intentDigest(s, solver, AMOUNT, 99));
+    }
+
+    /// The P0-7 exploit: a user with a valid intent for their own session raises `amount` to the whole
+    /// pooled balance. The signed amount is exact, so this must fail and the pool must stay whole.
+    function test_settleFromBalance_cannotDrainPoolWithRaisedAmount() public {
+        _enableSigner();
+        address attacker = makeAddr("attacker");
+        uint256 pool = 10 * AMOUNT; // funds that a solver sent for other sessions
+        usdc.mint(address(settlement), pool + AMOUNT);
+
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        s.recipient = attacker;
+        OpenRampSettlement.Intent memory i = _signBalance(s, attacker, block.timestamp + 600);
+
+        // Raise the amount and keep the signed value in `minAmount`: the amount check fails.
+        s.amount = pool + AMOUNT;
+        vm.prank(attacker);
+        vm.expectRevert(abi.encodeWithSelector(OpenRampSettlement.AmountMismatch.selector, pool + AMOUNT, AMOUNT));
+        settlement.settleFromBalance(s, i);
+
+        // Raise both the amount and `minAmount`: the signature no longer verifies.
+        i.minAmount = pool + AMOUNT;
+        vm.prank(attacker);
+        vm.expectRevert(OpenRampSettlement.InvalidSignature.selector);
+        settlement.settleFromBalance(s, i);
+
+        assertEq(usdc.balanceOf(address(settlement)), pool + AMOUNT);
+        assertEq(usdc.balanceOf(attacker), 0);
+        assertFalse(settlement.isSettled(SID));
+
+        // The honest call with the signed amount still works and takes only that amount.
+        s.amount = AMOUNT;
+        i = _signBalance(s, attacker, block.timestamp + 600);
+        vm.prank(attacker);
+        settlement.settleFromBalance(s, i);
+        assertEq(usdc.balanceOf(attacker), AMOUNT);
+        assertEq(usdc.balanceOf(address(settlement)), pool);
+    }
+
+    /// A `settle` intent (a minimum amount) is a different EIP-712 type and is not valid on the balance path.
+    function test_settleFromBalance_rejectsSettleIntent() public {
+        _enableSigner();
+        usdc.mint(address(settlement), 10 * AMOUNT);
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        OpenRampSettlement.Intent memory i = _sign(s, address(0), AMOUNT, block.timestamp + 600);
+        vm.prank(solver);
+        vm.expectRevert(OpenRampSettlement.InvalidSignature.selector);
+        settlement.settleFromBalance(s, i);
+    }
+
+    /// A balance intent is not valid on `settle` either.
+    function test_settle_rejectsBalanceIntent() public {
+        _enableSigner();
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
+        vm.prank(payer);
+        vm.expectRevert(OpenRampSettlement.InvalidSignature.selector);
+        settlement.settle(s, i);
+    }
+
+    function test_settleFromBalance_lowerAmountRejected() public {
+        _enableSigner();
+        usdc.mint(address(settlement), AMOUNT);
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
+        s.amount = AMOUNT - 1;
+        vm.prank(solver);
+        vm.expectRevert(abi.encodeWithSelector(OpenRampSettlement.AmountMismatch.selector, AMOUNT - 1, AMOUNT));
+        settlement.settleFromBalance(s, i);
+    }
+
+    function test_settleFromBalance_payerBound() public {
+        _enableSigner();
+        usdc.mint(address(settlement), AMOUNT);
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        OpenRampSettlement.Intent memory i = _signBalance(s, solver, block.timestamp + 600);
+        vm.prank(payer);
+        vm.expectRevert(abi.encodeWithSelector(OpenRampSettlement.PayerMismatch.selector, solver, payer));
+        settlement.settleFromBalance(s, i);
+        vm.prank(solver);
+        settlement.settleFromBalance(s, i);
+        assertEq(usdc.balanceOf(recipient), AMOUNT);
+    }
+
+    function test_settleFromBalance_whenPausedReverts() public {
+        _enableSigner();
+        usdc.mint(address(settlement), AMOUNT);
+        OpenRampSettlement.Settlement memory s = _settlement(SID, AMOUNT);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
+        vm.prank(owner);
+        settlement.pause();
+        vm.prank(solver);
+        vm.expectRevert(Pausable.EnforcedPause.selector);
+        settlement.settleFromBalance(s, i);
     }
 
     // ------------------------------------------------------------------ fuzz
@@ -651,6 +783,59 @@ contract OpenRampSettlementTest is Test {
         vm.prank(payer);
         vm.expectRevert(OpenRampSettlement.InvalidSignature.selector);
         settlement.settle(s, i);
+    }
+
+    /// Two sessions share the pool. Whatever amount a caller tries, only the exact signed amount
+    /// settles, and the other session can always settle after it.
+    function testFuzz_settleFromBalance_onlySignedAmount(uint256 a, uint256 b, uint256 tried) public {
+        a = bound(a, 1, 1_000_000e6);
+        b = bound(b, 1, 1_000_000e6);
+        tried = bound(tried, 1, a + b);
+        _enableSigner();
+        usdc.mint(address(settlement), a + b);
+
+        OpenRampSettlement.Settlement memory sa = _settlement(bytes32("ors_a"), a);
+        OpenRampSettlement.Intent memory ia = _signBalance(sa, address(0), block.timestamp + 600);
+        sa.amount = tried;
+        vm.prank(solver);
+        if (tried != a) {
+            vm.expectRevert(abi.encodeWithSelector(OpenRampSettlement.AmountMismatch.selector, tried, a));
+            settlement.settleFromBalance(sa, ia);
+            sa.amount = a;
+            vm.prank(solver);
+        }
+        settlement.settleFromBalance(sa, ia);
+        assertEq(usdc.balanceOf(recipient), a);
+
+        OpenRampSettlement.Settlement memory sb = _settlement(bytes32("ors_b"), b);
+        OpenRampSettlement.Intent memory ib = _signBalance(sb, address(0), block.timestamp + 600);
+        vm.prank(solver);
+        settlement.settleFromBalance(sb, ib);
+        assertEq(usdc.balanceOf(recipient), a + b);
+        assertEq(usdc.balanceOf(address(settlement)), 0);
+    }
+
+    /// With the signed amount kept in `minAmount`, any other amount fails before the signature check;
+    /// with `minAmount` raised too, the signature fails. Either way nothing moves.
+    function testFuzz_settleFromBalance_raisedAmountReverts(uint256 signedAmount, uint256 raised, bool raiseMin)
+        public
+    {
+        signedAmount = bound(signedAmount, 1, 1_000_000e6);
+        raised = bound(raised, signedAmount + 1, 100_000_000e6);
+        _enableSigner();
+        usdc.mint(address(settlement), raised);
+        OpenRampSettlement.Settlement memory s = _settlement(SID, signedAmount);
+        OpenRampSettlement.Intent memory i = _signBalance(s, address(0), block.timestamp + 600);
+        s.amount = raised;
+        if (raiseMin) {
+            i.minAmount = raised;
+            vm.expectRevert(OpenRampSettlement.InvalidSignature.selector);
+        } else {
+            vm.expectRevert(abi.encodeWithSelector(OpenRampSettlement.AmountMismatch.selector, raised, signedAmount));
+        }
+        vm.prank(solver);
+        settlement.settleFromBalance(s, i);
+        assertEq(usdc.balanceOf(address(settlement)), raised);
     }
 
     function testFuzz_settle_eachSessionOnce(bytes32 sid, uint256 a, uint256 b) public {

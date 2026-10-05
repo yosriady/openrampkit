@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import {
   OPEN_RAMP_SETTLEMENT_ABI,
   SETTLED_TOPIC,
+  SETTLEMENT_BALANCE_INTENT_TYPES,
   SETTLEMENT_SELECTORS,
   buildSettlementTxs,
   bytes32ToSessionId,
@@ -12,6 +13,7 @@ import {
   hashSettlementCalls,
   keccak256,
   sessionIdToBytes32,
+  settlementBalanceIntentTypedData,
   settlementCallsFrom,
   settlementIntentTypedData,
   verifySettlement,
@@ -94,6 +96,15 @@ describe('encoding', () => {
     expect(data.startsWith(SETTLEMENT_SELECTORS.settleFromBalance)).toBe(true)
   })
 
+  it('rejects a settleFromBalance intent whose amount differs from the settled amount', () => {
+    const p = { sessionId: 'ors_abc', token: vaultCall.target, amount: 5n, recipient: vaultCall.target }
+    const intent = { payer: '0x0000000000000000000000000000000000000000', minAmount: 4n, deadline: 2n, signature: '0x' }
+    expect(() => encodeSettle(p, intent, { fromBalance: true })).toThrow(/must equal the settled amount/)
+    expect(encodeSettle(p, { ...intent, minAmount: 5n }, { fromBalance: true }).startsWith(SETTLEMENT_SELECTORS.settleFromBalance)).toBe(true)
+    // settle() keeps the minimum semantics: a higher amount is fine
+    expect(encodeSettle(p, intent).startsWith(SETTLEMENT_SELECTORS.settle)).toBe(true)
+  })
+
   it('builds approve + settle transactions', () => {
     const txs = buildSettlementTxs({ chainId: 421614, contract: '0x2222222222222222222222222222222222222222', sessionId: 'ors_abc', token: '0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d', amount: 5n, recipient: vaultCall.target })
     expect(txs).toHaveLength(2)
@@ -121,6 +132,19 @@ describe('encoding', () => {
     expect(td.message.payer).toBe('0x0000000000000000000000000000000000000000')
     expect(td.message.sessionId).toBe(sessionIdToBytes32('ors_abc'))
     expect(td.primaryType).toBe('SettlementIntent')
+  })
+
+  it('builds EIP-712 typed data for settleFromBalance that binds the exact amount', () => {
+    const td = settlementBalanceIntentTypedData({ chainId: 421614, contract: vaultCall.target, sessionId: 'ors_abc', token: vaultCall.target, recipient: vaultCall.target, amount: 7n, deadline: 2n })
+    expect(td.primaryType).toBe('BalanceSettlementIntent')
+    expect(td.message.amount).toBe(7n)
+    expect(td.message).not.toHaveProperty('minAmount')
+    expect(td.types).toBe(SETTLEMENT_BALANCE_INTENT_TYPES)
+    // the encoded type string equals the contract's BALANCE_INTENT_TYPEHASH preimage
+    const typeString = (name: 'BalanceSettlementIntent' | 'Call') => `${name}(${td.types[name].map((f) => `${f.type} ${f.name}`).join(',')})`
+    expect(typeString('BalanceSettlementIntent') + typeString('Call')).toBe(
+      'BalanceSettlementIntent(bytes32 sessionId,address payer,address token,address recipient,uint256 amount,Call[] calls,uint256 deadline)Call(address target,bytes data)',
+    )
   })
 })
 
