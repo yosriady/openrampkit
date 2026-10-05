@@ -1,6 +1,6 @@
 # Deployments
 
-`OpenRampSettlement` has the same address on every testnet, because it is deployed with CREATE2 through the standard deterministic deployer (`SETTLEMENT_SALT` is `keccak256("openrampkit.settlement.v2")`). The source is verified on Blockscout (Arbitrum Sepolia), on the Robinhood Chain Testnet explorer (Blockscout) and on the Tempo contract verifier (Sourcify API, shown in the Tempo Explorer).
+`OpenRampSettlement` has the same address on every testnet, because it is deployed with CREATE2 through the standard deterministic deployer (`SETTLEMENT_SALT` is `keccak256("openrampkit.settlement.v2")`). The source is verified on Blockscout and Arbiscan (Arbitrum Sepolia), on the Robinhood Chain Testnet explorer (Blockscout) and on the Tempo contract verifier (Sourcify API, shown in the Tempo Explorer).
 
 | Chain | Chain id | OpenRampSettlement | Explorer |
 |---|---|---|---|
