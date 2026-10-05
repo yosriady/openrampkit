@@ -17,7 +17,7 @@ Adapters with a live catalog (Transak, Meld, Onramper, Swapped, Coinbase, MoonPa
 | Method | Code | Regions | Adapters | Notes |
 |---|---|---|---|---|
 | Card | `card` | All | Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Swapped | |
-| Apple Pay | `apple_pay` | All | Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Swapped | |
+| Apple Pay | `apple_pay` | All | Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Swapped | Coinbase guest Apple Pay (no Coinbase account) is US only, with `guestCheckout` |
 | Google Pay | `google_pay` | All | Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Swapped | Coinbase sends it as `CARD` |
 | PayPal | `paypal` | All (catalog decides) | MoonPay, Peer (US); Meld, Onramper (catalog) | MoonPay: US, UK and EU. Coinbase has PayPal for sell only |
 | Revolut Pay | `revolut_pay` | All (catalog decides) | MoonPay; Meld, Onramper (catalog) | |
@@ -100,6 +100,7 @@ The [mock adapter](../adapters/mock.md) also has VietQR, QRIS, GoPay, DANA, QR P
 | Transfer crypto | `transfer` | Relay | The user sends to a deposit address |
 | From an exchange | `exchange_transfer` | Mock | A deposit address, with exchange wording |
 | Connect exchange | `exchange` | Binance | The user pays from their exchange account, and the exchange sends the crypto to the address |
+| Coinbase account | `coinbase_account` | Coinbase | The user pays from the fiat or crypto balance of a Coinbase account (`FIAT_WALLET` or `CRYPTO_WALLET`). All Coinbase countries except JP |
 | Binance Pay | `binance_pay` | Meld (catalog) | |
 | Bank transfer | `bank_transfer` | Swapped, Transak, Meld, Onramper | A local bank transfer in the user's currency |
 

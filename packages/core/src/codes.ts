@@ -32,6 +32,8 @@ export const METHODS: Record<string, MethodInfo> = {
   transfer: { id: 'transfer', name: 'Transfer crypto', kind: 'crypto' },
   exchange: { id: 'exchange', name: 'Connect exchange', kind: 'exchange' },
   exchange_transfer: { id: 'exchange_transfer', name: 'From an exchange', kind: 'exchange' },
+  /** Pay from the balance of a Coinbase account (fiat or crypto), in the Coinbase hosted flow */
+  coinbase_account: { id: 'coinbase_account', name: 'Coinbase account', kind: 'exchange' },
   card: { id: 'card', name: 'Card', kind: 'card' },
   apple_pay: { id: 'apple_pay', name: 'Apple Pay', kind: 'wallet_pay' },
   google_pay: { id: 'google_pay', name: 'Google Pay', kind: 'wallet_pay' },
