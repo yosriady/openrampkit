@@ -15,7 +15,7 @@ OpenRampKit names chains with CAIP-2 ids and tokens with their address (or `nati
 | Monad | `eip155:143` | MON | |
 | HyperEVM | `eip155:999` | HYPE | |
 | Tempo | `eip155:4217` | none (fees in USD stablecoins) | See [Tempo](#tempo) |
-| Tempo Testnet (Moderato) | `eip155:42431` | none | Metadata only |
+| Tempo Testnet (Moderato) | `eip155:42431` | none (fees in pathUSD) | `OpenRampSettlement` deployed. Playground testnet mode |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | SOL (9 decimals) | See [Solana](../guide/solana.md) |
 | Solana Devnet | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | SOL | Metadata and devnet USDC only |
 | Robinhood Chain | `eip155:4663` | ETH | Arbitrum Orbit L2. No USDC in `USDC` yet. |

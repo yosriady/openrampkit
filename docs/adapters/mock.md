@@ -97,7 +97,7 @@ When the destination has `settlement`, the leg pays through [OpenRampSettlement]
 - A poll also completes the leg when the contract already has the receipt, for example after a lost `submit_tx`.
 - The leg is `FAILED` when the transaction reverted, did not settle this session, or settled a different amount, recipient or call bundle.
 
-This works on any EVM chain with an RPC, for example a testnet. The [playground](../guide/playground.md#testnet-mode-real-wallet) uses it on Arbitrum Sepolia and Robinhood Chain Testnet.
+This works on any EVM chain with an RPC, for example a testnet. The [playground](../guide/playground.md#testnet-mode-real-wallet) uses it on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet.
 
 ## Solana local chain leg
 

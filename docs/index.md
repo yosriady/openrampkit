@@ -24,7 +24,7 @@ features:
   - title: Pathways, not vendors
     details: A planner picks the best route at run time across 10 providers, for example a card or bank transfer to USDC on Base, then a bridge to Arbitrum. Every quote, fee and status is visible.
   - title: Onchain settlement
-    details: OpenRampSettlement settles each session once and can deposit into a vault in the same transaction. Live on Arbitrum Sepolia and Robinhood Chain Testnet.
+    details: OpenRampSettlement settles each session once and can deposit into a vault in the same transaction. Live on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet.
   - title: Any chain
     details: USDC on Arbitrum, Base, Solana, Tempo and other chains. Withdrawals to a wallet or a bank account use the same kit.
   - title: Agent-ready

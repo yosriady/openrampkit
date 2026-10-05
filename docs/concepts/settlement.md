@@ -84,7 +84,7 @@ Today these legs have this capability:
 
 ## Try it in the playground
 
-The [playground](../guide/playground.md#testnet-mode-real-wallet) has a testnet mode. Your browser wallet pays a session on Arbitrum Sepolia or Robinhood Chain Testnet. It uses test tokens with no value.
+The [playground](../guide/playground.md#testnet-mode-real-wallet) has a testnet mode. Your browser wallet pays a session on Arbitrum Sepolia, Robinhood Chain Testnet or Tempo Testnet. It uses test tokens with no value.
 
 1. Open the playground. Set **Mode** to **Testnet (real wallet)**.
 2. Connect your wallet. Mint the free test token, or get Circle test USDC from the [Circle faucet](https://faucet.circle.com/).
@@ -183,10 +183,13 @@ The contract has no upgrade path. Ownership moves in two steps (`transferOwnersh
 |---|---|---|---|
 | Arbitrum Sepolia | 421614 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` (Circle) |
 | Robinhood Chain Testnet | 46630 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | Not published yet |
+| Tempo Testnet (Moderato) | 42431 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132) | No Circle USDC. Test stablecoins from the faucet: AlphaUSD `0x20c0000000000000000000000000000000000001`, pathUSD `0x20c0000000000000000000000000000000000000` (TIP-20) |
 | Arbitrum One | 42161 | Not deployed yet | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (Circle) |
 
 The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. Demo settlements, and a settlement through the TypeScript client, are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
 
-On both testnets, a test token with an open mint (no value) is at `0x9A38C55160186C3E1e770e193fA96997e60ed425`. A test ERC-4626 vault for it is at `0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801`. The vault is an allowed call target on both contracts.
+On every testnet above, a test token with an open mint (no value) is at `0x9A38C55160186C3E1e770e193fA96997e60ed425`. A test ERC-4626 vault for it is at `0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801`. The vault is an allowed call target on each contract.
+
+Tempo has no gas token. Tempo takes the fee in pathUSD when a transaction names no fee token, so standard EIP-1559 transactions from `forge` or a browser wallet work. The payer needs some pathUSD. The Tempo faucet sends it without a sign-in: `cast rpc tempo_fundAddress <address> --rpc-url https://rpc.moderato.tempo.xyz`. A TIP-20 stablecoin settles like any ERC-20: `approve`, then `settle`.
 
 To deploy the contract, read [`contracts/README.md`](https://github.com/yosriady/openrampkit/tree/main/contracts#deploy).

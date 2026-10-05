@@ -5,7 +5,7 @@
 ::: warning Two modes
 **Demo** is the default. It uses mock providers and moves no real money. You do not need an account or an API key.
 
-**Testnet (real wallet)** sends real transactions from your browser wallet on Arbitrum Sepolia or Robinhood Chain Testnet, or from your Solana wallet on Solana devnet. It uses test tokens with no value. See [Testnet mode](#testnet-mode-real-wallet) and [Solana devnet](#solana-devnet).
+**Testnet (real wallet)** sends real transactions from your browser wallet on Arbitrum Sepolia, Robinhood Chain Testnet or Tempo Testnet, or from your Solana wallet on Solana devnet. It uses test tokens with no value. See [Testnet mode](#testnet-mode-real-wallet) and [Solana devnet](#solana-devnet).
 :::
 
 ## What it is
@@ -101,22 +101,23 @@ In this mode, your own wallet pays a session through the [OpenRampSettlement con
 You need these items:
 
 - A browser wallet, for example MetaMask or Rabby (any EIP-1193 wallet).
-- A small amount of test ETH for gas on the network.
+- A small amount of test ETH for gas on the network. Tempo Testnet has no gas token: you pay fees in pathUSD. Get pathUSD (and AlphaUSD) from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet).
 - Test tokens. The page can mint them for you.
 
 ### Steps
 
-1. Select the **Network**: Arbitrum Sepolia or Robinhood Chain Testnet. For Solana, see [Solana devnet](#solana-devnet).
+1. Select the **Network**: Arbitrum Sepolia, Robinhood Chain Testnet or Tempo Testnet. For Solana, see [Solana devnet](#solana-devnet).
 2. Select the **Token**:
    - **Test token (free, mint in one click)**. Select **Mint 100 tUSDC**. Your wallet sends one `mint` transaction.
    - **Circle test USDC** (Arbitrum Sepolia only). Get it from the [Circle faucet](https://faucet.circle.com/).
+   - **AlphaUSD** (Tempo Testnet only). A TIP-20 test stablecoin. Get it from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet).
 3. Select the **Destination**:
    - **Plain settlement**. The contract sends the tokens to the recipient.
    - **Deposit into vault** (test token only). The contract deposits the tokens into a test ERC-4626 vault for the recipient, in the same transaction. The vault call has a fixed amount, so enter the same amount in the widget.
 4. Select **Connect wallet**. If your wallet is on another network, select **Switch to Arbitrum Sepolia**.
 5. In the widget, select **Pay with wallet**. Enter an amount, then select **Continue** and **Confirm**.
 6. Select **Confirm in wallet**. Your wallet asks you to sign two transactions: `approve` on the token, then `settle` on the contract.
-7. The server reads the contract over the public RPC and checks the session with `verifySettlement`. Then the widget shows **Deposit complete**. The page shows links to the transaction on Arbiscan and Blockscout.
+7. The server reads the contract over the public RPC and checks the session with `verifySettlement`. Then the widget shows **Deposit complete**. The page shows links to the transaction on the explorers of the network (Arbiscan and Blockscout on Arbitrum Sepolia).
 
 The recipient is your connected wallet. Thus, a plain settlement sends the tokens back to you, and a vault deposit gives you vault shares.
 
