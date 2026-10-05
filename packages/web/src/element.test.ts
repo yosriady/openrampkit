@@ -507,6 +507,14 @@ describe('other surfaces (fake client)', () => {
     expect(f.getAttribute('sandbox')).toContain('allow-scripts')
     expect(f.getAttribute('allow')).toBe('payment; camera; microphone; clipboard-write')
     expect(f.getAttribute('style')).toBe('height:560px')
+    expect(f.getAttribute('referrerpolicy')).toBe('strict-origin-when-cross-origin')
+  })
+
+  it('IFRAME uses the referrer policy of the surface (Coinbase guest Apple Pay needs no-referrer)', async () => {
+    const h = await mountStep({ kind: 'IFRAME', url: 'about:blank', origin: 'https://p.example', allow: 'payment', referrerPolicy: 'no-referrer' })
+    const f = h.$('iframe.provider')!
+    expect(f.getAttribute('referrerpolicy')).toBe('no-referrer')
+    expect(f.getAttribute('allow')).toBe('payment')
   })
 
   it('IFRAME and PROVIDER_SDK never render a javascript: or data: URL', async () => {

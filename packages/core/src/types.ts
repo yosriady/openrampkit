@@ -318,6 +318,8 @@ export type Surface =
       allow?: string
       height?: number
       provider?: string
+      /** `referrerpolicy` of the frame. Default: `strict-origin-when-cross-origin`. Some providers need `no-referrer`. */
+      referrerPolicy?: 'no-referrer' | 'strict-origin-when-cross-origin'
       /**
        * `postMessage` events from the provider page that end the user's part of the step.
        * The UI only uses them to check the status at once (or to show a "closed" notice).

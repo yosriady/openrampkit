@@ -1041,7 +1041,7 @@ export class OpenRampModal extends LitElement {
           title=${m.iframeTitle(provider)}
           allow=${surface.allow ?? 'payment; camera; microphone; clipboard-write'}
           sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
-          referrerpolicy="strict-origin-when-cross-origin"
+          referrerpolicy=${surface.referrerPolicy ?? 'strict-origin-when-cross-origin'}
           style=${`height:${surface.height ?? 560}px`}
         ></iframe>`
       case 'PROVIDER_SDK': {

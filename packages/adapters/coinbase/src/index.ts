@@ -8,16 +8,20 @@
 //   header. Pass the subscription's `metadata.secret` as `webhookSecret`.
 // - Auth: CDP API key JWT (Ed25519 or ES256), signed with WebCrypto (see jwt.ts).
 //
-// Note: Coinbase ended guest checkout (card / Apple Pay without a Coinbase account) in the hosted
-// widget on 2026-06-30. The hosted flow now needs a Coinbase account. Guest Apple Pay / Google Pay
-// moved to the Headless Onramp API (Create Onramp Order), which this adapter does not implement yet.
+// Coinbase ended guest checkout (card / Apple Pay without a Coinbase account) in the hosted widget on
+// 2026-06-30. The hosted flow now needs a Coinbase account. Guest Apple Pay is the Headless Onramp API
+// (https://docs.cdp.coinbase.com/onramp/headless-onramp/overview), enabled with `guestCheckout`:
+// - Quote: POST https://api.cdp.coinbase.com/platform/v2/onramp/orders with `isQuote: true`.
+// - Start: the same call with `isQuote: false` returns `paymentLink.url`, shown in an IFRAME.
+// - Status: GET https://api.cdp.coinbase.com/platform/v2/onramp/orders/{orderId}.
+// US users only, Apple Pay only on the web (Google Pay is for Android WebViews).
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
 import { POLL as POLLS, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
+import type { AdapterContext, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
 import type { CdpKey } from './jwt.js'
 
@@ -45,16 +49,61 @@ export type CoinbaseOptions = {
   defaultSubdivision?: string
   /** Use sandbox transactions (partnerUserRef prefixed with "sandbox-"). Default: !session.livemode */
   sandbox?: boolean
+  /**
+   * Coinbase `paymentMethod` of the `coinbase_account` leg: the user's fiat balance (`FIAT_WALLET`, default)
+   * or crypto balance (`CRYPTO_WALLET`). In the hosted flow the user can still pick another balance.
+   */
+  accountBalance?: 'FIAT_WALLET' | 'CRYPTO_WALLET'
+  /**
+   * Guest Apple Pay with the Headless Onramp API (no Coinbase account, US only). Off when not set.
+   * Your CDP app must be approved for Onramp, and `domain` must be on the Onramp domain allowlist.
+   */
+  guestCheckout?: GuestCheckoutOptions
+}
+
+export type GuestCheckoutOptions = {
+  /** Domain of the page that shows the modal (the Apple Pay iframe), e.g. `app.example.com` */
+  domain: string
+  /**
+   * Contact details that your app verified with OTP (standard headless mode). Return undefined, or leave
+   * this out, for embedded orders: Coinbase then collects and verifies them in the frame. Embedded
+   * orders need account enablement by Coinbase.
+   */
+  verifiedContact?: (ctx: AdapterContext) => GuestContact | undefined | Promise<GuestContact | undefined>
+}
+
+/** Fields of the Create Onramp Order API for a user that your app verified */
+export type GuestContact = {
+  email: string
+  /** E.164, a real US cell number (not VoIP) */
+  phoneNumber: string
+  /** ISO time when the user accepted the Coinbase Guest Checkout Terms, User Agreement and Privacy Policy */
+  agreementAcceptedAt: string
+  /** ISO time of the phone OTP check. Coinbase needs a new check every 60 days. */
+  phoneNumberVerifiedAt?: string
+  /** From the Onramp Verification APIs, in place of your own OTP */
+  smsVerificationId?: string
+  emailVerificationId?: string
 }
 
 const POLL: PollSpec = POLLS.checkout
 /** Reuse the URL made at quote time only while its session token is fresh (tokens last 5 minutes). */
 const URL_REUSE_MS = 4 * 60_000
+/** Origin of Coinbase payment links (https://docs.cdp.coinbase.com/api-reference/v2/rest-api/onramp/create-an-onramp-order) */
+const PAY_ORIGIN = 'https://pay.coinbase.com'
+/** A `userAuthToken` is valid for 60 days (headless overview, "Embedded orders") */
+const USER_AUTH_TOKEN_TTL_SEC = 60 * 86400
+/** Guest checkout limits: "Up to $2.5K weekly for cards" (Onramp overview), minimum about 5 USD (Onramp FAQ) */
+const GUEST_LIMITS = { min: '5', max: '2500', currency: 'USD' }
 
 const SOLANA = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
 const SOLANA_USDC = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
 
-/** CAIP-2 chain -> Coinbase network name. TO VERIFY: names for arbitrum/optimism/polygon via Buy Options API. */
+/**
+ * CAIP-2 chain -> Coinbase network name. `base`, `ethereum`, `polygon` and `solana` appear in the CDP docs
+ * (Onramp Layer 2 networks page, Buy Options API). TO VERIFY: `arbitrum` and `optimism`, and USDC on them,
+ * with the Buy Options API.
+ */
 export const COINBASE_NETWORKS: Record<string, string> = {
   'eip155:8453': 'base',
   'eip155:1': 'ethereum',
@@ -70,21 +119,35 @@ const USDC_TOKENS: Record<string, string> = { ...USDC, [SOLANA]: SOLANA_USDC }
 const FIATS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'SGD', 'CHF']
 
 /**
- * Our method id -> Coinbase `paymentMethod` in the v2 session API. Its enum is CARD, ACH, APPLE_PAY, PAYPAL,
+ * Our leg id -> Coinbase `paymentMethod` in the v2 session API. Its enum is CARD, ACH, APPLE_PAY, PAYPAL,
  * FIAT_WALLET, CRYPTO_WALLET (https://docs.cdp.coinbase.com/api-reference/v2/rest-api/onramp/create-an-onramp-session).
- * google_pay has no own value in the session API (TO VERIFY). PayPal is sell only at Coinbase, so it is not a leg
- * (https://docs.cdp.coinbase.com/onramp/additional-resources/payment-methods).
+ * The enum has no Google Pay value, so google_pay is sent as CARD. PayPal is sell only at Coinbase, so it is not
+ * a leg (https://docs.cdp.coinbase.com/onramp/additional-resources/payment-methods).
+ * `coinbase_account` (the user's Coinbase balance) is set per adapter, see `accountBalance`.
  */
 const PAYMENT_METHOD: Record<string, string> = { card: 'CARD', apple_pay: 'APPLE_PAY', google_pay: 'CARD', ach: 'ACH' }
 
-/** Our method id -> payment method id in the v1 Buy Config API (ACH is `ACH_BANK_ACCOUNT` there; match without case) */
-const CONFIG_METHOD: Record<string, string> = { ...PAYMENT_METHOD, ach: 'ACH_BANK_ACCOUNT' }
+/**
+ * Our leg id -> payment method ids in the v1 Buy Config API (match without case). The v1 ids differ from the
+ * session API: ACH is `ACH_BANK_ACCOUNT` and the crypto balance is `CRYPTO_ACCOUNT` (Onramp API spec, PaymentMethodType).
+ */
+const CONFIG_METHODS: Record<string, string[]> = {
+  card: ['CARD'],
+  apple_pay: ['APPLE_PAY'],
+  google_pay: ['CARD'],
+  ach: ['ACH_BANK_ACCOUNT'],
+  coinbase_account: ['FIAT_WALLET', 'CRYPTO_ACCOUNT'],
+}
 
-type CoinbaseLeg = 'card' | 'apple_pay' | 'google_pay' | 'ach'
+/** Leg id of guest Apple Pay (Headless Onramp API, `GUEST_CHECKOUT_APPLE_PAY`) */
+const GUEST_APPLE_PAY = 'guest_apple_pay'
+
+type CoinbaseLeg = 'card' | 'apple_pay' | 'google_pay' | 'ach' | 'coinbase_account'
 
 type CbAmount = { value?: string; amount?: string; currency: string }
 type CbTransaction = {
   status?: string
+  orderId?: string
   tx_hash?: string
   txHash?: string
   purchase_amount?: CbAmount | string
@@ -98,6 +161,34 @@ type CbTransaction = {
   transaction_id?: string
   eventType?: string
 }
+/** `OnrampOrder` of the v2 order API */
+type CbOrder = {
+  orderId?: string
+  status?: string
+  paymentTotal?: string
+  paymentCurrency?: string
+  purchaseAmount?: string
+  destinationNetwork?: string
+  txHash?: string
+  partnerUserRef?: string
+  fees?: Array<{ type: string; amount: string; currency: string }>
+}
+type CbOrderResponse = { order?: CbOrder; paymentLink?: { url?: string; paymentLinkType?: string }; userAuthToken?: string }
+
+/** Order statuses where the user still has to act (verify, then pay) */
+const ORDER_WAITING = ['ONRAMP_ORDER_STATUS_PENDING_AUTH', 'ONRAMP_ORDER_STATUS_PENDING_VERIFICATION', 'ONRAMP_ORDER_STATUS_PENDING_PAYMENT']
+
+/**
+ * Create Onramp Order `errorType` values that are about the user, not our setup
+ * (https://docs.cdp.coinbase.com/api-reference/v2/rest-api/onramp/create-an-onramp-order, 400 and 429 examples).
+ */
+const GUEST_ERRORS: Record<string, { code: 'REGION_UNSUPPORTED' | 'PROVIDER_DECLINED' | 'AMOUNT_TOO_HIGH'; message: string }> = {
+  guest_region_forbidden: { code: 'REGION_UNSUPPORTED', message: 'Coinbase guest checkout is not available in your region.' },
+  guest_permission_denied: { code: 'PROVIDER_DECLINED', message: 'Coinbase does not allow guest checkout for this user.' },
+  guest_transaction_limit: { code: 'AMOUNT_TOO_HIGH', message: 'This amount is above your weekly Coinbase guest limit.' },
+  guest_transaction_count: { code: 'PROVIDER_DECLINED', message: 'You reached the Coinbase guest checkout transaction limit.' },
+}
+
 type CbSessionResponse = {
   session?: { onrampUrl?: string }
   quote?: {
@@ -164,7 +255,29 @@ export function coinbase(opts: CoinbaseOptions) {
     leg('google_pay'),
     // ACH_BANK_ACCOUNT: US only (Coinbase payment methods page, see PAYMENT_METHOD)
     leg('ach', { from: { asset: { kind: 'fiat', currencies: ['USD'] }, location: ['user_account'] }, regions: { allow: ['US'], deny: [] }, eta: { min: 300, max: 5 * 86400 } }),
+    // The user's Coinbase balance: FIAT_WALLET / CRYPTO_ACCOUNT, "All countries in which Coinbase operates
+    // except Japan" (payment methods page). No Coinbase fee to send an existing crypto balance (Onramp FAQ).
+    // TO VERIFY: that the session API returns a quote for FIAT_WALLET and CRYPTO_WALLET with a fiat paymentCurrency.
+    leg('coinbase_account'),
   ]
+  const accountMethod = opts.accountBalance ?? 'FIAT_WALLET'
+  const guest = opts.guestCheckout
+  if (guest) {
+    // Headless Onramp: "US-only" with a valid US phone number. USD only (TO VERIFY: the API takes
+    // `paymentCurrency`, but the docs show only USD for US users).
+    legs.push({
+      id: GUEST_APPLE_PAY,
+      kind: 'fiat_onramp',
+      methods: ['apple_pay'],
+      from: { asset: { kind: 'fiat', currencies: ['USD'] }, location: ['user_account'] },
+      to: { asset: { kind: 'crypto', chains: toChains }, location: ['address'] },
+      regions: { allow: ['US'], deny: [] },
+      limits: GUEST_LIMITS,
+      eta: { min: 30, max: 900 },
+      surfaces: ['IFRAME'],
+      capabilities: ['webhooks', 'polling'],
+    })
+  }
 
   function target(asset: CryptoAsset | undefined): { chain: string; network: string; asset: CryptoAsset } {
     const chain = asset && asset.chain !== '*' && COINBASE_NETWORKS[asset.chain] ? asset.chain : 'eip155:8453'
@@ -214,6 +327,50 @@ export function coinbase(opts: CoinbaseOptions) {
     return cdp<CbSessionResponse>(ctx, cdpApi, 'POST', '/platform/v2/onramp/sessions', '', body)
   }
 
+  async function createOrder(ctx: AdapterContext, p: {
+    network: string
+    address: string
+    paymentAmount?: string
+    purchaseAmount?: string
+    ref: string
+    isQuote: boolean
+    userAuthToken?: string
+  }): Promise<CbOrderResponse> {
+    const contact = guest?.verifiedContact ? await guest.verifiedContact(ctx) : undefined
+    const locale = ctx.session.locale
+    const body = {
+      paymentCurrency: 'USD',
+      purchaseCurrency: 'USDC',
+      paymentMethod: 'GUEST_CHECKOUT_APPLE_PAY',
+      destinationAddress: p.address,
+      destinationNetwork: p.network,
+      partnerUserRef: p.ref,
+      ...(p.paymentAmount ? { paymentAmount: roundTo(p.paymentAmount, 2) } : {}),
+      ...(p.purchaseAmount ? { purchaseAmount: p.purchaseAmount } : {}),
+      isQuote: p.isQuote,
+      domain: guest!.domain,
+      ...(ctx.session.ip ? { clientIp: ctx.session.ip } : {}),
+      ...(locale && /^[a-zA-Z]{2,3}(-[a-zA-Z0-9]{2,8})*$/.test(locale) ? { locale } : {}),
+      // No contact: an embedded order, where Coinbase verifies the user in the frame.
+      ...(contact ?? {}),
+      ...(!contact && p.userAuthToken ? { userAuthToken: p.userAuthToken } : {}),
+    }
+    return cdp<CbOrderResponse>(ctx, cdpApi, 'POST', '/platform/v2/onramp/orders', '', body)
+  }
+
+  /** Map a Create Onramp Order error: guest limits and regions are about the user, others as usual */
+  function orderError(e: unknown, what: string, log: Pick<Logger, 'warn'>): OrkException {
+    if (e instanceof OrkException) return e
+    const body = (e as { body?: unknown } | undefined)?.body
+    const type = body && typeof body === 'object' ? (body as { errorType?: unknown }).errorType : undefined
+    const known = typeof type === 'string' ? GUEST_ERRORS[type] : undefined
+    if (known) return new OrkException(orkError(known.code, { message: known.message, recovery: 'choose_other' }), 422)
+    return toOrk(e, what, log)
+  }
+
+  /** Key of the reusable `userAuthToken` of one user and wallet. A token only skips OTP for the same wallet. */
+  const authTokenKey = (ctx: AdapterContext, address: string) => `uat:${ctx.session.userId}:${address.toLowerCase()}`
+
   function deliverAddress(ctx: AdapterContext, deliverTo?: { address: string }): string {
     const a = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
     if (!a) throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase needs a wallet address to deliver to.' }))
@@ -235,7 +392,108 @@ export function coinbase(opts: CoinbaseOptions) {
     if (status.endsWith('_FAILED') || tx.eventType === 'onramp.transaction.failed') {
       return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The Coinbase purchase did not complete.', recovery: 'retry_payment' }) }
     }
+    // A headless order before payment: the user is still in the frame
+    if (ORDER_WAITING.includes(status)) return { ref, status: 'awaiting_user' }
     return { ref, status: 'processing' }
+  }
+
+  function feesOf(list: Array<{ type: string; amount: string; currency: string }> | undefined): Fee[] {
+    return (list ?? []).map((f) => ({
+      kind: f.type === 'FEE_TYPE_NETWORK' ? 'network' : 'provider',
+      label: f.type === 'FEE_TYPE_NETWORK' ? 'Network fee' : 'Coinbase fee',
+      amount: f.amount,
+      currency: f.currency,
+    }))
+  }
+
+  async function guestQuote(input: QuoteInput, ctx: AdapterContext, currency: string, t: ReturnType<typeof target>): Promise<LegQuote> {
+    if (currency.toUpperCase() !== 'USD') throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase guest checkout takes USD only.' }))
+    let res: CbOrderResponse
+    try {
+      res = await createOrder(ctx, {
+        network: t.network,
+        address: deliverAddress(ctx, input.deliverTo),
+        ...(input.amountIn ? { paymentAmount: input.amountIn.amount } : { purchaseAmount: input.amountOut?.amount ?? '0' }),
+        ref: partnerUserRef(ctx),
+        isQuote: true,
+      })
+    } catch (e) {
+      throw orderError(e, 'price this amount', ctx.log)
+    }
+    const o = res.order
+    if (!o?.paymentTotal || !o.purchaseAmount) throw new OrkException(orkError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
+    return {
+      adapterId: 'coinbase',
+      legId: GUEST_APPLE_PAY,
+      input: { amount: o.paymentTotal, asset: { kind: 'fiat', currency: o.paymentCurrency ?? 'USD' } },
+      output: { amount: o.purchaseAmount, asset: t.asset },
+      fees: feesOf(o.fees),
+      eta: legs.find((l) => l.id === GUEST_APPLE_PAY)!.eta,
+      limits: GUEST_LIMITS,
+      data: { network: t.network },
+    }
+  }
+
+  async function guestStart(input: StartInput, ctx: AdapterContext): Promise<LegStep> {
+    const data = (input.quote.data ?? {}) as { network?: string }
+    const t = target(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
+    const address = deliverAddress(ctx, input.deliverTo)
+    const ref = partnerUserRef(ctx)
+    const tokenKey = authTokenKey(ctx, address)
+    const saved = await ctx.shared.get<string>(tokenKey)
+    let res: CbOrderResponse
+    try {
+      res = await createOrder(ctx, {
+        network: data.network ?? t.network,
+        address,
+        paymentAmount: input.quote.input.amount,
+        ref,
+        isQuote: false,
+        ...(saved ? { userAuthToken: saved } : {}),
+      })
+    } catch (e) {
+      throw orderError(e, 'start the purchase', ctx.log)
+    }
+    const link = res.paymentLink?.url
+    const orderId = res.order?.orderId
+    if (!link || !orderId) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a payment link.' }), 502)
+    await ctx.store.put(`order:${ref}`, orderId, 7 * 86400)
+    // "Store it ... replacing any older value" (embedded orders)
+    if (res.userAuthToken && res.userAuthToken !== saved) await ctx.shared.put(tokenKey, res.userAuthToken, USER_AUTH_TOKEN_TTL_SEC)
+    // Sandbox orders: a fake Apple Pay sheet, allowed on http://localhost without domain setup
+    const url = ref.startsWith('sandbox-') ? `${link}${link.includes('?') ? '&' : '?'}useApplePaySandbox=true` : link
+    let origin = PAY_ORIGIN
+    try {
+      origin = new URL(url).origin
+    } catch {
+      // Keep the default origin. The server rejects a surface URL that is not https.
+    }
+    return {
+      state: 'PAYMENT',
+      surface: {
+        kind: 'IFRAME',
+        url,
+        origin,
+        // The iframe needs `allow=payment` and `referrerpolicy="no-referrer"` (Headless Onramp, web app requirements).
+        // The docs also ask for `sandbox="allow-scripts allow-same-origin"`. The modal sandbox has these tokens and
+        // more (forms, popups). TO VERIFY: that Coinbase accepts the extra sandbox tokens.
+        allow: 'payment',
+        referrerPolicy: 'no-referrer',
+        height: 600,
+        provider: 'Coinbase',
+        messages: {
+          typeField: 'eventName',
+          // commit_success: the payment started. polling_success: the crypto was sent.
+          completed: ['onramp_api.commit_success', 'onramp_api.polling_success'],
+          // Not load_error: on the web, ERROR_CODE_GUEST_APPLE_PAY_NOT_SUPPORTED falls back to a QR code.
+          failed: ['onramp_api.commit_error', 'onramp_api.polling_error', 'onramp_api.session_error'],
+          closed: ['onramp_api.cancel'],
+        },
+      },
+      transitions: [awaitPoll(POLL)],
+      status: 'awaiting_user',
+      ref,
+    }
   }
 
   return createAdapter({
@@ -244,8 +502,8 @@ export function coinbase(opts: CoinbaseOptions) {
     legs,
 
     async catalog(input, ctx) {
-      // Countries and payment methods from the Buy Config API, cached for a day.
-      // TO VERIFY: response shape ({ data: { countries } } in the guide, { countries } in the API spec).
+      // Countries and payment methods from the Buy Config API, cached for a day. The API spec
+      // (GetBuyConfigResponse) has `{ countries }`; the older `{ data: { countries } }` shape is accepted too.
       type Config = { countries?: Array<{ id: string; payment_methods?: Array<{ id: string }> }> }
       let cfg = await ctx.shared.get<Config>('config')
       if (!cfg) {
@@ -255,26 +513,30 @@ export function coinbase(opts: CoinbaseOptions) {
       }
       const countries = cfg.countries ?? []
       const allowFor = (l: LegSpec) => {
-        const pm = CONFIG_METHOD[l.id]!
-        const ids = countries.filter((c) => (c.payment_methods ?? []).some((m) => m.id?.toUpperCase() === pm)).map((c) => c.id.toUpperCase())
+        const pms = CONFIG_METHODS[l.id]!
+        const ids = countries.filter((c) => (c.payment_methods ?? []).some((m) => pms.includes(m.id?.toUpperCase()))).map((c) => c.id.toUpperCase())
         // A leg with fixed countries (ACH: US) stays inside them
         return l.regions.allow.includes('*') ? ids : ids.filter((c) => l.regions.allow.includes(c))
       }
-      const refined = legs.map((l) => ({ ...l, regions: { allow: allowFor(l), deny: l.regions.deny } }))
+      // Guest Apple Pay is not a hosted method: it keeps its static US region.
+      const hosted = legs.filter((l) => l.id !== GUEST_APPLE_PAY)
+      const fixed = legs.filter((l) => l.id === GUEST_APPLE_PAY)
+      const refined = hosted.map((l) => ({ ...l, regions: { allow: allowFor(l), deny: l.regions.deny } }))
       // No country lists any of our methods: the config format is not what we expect, so keep the static legs.
       if (!refined.some((l) => l.regions.allow.length)) return legs
       // A method no country supports is not offered at all.
-      return refined.filter((l) => l.regions.allow.length)
+      return [...refined.filter((l) => l.regions.allow.length), ...fixed]
     },
 
     async quote(input, ctx) {
       const fiat = input.amountIn?.asset ?? input.leg.from.asset
       if (fiat.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase quotes need a fiat amount.' }))
       const t = target(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
+      if (input.leg.legId === GUEST_APPLE_PAY) return guestQuote(input, ctx, fiat.currency, t)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
       const sub = subdivision(ctx, country)
       const ref = partnerUserRef(ctx)
-      const paymentMethod = PAYMENT_METHOD[input.leg.legId] ?? 'CARD'
+      const paymentMethod = input.leg.legId === 'coinbase_account' ? accountMethod : PAYMENT_METHOD[input.leg.legId] ?? 'CARD'
       let res: CbSessionResponse
       try {
         res = await createSession(ctx, {
@@ -292,12 +554,7 @@ export function coinbase(opts: CoinbaseOptions) {
       }
       const q = res.quote
       if (!q) throw new OrkException(orkError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
-      const fees: Fee[] = q.fees.map((f) => ({
-        kind: f.type === 'FEE_TYPE_NETWORK' ? 'network' : 'provider',
-        label: f.type === 'FEE_TYPE_NETWORK' ? 'Network fee' : 'Coinbase fee',
-        amount: f.amount,
-        currency: f.currency,
-      }))
+      const fees = feesOf(q.fees)
       return {
         adapterId: 'coinbase',
         legId: input.leg.legId,
@@ -319,6 +576,7 @@ export function coinbase(opts: CoinbaseOptions) {
         country?: string
         subdivision?: string
       }
+      if (input.leg.legId === GUEST_APPLE_PAY) return guestStart(input, ctx)
       let ref = data.ref
       let url = data.onrampUrl
       // The quote's URL is single-use and its session token expires after 5 minutes: make a new one when stale.
@@ -354,7 +612,18 @@ export function coinbase(opts: CoinbaseOptions) {
     },
 
     async status(input, ctx) {
-      // TO VERIFY: query parameter casing (the API spec says pageSize; the guide says page_size).
+      // A headless order: GET /v2/onramp/orders/{orderId} (orderId saved at start)
+      const orderId = await ctx.store.get<string>(`order:${input.ref}`)
+      if (orderId) {
+        let res: { order?: CbOrder }
+        try {
+          res = await cdp(ctx, cdpApi, 'GET', `/platform/v2/onramp/orders/${encodeURIComponent(orderId)}`)
+        } catch (e) {
+          throw toOrk(e, 'find this purchase', ctx.log)
+        }
+        return legStepFromEvent(res.order ? eventFrom(res.order as CbTransaction, input.ref) : undefined, input.ref, POLL)
+      }
+      // `pageSize` (camelCase) as in the Onramp API spec
       const path = `/onramp/v1/buy/user/${encodeURIComponent(input.ref)}/transactions`
       let res: { transactions?: CbTransaction[] }
       try {

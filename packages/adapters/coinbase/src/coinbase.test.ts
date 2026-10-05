@@ -72,10 +72,10 @@ describe('CDP JWT (WebCrypto)', () => {
 })
 
 describe('coinbase adapter', () => {
-  it('passes the shape check; one leg per method (card, Apple Pay, Google Pay, ACH), REDIRECT', () => {
+  it('passes the shape check; one leg per method (card, Apple Pay, Google Pay, ACH, Coinbase account), REDIRECT', () => {
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: 'x' })
     expect(checkAdapterShape(a)).toEqual([])
-    expect(a.legs.map((l) => l.id)).toEqual(['card', 'apple_pay', 'google_pay', 'ach'])
+    expect(a.legs.map((l) => l.id)).toEqual(['card', 'apple_pay', 'google_pay', 'ach', 'coinbase_account'])
     const ach = a.legs.find((l) => l.id === 'ach')!
     expect(ach.regions.allow).toEqual(['US'])
     expect(ach.from.asset).toEqual({ kind: 'fiat', currencies: ['USD'] })
