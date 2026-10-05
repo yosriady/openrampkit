@@ -78,6 +78,7 @@ export default withMermaid(
             items: [
               { text: 'Overview', link: '/adapters/' },
               { text: 'Relay', link: '/adapters/relay' },
+              { text: 'LI.FI', link: '/adapters/lifi' },
               { text: 'Swapped', link: '/adapters/swapped' },
               { text: 'Xendit', link: '/adapters/xendit' },
               { text: 'Coinbase', link: '/adapters/coinbase' },

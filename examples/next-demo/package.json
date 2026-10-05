@@ -9,6 +9,7 @@
     "e2e": "playwright test"
   },
   "dependencies": {
+    "@openrampkit/adapter-lifi": "workspace:*",
     "@openrampkit/adapter-mock": "workspace:*",
     "@openrampkit/adapter-relay": "workspace:*",
     "@openrampkit/adapter-xendit": "workspace:*",

@@ -1,4 +1,5 @@
 import { mockAdapter } from '@openrampkit/adapter-mock'
+import { lifi } from '@openrampkit/adapter-lifi'
 import { relay } from '@openrampkit/adapter-relay'
 import { xendit } from '@openrampkit/adapter-xendit'
 import { createOpenRamp } from '@openrampkit/server'
@@ -19,6 +20,8 @@ export const openramp =
     adapters: [
       // `offramp: true` adds a mock withdraw-to-cash leg (bank transfer, GCash, MoMo, PromptPay payouts).
       ...(MOCK ? [mockAdapter({ crypto: true, bridge: true, offramp: true, settleMs: 4000 })] : [relay({ ...(process.env.RELAY_API_KEY ? { apiKey: process.env.RELAY_API_KEY } : {}) }), mockAdapter({ offramp: true, settleMs: 4000 })]),
+      // LI.FI: a second wallet router next to Relay, in real mode when a LI.FI API key is set.
+      ...(!MOCK && process.env.LIFI_API_KEY ? [lifi({ apiKey: process.env.LIFI_API_KEY, integrator: 'openrampkit-demo' })] : []),
       // Real merchant pay-in (QRIS, QR Ph, PromptPay, e-wallets) when Xendit test keys are set.
       ...(process.env.XENDIT_SECRET_KEY && process.env.XENDIT_WEBHOOK_TOKEN
         ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]

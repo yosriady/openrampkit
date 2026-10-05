@@ -82,6 +82,9 @@ importers:
 
   examples/next-demo:
     dependencies:
+      '@openrampkit/adapter-lifi':
+        specifier: workspace:*
+        version: link:../../packages/adapters/lifi
       '@openrampkit/adapter-mock':
         specifier: workspace:*
         version: link:../../packages/adapters/mock
@@ -218,6 +221,15 @@ importers:
         version: link:../core
 
   packages/adapters/coinbase:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
+  packages/adapters/lifi:
     dependencies:
       '@openrampkit/adapter':
         specifier: workspace:*

@@ -282,6 +282,7 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | Id | Package | What it does | Status |
 |---|---|---|---|
 | `relay` | [`adapter-relay`](packages/adapters/relay) | Pay with wallet, transfer to a deposit address, bridge hop, withdraw to any address | Working. Live check with `pnpm live:relay` (moves no money) |
+| `lifi` | [`adapter-lifi`](packages/adapters/lifi) | Pay with wallet: any token on EVM chains or Solana, swapped and bridged by LI.FI. A second router next to Relay | New. Some details TO VERIFY |
 | `swapped` | [`adapter-swapped`](packages/adapters/swapped) | Card, Apple Pay, Google Pay, EUR bank transfer, SEA local methods (VietQR, MoMo, GCash and more), BLIK, SPEI, mobile money. Payouts for withdrawals | Working. Status polling TO VERIFY |
 | `coinbase` | [`adapter-coinbase`](packages/adapters/coinbase) | Coinbase Onramp: card, Apple Pay, Google Pay, ACH (US) | Working. Some details TO VERIFY |
 | `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE | Working. Some details TO VERIFY |
