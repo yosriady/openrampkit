@@ -16,6 +16,8 @@ export type TestnetToken = {
   mint?: boolean
   /** Where to get the token when it has no open mint */
   faucet?: string
+  /** Name of the faucet in the link text (default: Circle faucet) */
+  faucetName?: string
   /** An ERC-4626 vault for this token that the settlement contract allows as a call target */
   vault?: string
 }
@@ -34,14 +36,22 @@ export type TestnetNetwork = {
   explorers: TestnetExplorer[]
   /** Where to get test ETH for gas */
   gasFaucet?: string
+  /**
+   * Set when the network has no gas token and takes fees in a stablecoin (Tempo). The wallet shows
+   * this symbol as the native currency, and error messages name it instead of test ETH.
+   */
+  feeToken?: { symbol: string; faucet: string }
   tokens: TestnetToken[]
 }
 
 const SETTLEMENT = '0xBF66696115128B8f9f794780061348b4213A7132'
-/** Test USDC with an open mint (no value), the same address on both testnets */
+/** Test USDC with an open mint (no value), the same address on every EVM testnet */
 const TEST_TOKEN = '0x9A38C55160186C3E1e770e193fA96997e60ed425'
-/** Test ERC-4626 vault over the test token, allowlisted as a call target on both deployments */
+/** Test ERC-4626 vault over the test token, allowlisted as a call target on every deployment */
 const TEST_VAULT = '0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801'
+
+/** The Tempo testnet faucet page (no sign-in). It sends pathUSD, AlphaUSD, BetaUSD and ThetaUSD. */
+const TEMPO_FAUCET = 'https://docs.tempo.xyz/quickstart/faucet'
 
 const testToken: TestnetToken = {
   key: 'test',
@@ -85,6 +95,30 @@ export const DEFAULT_NETWORKS: TestnetNetwork[] = [
     settlement: SETTLEMENT,
     explorers: [{ name: 'Blockscout', url: 'https://explorer.testnet.chain.robinhood.com' }],
     tokens: [testToken],
+  },
+  {
+    // Tempo Moderato. No gas token: Tempo takes the fee in pathUSD (the default fee token), so the
+    // wallet needs some pathUSD. The Tempo faucet sends pathUSD and AlphaUSD.
+    key: 'tempo-testnet',
+    chainId: 42431,
+    name: 'Tempo Testnet',
+    rpcUrl: 'https://rpc.moderato.tempo.xyz',
+    settlement: SETTLEMENT,
+    explorers: [{ name: 'Tempo Explorer', url: 'https://explore.testnet.tempo.xyz' }],
+    gasFaucet: TEMPO_FAUCET,
+    feeToken: { symbol: 'pathUSD', faucet: TEMPO_FAUCET },
+    tokens: [
+      testToken,
+      {
+        key: 'alphausd',
+        label: 'AlphaUSD (TIP-20, Tempo faucet)',
+        address: '0x20c0000000000000000000000000000000000001',
+        symbol: 'AlphaUSD',
+        decimals: 6,
+        faucet: TEMPO_FAUCET,
+        faucetName: 'Tempo faucet',
+      },
+    ],
   },
 ]
 

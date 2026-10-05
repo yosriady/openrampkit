@@ -43,6 +43,9 @@ describe('friendlyWalletError', () => {
     expect(friendlyWalletError({ code: 4902, message: 'Unrecognized chain ID' }, ctx)).toMatch(/does not know Arbitrum Sepolia/)
     expect(friendlyWalletError({ name: 'SwitchChainError', message: 'An error occurred when attempting to switch chain.' }, ctx)).toBe('Switch your wallet to Arbitrum Sepolia, then try again.')
     expect(friendlyWalletError(new Error('insufficient funds for gas * price + value'), ctx)).toMatch(/Not enough test ETH for gas on Arbitrum Sepolia/)
+    // Tempo has no gas token: the node says "gas required exceeds allowance (0)" when the fee token balance is 0.
+    const tempo = { chainName: 'Tempo Testnet', feeToken: { symbol: 'pathUSD', faucet: 'https://docs.tempo.xyz/quickstart/faucet' } }
+    expect(friendlyWalletError(new Error('gas required exceeds allowance (0)'), tempo)).toBe('Not enough pathUSD for fees on Tempo Testnet. Get pathUSD at https://docs.tempo.xyz/quickstart/faucet, then try again.')
     expect(friendlyWalletError({ shortMessage: 'Execution reverted with reason: AlreadySettled(bytes32)' }, ctx)).toMatch(/already settled/)
     expect(friendlyWalletError({ message: 'reverted', data: '0xb196a44a6f72735f' }, ctx)).toMatch(/already settled/)
     expect(friendlyWalletError({ message: 'execution reverted: 0xe450d38c...' }, ctx)).toBe('Not enough tUSDC in your wallet for this amount.')
@@ -128,7 +131,10 @@ describe('testnet config', () => {
 
   it('uses the public testnets without an override; the Circle USDC has no vault', () => {
     expect(testnetNetworks()).toBe(DEFAULT_NETWORKS)
-    expect(DEFAULT_NETWORKS.map((n) => n.chainId)).toEqual([421614, 46630])
+    expect(DEFAULT_NETWORKS.map((n) => n.chainId)).toEqual([421614, 46630, 42431])
+    const tempo = DEFAULT_NETWORKS.find((n) => n.key === 'tempo-testnet')!
+    expect(tempo.feeToken?.symbol).toBe('pathUSD')
+    expect(tempo.tokens.find((t) => t.key === 'alphausd')?.address).toBe('0x20c0000000000000000000000000000000000001')
     const usdc = DEFAULT_NETWORKS[0]!.tokens.find((t) => t.key === 'usdc')!
     expect(usdc).toMatchObject({ faucet: 'https://faucet.circle.com/' })
     expect(usdc.vault).toBeUndefined()

@@ -49,7 +49,7 @@ afterEach(() => vi.unstubAllGlobals())
 describe('testnet server', () => {
   it('has one wallet leg per network and token, and no card or cash legs', () => {
     const adapters = testnetAdapters(DEFAULT_NETWORKS)
-    expect(adapters.map((a) => a.id)).toEqual(['testnet-arbitrum-sepolia-test', 'testnet-arbitrum-sepolia-usdc', 'testnet-robinhood-testnet-test'])
+    expect(adapters.map((a) => a.id)).toEqual(['testnet-arbitrum-sepolia-test', 'testnet-arbitrum-sepolia-usdc', 'testnet-robinhood-testnet-test', 'testnet-tempo-testnet-test', 'testnet-tempo-testnet-alphausd'])
     for (const a of adapters) expect(a.legs.map((l) => l.id)).toEqual(['onchain'])
   })
 

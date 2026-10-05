@@ -24,11 +24,17 @@ function chainOf(n: TestnetNetwork): Chain {
   return defineChain({
     id: n.chainId,
     name: n.name,
-    nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 },
+    // Tempo has no gas token. Wallets still need a native currency entry, so it shows the fee symbol.
+    nativeCurrency: n.feeToken ? { name: 'USD', symbol: 'USD', decimals: 18 } : { name: 'Ether', symbol: 'ETH', decimals: 18 },
     rpcUrls: { default: { http: [n.rpcUrl] } },
     ...(n.explorers[0] ? { blockExplorers: { default: { name: n.explorers[0].name, url: n.explorers[0].url } } } : {}),
     testnet: true,
   })
+}
+
+/** The fee token of a network without a gas token (Tempo), for error messages */
+function feeOf(n: TestnetNetwork): { feeToken?: { symbol: string; faucet: string } } {
+  return n.feeToken ? { feeToken: n.feeToken } : {}
 }
 
 export function createTestnetWallet(networks: TestnetNetwork[]) {
@@ -71,7 +77,7 @@ export function createTestnetWallet(networks: TestnetNetwork[]) {
       try {
         await connect(config, { connector: config.connectors[0]! })
       } catch (e) {
-        throw new Error(friendlyWalletError(e, { chainName: networks[0]!.name }))
+        throw new Error(friendlyWalletError(e, { chainName: networks[0]!.name, ...feeOf(networks[0]!) }))
       }
       return state()
     },
@@ -84,7 +90,7 @@ export function createTestnetWallet(networks: TestnetNetwork[]) {
       try {
         await switchChain(config, { chainId: n.chainId as Config['chains'][number]['id'] })
       } catch (e) {
-        throw new Error(friendlyWalletError(e, { chainName: n.name }))
+        throw new Error(friendlyWalletError(e, { chainName: n.name, ...feeOf(n) }))
       }
     },
 
@@ -102,7 +108,7 @@ export function createTestnetWallet(networks: TestnetNetwork[]) {
         if (r.status !== 'success') throw new Error('The mint transaction failed on chain.')
         return hash
       } catch (e) {
-        throw new Error(friendlyWalletError(e, { chainName: n.name, symbol: t.symbol }))
+        throw new Error(friendlyWalletError(e, { chainName: n.name, symbol: t.symbol, ...feeOf(n) }))
       }
     },
 
@@ -117,6 +123,7 @@ export function createTestnetWallet(networks: TestnetNetwork[]) {
       return guardWallet(base, {
         chain: `eip155:${n.chainId}`,
         chainName: n.name,
+        ...feeOf(n),
         settlement: n.settlement,
         token: t,
         readBalance: async () => {

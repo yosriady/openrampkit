@@ -74,7 +74,7 @@ export const ALREADY_SETTLED_SELECTOR = '0xb196a44a'
  * A short, plain message for a wallet or chain error. The raw viem messages are long and
  * technical, so the widget shows this instead.
  */
-export function friendlyWalletError(e: unknown, ctx: { chainName: string; symbol?: string }): string {
+export function friendlyWalletError(e: unknown, ctx: { chainName: string; symbol?: string; feeToken?: { symbol: string; faucet: string } }): string {
   const all = chain(e)
   const codes = all.map((x) => (typeof x.code === 'number' ? x.code : undefined))
   const text = all.map((x) => [x.name, x.shortMessage, x.message, x.details, typeof x.data === 'string' ? x.data : ''].filter((v) => typeof v === 'string').join(' ')).join(' ')
@@ -91,6 +91,7 @@ export function friendlyWalletError(e: unknown, ctx: { chainName: string; symbol
     return 'This session is already settled on chain. Start a new deposit.'
   }
   if (/insufficient funds|exceeds the balance of the account|gas required exceeds/i.test(text)) {
+    if (ctx.feeToken) return `Not enough ${ctx.feeToken.symbol} for fees on ${ctx.chainName}. Get ${ctx.feeToken.symbol} at ${ctx.feeToken.faucet}, then try again.`
     return `Not enough test ETH for gas on ${ctx.chainName}. Get test ETH from a faucet, then try again.`
   }
   if (/transfer amount exceeds balance|ERC20InsufficientBalance|0xe450d38c/i.test(text)) {
@@ -107,6 +108,8 @@ export type GuardOptions = {
   /** CAIP-2 chain of the network, e.g. `eip155:421614` */
   chain: string
   chainName: string
+  /** The fee token of a network without a gas token (Tempo) */
+  feeToken?: { symbol: string; faucet: string }
   settlement: string
   token: { address: string; symbol: string; decimals: number }
   /** The connected account's token balance, in base units */
@@ -153,7 +156,7 @@ export function guardWallet(base: WalletAdapter, g: GuardOptions): WalletAdapter
       try {
         return await base.sendTransactions(chain, txs)
       } catch (e) {
-        throw fail(friendlyWalletError(e, { chainName: g.chainName, symbol: g.token.symbol }))
+        throw fail(friendlyWalletError(e, { chainName: g.chainName, symbol: g.token.symbol, ...(g.feeToken ? { feeToken: g.feeToken } : {}) }))
       }
     },
   }

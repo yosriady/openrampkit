@@ -223,7 +223,12 @@ export function startTestnet(env: TestnetEnv) {
     el.mint.textContent = `Mint ${MINT_AMOUNT} ${t.symbol}`
     el.faucet.hidden = !t.faucet
     if (t.faucet) el.faucet.href = t.faucet
-    el.faucet.textContent = `Get ${t.symbol} (Circle faucet)`
+    el.faucet.textContent = `Get ${t.symbol} (${t.faucetName ?? 'Circle faucet'})`
+    if (n.feeToken && n.feeToken.faucet !== t.faucet) {
+      el.gasFaucet.hidden = false
+      el.gasFaucet.href = n.feeToken.faucet
+      el.gasFaucet.textContent = `Get ${n.feeToken.symbol} for fees (faucet)`
+    }
 
     if (!hasInjectedWallet()) {
       el.status.textContent = 'No wallet'
@@ -257,8 +262,9 @@ export function startTestnet(env: TestnetEnv) {
     el.start.disabled = false
     const notes: string[] = []
     if (wrongChain) notes.push(`Your wallet is on another network. Switch to ${n.name}. The widget also asks your wallet to switch before it pays.`)
+    if (n.feeToken) notes.push(`${n.name} has no gas token. Your wallet pays fees in ${n.feeToken.symbol}, so it needs some ${n.feeToken.symbol} from the faucet.`)
     if (balance === 0n) {
-      notes.push(t.mint ? `You have 0 ${t.symbol}. Press "Mint ${MINT_AMOUNT} ${t.symbol}" to get free test tokens.` : `You have 0 ${t.symbol}. Get test ${t.symbol} from the Circle faucet, then press "Start deposit".`)
+      notes.push(t.mint ? `You have 0 ${t.symbol}. Press "Mint ${MINT_AMOUNT} ${t.symbol}" to get free test tokens.` : `You have 0 ${t.symbol}. Get test ${t.symbol} from the ${t.faucetName ?? 'Circle faucet'}, then press "Start deposit".`)
     }
     say(notes.join(' '), balance === 0n ? 'error' : 'info')
     return balance !== 0n
