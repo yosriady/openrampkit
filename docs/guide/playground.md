@@ -133,7 +133,7 @@ await openramp.sessions.create({
     chain: 'eip155:421614', // Arbitrum Sepolia (Robinhood Chain Testnet: eip155:46630, Tempo Testnet: eip155:42431)
     token: TOKEN, // the token that you selected
     address: user.address,
-    settlement: { contract: '0xBF66696115128B8f9f794780061348b4213A7132' },
+    settlement: { contract: '0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5' },
   },
 })
 ```

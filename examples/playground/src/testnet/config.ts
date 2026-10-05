@@ -44,7 +44,7 @@ export type TestnetNetwork = {
   tokens: TestnetToken[]
 }
 
-const SETTLEMENT = '0xBF66696115128B8f9f794780061348b4213A7132'
+const SETTLEMENT = '0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5'
 /** Test USDC with an open mint (no value), the same address on every EVM testnet */
 const TEST_TOKEN = '0x9A38C55160186C3E1e770e193fA96997e60ed425'
 /** Test ERC-4626 vault over the test token, allowlisted as a call target on every deployment */

@@ -60,7 +60,7 @@ const NET = NETWORKS[process.env.NETWORK ?? 'arbitrum-sepolia']
 if (!NET) throw new Error(`NETWORK must be one of: ${Object.keys(NETWORKS).join(', ')}`)
 const CHAIN = `eip155:${NET.viemChain.id}`
 const RPC_URL = process.env.RPC_URL ?? NET.rpcUrl
-const SETTLEMENT = '0xBF66696115128B8f9f794780061348b4213A7132'
+const SETTLEMENT = '0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5'
 const USDC = NET.token
 const SYMBOL = NET.symbol
 const AMOUNT = process.env.AMOUNT ?? '5'

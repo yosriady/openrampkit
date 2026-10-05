@@ -157,8 +157,6 @@ const signature = await signer.signTypedData(typedData)
 const data = encodeSettle({ sessionId, token, amount, recipient }, { payer: solver, minAmount: amount, deadline, signature }, { fromBalance: true })
 ```
 
-> **Note:** The deployed testnet contracts (below) are an older version. In that version, the `settleFromBalance` intent binds only a minimum amount. The testnet contracts have no intent signer, so `settleFromBalance` reverts on them. A redeploy is necessary before you use `settleFromBalance`. `settle` did not change.
-
 ## Verify a settlement
 
 The server does this for you. You can also call the helper from your backend:
@@ -208,12 +206,12 @@ The deploy script stops on a chain that is not a known testnet when no intent si
 
 | Network | Chain id | OpenRampSettlement | USDC |
 |---|---|---|---|
-| Arbitrum Sepolia | 421614 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` (Circle) |
-| Robinhood Chain Testnet | 46630 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132) | Not published yet |
-| Tempo Testnet (Moderato) | 42431 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132) | No Circle USDC. Test stablecoins from the faucet: AlphaUSD `0x20c0000000000000000000000000000000000001`, pathUSD `0x20c0000000000000000000000000000000000000` (TIP-20) |
+| Arbitrum Sepolia | 421614 | [`0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5`](https://arbitrum-sepolia.blockscout.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5) | `0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d` (Circle) |
+| Robinhood Chain Testnet | 46630 | [`0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5`](https://explorer.testnet.chain.robinhood.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5) | Not published yet |
+| Tempo Testnet (Moderato) | 42431 | [`0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5`](https://explore.testnet.tempo.xyz/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5) | No Circle USDC. Test stablecoins from the faucet: AlphaUSD `0x20c0000000000000000000000000000000000001`, pathUSD `0x20c0000000000000000000000000000000000000` (TIP-20) |
 | Arbitrum One | 42161 | Not deployed yet | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (Circle) |
 
-The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. They are an older version without the `settleFromBalance` amount fix, and they need a redeploy (see [Funds from a bridge or solver](#funds-from-a-bridge-or-solver)). Demo settlements, and a settlement through the TypeScript client, are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
+The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. They include the `settleFromBalance` amount fix (redeployed on 5 October 2026). Demo settlements, and a settlement through the TypeScript client, are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
 
 On every testnet above, a test token with an open mint (no value) is at `0x9A38C55160186C3E1e770e193fA96997e60ed425`. A test ERC-4626 vault for it is at `0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801`. The vault is an allowed call target on each contract.
 

@@ -16,7 +16,9 @@ import {MockUSDC, MockVault} from "../test/mocks/Mocks.sol";
 /// Testnets only. The deployer must be the settlement owner.
 ///
 /// Environment: `DEPLOYER_PRIVATE_KEY`, `SETTLEMENT` (the deployed contract),
-/// `DEMO_RECIPIENT` (optional, default the deployer).
+/// `DEMO_RECIPIENT` (optional, default the deployer). `DEMO_TOKEN` and `DEMO_VAULT` (optional): an
+/// existing open-mint test token and its ERC-4626 vault to use again, instead of new ones. The vault
+/// must already be an allowed call target, or the deployer (the owner) allows it here.
 ///
 ///   forge script script/Demo.s.sol --rpc-url arbitrum_sepolia --broadcast
 contract Demo is Script {
@@ -29,9 +31,11 @@ contract Demo is Script {
         uint256 amount = 25e6;
 
         vm.startBroadcast(key);
-        MockUSDC usdc = new MockUSDC();
-        MockVault vault = new MockVault(IERC20(address(usdc)));
-        settlement.setAllowedTarget(address(vault), true);
+        address tokenAddr = vm.envOr("DEMO_TOKEN", address(0));
+        MockUSDC usdc = tokenAddr == address(0) ? new MockUSDC() : MockUSDC(tokenAddr);
+        address vaultAddr = vm.envOr("DEMO_VAULT", address(0));
+        MockVault vault = vaultAddr == address(0) ? new MockVault(IERC20(address(usdc))) : MockVault(vaultAddr);
+        if (!settlement.isAllowedTarget(address(vault))) settlement.setAllowedTarget(address(vault), true);
         usdc.mint(deployer, 2 * amount);
         usdc.approve(address(settlement), 2 * amount);
 

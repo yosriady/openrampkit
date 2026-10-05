@@ -12,6 +12,9 @@ import {OpenRampSettlement} from "../src/OpenRampSettlement.sol";
 /// - `SETTLEMENT_INTENT_SIGNER`: the OpenRampKit server signer. Required on every chain that is not a
 ///   known testnet (see `isTestnet`). On a testnet the default is zero (intents off).
 /// - `SETTLEMENT_ALLOWED_TARGETS` (optional): comma-separated call targets, e.g. ERC-4626 vaults.
+/// - `SETTLEMENT_SALT` (optional): a bytes32 salt. When set, the script deploys with CREATE2 through the
+///   standard deterministic deployer, so the same salt and constructor arguments give the same address
+///   on every chain.
 ///
 /// Dry run against a local anvil:
 ///   anvil &
@@ -46,6 +49,7 @@ contract Deploy is Script {
         address owner = vm.envOr("SETTLEMENT_OWNER", deployer);
         address signer = vm.envOr("SETTLEMENT_INTENT_SIGNER", address(0));
         address[] memory targets = vm.envOr("SETTLEMENT_ALLOWED_TARGETS", ",", new address[](0));
+        bytes32 salt = vm.envOr("SETTLEMENT_SALT", bytes32(0));
 
         console2.log("chain id      ", block.chainid);
         console2.log("deployer      ", deployer);
@@ -58,7 +62,9 @@ contract Deploy is Script {
         }
 
         vm.startBroadcast(key);
-        settlement = new OpenRampSettlement(owner, signer, targets);
+        settlement = salt == bytes32(0)
+            ? new OpenRampSettlement(owner, signer, targets)
+            : new OpenRampSettlement{salt: salt}(owner, signer, targets);
         vm.stopBroadcast();
 
         console2.log("OpenRampSettlement", address(settlement));

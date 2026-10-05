@@ -67,7 +67,7 @@ Hosted platforms are a good choice when you want one contract, one bill and no s
 ## What is live today
 
 - The playground on this site: deposits and withdrawals with mock providers.
-- `OpenRampSettlement` on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0xBF66696115128B8f9f794780061348b4213A7132`, with verified source and demo settlements. See [On-chain settlement](../concepts/settlement.md).
+- `OpenRampSettlement` on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5`, with verified source and demo settlements. See [On-chain settlement](../concepts/settlement.md).
 - 10 provider adapters, Solana and EVM wallet adapters, and an MCP server for agents.
 - A security review, with the fixes and a threat model in [Security](./security.md).
 

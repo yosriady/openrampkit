@@ -6,9 +6,9 @@
 [![Coverage](https://img.shields.io/badge/coverage-100%25_lines_and_branches-brightgreen)](audit/coverage.md)
 [![Slither](https://img.shields.io/badge/Slither-0_high_%2F_0_medium-brightgreen)](audit/static-analysis.md)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
-[![Arbitrum Sepolia](https://img.shields.io/badge/deployed-Arbitrum_Sepolia-28A0F0)](https://sepolia.arbiscan.io/address/0xBF66696115128B8f9f794780061348b4213A7132#code)
-[![Robinhood Chain Testnet](https://img.shields.io/badge/deployed-Robinhood_Chain_Testnet-CCFF00)](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract)
-[![Tempo Testnet](https://img.shields.io/badge/deployed-Tempo_Testnet-000000)](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132)
+[![Arbitrum Sepolia](https://img.shields.io/badge/deployed-Arbitrum_Sepolia-28A0F0)](https://sepolia.arbiscan.io/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5#code)
+[![Robinhood Chain Testnet](https://img.shields.io/badge/deployed-Robinhood_Chain_Testnet-CCFF00)](https://explorer.testnet.chain.robinhood.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5?tab=contract)
+[![Tempo Testnet](https://img.shields.io/badge/deployed-Tempo_Testnet-000000)](https://explore.testnet.tempo.xyz/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5)
 
 `OpenRampSettlement` is the on-chain settlement point for OpenRampKit deposit sessions. A payer settles one session: the contract takes the amount, then pays the recipient or runs an allowlisted call bundle (for example an ERC-4626 deposit for the recipient), in one transaction. It records each session id one time only, so the server verifies a payment by reading one receipt and one `Settled` event.
 
@@ -16,9 +16,7 @@ Read the concept page: [docs/concepts/settlement.md](../docs/concepts/settlement
 
 ## Deployments
 
-Live on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0xBF66696115128B8f9f794780061348b4213A7132`. See [deployments.md](deployments.md) for the explorer links and the demo settlements.
-
-> **Note:** The deployed testnet contracts are an older version. They do not have the `settleFromBalance` amount fix (`BalanceSettlementIntent`). In that version, `settleFromBalance` binds only a minimum amount, so a caller with a valid intent can take other funds that the contract holds. The testnet contracts have no intent signer, so `settleFromBalance` reverts there. A redeploy is necessary before any flow uses `settleFromBalance`.
+Live on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5`. See [deployments.md](deployments.md) for the explorer links and the demo settlements.
 
 ## Design
 
@@ -72,7 +70,7 @@ Stack: Solidity 0.8.28, EVM `cancun`, OpenZeppelin Contracts 5.1 and forge-std (
 | Invariant tests | 3 invariants with random settlements and stray donations | [test/OpenRampSettlement.invariant.t.sol](test/OpenRampSettlement.invariant.t.sol) |
 | Fuzz tests | 4 properties, 1,024 runs locally, 4,096 in CI | [test/OpenRampSettlement.t.sol](test/OpenRampSettlement.t.sol) |
 | CI | `forge fmt --check`, `forge build`, `forge test` and Slither on each push and pull request | [.github/workflows/ci.yml](../.github/workflows/ci.yml) |
-| Source verification | Verified on Blockscout and Arbiscan (Arbitrum Sepolia), on the Robinhood Chain Testnet explorer, and on the Tempo verifier (Sourcify API) | [Arbiscan](https://sepolia.arbiscan.io/address/0xBF66696115128B8f9f794780061348b4213A7132#code), [Blockscout](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract), [Robinhood Chain Testnet](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract), [Tempo Testnet](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132) |
+| Source verification | Verified on Blockscout (Arbitrum Sepolia), on the Robinhood Chain Testnet explorer, and on the Tempo verifier (Sourcify API) | [Arbiscan](https://sepolia.arbiscan.io/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5#code), [Blockscout](https://arbitrum-sepolia.blockscout.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5?tab=contract), [Robinhood Chain Testnet](https://explorer.testnet.chain.robinhood.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5?tab=contract), [Tempo Testnet](https://explore.testnet.tempo.xyz/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5) |
 
 Run the checks yourself from `contracts/`:
 

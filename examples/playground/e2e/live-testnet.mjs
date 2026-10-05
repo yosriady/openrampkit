@@ -17,7 +17,7 @@ import { arbitrumSepolia } from 'viem/chains'
 
 const URL_ = process.env.PLAYGROUND_URL ?? 'https://openrampkit-getformo.vercel.app/playground/'
 const RPC = 'https://sepolia-rollup.arbitrum.io/rpc'
-const SETTLEMENT = '0xBF66696115128B8f9f794780061348b4213A7132'
+const SETTLEMENT = '0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5'
 const TEST_TOKEN = '0x9A38C55160186C3E1e770e193fA96997e60ed425'
 const VAULT = '0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801'
 const USDC = '0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d'
