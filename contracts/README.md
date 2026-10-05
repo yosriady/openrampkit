@@ -8,6 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](../LICENSE)
 [![Arbitrum Sepolia](https://img.shields.io/badge/deployed-Arbitrum_Sepolia-28A0F0)](https://sepolia.arbiscan.io/address/0xBF66696115128B8f9f794780061348b4213A7132#code)
 [![Robinhood Chain Testnet](https://img.shields.io/badge/deployed-Robinhood_Chain_Testnet-CCFF00)](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract)
+[![Tempo Testnet](https://img.shields.io/badge/deployed-Tempo_Testnet-000000)](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132)
 
 `OpenRampSettlement` is the on-chain settlement point for OpenRampKit deposit sessions. A payer settles one session: the contract takes the amount, then pays the recipient or runs an allowlisted call bundle (for example an ERC-4626 deposit for the recipient), in one transaction. It records each session id one time only, so the server verifies a payment by reading one receipt and one `Settled` event.
 
@@ -15,7 +16,7 @@ Read the concept page: [docs/concepts/settlement.md](../docs/concepts/settlement
 
 ## Deployments
 
-Live on Arbitrum Sepolia and Robinhood Chain Testnet at `0xBF66696115128B8f9f794780061348b4213A7132`. See [deployments.md](deployments.md) for the explorer links and the demo settlements.
+Live on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0xBF66696115128B8f9f794780061348b4213A7132`. See [deployments.md](deployments.md) for the explorer links and the demo settlements.
 
 ## Design
 
@@ -55,7 +56,7 @@ Stack: Solidity 0.8.28, EVM `cancun`, OpenZeppelin Contracts 5.1 and forge-std (
 - **Trust in the owner.** The owner can pause, change the allowlist, change or remove the intent signer, and sweep tokens that the contract holds outside a settlement. Use a multisig as owner in production.
 - **Trust in the intent signer.** When intents are on, the server key decides which recipient, token and call bundle are valid. A stolen signer key can authorize bad settlements for payers who use them. When intents are off, any caller can settle any unused session id. The server must then check the receipt (payer, token, recipient, amount) before it accepts a deposit.
 - **Token behavior.** The contract assumes standard ERC-20 behavior. Fee-on-transfer tokens are rejected, but rebasing tokens, pausable or blocklist tokens, and tokens with hooks are not supported. The owner and the server must choose the tokens and the call targets.
-- **Testnet only.** The contract is deployed on Arbitrum Sepolia and Robinhood Chain Testnet only. It is not deployed on a mainnet.
+- **Testnet only.** The contract is deployed on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet only. It is not deployed on a mainnet.
 - **No external audit yet.** The checks below are automated. They do not replace a manual audit.
 
 ## Verification
@@ -67,7 +68,7 @@ Stack: Solidity 0.8.28, EVM `cancun`, OpenZeppelin Contracts 5.1 and forge-std (
 | Invariant tests | 3 invariants with random settlements and stray donations | [test/OpenRampSettlement.invariant.t.sol](test/OpenRampSettlement.invariant.t.sol) |
 | Fuzz tests | 4 properties, 1,024 runs locally, 4,096 in CI | [test/OpenRampSettlement.t.sol](test/OpenRampSettlement.t.sol) |
 | CI | `forge fmt --check`, `forge build`, `forge test` and Slither on each push and pull request | [.github/workflows/ci.yml](../.github/workflows/ci.yml) |
-| Source verification | Verified on Blockscout and Arbiscan (Arbitrum Sepolia), and on the Robinhood Chain Testnet explorer | [Arbiscan](https://sepolia.arbiscan.io/address/0xBF66696115128B8f9f794780061348b4213A7132#code), [Blockscout](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract), [Robinhood Chain Testnet](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract) |
+| Source verification | Verified on Blockscout and Arbiscan (Arbitrum Sepolia), on the Robinhood Chain Testnet explorer, and on the Tempo verifier (Sourcify API) | [Arbiscan](https://sepolia.arbiscan.io/address/0xBF66696115128B8f9f794780061348b4213A7132#code), [Blockscout](https://arbitrum-sepolia.blockscout.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract), [Robinhood Chain Testnet](https://explorer.testnet.chain.robinhood.com/address/0xBF66696115128B8f9f794780061348b4213A7132?tab=contract), [Tempo Testnet](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132) |
 
 Run the checks yourself from `contracts/`:
 
@@ -169,6 +170,35 @@ forge script script/Deploy.s.sol --rpc-url robinhood_testnet --broadcast \
 ```
 
 TODO: Circle does not list a USDC deployment on Robinhood Chain yet. Use any ERC-20 on the testnet, or deploy a test token, until one is published.
+
+### Tempo Testnet (chain 42431)
+
+Tempo Moderato is the Tempo testnet. Tempo has no gas token. Fees are paid in a TIP-20 stablecoin. When a transaction does not name a fee token, Tempo takes the fee in pathUSD (`0x20c0000000000000000000000000000000000000`). Standard EIP-1559 transactions work, so `forge script` and browser wallets work without changes. Network data from https://docs.tempo.xyz:
+
+| Item | Value |
+|---|---|
+| Chain id | 42431 (mainnet: 4217) |
+| Public RPC | https://rpc.moderato.tempo.xyz |
+| Explorer | https://explore.testnet.tempo.xyz |
+| Faucet | `cast rpc tempo_fundAddress <address> --rpc-url tempo_testnet`, or https://docs.tempo.xyz/quickstart/faucet. It sends pathUSD, AlphaUSD, BetaUSD and ThetaUSD. |
+| Verifier | https://contracts.tempo.xyz (Sourcify API) |
+
+1. Fund the deployer (no sign-in):
+   ```sh
+   cast rpc tempo_fundAddress 0xYourDeployer --rpc-url tempo_testnet
+   ```
+2. Deploy:
+   ```sh
+   forge script script/Deploy.s.sol --rpc-url tempo_testnet --broadcast
+   ```
+3. Verify:
+   ```sh
+   forge verify-contract --rpc-url tempo_testnet --verifier sourcify --verifier-url https://contracts.tempo.xyz \
+     --constructor-args $(cast abi-encode 'constructor(address,address,address[])' <owner> <signer> '[]') \
+     <address> src/OpenRampSettlement.sol:OpenRampSettlement
+   ```
+
+`eth_getBalance` on Tempo returns a fixed large number, not a real balance. Read the pathUSD balance with `balanceOf` instead. Forge prints the estimated cost in "TIP-20".
 
 ## Files
 
