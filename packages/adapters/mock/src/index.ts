@@ -1,9 +1,9 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { POLL as POLLS, awaitPoll, buildSettlementTxs, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, verifySettlement } from '@openrampkit/adapter'
-import type { AdapterContext, EvmReceipt, LegEvent } from '@openrampkit/adapter'
-import { CHAINS, OrkException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isUsdc, minorUnits, mulRatio, nativeDecimals, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
+import { POLL as POLLS, awaitPoll, buildSettlementTxs, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
+import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
+import { CHAINS, OrkException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, minorUnits, mulRatio, nativeDecimals, normalizeToken, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
@@ -55,6 +55,29 @@ export type MockOptions = {
    * This works on any EVM chain with a public RPC, for example a testnet.
    */
   localChain?: MockLocalChain
+  /**
+   * Test only: add a `solana-onchain` leg (method `wallet`, surface WALLET_TX) on a Solana cluster,
+   * for example devnet. It asks the wallet for one transfer of `mint` (an SPL token, or `native` SOL)
+   * to the destination address, the same as `localChain` does on EVM. It completes only when the
+   * signature, read over JSON-RPC from `rpcUrl`, is confirmed without error, is in a slot at or after
+   * the slot when the leg started, moves at least the quoted amount of `mint` to the destination,
+   * and did not complete another payment before. The quote is 1:1 with no fee.
+   */
+  solanaLocalChain?: MockSolanaLocalChain
+}
+
+/** A Solana cluster for the mock `solana-onchain` leg (see `MockOptions.solanaLocalChain`) */
+export type MockSolanaLocalChain = {
+  /** CAIP-2 chain id, for example `SOLANA_DEVNET` */
+  chain: string
+  /** JSON-RPC URL of the cluster, for example `https://api.devnet.solana.com` */
+  rpcUrl: string
+  /** SPL mint to pay with (base58, case-sensitive), or `native` for SOL */
+  mint: string
+  /** Default `USDC` (`SOL` for native) */
+  symbol?: string
+  /** Default 6 (9 for native) */
+  decimals?: number
 }
 
 /** Fees in basis points per leg (see `MockOptions.feeBps`) */
@@ -130,6 +153,8 @@ type MockOrder = {
   txHash?: string
   /** Local chain through OpenRampSettlement: the contract, the calls hash and the block at start */
   settlement?: { contract: string; callsHash: string; fromBlock: string }
+  /** Solana local chain: the confirmed slot when the leg started */
+  fromSlot?: number
 }
 
 const WORK = 18
@@ -271,6 +296,31 @@ export function mockAdapter(opts: MockOptions = {}) {
       requires: ['wallet'],
       // `settlement`: with a destination settlement contract, the leg pays with approve + settle.
       capabilities: ['settlement'],
+    })
+  }
+
+  const sol = opts.solanaLocalChain
+  const solAsset: CryptoAsset | undefined = sol
+    ? {
+        kind: 'crypto',
+        chain: sol.chain,
+        token: normalizeToken(sol.chain, sol.mint),
+        symbol: sol.symbol ?? (sol.mint === 'native' ? 'SOL' : 'USDC'),
+        decimals: sol.decimals ?? (sol.mint === 'native' ? nativeDecimals(sol.chain) : 6),
+      }
+    : undefined
+  if (solAsset) {
+    const chains = { [solAsset.chain]: [solAsset.token] }
+    legs.push({
+      id: 'solana-onchain',
+      kind: 'bridge_swap',
+      methods: ['wallet'],
+      from: { asset: { kind: 'crypto', chains }, location: ['user_wallet'] },
+      to: { asset: { kind: 'crypto', chains }, location: ['address'] },
+      regions: { allow: ['*'], deny: [] },
+      eta: { min: 1, max: 30 },
+      surfaces: ['WALLET_TX'],
+      requires: ['wallet'],
     })
   }
 
@@ -418,6 +468,49 @@ export function mockAdapter(opts: MockOptions = {}) {
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash }
   }
 
+  /** The Solana leg's user step: one transfer of the mint to the destination owner address. */
+  function solanaStep(ref: string, o: MockOrder): LegStep {
+    const asset = solAsset!
+    const decimals = asset.decimals ?? 6
+    const tx: TxRequest = { kind: 'solana', type: 'transfer', to: o.payTo!, mint: asset.token, amount: toBaseUnits(o.input!.amount, decimals), decimals }
+    return {
+      state: 'PAYMENT', sub: 'SEND_CRYPTO', status: 'awaiting_user', ref,
+      surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
+      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+    }
+  }
+
+  /**
+   * The Solana leg completes only when the signature is confirmed without error, is not older than
+   * the leg, moves at least the quoted amount to the destination, and did not complete another payment.
+   */
+  async function verifySolana(ref: string, o: MockOrder, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<LegStep> {
+    const asset = solAsset!
+    const sig = o.txHash!
+    const rpc = <T>(method: string, params: unknown[]) => evmRpc<T>(ctx.fetch, sol!.rpcUrl, method, params, { log: ctx.log })
+    const waiting: LegStep = { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, txHash: sig, transitions: [awaitPoll(POLL)] }
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, txHash: sig })
+    // One signature completes one payment only. Solana signatures are case-sensitive.
+    const usedKey = `txused:${asset.chain}:${sig}`
+    const usedBy = await ctx.shared.get<string>(usedKey)
+    if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
+    const st = await rpc<{ value?: SolanaSignatureStatus[] } | null>('getSignatureStatuses', [[sig], { searchTransactionHistory: true }])
+    const s = st?.value?.[0]
+    if (!s) return waiting
+    if (s.err) return fail('The transaction failed on chain.')
+    if (s.confirmationStatus !== 'confirmed' && s.confirmationStatus !== 'finalized') return waiting
+    const tx = await rpc<SolanaParsedTx | null>('getTransaction', [sig, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }])
+    if (!tx?.meta) return waiting
+    if (tx.meta.err) return fail('The transaction failed on chain.')
+    // Only a transaction from after the start of this leg can pay it.
+    if (o.fromSlot !== undefined && (typeof tx.slot !== 'number' || tx.slot < o.fromSlot)) return fail('The transaction was sent before this payment started.')
+    if (solanaPaidTo(tx, o.payTo!, asset.token) < BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))) {
+      return fail('The transaction does not pay the destination the quoted amount.')
+    }
+    if (!usedBy) await ctx.shared.put(usedKey, ref, ORDER_TTL_SEC)
+    return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: sig }
+  }
+
   return createAdapter({
     id,
     name,
@@ -472,6 +565,11 @@ export function mockAdapter(opts: MockOptions = {}) {
           fees: [{ kind: 'provider', label: `${name} fee`, amount: roundTo(mulRatio(fee, String(1 / Number(rate))), minorUnits(fiat)), currency: fiat }],
           eta: spec.eta, expiresAt,
         }
+      }
+      if (spec.id === 'solana-onchain' && solAsset) {
+        // A plain transfer on the cluster: what the user sends arrives.
+        const amount = amountIn?.amount ?? amountOut?.amount ?? '0'
+        return { adapterId: id, legId: leg.legId, input: { amount, asset: solAsset }, output: { amount, asset: solAsset }, fees: [], eta: spec.eta, expiresAt }
       }
       if (spec.id === 'onchain' && localAsset) {
         // A plain transfer on the local chain: what the user sends arrives.
@@ -576,6 +674,15 @@ export function mockAdapter(opts: MockOptions = {}) {
           await ctx.shared.put(orderKey(ref), o, ORDER_TTL_SEC)
           return localStep(ref, o, ctx)
         }
+        case 'solana-onchain': {
+          const recipient = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
+          if (!recipient) throw new OrkException(orkError('BAD_REQUEST', { message: 'The Solana leg needs a destination address.' }), 400)
+          // Only slots from now on can hold the payment.
+          const fromSlot = await evmRpc<number>(ctx.fetch, sol!.rpcUrl, 'getSlot', [{ commitment: 'confirmed' }], { log: ctx.log })
+          const o: MockOrder = { ...order, input: quote.input, payTo: recipient, ...(typeof fromSlot === 'number' ? { fromSlot } : {}) }
+          await ctx.shared.put(orderKey(ref), o, ORDER_TTL_SEC)
+          return solanaStep(ref, o)
+        }
         case 'offramp': {
           const offer: MockOrder = { ...order, ...(leg.method ? { method: leg.method } : {}), input: quote.input, payTo: fakeAddress(`offramp:${ref}`) }
           await ctx.shared.put(orderKey(ref), offer, ORDER_TTL_SEC)
@@ -605,6 +712,14 @@ export function mockAdapter(opts: MockOptions = {}) {
         const next: MockOrder = { ...o, account: mask(acct.replace(/\D/g, '') || acct) }
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
         return offrampStep(ref, next)
+      }
+      if (o.kind === 'solana-onchain') {
+        if (t !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+        const sig = typeof inputs?.txHash === 'string' ? inputs.txHash : ''
+        if (!isSolanaSignature(sig)) throw new OrkException(orkError('BAD_REQUEST', { message: 'Send a valid Solana transaction signature.' }), 400)
+        const next: MockOrder = { ...o, txHash: sig }
+        await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
+        return verifySolana(ref, next, ctx)
       }
       if (o.kind === 'onchain') {
         if (t !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
@@ -644,6 +759,7 @@ export function mockAdapter(opts: MockOptions = {}) {
 
     async status({ ref }, ctx): Promise<LegStep> {
       const pending = await ctx.shared.get<MockOrder>(orderKey(ref))
+      if (pending?.kind === 'solana-onchain') return pending.txHash ? verifySolana(ref, pending, ctx) : solanaStep(ref, pending)
       if (pending?.kind === 'onchain') {
         if (pending.settlement) return verifyLocalSettlement(ref, pending, ctx)
         return pending.txHash ? verifyLocal(ref, pending, ctx) : localStep(ref, pending, ctx)

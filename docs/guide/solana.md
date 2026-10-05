@@ -16,6 +16,7 @@ OpenRampKit supports Solana as a destination and as a source. This page tells yo
 | Solana wallet to any chain | Relay `wallet` | `WALLET_TX` (Solana) | The Solana wallet signs Relay's Solana transaction. |
 | Solana wallet to USDC on Solana | Relay `wallet` (same chain) | `WALLET_TX` (Solana) | A plain SPL transfer. The server checks it on chain. |
 | Withdraw to a Solana address | Relay `wallet` | `WALLET_TX` | The user types a Solana address on the "To wallet" tab. |
+| Solana devnet demo | Mock adapter `solanaLocalChain` | `WALLET_TX` (Solana) | A real SPL transfer of devnet USDC. The server checks it on chain. |
 | Demo and tests | Mock adapter | all | No money moves. |
 
 ## Chain and token ids
@@ -167,8 +168,66 @@ relay({ apiKey: process.env.RELAY_API_KEY, rpcUrls: { [SOLANA_MAINNET]: process.
 
 - A Relay open deposit address **on Solana** (the user sends from Solana) needs a Relay API key. Without a key, Relay refuses the request. Deposit addresses on EVM chains that deliver to Solana work without a key.
 - Relay's Solana route needs a Solana `user`. The quote uses a placeholder until the user connects a Solana wallet. The adapter quotes again with the real address when the payment starts.
-- Solana devnet has metadata and a USDC mint, but Relay does not route devnet. Use the mock adapter for devnet demos.
+- Solana devnet has metadata and a USDC mint, but Relay does not route devnet. Use the mock adapter's `solanaLocalChain` leg for devnet demos. See [Solana devnet](#solana-devnet).
 - The mock offramp (withdraw to cash) takes EVM USDC only.
+
+## Solana devnet
+
+You can try a real Solana payment on devnet. The tokens on devnet have no value.
+
+### In the playground
+
+Open the [playground](./playground.md#solana-devnet). Set **Mode** to **Testnet (real wallet)** and **Network** to **Solana Devnet**. Or open `/playground/?mode=testnet&network=solana-devnet`.
+
+1. Connect Phantom, Solflare, Backpack or another Wallet Standard wallet.
+2. Get devnet USDC from the [Circle faucet](https://faucet.circle.com/). Choose **Solana Devnet**.
+3. Get a little devnet SOL for fees from the [Solana faucet](https://faucet.solana.com/).
+4. In the widget, select **Pay with wallet**, enter an amount, and confirm in your wallet.
+
+Your wallet signs one SPL transfer of devnet USDC to your own address. Thus you get the USDC back. The server checks the signature on chain, then the widget shows **Deposit complete**. The page shows a link to the transaction in Solana Explorer.
+
+The page asks the wallet to sign only (`solana:signTransaction`). Then it sends the transaction through the devnet RPC. Thus the transaction goes to devnet, even when the network setting of the wallet is mainnet.
+
+### The parts
+
+- **Server**: the mock adapter with `solanaLocalChain` on devnet. See [Solana local chain leg](../adapters/mock.md#solana-local-chain-leg).
+- **Session**: a destination of devnet USDC to the address of the user.
+- **Wallet**: `solanaWallet({ chain: SOLANA_DEVNET })` from `@openrampkit/solana`.
+
+```ts
+import { SOLANA_DEVNET, SOLANA_DEVNET_USDC_MINT } from '@openrampkit/core'
+import { mockAdapter } from '@openrampkit/adapter-mock'
+
+const openramp = createOpenRamp({
+  // ...
+  adapters: [mockAdapter({ methods: ['wallet'], solanaLocalChain: { chain: SOLANA_DEVNET, rpcUrl: 'https://api.devnet.solana.com', mint: SOLANA_DEVNET_USDC_MINT } })],
+})
+
+await openramp.sessions.create({
+  userId: user.id,
+  destination: { type: 'crypto', chain: SOLANA_DEVNET, token: SOLANA_DEVNET_USDC_MINT, symbol: 'USDC', decimals: 6, address: user.solanaAddress },
+})
+```
+
+The server completes the payment only when all of these are true:
+
+- The signature is `confirmed` or `finalized`, with no error.
+- The transaction is in a slot at or after the slot when the payment started.
+- The transaction moves at least the quoted amount of the mint into a token account of the recipient.
+- No other payment used the signature before.
+
+### From Node
+
+The repo has a script that runs the same flow with a local devnet key. It uses the same packages: the server, the mock adapter, `@openrampkit/client` and `solanaWallet`.
+
+```bash
+pnpm solana:key               # create the key (once) and show its address and balances
+pnpm solana:key --airdrop     # also ask the public faucet for devnet SOL (rate limited)
+pnpm solana:settle            # pay 1 devnet USDC to itself, then check that a second use of the signature fails
+TOKEN=sol pnpm solana:settle  # pay 0.001 SOL to itself (needs devnet SOL only)
+```
+
+The key is in `examples/playground/.solana-devnet-key.json`. This file is in `.gitignore`. The scripts never print the secret. Fund the address from the faucets above.
 
 ## Demo
 

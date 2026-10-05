@@ -2,13 +2,15 @@
 // token. The leg is the mock adapter's `localChain` leg: with a destination settlement contract it
 // asks the wallet for `approve` + `settle` (buildSettlementTxs) and completes only when
 // `verifySettlement` finds the session's receipt on chain, read from the public testnet RPC.
+// On Solana devnet, the leg is the mock adapter's `solanaLocalChain` leg: one SPL transfer, checked
+// with getSignatureStatuses + getTransaction on the devnet RPC.
 // No Relay, no API keys, no secrets.
 
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { CreateSessionInput } from '@openrampkit/server'
 import { createPlaygroundServer } from '../server.js'
 import { baseUnits, vaultDepositData } from './chain.js'
-import type { TestnetNetwork, TestnetToken } from './config.js'
+import type { SolanaDevnetConfig, TestnetNetwork, TestnetToken } from './config.js'
 
 export const caip2 = (n: TestnetNetwork) => `eip155:${n.chainId}`
 
@@ -28,7 +30,21 @@ export function testnetAdapters(networks: TestnetNetwork[]) {
   )
 }
 
-export function createTestnetServer(networks: TestnetNetwork[]) {
+/**
+ * The Solana devnet leg: the mock adapter's `solanaLocalChain` leg. It asks the wallet for one SPL
+ * transfer of devnet USDC to the destination, and completes only when the devnet RPC shows it.
+ */
+export function solanaAdapter(cfg: SolanaDevnetConfig) {
+  return mockAdapter({
+    id: `testnet-${cfg.key}-usdc`,
+    name: `${cfg.name} wallet`,
+    settleMs: 0,
+    methods: ['wallet'],
+    solanaLocalChain: { chain: cfg.chain, rpcUrl: cfg.rpcUrl, mint: cfg.token.mint, symbol: cfg.token.symbol, decimals: cfg.token.decimals },
+  })
+}
+
+export function createTestnetServer(networks: TestnetNetwork[], solana?: SolanaDevnetConfig) {
   const norm = (u: string) => {
     try {
       return new URL(u).href
@@ -36,10 +52,11 @@ export function createTestnetServer(networks: TestnetNetwork[]) {
       return u
     }
   }
-  const rpcUrls = new Set(networks.map((n) => norm(n.rpcUrl)))
+  const rpcUrls = new Set([...networks.map((n) => norm(n.rpcUrl)), ...(solana ? [norm(solana.rpcUrl)] : [])])
   return createPlaygroundServer({
-    adapters: testnetAdapters(networks),
-    // The server reads the chain from the public RPC: the settlement receipt and the Settled log.
+    adapters: [...testnetAdapters(networks), ...(solana ? [solanaAdapter(solana)] : [])],
+    // The server reads the chain from the public RPC: the settlement receipt and the Settled log,
+    // and on Solana devnet the signature status and the parsed transaction.
     passthrough: (url) => rpcUrls.has(norm(url)),
   })
 }

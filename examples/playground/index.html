@@ -28,13 +28,18 @@
           </select>
         </label>
         <div id="testnet-setup" class="testnet" hidden>
-          <p class="hint">
+          <p id="tn-hint-sol" class="hint" hidden>
+            Pay with your own Solana wallet on devnet. Your wallet signs one USDC transfer back to itself. The server
+            checks the transfer on chain.
+          </p>
+          <p id="tn-hint-evm" class="hint">
             Pay with your own browser wallet on a testnet. Your wallet sends <code>approve</code> and <code>settle</code> to the
             OpenRampSettlement contract. The server checks the session on chain.
           </p>
           <label>Network <select id="tn-network"></select></label>
           <label>Token <select id="tn-token"></select></label>
-          <label>Destination
+          <label id="tn-wallet-row" hidden>Solana wallet <select id="tn-wallet-pick"></select></label>
+          <label id="tn-dest-row">Destination
             <select id="tn-dest">
               <option value="plain">Plain settlement</option>
               <option value="vault">Deposit into vault</option>
@@ -50,6 +55,7 @@
             <button id="tn-switch" class="btn-small" type="button" hidden>Switch network</button>
             <button id="tn-mint" class="btn-small" type="button" hidden>Mint</button>
             <a id="tn-faucet" class="btn-small" href="https://faucet.circle.com/" target="_blank" rel="noopener" hidden>Circle faucet</a>
+            <a id="tn-gas-faucet" class="btn-small" href="https://faucet.solana.com/" target="_blank" rel="noopener" hidden>SOL faucet</a>
             <button id="tn-start" class="btn-small primary" type="button">Start deposit</button>
           </div>
           <p id="tn-message" class="tn-message" role="status" data-testid="testnet-message" hidden></p>

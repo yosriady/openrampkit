@@ -196,9 +196,11 @@ function setBanner(text?: string) {
     banner.innerHTML = demoBanner
     return
   }
+  // The label before the first colon is bold: "Testnet:" or "Devnet:".
+  const colon = text.indexOf(':')
   const strong = document.createElement('strong')
-  strong.textContent = 'Testnet:'
-  banner.replaceChildren(strong, text.replace(/^Testnet:/, ''))
+  strong.textContent = colon > 0 ? text.slice(0, colon + 1) : ''
+  banner.replaceChildren(strong, colon > 0 ? text.slice(colon + 1) : text)
 }
 
 function open(o: Options, container?: HTMLElement): DepositHandle {

@@ -35,6 +35,7 @@ mockAdapter({ cardCheckout: 'form' })                  // card fields in the wid
 | `cardCheckout` | `'redirect' \| 'form'` | `'redirect'` | `redirect`: a hosted checkout page in a new tab. `form`: test card fields in the widget (surface `FORM`). Use `form` on a static site that cannot serve the hosted page. |
 | `exchange` | `boolean` | `false` | With `crypto`: the `transfer` leg also offers the method `exchange_transfer` ("From an exchange") |
 | `localChain` | `{ chain, rpcUrl, token, symbol?, decimals? }` | none | Test only. Add an `onchain` leg that pays with a real ERC-20 transfer on a local chain (for example Anvil). See [Local chain leg](#local-chain-leg). |
+| `solanaLocalChain` | `{ chain, rpcUrl, mint, symbol?, decimals? }` | none | Test only. Add a `solana-onchain` leg that pays with a real SPL (or SOL) transfer on a Solana cluster, for example devnet. See [Solana local chain leg](#solana-local-chain-leg). |
 
 Do not turn on `crypto` or `bridge` next to the real Relay adapter: both would offer the same methods.
 
@@ -50,6 +51,7 @@ Do not turn on `crypto` or `bridge` next to the real Relay adapter: both would o
 | `bridge` | `bridge_swap` | (hop) | USDC on known chains | any crypto | all | none shown |
 | `offramp` | `crypto_offramp` | bank_transfer, gcash, momo, promptpay | USDC on known chains (wallet or app address) | fiat in the user's account | all | `FORM`, then `WALLET_TX` |
 | `onchain` | `bridge_swap` | wallet | `localChain.token` in a wallet | the same token to an address | all | `WALLET_TX` |
+| `solana-onchain` | `bridge_swap` | wallet | `solanaLocalChain.mint` in a wallet | the same token to an address | all | `WALLET_TX` (Solana) |
 
 Because the fiat legs deliver USDC on Base, a destination on another chain (for example Monad) gets a two-leg pathway through the `bridge` leg (or Relay).
 
@@ -96,6 +98,33 @@ When the destination has `settlement`, the leg pays through [OpenRampSettlement]
 - The leg is `FAILED` when the transaction reverted, did not settle this session, or settled a different amount, recipient or call bundle.
 
 This works on any EVM chain with an RPC, for example a testnet. The [playground](../guide/playground.md#testnet-mode-real-wallet) uses it on Arbitrum Sepolia and Robinhood Chain Testnet.
+
+## Solana local chain leg
+
+`solanaLocalChain` adds a `solana-onchain` leg. It is the Solana version of the local chain leg. This leg sends a real transaction. Use it only with Solana devnet (or a local validator) and a test token.
+
+```ts
+import { SOLANA_DEVNET, SOLANA_DEVNET_USDC_MINT } from '@openrampkit/core'
+
+mockAdapter({
+  methods: ['wallet'],
+  solanaLocalChain: { chain: SOLANA_DEVNET, rpcUrl: 'https://api.devnet.solana.com', mint: SOLANA_DEVNET_USDC_MINT },
+})
+```
+
+- The destination must be an owner address on `chain` in `mint`. Use `mint: 'native'` for SOL (9 decimals).
+- Quote: 1:1 with no fee.
+- At start, the leg reads the current slot with `getSlot`.
+- Step 1: `WALLET_TX` (sub-state `SEND_CRYPTO`) with one Solana `transfer` of the quoted amount to the destination. `@openrampkit/solana` builds it. Transition `submit_tx` with the base58 signature.
+- Step 2: the adapter checks the signature at `rpcUrl`:
+  - `getSignatureStatuses`: the signature must be `confirmed` or `finalized`, with no error.
+  - `getTransaction` (`jsonParsed`): the transaction must be in a slot at or after the start slot. Its SPL `transfer` and `transferChecked` instructions (or System Program transfers, for SOL) must move at least the quoted amount into a token account of the mint that the destination owns.
+  - One signature completes one payment only.
+- The leg stays `PROCESSING` while the signature is unknown or not confirmed. It is `FAILED` when the transaction failed, is older than the leg, pays less, pays another mint or account, or was already used.
+
+The check reads the instructions, not the balance change. Thus a transfer from the destination to itself counts. The [playground](../guide/playground.md#solana-devnet) uses this: the visitor pays devnet USDC back to their own wallet, so no funds are lost.
+
+`solanaPaidTo(tx, owner, mint)` from `@openrampkit/adapter` does the amount check. Use it in your own adapter.
 
 ## Quotes
 
