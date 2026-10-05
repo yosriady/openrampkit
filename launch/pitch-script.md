@@ -4,11 +4,11 @@ Read it in your own words. Look at the camera. One take is fine.
 
 ## 1. Who you are (15 s)
 
-Hi, I'm Yos. I'm based in Singapore. I've spent my career on payments and onchain infrastructure: engineering at PayPal and Grab, then Chainlink Labs. Today I also run Formo, analytics for onchain apps.
+Hi, I'm Yos. I'm from Singapore. I've spent my career on payments and onchain infrastructure: engineering at PayPal and Grab, then Chainlink Labs. Today I also run Formo, analytics for onchain apps.
 
-## 2. The problem (20 s)
+## 2. The problem (30 s)
 
-At Formo, I see the same drop-off again and again: the first deposit. Most people in the world don't pay with a card. They pay from a bank app: Pix, UPI, SEPA, or a QR code. But crypto onramps are built for cards. So every team rebuilds the same integrations, and still loses users at the first step.
+Getting people onchain is easier than it has ever been. Embedded wallets have mostly solved accounts and logins. But to do anything meaningful onchain, you need funds. You need that first deposit into your account. That's where most users stop. Even the embedded wallet companies see this. Privy, for example, now ships its own onramp. But onramps are expensive. A card purchase typically costs three to five percent, and more once the exchange spread is added. And they're closed. You can't self-host them, and the money passes through their hands. A third party sits between your app and your users' money. Most are also built for cards, while most of the world pays from a bank app: Pix, UPI, SEPA, or a QR code.
 
 ## 3. What I'm building (30 s)
 
@@ -16,7 +16,7 @@ OpenRampKit is the RainbowKit for onramps and deposits. It's open source. A deve
 
 ## 4. Why me (15 s)
 
-I've built payments at scale, I've built onchain building blocks, and I've built developer tools people use. I grew up in Southeast Asia, where everyone pays by QR. This is the problem I understand best.
+I've built payments at scale, I've built onchain building blocks, and I've built developer tools people use. Payments and onchain infrastructure are the two halves of this problem, and I've worked on both.
 
 ## 5. Where it's going (15 s)
 
