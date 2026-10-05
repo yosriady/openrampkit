@@ -87,6 +87,7 @@ export default withMermaid(
               { text: 'Meld', link: '/adapters/meld' },
               { text: 'Onramper', link: '/adapters/onramper' },
               { text: 'Peer', link: '/adapters/peer' },
+              { text: 'Bridge', link: '/adapters/bridge' },
               { text: 'Mock', link: '/adapters/mock' },
               { text: 'Wallets (wagmi)', link: '/adapters/wagmi' },
               { text: 'Wallets (Solana)', link: '/guide/solana#pay-from-a-solana-wallet' },
