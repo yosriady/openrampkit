@@ -63,6 +63,9 @@ function expectConformant(q: LegQuote) {
   expect(checkLegQuote(q)).toEqual([])
 }
 
+/** Relay request `metadata.currencyIn` in base units of USDC */
+const cin = (amount: string) => ({ currency: usdc(42161, ARB_USDC.token), amount })
+
 const TRANSFER = '0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef'
 
 describe('relay adapter', () => {
@@ -178,26 +181,26 @@ describe('relay adapter', () => {
     expect(sn.surface).toMatchObject({ txs: [{ to: DEST, value: '10000000000000000', chainId: 8453 }] })
   })
 
-  it('transfer: open deposit address (not strict), cached per route and reused', async () => {
+  it('transfer: open deposit address (not strict), kept per session and route', async () => {
     let n = 0
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => (n++, relayQuote({ deposit: true })) }])
     const a = relay()
-    const shared = memoryKV()
-    const ctx = makeCtx({ fetch, shared })
+    const store = memoryKV()
+    const ctx = makeCtx({ fetch, store })
     const q = await a.quote({ leg: transferLeg, amountIn: { amount: '0', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, ctx)
     expectConformant(q)
     expect(q.data).toMatchObject({ depositAddress: DEPOSIT, anyAmount: true, nominal: true })
     const body = calls[0]!.body as Record<string, unknown>
     expect(body).toMatchObject({ useDepositAddress: true, user: DEST, recipient: DEST, refundTo: '0x0000000000000000000000000000000000000000', tradeType: 'EXACT_INPUT', amount: '10000000' })
     expect(body.strict).toBeUndefined()
-    expect([...shared.data.keys()].some((k) => k.startsWith('da:'))).toBe(true)
+    expect([...store.data.keys()].some((k) => k.startsWith('da:'))).toBe(true)
 
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     expect(checkLegStep(step)).toEqual([])
     expect(step).toMatchObject({
       state: 'PAYMENT',
       status: 'awaiting_user',
-      ref: DEPOSIT,
+      ref: `dep:sess_1:${DEPOSIT}`,
       surface: { kind: 'DEPOSIT_ADDRESS', chain: 'eip155:42161', chainName: 'Arbitrum', address: DEPOSIT, symbol: 'USDC', warning: 'Send only USDC on Arbitrum. Other tokens or chains may be lost.' },
     })
     expect(step.transitions[0]!.kind).toBe('AWAIT')
@@ -217,7 +220,7 @@ describe('relay adapter', () => {
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     requests = [
-      { id: 'new', status: 'pending', createdAt: new Date().toISOString() },
+      { id: 'new', status: 'pending', createdAt: new Date().toISOString(), data: { metadata: { currencyIn: cin('25000000') } } },
       ...requests,
     ]
     expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
@@ -226,7 +229,7 @@ describe('relay adapter', () => {
         id: 'new',
         status: 'success',
         createdAt: new Date().toISOString(),
-        data: { outTxs: [{ hash: '0xout', chainId: 8453 }], metadata: { currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: '24950000' } } },
+        data: { outTxs: [{ hash: '0xout', chainId: 8453 }], metadata: { currencyIn: cin('25000000'), currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: '24950000' } } },
       },
     ]
     const done = await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)
@@ -243,7 +246,7 @@ describe('relay adapter', () => {
         method: 'GET',
         match: '/requests/v3',
         reply: () => ({
-          requests: [{ id: 'r', status: 'refund', createdAt: new Date().toISOString(), data: { outTxs: [{ txHash: '0xrefund' }] } }],
+          requests: [{ id: 'r', status: 'refund', createdAt: new Date().toISOString(), data: { outTxs: [{ txHash: '0xrefund' }], metadata: { currencyIn: cin('10000000') } } }],
         }),
       },
     ])
@@ -302,8 +305,9 @@ describe('relay adapter', () => {
 
   it('transfer: same chain and token shows the destination address and completes on a Transfer log', async () => {
     let logs: unknown[] = []
+    let head = '0x100'
     const { fetch, calls } = fakeFetch([
-      { method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ result: (c.body as { method: string }).method === 'eth_blockNumber' ? '0x100' : logs }) },
+      { method: 'POST', match: 'mainnet.base.org', reply: (c) => ({ result: (c.body as { method: string }).method === 'eth_blockNumber' ? head : logs }) },
     ])
     const a = relay()
     const ctx = makeCtx({ fetch })
@@ -311,14 +315,20 @@ describe('relay adapter', () => {
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', address: DEST, chain: 'eip155:8453' })
     expect(calls.every((c) => !c.url.includes('relay.link'))).toBe(true)
-    expect(await a.status!({ leg: transferLeg, ref: DEST }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(step.ref).toBe(`dep:sess_1:${DEST}`)
+    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     const getLogs = calls.find((c) => (c.body as { method?: string }).method === 'eth_getLogs')!
-    expect((getLogs.body as { params: Array<Record<string, unknown>> }).params[0]).toMatchObject({ fromBlock: '0x100', address: BASE_USDC.token, topics: [TRANSFER, null, `0x${'0'.repeat(24)}${DEST.slice(2).toLowerCase()}`] })
-    logs = [{ data: `0x${(5_000_000n).toString(16)}`, transactionHash: '0xaaa' }, { data: `0x${(2_500_000n).toString(16)}`, transactionHash: '0xbbb' }]
-    expect(await a.status!({ leg: transferLeg, ref: DEST }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: '0xbbb', output: { amount: '7.5' } })
+    expect((getLogs.body as { params: Array<Record<string, unknown>> }).params[0]).toMatchObject({ fromBlock: '0x100', toBlock: '0x100', address: BASE_USDC.token, topics: [TRANSFER, null, `0x${'0'.repeat(24)}${DEST.slice(2).toLowerCase()}`] })
+    // One log completes the leg (no sum of several transfers); the first one in block order wins.
+    logs = [
+      { data: `0x${(2_500_000n).toString(16)}`, transactionHash: '0xbbb', blockNumber: '0x101', logIndex: '0x2' },
+      { data: `0x${(5_000_000n).toString(16)}`, transactionHash: '0xaaa', blockNumber: '0x101', logIndex: '0x1' },
+    ]
+    head = '0x101'
+    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: '0xaaa', output: { amount: '5' } })
   })
 
-  it('bridge: prepareDeposit returns a cached open address, quote estimates, start waits in PROCESSING', async () => {
+  it('bridge: prepareDeposit keeps one open address per session, quote estimates, start waits in PROCESSING', async () => {
     const { fetch, calls } = fakeFetch([
       { method: 'POST', match: '/quote/v2', reply: (c) => relayQuote({ deposit: true, amountIn: String((c.body as { amount: string }).amount) }) },
       { method: 'GET', match: '/requests/v2', reply: () => ({ requests: [] }) },
@@ -328,10 +338,12 @@ describe('relay adapter', () => {
     const dest = { type: 'crypto' as const, chain: 'eip155:143', token: MONAD_TOKEN, address: DEST }
     const ctx = makeCtx({ fetch, shared, destination: dest })
     const d1 = await a.prepareDeposit!({ leg: bridgeLeg }, ctx)
-    const d2 = await a.prepareDeposit!({ leg: bridgeLeg }, makeCtx({ fetch, shared, destination: dest }))
-    expect(d1.address).toBe(DEPOSIT)
-    expect(d2.address).toBe(DEPOSIT)
-    expect(calls.filter((c) => c.url.includes('/quote/v2'))).toHaveLength(1) // second call served from the cache
+    const again = await a.prepareDeposit!({ leg: bridgeLeg }, ctx)
+    expect(d1).toEqual({ address: DEPOSIT, ref: `dep:sess_1:${DEPOSIT}` })
+    expect(again).toEqual(d1)
+    expect(calls.filter((c) => c.url.includes('/quote/v2'))).toHaveLength(1) // same session: served from its store
+    await a.prepareDeposit!({ leg: bridgeLeg }, makeCtx({ fetch, shared, destination: dest, session: { id: 'sess_2' } }))
+    expect(calls.filter((c) => c.url.includes('/quote/v2'))).toHaveLength(2) // another session: never the cached address
 
     const q = await a.quote({ leg: bridgeLeg, amountIn: { amount: '100', asset: BASE_USDC }, deliverTo: { address: DEST } }, ctx)
     expectConformant(q)
@@ -339,9 +351,9 @@ describe('relay adapter', () => {
     expect(q.data).toMatchObject({ depositAddress: DEPOSIT, anyAmount: false })
     const step = await a.start({ leg: bridgeLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PROCESSING', status: 'processing', ref: DEPOSIT })
+    expect(step).toMatchObject({ state: 'PROCESSING', status: 'processing', ref: d1.ref })
     expect(step.surface).toBeUndefined()
-    expect(await a.status!({ leg: bridgeLeg, ref: DEPOSIT }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
+    expect(await a.status!({ leg: bridgeLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
   })
 
   it('maps Relay 4xx to NO_QUOTES and health() calls /chains', async () => {
@@ -374,7 +386,7 @@ describe('relay conformance', () => {
     const { fetch } = fakeFetch([
       { method: 'POST', match: '/quote/v2', reply: (c) => relayQuote({ deposit: !!(c.body as { useDepositAddress?: boolean }).useDepositAddress }) },
       { method: 'GET', match: '/intents/status/v3', reply: () => ({ status: 'pending', inTxHashes: ['0x1'] }) },
-      { method: 'GET', match: '/requests/v3', reply: () => ({ requests: [{ id: 'r', status: 'success', createdAt: new Date().toISOString() }] }) },
+      { method: 'GET', match: '/requests/v3', reply: () => ({ requests: [{ id: 'r', status: 'success', createdAt: new Date().toISOString(), data: { metadata: { currencyIn: cin('50000000') } } }] }) },
     ])
     const report = await runAdapterConformance(relay({ apiKey: 'k' }), {
       fetch,
@@ -618,16 +630,18 @@ describe('relay deposit addresses', () => {
   afterEach(() => vi.useRealTimers())
   const routeKey = (shared: ReturnType<typeof memoryKV>) => [...shared.data.keys()].find((k) => k.startsWith('da:'))!
 
-  it('cache: miss creates, hit reuses, expiry after 24 h creates again', async () => {
+  it('per-session cache: miss creates, hit reuses, expiry after 24 h creates again; another session gets its own address', async () => {
     vi.useFakeTimers({ now: new Date('2026-09-01T00:00:00Z') })
     let address = DEPOSIT
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => ({ ...relayQuote({ deposit: true }), steps: [{ id: 'd', kind: 'transaction', depositAddress: address, items: [] }] }) }])
     const a = relay()
     const shared = memoryKV()
+    const store = memoryKV()
     const dest = { type: 'crypto' as const, chain: 'eip155:143', token: MONAD_TOKEN, decimals: 18, address: DEST }
-    const ctx = () => makeCtx({ fetch, shared, destination: dest })
+    const ctx = () => makeCtx({ fetch, shared, store, destination: dest })
     expect((await a.prepareDeposit!({ leg: bridgeLeg }, ctx())).address).toBe(DEPOSIT) // miss
-    expect(routeKey(shared)).toBe(`da:${DEST}:eip155:8453:${BASE_USDC.token}:eip155:143:${MONAD_TOKEN}`)
+    expect([...shared.data.keys()].some((k) => k.startsWith('da:'))).toBe(false) // never shared across sessions
+    expect(routeKey(store)).toBe(`da:${DEST}:eip155:8453:${BASE_USDC.token}:eip155:143:${MONAD_TOKEN}`)
     const quoteBody = calls[0]!.body as Record<string, unknown>
     expect(quoteBody).toMatchObject({ amount: '10000000', useDepositAddress: true }) // nominal 10 USDC
     address = '0x2222222222222222222222222222222222222222'
@@ -640,6 +654,9 @@ describe('relay deposit addresses', () => {
     vi.advanceTimersByTime(2 * 3600_000) // 25 h: expired
     expect((await a.prepareDeposit!({ leg: bridgeLeg }, ctx())).address).toBe(address)
     expect(calls).toHaveLength(3)
+    // another session never sees this session's address: it quotes and gets its own
+    address = '0x3333333333333333333333333333333333333333'
+    expect((await a.prepareDeposit!({ leg: bridgeLeg }, makeCtx({ fetch, shared, destination: dest, session: { id: 'sess_2' } }))).address).toBe(address)
   })
 
   it('prepareDeposit records the session start once; start without an address looks it up', async () => {
@@ -647,15 +664,17 @@ describe('relay deposit addresses', () => {
     const a = relay()
     const ctx = makeCtx({ fetch, destination: { type: 'crypto', chain: 'eip155:143', token: MONAD_TOKEN, decimals: 18, address: DEST } })
     await a.prepareDeposit!({ leg: bridgeLeg }, ctx)
-    const rec = await ctx.store.get<{ since: number; mode: string }>(`d:${DEPOSIT}`)
+    const rec = await ctx.store.get<{ since: number; mode: string }>(`d:dep:sess_1:${DEPOSIT}`)
     expect(rec).toMatchObject({ address: DEPOSIT, mode: 'relay' })
     await a.prepareDeposit!({ leg: bridgeLeg }, ctx)
-    expect((await ctx.store.get<{ since: number }>(`d:${DEPOSIT}`))!.since).toBe(rec!.since)
+    expect((await ctx.store.get<{ since: number }>(`d:dep:sess_1:${DEPOSIT}`))!.since).toBe(rec!.since)
     // a quote without the deposit address in its data (e.g. from an older server)
     const quote: LegQuote = { adapterId: 'relay', legId: 'bridge', input: { amount: '5', asset: BASE_USDC }, output: { amount: '5', asset: { kind: 'crypto', chain: 'eip155:143', token: MONAD_TOKEN, decimals: 18 } }, fees: [], eta: { min: 1, max: 2 } }
     const step = await a.start({ leg: bridgeLeg, quote }, ctx)
-    expect(step).toMatchObject({ state: 'PROCESSING', ref: DEPOSIT })
+    expect(step).toMatchObject({ state: 'PROCESSING', ref: `dep:sess_1:${DEPOSIT}` })
     expect(calls).toHaveLength(1)
+    // the expected amount comes from the quote input, minus the hop tolerance (5%)
+    expect(await ctx.store.get(`d:dep:sess_1:${DEPOSIT}`)).toMatchObject({ since: rec!.since, expectedBase: '5000000', minBase: '4750000' })
   })
 
   it('same chain and token: no Relay call; the destination is the address and status waits', async () => {
@@ -663,9 +682,9 @@ describe('relay deposit addresses', () => {
     const a = relay()
     const ctx = makeCtx({ fetch })
     const sameBridge: PathwayLeg = { ...bridgeLeg, to: { asset: BASE_USDC, location: { kind: 'address', address: DEST } } }
-    expect(await a.prepareDeposit!({ leg: sameBridge }, ctx)).toEqual({ address: DEST, ref: DEST })
-    expect(await ctx.store.get(`d:${DEST}`)).toMatchObject({ mode: 'direct' })
-    expect(await a.status!({ leg: sameBridge, ref: DEST }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'waiting_for_deposit' })
+    expect(await a.prepareDeposit!({ leg: sameBridge }, ctx)).toEqual({ address: DEST, ref: `dep:sess_1:${DEST}` })
+    expect(await ctx.store.get(`d:dep:sess_1:${DEST}`)).toMatchObject({ mode: 'direct' })
+    expect(await a.status!({ leg: sameBridge, ref: `dep:sess_1:${DEST}` }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'waiting_for_deposit' })
     // native ETH on Base by transfer
     const eth: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: 'native' }
     const nctx = makeCtx({ fetch, destination: { type: 'crypto', chain: 'eip155:8453', token: '0x0000000000000000000000000000000000000000', address: DEST } })
@@ -674,7 +693,7 @@ describe('relay deposit addresses', () => {
     const step = await a.start({ leg: transferLeg, quote: q }, nctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', address: DEST, symbol: 'ETH', warning: 'Send only ETH on Base. Other tokens or chains may be lost.' })
     // native: no Transfer logs to watch, so the leg keeps waiting
-    expect(await a.status!({ leg: transferLeg, ref: DEST }, nctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, nctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     expect(calls.every((c) => !c.url.includes('relay.link'))).toBe(true)
   })
 
@@ -691,33 +710,38 @@ describe('relay deposit addresses', () => {
     expect(start.surface).toMatchObject({ symbol: 'SOL', chainName: expect.any(String) })
   })
 
-  it('request status: newest request wins, output from route, failures', async () => {
+  it('request status: the first request after the start is bound, output from route, failures', async () => {
     const now = Date.now()
     let requests: unknown[] | undefined = []
     const { fetch } = fakeFetch([{ method: 'GET', match: '/requests/v3', reply: () => (requests ? { requests } : {}) }])
     const a = relay({ apiKey: 'k' })
-    const ctx = makeCtx({ fetch })
-    await ctx.store.put(`d:${DEPOSIT}`, { address: DEPOSIT, since: now, mode: 'relay' })
+    // a legacy ref (the address itself) still finds its record
+    const session = async () => {
+      const ctx = makeCtx({ fetch })
+      await ctx.store.put(`d:${DEPOSIT}`, { address: DEPOSIT, since: now, mode: 'relay' })
+      return ctx
+    }
+    const ctx = await session()
     requests = undefined
     expect(await a.status!({ leg: transferLeg, ref: DEPOSIT }, ctx)).toMatchObject({ state: 'PAYMENT' })
     const out = (amount: string) => ({ currency: usdc(8453, BASE_USDC.token), amount })
     requests = [
-      { id: 'a', status: 'pending', createdAt: new Date(now + 1000).toISOString() },
       { id: 'b', status: 'failure', createdAt: new Date(now + 5000).toISOString(), data: { route: { quoted: { destination: { outputCurrency: out('1000000') } } } } },
+      { id: 'a', status: 'pending', createdAt: new Date(now - 120_000).toISOString() }, // before the start
       { id: 'c', status: 'success', createdAt: 'not a date' },
     ]
     const failed = await a.status!({ leg: transferLeg, ref: DEPOSIT }, ctx)
     expect(failed).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'DELIVERY_FAILED' }, output: { amount: '1' } })
     expect(checkLegStep(failed)).toEqual([])
     requests = [{ id: 'd', status: 'success', createdAt: new Date(now).toISOString(), data: { route: { actual: { destination: { outputCurrency: out('2000000') } }, quoted: { destination: { outputCurrency: out('1') } } } } }]
-    expect(await a.status!({ leg: transferLeg, ref: DEPOSIT }, ctx)).toMatchObject({ state: 'COMPLETED', output: { amount: '2' } })
+    expect(await a.status!({ leg: transferLeg, ref: DEPOSIT }, await session())).toMatchObject({ state: 'COMPLETED', output: { amount: '2' } })
     requests = [{ id: 'e', status: 'delayed', createdAt: new Date(now).toISOString(), data: { outTxs: [], metadata: { currencyOut: { amount: '5' } } } }]
-    const delayed = await a.status!({ leg: transferLeg, ref: DEPOSIT }, ctx)
+    const delayed = await a.status!({ leg: transferLeg, ref: DEPOSIT }, await session())
     expect(delayed).toMatchObject({ state: 'PROCESSING', sub: 'delayed' })
     expect(delayed.output).toBeUndefined()
-    // no stored record: any request counts (since = 0)
-    const fresh = makeCtx({ fetch })
-    expect(await a.status!({ leg: bridgeLeg, ref: DEPOSIT }, fresh)).toMatchObject({ state: 'PROCESSING', sub: 'delayed' })
+    // no stored record: any request counts (since = 0); 'e' is already bound to another session
+    requests = [{ id: 'f', status: 'delayed', createdAt: new Date(now).toISOString() }, ...requests]
+    expect(await a.status!({ leg: bridgeLeg, ref: DEPOSIT }, makeCtx({ fetch }))).toMatchObject({ state: 'PROCESSING', sub: 'delayed' })
   })
 
   it('health: down or no chains', async () => {

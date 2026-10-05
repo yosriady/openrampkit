@@ -77,6 +77,19 @@ export type RelayOptions = {
   signSettlementIntent?: (typedData: SettlementIntentTypedData) => Promise<string>
   /** Seconds a signed settlement intent stays valid. Default 1800. */
   settlementIntentTtlSec?: number
+  /**
+   * Relay `slippageTolerance` in basis points (0 to 10000), sent with every quote. Default: Relay
+   * picks a value. The quote data carries Relay's `minimumAmount` as `minOutput`.
+   */
+  slippageBps?: number
+  /**
+   * How far below the expected amount (in basis points) a deposit can be and still complete a
+   * `transfer` leg. Default 50 (0.5%). A `bridge` leg uses at least 500 (5%), because the onramp
+   * can deliver a little less than its quote.
+   */
+  amountToleranceBps?: number
+  /** Most blocks in one `eth_getLogs` call (same-chain `transfer` checks). Default 2000. */
+  logBlockRange?: number
 }
 
 /** Public RPCs for on-chain verification. Rate-limited: use your own in production. */
@@ -107,6 +120,15 @@ const SOLANA_NATIVE = '11111111111111111111111111111111'
 const PLACEHOLDER_USER = '0x000000000000000000000000000000000000dEaD'
 const PLACEHOLDER_SOLANA_USER = SOLANA_NATIVE
 const DEPOSIT_ADDRESS_TTL_SEC = 24 * 60 * 60
+/** An open deposit watch (see `Watcher`) counts as a rival for this long after its leg started */
+const WATCH_TTL_SEC = 24 * 60 * 60
+/** How long a used transaction, log or Relay request stays recorded */
+const USED_TTL_SEC = 90 * 24 * 60 * 60
+const DEFAULT_TOLERANCE_BPS = 50
+const HOP_TOLERANCE_BPS = 500
+const DEFAULT_LOG_BLOCK_RANGE = 2000
+/** Most `eth_getLogs` pages in one status check; the next check goes on from where this one stopped */
+const LOG_PAGES_PER_CHECK = 5
 const WALLET_QUOTE_REUSE_MS = 20_000
 const WALLET_QUOTE_TTL_MS = 60_000
 
@@ -138,7 +160,7 @@ export type RelayQuoteResponse = {
   requestId?: string
   steps: RelayStep[]
   fees?: Partial<Record<'gas' | 'relayer' | 'app', RelayAmount>>
-  details?: { currencyIn?: RelayAmount; currencyOut?: RelayAmount; timeEstimate?: number }
+  details?: { currencyIn?: RelayAmount; currencyOut?: RelayAmount & { minimumAmount?: string }; timeEstimate?: number }
 }
 type RelayIntentStatus = { status: string; details?: string; inTxHashes?: string[]; txHashes?: string[] }
 type RelayTx = { hash?: string; txHash?: string; chainId?: number }
@@ -146,11 +168,13 @@ type RelayRequest = {
   id: string
   status: string
   createdAt: string
+  /** Set for deposit-address requests. `depositTxHash` is the transfer into the address. */
+  depositAddress?: { address?: string; depositTxHash?: string; depositor?: string } | null
   data?: {
     outTxs?: RelayTx[]
     inTxs?: RelayTx[]
     failReason?: string | null
-    metadata?: { currencyOut?: RelayAmount }
+    metadata?: { currencyIn?: RelayAmount; currencyOut?: RelayAmount }
     route?: { actual?: { destination?: { outputCurrency?: RelayAmount } }; quoted?: { destination?: { outputCurrency?: RelayAmount } } }
   }
 }
@@ -247,6 +271,17 @@ function feesFrom(q: RelayQuoteResponse): Fee[] {
   return out
 }
 
+/** Relay's minimum output after slippage (`details.currencyOut.minimumAmount`), as a decimal string */
+function minOutputOf(q: RelayQuoteResponse): { minOutput?: string } {
+  const out = q.details?.currencyOut
+  if (!out?.minimumAmount || !/^[0-9]+$/.test(out.minimumAmount)) return {}
+  return { minOutput: fromBaseUnits(out.minimumAmount, out.currency.decimals) }
+}
+
+const toHex = (n: bigint) => `0x${n.toString(16)}`
+const hexOr = (v: string | undefined, d: bigint) => (v ? BigInt(v) : d)
+const cmpBig = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0)
+
 function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: number }) {
   const t = q.details?.timeEstimate
   if (typeof t !== 'number' || !Number.isFinite(t)) return fallback
@@ -306,11 +341,41 @@ type WalletRecord = {
   /** Direct payment through an OpenRampSettlement contract: its address, the calls hash and the start block */
   settlement?: { contract: string; callsHash: string; fromBlock: string }
 }
-type DepositRecord = { address: string; since: number; mode: 'relay' | 'direct'; output?: Amount; chain?: string; token?: string; fromBlock?: string }
+type DepositRecord = {
+  address: string
+  since: number
+  mode: 'relay' | 'direct'
+  output?: Amount
+  chain?: string
+  token?: string
+  fromBlock?: string
+  /** Expected deposit (base units of the origin token), when the user gave an amount */
+  expectedBase?: string
+  /** Smallest deposit that completes the leg: `expectedBase` minus the tolerance */
+  minBase?: string
+  /** EVM direct: the next block to scan for Transfer logs */
+  scanFrom?: string
+  /** Relay: the key (deposit tx hash, else request id) and id of the request bound to this leg */
+  bound?: { key: string; id: string }
+}
+/**
+ * An open deposit leg on an address, kept in `shared` so that legs of other sessions on the same
+ * address can see it. A deposit that two open legs could both claim is ambiguous: neither leg takes it.
+ */
+type Watcher = { owner: string; since: number; fromBlock?: string; expectedBase?: string; minBase?: string; until: number }
 
 export function relay(opts: RelayOptions = {}) {
   const baseUrl = (opts.baseUrl ?? 'https://api.relay.link').replace(/\/+$/, '')
   let warnedV2 = false
+  const toleranceBps = Math.max(0, Math.min(10_000, Math.round(opts.amountToleranceBps ?? DEFAULT_TOLERANCE_BPS)))
+  const logBlockRange = BigInt(Math.max(1, Math.floor(opts.logBlockRange ?? DEFAULT_LOG_BLOCK_RANGE)))
+
+  /** Warn once, on the first adapter call, when no API key is set: status then uses /requests/v2. */
+  function warnNoKey(log: Pick<Logger, 'warn'>) {
+    if (opts.apiKey || warnedV2) return
+    warnedV2 = true
+    log.warn('relay: no apiKey, using deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Set relay({ apiKey }) to use /requests/v3.')
+  }
 
   const headers = (): Record<string, string> => (opts.apiKey ? { 'x-api-key': opts.apiKey } : {})
 
@@ -360,6 +425,7 @@ export function relay(opts: RelayOptions = {}) {
       destinationChainId: relayChainId(dest.chain),
       destinationCurrency: relayCurrency(dest.chain, dest.token),
       ...(opts.referrer ? { referrer: opts.referrer } : {}),
+      ...(opts.slippageBps !== undefined ? { slippageTolerance: String(Math.max(0, Math.min(10_000, Math.round(opts.slippageBps)))) } : {}),
       ...(opts.appFee && opts.appFee.bps > 0 ? { appFees: [{ recipient: opts.appFee.recipient, fee: String(Math.round(opts.appFee.bps)) }] } : {}),
     }
   }
@@ -393,9 +459,14 @@ export function relay(opts: RelayOptions = {}) {
     return `da:${addrKey(recipient)}:${origin.chain}:${norm(origin.chain, origin.token)}:${dest.chain}:${norm(dest.chain, dest.token)}`
   }
 
-  /** Quote with an open deposit address. Returns the raw quote and the deposit address (cached per route for 24 h). */
+  /**
+   * Quote with an open deposit address. Returns the raw quote and the deposit address.
+   * Relay gives a new address for each quote. The adapter keeps one address per session and route
+   * (in the session store, for 24 h), so the hop quote and the onramp use the same address. It never
+   * gives the address of one session to another session.
+   */
   async function depositQuote(
-    ctx: Pick<AdapterContext, 'fetch' | 'shared'>,
+    ctx: Pick<AdapterContext, 'fetch' | 'store'>,
     p: { origin: CryptoAsset; dest: CryptoAsset; recipient: string; amountBase: string },
   ): Promise<{ q: RelayQuoteResponse; address: string; requestId?: string }> {
     const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', {
@@ -411,19 +482,19 @@ export function relay(opts: RelayOptions = {}) {
       throw toOrk(e)
     })
     const key = depositKey(p.recipient, p.origin, p.dest)
-    const cached = await ctx.shared.get<string>(key)
+    const cached = await ctx.store.get<string>(key)
     const fresh = q.steps?.find((s) => s.depositAddress)?.depositAddress
     const address = cached ?? fresh
     if (!address) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Relay did not return a deposit address.' }), 502)
-    if (!cached) await ctx.shared.put(key, address, DEPOSIT_ADDRESS_TTL_SEC)
+    if (!cached) await ctx.store.put(key, address, DEPOSIT_ADDRESS_TTL_SEC)
     const requestId = requestIdOf(q)
     return { q, address, ...(requestId ? { requestId } : {}) }
   }
 
-  /** Get the cached open deposit address for a route, creating it with a nominal quote when missing. */
-  async function openDepositAddress(ctx: Pick<AdapterContext, 'fetch' | 'shared'>, origin: CryptoAsset, dest: CryptoAsset, recipient: string): Promise<string> {
+  /** Get this session's open deposit address for a route, creating it with a nominal quote when missing. */
+  async function openDepositAddress(ctx: Pick<AdapterContext, 'fetch' | 'shared' | 'store'>, origin: CryptoAsset, dest: CryptoAsset, recipient: string): Promise<string> {
     if (sameAsset(origin.chain, origin.token, dest.chain, dest.token)) return recipient
-    const cached = await ctx.shared.get<string>(depositKey(recipient, origin, dest))
+    const cached = await ctx.store.get<string>(depositKey(recipient, origin, dest))
     if (cached) return cached
     const decimals = await decimalsOf(ctx, origin)
     const { address } = await depositQuote(ctx, { origin, dest, recipient, amountBase: toBaseUnits(nominalAmount(decimals), decimals) })
@@ -437,24 +508,161 @@ export function relay(opts: RelayOptions = {}) {
 
   // ---------- status of deposit-address legs ----------
 
-  async function findRequest(ctx: AdapterContext, address: string, since: number): Promise<RelayRequest | undefined> {
-    let list: RelayRequest[] = []
-    const q = `depositAddress=${encodeURIComponent(address)}&limit=5`
-    if (opts.apiKey) {
-      const res = await api<{ requests?: RelayRequest[] }>(ctx, `/requests/v3?${q}`)
-      list = res.requests ?? []
-    } else {
-      if (!warnedV2) {
-        warnedV2 = true
-        ctx.log.warn('relay: no apiKey, using deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Set relay({ apiKey }) to use /requests/v3.')
-      }
-      const res = await api<{ requests?: RelayRequest[] }>(ctx, `/requests/v2?${q}`)
-      list = res.requests ?? []
+  async function listRequests(ctx: AdapterContext, query: string): Promise<RelayRequest[]> {
+    warnNoKey(ctx.log)
+    const path = opts.apiKey ? '/requests/v3' : '/requests/v2'
+    const res = await api<{ requests?: RelayRequest[] }>(ctx, `${path}?${query}`)
+    return res.requests ?? []
+  }
+
+  /** The deposit of a Relay request, in base units of the origin token (`metadata.currencyIn`) */
+  function requestDeposit(r: RelayRequest): bigint | undefined {
+    const a = r.data?.metadata?.currencyIn?.amount
+    return a && /^[0-9]+$/.test(a) ? BigInt(a) : undefined
+  }
+
+  /** A request is bound by the transfer into the address (Relay can re-quote under a new id), else by id */
+  function requestKey(r: RelayRequest): string {
+    const h = r.depositAddress?.depositTxHash ?? r.data?.inTxs?.[0]?.hash ?? r.data?.inTxs?.[0]?.txHash
+    return h ? `tx:${h.startsWith('0x') ? h.toLowerCase() : h}` : `id:${r.id}`
+  }
+
+  /**
+   * Status of a deposit-address leg. Each Relay request completes one leg only. A request counts when
+   * it was created after the leg started (1 minute of slack), it is not bound to another leg, its
+   * deposit is at least `minBase` (when the user gave an amount), and no other open leg on the same
+   * address could claim it. The first such request (oldest first) is bound to the leg for good.
+   */
+  async function findRelayDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord | undefined, waiting: LegStep): Promise<LegStep> {
+    const address = rec?.address ?? ref
+    const owner = ownerOf(ctx, ref)
+    const list = await listRequests(ctx, `depositAddress=${encodeURIComponent(address)}&limit=20`)
+    if (rec?.bound) {
+      const bound = rec.bound
+      const r = list.find((x) => requestKey(x) === bound.key) ?? (await listRequests(ctx, `id=${encodeURIComponent(bound.id)}`))[0]
+      return r ? finish(ctx, ref, rec, mapRequest(r, ref)) : { state: 'PROCESSING', sub: 'processing', status: 'processing', transitions: [POLL_TRANSITION], ref }
     }
-    // Only requests created after this leg started (1 minute of slack for clock skew)
-    return list
+    const since = rec?.since ?? 0
+    const min = rec?.minBase ? BigInt(rec.minBase) : undefined
+    const candidates = list
       .filter((r) => Date.parse(r.createdAt) >= since - 60_000)
-      .sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))[0]
+      .sort((a, b) => Date.parse(a.createdAt) - Date.parse(b.createdAt))
+    let ambiguous = false
+    for (const r of candidates) {
+      const key = requestKey(r)
+      const used = `relayreq:${key}`
+      const usedBy = await ctx.shared.get<string>(used)
+      if (usedBy && usedBy !== owner) continue
+      const amount = requestDeposit(r)
+      if (min !== undefined && (amount === undefined || amount < min)) continue // dust, or less than the user said
+      if (!usedBy) {
+        if (rec && (await contested(ctx, rec, owner, { ...(amount !== undefined ? { amount } : {}), time: Date.parse(r.createdAt) }))) {
+          ambiguous = true
+          continue
+        }
+        if (!(await claim(ctx, used, owner))) continue
+      }
+      if (rec) {
+        rec.bound = { key, id: r.id }
+        await ctx.store.put(`d:${addrKey(ref)}`, rec, RECORD_TTL_SEC)
+      }
+      return finish(ctx, ref, rec, mapRequest(r, ref))
+    }
+    if (ambiguous) return ambiguousStep(ctx, ref, address, waiting)
+    return waiting
+  }
+
+  // ---------- one deposit for one leg ----------
+
+  /** Who claims a deposit: the session and the leg ref */
+  function ownerOf(ctx: AdapterContext, ref: string): string {
+    return `${ctx.session.id}:${ref}`
+  }
+
+  /**
+   * Record `key` as used by `owner` when it is free. Returns false when another owner has it.
+   * ScopedKV has no atomic set-if-absent, so this writes, then reads back to catch most races.
+   */
+  async function claim(ctx: Pick<AdapterContext, 'shared'>, key: string, owner: string): Promise<boolean> {
+    const cur = await ctx.shared.get<string>(key)
+    if (cur) return cur === owner
+    await ctx.shared.put(key, owner, USED_TTL_SEC)
+    return (await ctx.shared.get<string>(key)) === owner
+  }
+
+  /** Smallest deposit that completes a leg: the expected amount minus the tolerance (bigint math) */
+  function minFor(expectedBase: string | undefined, legId: 'transfer' | 'bridge'): string | undefined {
+    if (!expectedBase) return undefined
+    const expected = BigInt(expectedBase)
+    if (expected <= 0n) return undefined
+    const bps = BigInt(legId === 'bridge' ? Math.max(toleranceBps, HOP_TOLERANCE_BPS) : toleranceBps)
+    return (expected - (expected * bps) / 10_000n).toString()
+  }
+
+  function watchKey(rec: DepositRecord): string {
+    if (rec.mode === 'relay') return `watch:relay:${addrKey(rec.address)}`
+    const token = rec.token ? (isSolana(rec.chain ?? '') ? rec.token : rec.token.toLowerCase()) : ''
+    return `watch:${rec.chain}:${token}:${addrKey(rec.address)}`
+  }
+
+  async function addWatcher(ctx: AdapterContext, rec: DepositRecord, owner: string) {
+    const key = watchKey(rec)
+    const now = Date.now()
+    const list = ((await ctx.shared.get<Watcher[]>(key)) ?? []).filter((w) => w.until > now && w.owner !== owner)
+    list.push({
+      owner,
+      since: rec.since,
+      until: rec.since + WATCH_TTL_SEC * 1000,
+      ...(rec.fromBlock ? { fromBlock: rec.fromBlock } : {}),
+      ...(rec.expectedBase ? { expectedBase: rec.expectedBase } : {}),
+      ...(rec.minBase ? { minBase: rec.minBase } : {}),
+    })
+    await ctx.shared.put(key, list, WATCH_TTL_SEC)
+  }
+
+  async function removeWatcher(ctx: AdapterContext, rec: DepositRecord, owner: string) {
+    const key = watchKey(rec)
+    const list = (await ctx.shared.get<Watcher[]>(key)) ?? []
+    if (!list.some((w) => w.owner === owner)) return
+    await ctx.shared.put(key, list.filter((w) => w.owner !== owner && w.until > Date.now()), WATCH_TTL_SEC)
+  }
+
+  /** True when the amount is the leg's expected amount, within the tolerance on both sides */
+  function exact(w: { expectedBase?: string; minBase?: string }, amount: bigint | undefined): boolean {
+    if (amount === undefined || !w.expectedBase || !w.minBase) return false
+    const expected = BigInt(w.expectedBase)
+    return amount >= BigInt(w.minBase) && amount <= expected + (expected - BigInt(w.minBase))
+  }
+
+  /**
+   * True when another open leg on the same address could also claim this deposit. A deposit that
+   * matches this leg's exact amount, and no rival's exact amount, is not contested.
+   */
+  async function contested(ctx: AdapterContext, rec: DepositRecord, owner: string, ev: { amount?: bigint; time?: number; block?: bigint }): Promise<boolean> {
+    const now = Date.now()
+    const rivals = ((await ctx.shared.get<Watcher[]>(watchKey(rec))) ?? []).filter((w) => {
+      if (w.owner === owner || w.until <= now) return false
+      if (ev.block !== undefined && w.fromBlock && BigInt(w.fromBlock) > ev.block) return false
+      if (ev.time !== undefined && Number.isFinite(ev.time) && ev.time < w.since - 60_000) return false
+      if (ev.amount !== undefined && w.minBase && ev.amount < BigInt(w.minBase)) return false
+      return true
+    })
+    if (!rivals.length) return false
+    if (exact(rec, ev.amount) && !rivals.some((w) => exact(w, ev.amount))) return false
+    return true
+  }
+
+  /** The leg is done: remove its watch so it no longer contests deposits of other legs */
+  async function finish(ctx: AdapterContext, ref: string, rec: DepositRecord | undefined, step: LegStep): Promise<LegStep> {
+    if (rec && (step.status === 'succeeded' || step.status === 'failed' || step.status === 'refunded')) await removeWatcher(ctx, rec, ownerOf(ctx, ref))
+    return step
+  }
+
+  function ambiguousStep(ctx: AdapterContext, ref: string, address: string, waiting: LegStep): LegStep {
+    ctx.log.warn(
+      `relay: a deposit to ${address} matches more than one open session (ref ${ref}). No session takes it. Use a unique address per session, or a wallet payment or a settlement contract.`,
+    )
+    return { ...waiting, sub: 'ambiguous_deposit' }
   }
 
   function requestOutput(r: RelayRequest): Amount | undefined {
@@ -580,7 +788,7 @@ export function relay(opts: RelayOptions = {}) {
       fees: feesFrom(q),
       eta: etaFrom(q, legEta),
       expiresAt: new Date(Date.now() + WALLET_QUOTE_TTL_MS).toISOString(),
-      data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps ?? [], requestId: requestIdOf(q) },
+      data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps ?? [], requestId: requestIdOf(q), ...minOutputOf(q) },
     }
   }
 
@@ -605,7 +813,7 @@ export function relay(opts: RelayOptions = {}) {
         output: { amount: given, asset: withMeta(dest, inDec) },
         fees: [],
         eta: { min: 5, max: 60 },
-        data: { direct: true, depositAddress: recipient, anyAmount, nominal: false },
+        data: { direct: true, depositAddress: recipient, anyAmount, nominal: false, ...(cmp(given, '0') > 0 ? { amountBase: toBaseUnits(given, inDec) } : {}) },
       }
     }
 
@@ -623,7 +831,7 @@ export function relay(opts: RelayOptions = {}) {
       fees: feesFrom(q),
       eta: etaFrom(q, spec.eta),
       // Open deposit addresses accept any amount; the output is the rate-based estimate for `input`.
-      data: { direct: false, depositAddress: address, requestId, anyAmount, nominal, recipient },
+      data: { direct: false, depositAddress: address, requestId, anyAmount, nominal, recipient, ...(nominal ? {} : { amountBase: cin.amount, ...minOutputOf(q) }) },
     }
   }
 
@@ -722,9 +930,11 @@ export function relay(opts: RelayOptions = {}) {
     if (paid < BigInt(rec.amountBase ?? '0')) return fail('The transaction does not pay the destination the quoted amount.')
     // One transaction can complete one payment only: an old hash must not be reused for a new session.
     const key = usedKey(rec.chain!, rec.txHash!)
+    // A transfer leg on the same address may have taken a log of this transaction already.
+    if (await ctx.shared.get<string>(`${key}:log`)) return fail('This transaction was already used for another payment.')
     const usedBy = await ctx.shared.get<string>(key)
     if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
-    if (!usedBy) await ctx.shared.put(key, ref, 90 * 24 * 3600)
+    if (!usedBy) await ctx.shared.put(key, ref, USED_TTL_SEC)
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
   }
 
@@ -824,6 +1034,8 @@ export function relay(opts: RelayOptions = {}) {
       }
     }
     if (total <= 0n || !last) return undefined
+    // Dust, or less than the user said: wait (and do not take the signatures).
+    if (rec.minBase && total < BigInt(rec.minBase)) return undefined
     for (const sig of counted) await ctx.shared.put(usedKey(chain, sig), owner, 90 * 24 * 3600)
     const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
     return {
@@ -916,24 +1128,64 @@ export function relay(opts: RelayOptions = {}) {
     return fail('The transaction did not settle this session.', rec.txHash)
   }
 
-  /** Transfer to the destination itself (same chain and token): find ERC20 Transfer logs to it since the start block. */
-  async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
+  type TransferLog = { data: string; transactionHash: string; blockNumber?: string; logIndex?: string; removed?: boolean }
+
+  /**
+   * Transfer to the destination itself (same chain and token, EVM): read the token's Transfer logs to
+   * the address, page by page (`logBlockRange` blocks each, at most `LOG_PAGES_PER_CHECK` pages per
+   * check). One log completes the leg when it pays at least `minBase` (no sum of small transfers),
+   * no other leg has it, and no other open leg on the address could also claim it. The log is then
+   * recorded as used, by (chain, tx hash, log index), so it never completes a second session.
+   */
+  async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord, waiting: LegStep): Promise<LegStep | undefined> {
     if (rec.chain && rec.token && isSolana(rec.chain)) return findSolanaDeposit(ctx, ref, rec)
     if (!rec.chain || !rec.token || !rec.fromBlock || isNative(rec.chain, rec.token)) return undefined
-    const logs = await rpc<Array<{ data: string; transactionHash: string }>>(ctx, rec.chain, 'eth_getLogs', [
-      { fromBlock: rec.fromBlock, toBlock: 'latest', address: rec.token, topics: [ERC20_TRANSFER_TOPIC, null, topicAddress(rec.address)] },
-    ])
-    if (!logs?.length) return undefined
-    const total = logs.reduce((acc, l) => acc + BigInt(l.data), 0n)
-    const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
-    return {
-      state: 'COMPLETED',
-      status: 'succeeded',
-      transitions: [],
-      ref,
-      txHash: logs[logs.length - 1]!.transactionHash,
-      ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(total.toString(), decimals) } } : {}),
+    const chain = rec.chain
+    const owner = ownerOf(ctx, ref)
+    const min = rec.minBase ? BigInt(rec.minBase) : 1n
+    const latest = BigInt(await rpc<string>(ctx, chain, 'eth_blockNumber', []))
+    const start = BigInt(rec.scanFrom ?? rec.fromBlock)
+    let from = start
+    let holdAt: bigint | undefined
+    for (let page = 0; page < LOG_PAGES_PER_CHECK && from <= latest; page++) {
+      const to = from + logBlockRange - 1n < latest ? from + logBlockRange - 1n : latest
+      const logs = await rpc<TransferLog[] | null>(ctx, chain, 'eth_getLogs', [
+        { fromBlock: toHex(from), toBlock: toHex(to), address: rec.token, topics: [ERC20_TRANSFER_TOPIC, null, topicAddress(rec.address)] },
+      ])
+      const ordered = (logs ?? []).filter((l) => !l.removed).sort((a, b) => cmpBig(hexOr(a.blockNumber, from), hexOr(b.blockNumber, from)) || cmpBig(hexOr(a.logIndex, 0n), hexOr(b.logIndex, 0n)))
+      for (const l of ordered) {
+        const amount = BigInt(l.data)
+        if (amount < min) continue // dust, or less than the user said
+        const block = hexOr(l.blockNumber, from)
+        const key = `${usedKey(chain, l.transactionHash)}:${hexOr(l.logIndex, 0n).toString()}`
+        const usedBy = await ctx.shared.get<string>(key)
+        if (usedBy && usedBy !== owner) continue
+        if (!usedBy) {
+          // A same-chain wallet payment already used this transaction.
+          if (await ctx.shared.get<string>(usedKey(chain, l.transactionHash))) continue
+          if (await contested(ctx, rec, owner, { amount, block })) {
+            holdAt ??= block
+            continue
+          }
+          if (!(await claim(ctx, key, owner))) continue
+          await ctx.shared.put(`${usedKey(chain, l.transactionHash)}:log`, owner, USED_TTL_SEC)
+        }
+        const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
+        return finish(ctx, ref, rec, {
+          state: 'COMPLETED',
+          status: 'succeeded',
+          transitions: [],
+          ref,
+          txHash: l.transactionHash,
+          ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(amount.toString(), decimals) } } : {}),
+        })
+      }
+      from = to + 1n
     }
+    // Go on from here next time. Keep an ambiguous log in range: a rival leg can end and free it.
+    const next = holdAt ?? from
+    if (next !== start) await ctx.store.put(`d:${addrKey(ref)}`, { ...rec, scanFrom: toHex(next) } satisfies DepositRecord, RECORD_TTL_SEC)
+    return holdAt !== undefined ? ambiguousStep(ctx, ref, rec.address, waiting) : undefined
   }
 
   async function startWallet(input: StartInput, ctx: AdapterContext): Promise<LegStep> {
@@ -1012,20 +1264,34 @@ export function relay(opts: RelayOptions = {}) {
       const dest = cryptoAsset(input.quote.output, 'output')
       address = await openDepositAddress(ctx, origin, dest, recipientOf(ctx, input.deliverTo))
     }
-    const key = `d:${addrKey(address)}`
+    // One ref per session and address: the server's ref index then maps one ref to one session.
+    const ref = depositRef(ctx, address)
+    const key = `d:${addrKey(ref)}`
     const prev = await ctx.store.get<DepositRecord>(key)
     const since = prev?.since ?? Date.now()
     // Same chain and token: the address is the destination itself, so we watch transfers to it from now on
     // (EVM: Transfer logs from this block; Solana: signatures since `since`).
     const fromBlock = data.direct && !isSolana(origin.chain) ? (prev?.fromBlock ?? (await rpc<string>(ctx, origin.chain, 'eth_blockNumber', []))) : undefined
-    await ctx.store.put(
-      key,
-      { address, since, mode: data.direct ? 'direct' : 'relay', output: input.quote.output, chain: origin.chain, token: origin.token, ...(fromBlock ? { fromBlock } : {}) } satisfies DepositRecord,
-      RECORD_TTL_SEC,
-    )
+    const expectedBase = expectedOf(input.quote, data, origin)
+    const minBase = minFor(expectedBase, legId)
+    const rec: DepositRecord = {
+      address,
+      since,
+      mode: data.direct ? 'direct' : 'relay',
+      output: input.quote.output,
+      chain: origin.chain,
+      token: origin.token,
+      ...(fromBlock ? { fromBlock } : {}),
+      ...(expectedBase ? { expectedBase } : {}),
+      ...(minBase ? { minBase } : {}),
+      ...(prev?.scanFrom ? { scanFrom: prev.scanFrom } : {}),
+      ...(prev?.bound ? { bound: prev.bound } : {}),
+    }
+    await ctx.store.put(key, rec, RECORD_TTL_SEC)
+    await addWatcher(ctx, rec, ownerOf(ctx, ref))
 
     if (legId === 'bridge') {
-      return { state: 'PROCESSING', sub: 'waiting_for_deposit', transitions: [POLL_TRANSITION], status: 'processing', ref: address }
+      return { state: 'PROCESSING', sub: 'waiting_for_deposit', transitions: [POLL_TRANSITION], status: 'processing', ref }
     }
     const symbol = origin.symbol ?? knownSymbol(origin.chain, origin.token) ?? 'the token'
     const name = chainName(origin.chain)
@@ -1042,8 +1308,22 @@ export function relay(opts: RelayOptions = {}) {
       },
       transitions: [POLL_TRANSITION],
       status: 'awaiting_user',
-      ref: address,
+      ref,
     }
+  }
+
+  function depositRef(ctx: Pick<AdapterContext, 'session'>, address: string): string {
+    return `dep:${ctx.session.id}:${address}`
+  }
+
+  /** The deposit the user said they will send (base units of the origin token), when they gave an amount */
+  function expectedOf(quote: LegQuote, data: Record<string, unknown>, origin: CryptoAsset): string | undefined {
+    if (typeof data.amountBase === 'string' && /^[0-9]+$/.test(data.amountBase)) return data.amountBase
+    if (data.nominal || data.depositAddress) return undefined
+    // A quote without our data (e.g. from an older server): use its input when the decimals are known.
+    const decimals = origin.decimals ?? knownDecimals(origin.chain, origin.token)
+    if (decimals === undefined || cmp(quote.input.amount, '0') <= 0) return undefined
+    return toBaseUnits(quote.input.amount, decimals)
   }
 
   return createAdapter({
@@ -1052,6 +1332,7 @@ export function relay(opts: RelayOptions = {}) {
     legs,
 
     async quote(input, ctx) {
+      warnNoKey(ctx.log)
       switch (input.leg.legId) {
         case 'wallet':
           return quoteWallet(input, ctx)
@@ -1068,13 +1349,15 @@ export function relay(opts: RelayOptions = {}) {
       const origin = cryptoAsset({ amount: '0', asset: input.leg.from.asset }, 'hop asset')
       const dest = destAsset(ctx, input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const recipient = recipientOf(ctx)
+      warnNoKey(ctx.log)
       const address = await openDepositAddress(ctx, origin, dest, recipient)
       // Remember when this session first used the address, so status ignores older deposits.
-      const key = `d:${addrKey(address)}`
+      const ref = depositRef(ctx, address)
+      const key = `d:${addrKey(ref)}`
       if (!(await ctx.store.get(key))) {
         await ctx.store.put(key, { address, since: Date.now(), mode: address === recipient ? 'direct' : 'relay' } satisfies DepositRecord, RECORD_TTL_SEC)
       }
-      return { address, ref: address }
+      return { address, ref }
     },
 
     async start(input, ctx) {
@@ -1134,11 +1417,10 @@ export function relay(opts: RelayOptions = {}) {
           ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [POLL_TRANSITION], ref: input.ref }
           : { state: 'PAYMENT', status: 'awaiting_user', transitions: [POLL_TRANSITION], ref: input.ref }
       // Same chain and token: the address is the destination itself; look for Transfer logs to it.
-      if (rec?.mode === 'direct') return (await findDirectDeposit(ctx, input.ref, rec)) ?? waiting
-      const found = await findRequest(ctx, input.ref, rec?.since ?? 0).catch((e) => {
+      if (rec?.mode === 'direct') return (await findDirectDeposit(ctx, input.ref, rec, waiting)) ?? waiting
+      return findRelayDeposit(ctx, input.ref, rec, waiting).catch((e) => {
         throw toOrk(e, ctx.log)
       })
-      return found ? mapRequest(found, input.ref) : waiting
     },
 
     async health(ctx) {

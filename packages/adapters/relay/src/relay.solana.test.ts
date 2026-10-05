@@ -174,7 +174,7 @@ describe('relay: Solana destination', () => {
   it('deposit address into Solana: `user` is an EVM placeholder (Relay rejects a Solana user on an EVM origin)', async () => {
     const { fetch, calls } = fakeFetch([
       { method: 'POST', match: '/quote/v2', reply: () => intoSolanaQuote(true) },
-      { method: 'GET', match: '/requests/v3', reply: () => ({ requests: [{ id: 'r', status: 'success', createdAt: new Date().toISOString(), data: { outTxs: [{ hash: SIG }], route: { actual: { destination: { outputCurrency: { currency: usdcOf(RELAY_SOLANA_CHAIN_ID, SOLANA_USDC_MINT), amount: '9966541' } } } } } }] }) },
+      { method: 'GET', match: '/requests/v3', reply: () => ({ requests: [{ id: 'r', status: 'success', createdAt: new Date().toISOString(), data: { outTxs: [{ hash: SIG }], metadata: { currencyIn: { currency: usdcOf(8453, BASE_USDC.token), amount: '10000000' } }, route: { actual: { destination: { outputCurrency: { currency: usdcOf(RELAY_SOLANA_CHAIN_ID, SOLANA_USDC_MINT), amount: '9966541' } } } } } }] }) },
     ])
     const a = relay({ apiKey: 'k' })
     const ctx = makeCtx({ fetch, destination: solDest })
@@ -191,12 +191,12 @@ describe('relay: Solana destination', () => {
 
   it('the deposit address cache key keeps the case of a Solana recipient', async () => {
     const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => intoSolanaQuote(true) }])
-    const shared = memoryKV()
+    const store = memoryKV()
     const a = relay()
     const transfer = leg('transfer', SOL_USDC, SOL_DEST)
-    await a.quote({ leg: transfer, amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, makeCtx({ fetch, shared, destination: solDest }))
+    await a.quote({ leg: transfer, amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, makeCtx({ fetch, store, destination: solDest }))
     const key = `da:${SOL_DEST}:eip155:8453:${BASE_USDC.token}:${SOL}:${SOLANA_USDC_MINT}`
-    expect(await shared.get(key)).toBe(DEPOSIT)
+    expect(await store.get(key)).toBe(DEPOSIT)
   })
 })
 

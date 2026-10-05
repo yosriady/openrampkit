@@ -25,9 +25,12 @@ relay({
 | `rpcUrls` | `Record<string, string>` | public RPCs for Ethereum, Base, Arbitrum, Optimism, Polygon, Tempo, Solana (mainnet and devnet), Arbitrum Sepolia, Robinhood Chain Testnet | JSON-RPC URL per CAIP-2 chain. The adapter uses it to check same-chain, same-token moves on chain. Set your own in production: the public RPCs have rate limits. |
 | `signSettlementIntent` | `(typedData) => Promise<string>` | none | Signs the EIP-712 intent for a settlement contract that has an intent signer. See [On-chain settlement](../concepts/settlement.md). |
 | `settlementIntentTtlSec` | `number` | `1800` | How long a signed settlement intent stays valid, in seconds |
+| `slippageBps` | `number` | none (Relay picks) | Relay `slippageTolerance` in basis points (0 to 10000), sent with every quote. The quote data has `minOutput`: the smallest output after slippage (Relay `minimumAmount`). |
+| `amountToleranceBps` | `number` | `50` | How far below the expected amount a deposit can be and still complete a `transfer` leg, in basis points. A `bridge` leg uses at least 500. See [One deposit, one session](#one-deposit-one-session). |
+| `logBlockRange` | `number` | `2000` | The most blocks in one `eth_getLogs` call, for same-chain `transfer` checks. Set it to the limit of your RPC. |
 
 ::: warning No API key
-Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24. The adapter logs a warning once. Set an API key.
+Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24. The adapter logs a warning once, on its first call. Set an API key.
 :::
 
 ## Legs
@@ -64,9 +67,11 @@ In a [withdraw session](../guide/withdraw.md), the `wallet` leg sends the sessio
 
 ### transfer
 
-- The quote asks Relay for an **open deposit address** (`useDepositAddress: true`) for the source token and the destination. Deposit addresses are cached per recipient and route for 24 hours, so a user sees the same address again.
+- The quote asks Relay for an **open deposit address** (`useDepositAddress: true`) for the source token and the destination. Relay gives a new address for each quote. The adapter keeps one address per session and route (in the session store, for 24 hours). It never gives the address of one session to another session.
 - When the user did not enter an amount, the quote uses a nominal amount (10 units of a 6 to 8 decimal token, else 0.005) to show the rate.
-- Status looks for Relay requests to the deposit address that were created after the leg started (with one minute of slack), newest first.
+- The leg ref is `dep:<sessionId>:<address>`, so one ref maps to one session.
+- Status reads the Relay requests of the deposit address (`depositAddress=...`), oldest first. It binds the first request that was created after the leg started (with one minute of slack) and that no other session has. Relay can re-quote a deposit under a new request id, so the bind key is the deposit tx hash (`depositAddress.depositTxHash`). Then status follows that request only (by `id` when it is no longer in the list).
+- When the user entered an amount, the request deposit (`metadata.currencyIn.amount`) must be at least that amount minus `amountToleranceBps`. A smaller deposit does not complete the leg. Relay still delivers or refunds it.
 - Same chain and same token: the address is the destination itself. See [Same-chain moves](#same-chain-moves).
 
 ![Transfer crypto](../screenshots/21-transfer-address.png)
@@ -75,6 +80,7 @@ In a [withdraw session](../guide/withdraw.md), the `wallet` leg sends the sessio
 
 - Before the first leg is quoted, the server calls `prepareDeposit()`. The adapter returns an open deposit address from the hop asset to the destination. The first leg (for example Swapped) delivers there.
 - The bridge leg starts as `PROCESSING` with sub-state `waiting_for_deposit`, and completes when Relay reports the request as `success`.
+- The expected deposit is the input of the bridge quote. The tolerance is at least 5%, because the onramp can deliver a little less than its quote.
 
 ## Same-chain moves
 
@@ -84,12 +90,30 @@ When the source and the destination are the same token on the same chain, Relay 
 |---|---|
 | `wallet` | After `submit_tx`, the leg is `PROCESSING` (sub-state `confirming`) until the receipt exists (`eth_getTransactionReceipt`). The leg succeeds only when the transaction succeeded, was mined after the payment started (the block time from `eth_getBlockByNumber`, with 5 minutes of clock tolerance), paid the recipient at least the quoted amount (the value of a native transfer from `eth_getTransactionByHash`, or the sum of the token's `Transfer` logs to the recipient), and did not complete another payment before. Otherwise it fails with `DELIVERY_FAILED`. |
 | `wallet` with `destination.settlement` | The wallet sends `approve` and `settle` to the settlement contract. The adapter reads the contract receipt of the session (`eth_call`) and its `Settled` log (`eth_getLogs`). The leg succeeds when the token, the recipient, the amount and the calls agree with the quote. It does not need the transaction hash. See [On-chain settlement](../concepts/settlement.md). |
-| `transfer` | At start, the adapter records the current block (`eth_blockNumber`). Status looks for the token's `Transfer` logs to the destination since that block (`eth_getLogs`), and completes with their sum as the output. Native tokens are not detected: the leg stays in `PAYMENT`. |
+| `transfer` | At start, the adapter records the current block (`eth_blockNumber`). Status reads the token's `Transfer` logs to the destination since that block (`eth_getLogs`), in pages of `logBlockRange` blocks, at most 5 pages per check. The next check goes on from where the last one stopped. One log completes the leg, with its amount as the output. The adapter does not add logs together. See [One deposit, one session](#one-deposit-one-session). Native tokens are not detected: the leg stays in `PAYMENT`. |
 | `wallet` (Solana) | `getSignatureStatuses` must show `confirmed` or `finalized` with no error. Then `getTransaction` (`jsonParsed`) must show that the recipient got at least the quoted amount: the balance change of its token accounts for the mint, or its lamport change for SOL. The block time must not be before the payment started (5 minutes of tolerance). One signature completes one payment only. |
-| `transfer` (Solana) | Status reads the recipient's token accounts for the mint (`getTokenAccountsByOwner`), then their recent signatures (`getSignaturesForAddress`) since the leg started. It adds what each new, successful transaction paid the recipient. Each signature counts for one session only. For SOL, it reads the signatures of the recipient address. |
+| `transfer` (Solana) | Status reads the recipient's token accounts for the mint (`getTokenAccountsByOwner`), then their recent signatures (`getSignaturesForAddress`) since the leg started. It adds what each new, successful transaction paid the recipient. The sum must be at least the expected amount minus the tolerance. Each signature counts for one session only. For SOL, it reads the signatures of the recipient address. |
 
 ::: warning What the check does not cover
-The `wallet` check proves that a new transaction paid the recipient, and that no other session of this adapter used the same hash (the record lives in the store for 90 days). It does not check who sent it. The `transfer` check counts every transfer to the destination after the start block, from any sender. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
+The `wallet` check proves that a new transaction paid the recipient, and that no other session of this adapter used the same hash (the record lives in the shared store for 90 days). It does not check who sent it. The `transfer` check takes a transfer to the destination after the start block, from any sender. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
+:::
+
+## One deposit, one session
+
+A deposit completes one session only. These rules apply to same-chain `transfer` legs and to deposit-address legs (`transfer` and `bridge`).
+
+1. **Amount.** When the user gave an amount, one deposit must be at least that amount minus `amountToleranceBps` (default 0.5%; a `bridge` leg uses at least 5%). The adapter uses integer math in base units. A dust transfer does not complete a leg. When the user gave no amount, any deposit above zero counts.
+2. **Used record.** The adapter records each deposit as used in the shared store for 90 days: a `Transfer` log by (chain, tx hash, log index), and a Relay request by its deposit tx hash. A used deposit never completes a second session. A same-chain `wallet` payment cannot use a transaction that a `transfer` leg used, and the reverse.
+3. **Ambiguity.** Each open deposit leg puts a watch on its address in the shared store (for 24 hours). When another open leg on the same address could also claim a deposit, the deposit is ambiguous. An exception: the deposit is the exact amount of this leg (within the tolerance) and of no other leg. An ambiguous deposit completes no session. The leg stays in its waiting state with sub-state `ambiguous_deposit`, and the adapter logs a warning. A finished leg removes its watch.
+
+The shared store has no atomic "set if absent". The adapter writes the used record, then reads it back. Two status checks at the same moment on an eventually consistent store (for example Workers KV) can still race.
+
+::: tip Safe setups
+A shared destination (one treasury or vault address for all users) cannot tell two sessions with the same amount apart. Use one of these:
+
+- **A unique address per session.** Relay deposit-address legs do this: each session gets its own Relay address. For same-chain deposits, give each session its own destination address.
+- **A wallet payment.** The `wallet` leg checks the tx hash that the user's wallet sent for this session.
+- **A settlement contract.** With `destination.settlement`, the contract records the session id. See [On-chain settlement](../concepts/settlement.md).
 :::
 
 ## Status mapping
@@ -107,4 +131,4 @@ The Relay adapter has no webhook handler. Status comes from polling: the browser
 
 ## Verified vs TO VERIFY
 
-The source has no TO VERIFY markers for Relay. The Relay API paths used are `/quote/v2`, `/currencies/v2`, `/intents/status/v3`, `/requests/v3` (with a key) or `/requests/v2`, and `/chains` (health). Same-chain checks use the JSON-RPC methods `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_getBlockByNumber`, `eth_blockNumber`, `eth_getLogs` and `eth_call` (settlement receipts) on EVM chains, and `getSignatureStatuses`, `getTransaction`, `getTokenAccountsByOwner` and `getSignaturesForAddress` on Solana.
+The source has no TO VERIFY markers for Relay. The Relay API paths used are `/quote/v2`, `/currencies/v2`, `/intents/status/v3`, `/requests/v3` (with a key) or `/requests/v2` (by `depositAddress`, or by `id`), and `/chains` (health). A live check on 2026-10-05 showed: two `/quote/v2` calls with `useDepositAddress: true` and the same parameters give two different addresses; a request has `depositAddress.depositTxHash` and `metadata.currencyIn.amount` (base units); `inTxs[].data.value` is `0` for an ERC-20 deposit. Same-chain checks use the JSON-RPC methods `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_getBlockByNumber`, `eth_blockNumber`, `eth_getLogs` and `eth_call` (settlement receipts) on EVM chains, and `getSignatureStatuses`, `getTransaction`, `getTokenAccountsByOwner` and `getSignaturesForAddress` on Solana.
