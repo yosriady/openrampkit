@@ -51,6 +51,26 @@ We fix vulnerabilities in the latest minor version of each `@openrampkit/*` pack
 | Denial of service | Body size limits, a per-session rate limit on provider calls, and timeouts on provider calls. |
 | Secrets leak in errors or logs | The browser gets only error codes and safe messages. The server does not log keys or headers. |
 
+### AI agents (MCP server)
+
+`@openrampkit/mcp` lets an AI agent create deposit and payout sessions. Do not trust the agent. Its instructions can come from text that an attacker wrote (prompt injection), for example a web page, an email or a tool result. The agent can also loop and call the same tool many times. The operator config is trusted. The agent input is not.
+
+| Threat | Control |
+|---|---|
+| Prompt injection sends funds to an attacker wallet | The agent cannot give an address for a payout. It picks only a name from `withdraw.targets`, which the operator sets. For a bound target, the MCP server makes no pay link, so nobody can change the target. Deposit destinations work the same way (`deposit.destinations`). |
+| A pay link reaches the wrong person | For a payout without a bound target, the person who opens the pay link picks where the funds go, up to the bounds. The link cannot be revoked. Use `withdraw.requireBoundTarget` to turn off these payouts. The CLI turns them off by default. |
+| A looping or injected agent drains the treasury in many small payouts | `maxAmounts` caps each session. `limits.maxTotalPerDay` caps the total per currency per UTC day. `limits.maxSessionsPerHour` caps the session rate. Each session counts its largest amount. |
+| Payouts without a person to check them | The `approve` hook runs before each payout session and fails closed. The CLI has no hook, so it requires bound targets. |
+| The agent reads or changes sessions that it did not create | The MCP server keeps each client secret in its registry. The agent sees only session ids. It can read only the sessions that this MCP server created. |
+| Secrets leak to the agent | Tool results never contain a client secret, the app key or the server secret. Unknown errors give a generic message. |
+| A caller on the network uses the HTTP transport | The HTTP transport needs a bearer token of at least 16 characters. The CLI listens on `127.0.0.1` by default and refuses a body larger than 1 MB. |
+
+Limits:
+
+- The limit counters live in the session registry. `memoryRegistry()` keeps them for one process. With more than one instance, give a shared registry with an atomic `incr`.
+- Limit windows are fixed UTC hours and days. At a window boundary, an agent can use the old and the new window.
+- The MCP server does not know the identity of the person who opens a pay link. Your OpenRampKit server and your providers handle KYC.
+
 ## Hardening measures
 
 - Session secrets: 24 random bytes, stored as a SHA-256 hash, compared in constant time.

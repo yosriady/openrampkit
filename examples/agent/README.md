@@ -21,7 +21,7 @@ With `--serve`, the server listens on `http://localhost:8788` and serves the web
 > [!NOTE]
 > The `npx -y @openrampkit/mcp` commands below need the npm release. Until then, build the repository (`pnpm build`) and use `node /absolute/path/to/openrampkit/packages/mcp/dist/cli.js` in place of `npx -y @openrampkit/mcp`.
 
-Run your OpenRampKit server with an `authorize` hook that checks `x-app-key` (see `examples/cloudflare-worker`). Copy `mcp.config.example.json`, set your destinations and caps, then add this to `claude_desktop_config.json`:
+Run your OpenRampKit server with an `authorize` hook that checks `x-app-key` (see `examples/cloudflare-worker`). Copy `mcp.config.example.json`. Set your destinations, payout targets, caps and daily limits. Then add this to `claude_desktop_config.json`:
 
 ```json
 {
@@ -58,6 +58,6 @@ MCP_HTTP_TOKEN=a-long-random-token OPENRAMP_URL=... OPENRAMP_APP_KEY=... OPENRAM
   npx @openrampkit/mcp --http --port 3333
 ```
 
-Clients connect to `http://localhost:3333/mcp` with `Authorization: Bearer a-long-random-token`.
+Clients connect to `http://127.0.0.1:3333/mcp` with `Authorization: Bearer a-long-random-token`. The CLI listens on `127.0.0.1` only. Set `HOST` to change this.
 
 Docs: [Agents (MCP)](../../docs/guide/agents.md)

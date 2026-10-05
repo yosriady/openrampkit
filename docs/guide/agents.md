@@ -4,8 +4,9 @@
 
 - **fund a wallet**: a person pays in with a local method (VietQR, QRIS, PromptPay, DuitNow, QR Ph, PayNow, card or crypto), and the funds go to a wallet that you allow.
 - **pay out to a person**: your app sends funds, and the person picks how to receive them (for example a bank account or an e-wallet).
+- **pay out to a bound target**: your app sends funds to a wallet that you listed in the config. No pay link is made.
 
-The agent does not move money itself. A person always does the payment step. The agent creates a session and gets a **pay link**. The person opens the pay link on a phone and pays. Then the agent waits for the result.
+For deposits and pay link payouts, a person does the payment step. The agent creates a session and gets a **pay link**. The person opens the pay link on a phone and pays. Then the agent waits for the result. For a payout to a bound target, the MCP server starts the payout itself, inside your limits and after your approval.
 
 ```
 Agent ──MCP──> @openrampkit/mcp ──HTTP──> OpenRampKit server ──> providers
@@ -67,9 +68,25 @@ Put the guardrails in a JSON file. Keep secrets (the URL and the app key) in env
     ]
   },
   "withdraw": {
-    "source": { "chain": "eip155:8453", "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "symbol": "USDC", "decimals": 6, "custody": "app" }
+    "source": { "chain": "eip155:8453", "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "symbol": "USDC", "decimals": 6, "custody": "app" },
+    "targets": [
+      {
+        "name": "ops",
+        "description": "Operations wallet on Base",
+        "chain": "eip155:8453",
+        "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "address": "0x000000000000000000000000000000000000cafe",
+        "symbol": "USDC",
+        "decimals": 6
+      }
+    ],
+    "requireBoundTarget": true
   },
-  "maxAmounts": { "VND": "2500000", "IDR": "1500000", "USDC": "100" }
+  "maxAmounts": { "VND": "2500000", "IDR": "1500000", "USDC": "100" },
+  "limits": {
+    "maxTotalPerDay": { "VND": "10000000", "IDR": "6000000", "USDC": "300" },
+    "maxSessionsPerHour": 10
+  }
 }
 ```
 
@@ -79,14 +96,49 @@ Put the guardrails in a JSON file. Keep secrets (the URL and the app key) in env
 | `deposit.destinations` | none | The only wallets that the agent can fund. The agent picks one by `name`. Without `deposit`, the deposit tool is off. |
 | `deposit.allowCustomAddress` | off | `{ chains, tokens? }`: let the agent give its own address, on these chains and tokens only. |
 | `withdraw.source` | none | The asset that leaves and who holds it. For agent payouts, use `custody: 'app'` and a server [`treasury`](./withdraw.md#custody-app). Without `withdraw`, the payout tool is off. |
-| `withdraw.allowedTargets` | cash only | Where the person can receive the funds. See [Allowed targets](./withdraw.md#allowed-targets). |
+| `withdraw.allowedTargets` | cash only | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
+| `withdraw.targets` | none | Bound payout wallets, in the same form as `deposit.destinations`. The agent picks one by `name`. The MCP server sets the target and starts the payout. No pay link is made. Needs `custody: 'app'`. |
+| `withdraw.requireBoundTarget` | `false` in the library, `true` in the CLI | Refuse payouts without a bound target. Then the agent cannot make a payout pay link. |
+| `limits.maxTotalPerDay` | none | The largest total per UTC day, by currency. When set, it must list each currency of `maxAmounts`. Each session counts its largest amount. Payouts and deposits have separate totals. |
+| `limits.maxSessionsPerHour` | none | The most sessions (deposits and payouts together) that the agent can create in one UTC hour |
+| `approve` | none | Library only. `async (request) => boolean`. It runs before each payout session. See [Operator approval](#operator-approval). |
+| `registry` | `memoryRegistry()` | Keeps client secrets and the `limits` counters. See [Library](#library). |
 | `allowedMethods` | all | Only these methods, for example `["vietqr", "qris"]` |
 | `userId` | `agent` | The `userId` of each session |
 | `sessionTtlMinutes` | `30` | The longest session life. The agent can ask for less. |
 | `maxWaitSeconds` | `120` | The longest time of one `wait_for_completion` call (at most 600) |
 | `pollIntervalMs` | `3000` | The poll interval of `wait_for_completion` |
 
-The MCP server checks the config when it starts. It stops with an error when `maxAmounts` is empty, or when a destination address is not valid for its chain.
+The MCP server checks the config when it starts. It stops with an error when:
+
+- `maxAmounts` is empty.
+- A destination or target address is not valid for its chain, or two names are the same.
+- `withdraw.targets` is set and `custody` is not `app`.
+- `requireBoundTarget` is `true` and `withdraw.targets` is empty.
+- `limits.maxTotalPerDay` does not list each currency of `maxAmounts`.
+- `limits` is set and the `registry` has no `incr` function.
+
+::: warning Set limits for payouts
+`maxAmounts` caps one session only. Without `limits`, a looping agent or an agent that follows injected instructions can create many payouts, each under the cap. Always set `limits` when `withdraw` is on. The CLI writes a warning when they are missing.
+:::
+
+### Operator approval
+
+In the library, give an `approve` function. The MCP server calls it before it creates each payout session. Only `true` allows the payout. `false`, any other value or an error refuses it, and the agent gets `NOT_APPROVED`.
+
+```ts
+const server = createOpenRampMcpServer({
+  // ...
+  approve: async ({ amount, target, reference }) => {
+    // For example: ask a person in a chat, then wait for the answer.
+    return askOperator(`Pay out ${amount.max} ${amount.currency} to ${target?.name ?? 'a pay link'} (${reference ?? 'no reference'})?`)
+  },
+})
+```
+
+The request has `direction`, `country`, `amount` (`max`, `min?`, `currency`), `source`, `target` (only for a bound target) and `reference`.
+
+The CLI cannot run a function. In the CLI, `withdraw.requireBoundTarget` is `true` by default, so payouts go only to the wallets in `withdraw.targets`. To allow pay link payouts in the CLI, set `"requireBoundTarget": false` in the config file. The CLI then writes a warning.
 
 ## Connect an agent
 
@@ -126,7 +178,9 @@ claude mcp add openrampkit \
 MCP_HTTP_TOKEN=a-long-random-token npx @openrampkit/mcp --http --port 3333
 ```
 
-Clients connect to `http://localhost:3333/mcp`. Each request must have `Authorization: Bearer <MCP_HTTP_TOKEN>`. The CLI does not start without the token. The token must have at least 16 characters. `--port` (or `PORT`) sets the port. The default is `3333`.
+Clients connect to `http://127.0.0.1:3333/mcp`. Each request must have `Authorization: Bearer <MCP_HTTP_TOKEN>`. The CLI does not start without the token. The token must have at least 16 characters. `--port` (or `PORT`) sets the port. The default is `3333`.
+
+The CLI listens on `127.0.0.1` only. To listen on other interfaces, set `--host 0.0.0.0` (or `HOST`). Do this only behind a proxy with TLS. A request body larger than 1 MB gets `413`.
 
 The CLI reads these environment variables:
 
@@ -136,6 +190,8 @@ The CLI reads these environment variables:
 | `OPENRAMP_APP_KEY` | The key that your `authorize` hook checks (header `x-app-key`). |
 | `OPENRAMP_MCP_CONFIG` | The path to the JSON file with the guardrails. `--config <path>` also works. |
 | `MCP_HTTP_TOKEN` | With `--http` only: the bearer token that clients send. |
+| `PORT` | With `--http` only: the port. The default is `3333`. |
+| `HOST` | With `--http` only: the interface. The default is `127.0.0.1`. |
 
 On Cloudflare Workers, Deno or Bun, use the web-standard handler:
 
@@ -146,7 +202,7 @@ const handler = createMcpHttpHandler(config, { bearerToken: env.MCP_HTTP_TOKEN }
 export default { fetch: (req: Request) => handler(req) }
 ```
 
-The handler is stateless. It keeps the session registry in memory for the life of the process. For many instances, give a shared `registry` (see [Library](#library)).
+The handler is stateless. It keeps the session registry in memory for the life of the process. For many instances, give a shared `registry` (see [Library](#library)). Each instance with its own memory registry has its own `limits` counters. The handler refuses a body larger than `maxBodyBytes` (default 1 MB) with `413`.
 
 ## Tools
 
@@ -157,7 +213,7 @@ All results are compact JSON. An error result has `isError: true` and `{ "error"
 | `list_payment_methods` | `country`, `direction?` (`deposit` or `withdraw`, default `deposit`), `destination?` (only with more than one destination) | The methods in that country: `method`, `name`, `kind`, `available`, `reason` (when not available), `eta`, `limits`, `providers` |
 | `get_quotes` | `country`, `amount`, `method?`, `direction?`, `destination?` (only with more than one destination) | Quotes: `pay`, `receive`, `fees`, `eta`. Without `method`, it quotes up to 3 cash methods. |
 | `create_deposit_session` | `country`, `destination?`, `custom_destination?` (only with `allowCustomAddress`), `currency?`, `max_amount?`, `min_amount?`, `method?`, `amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next`. With `method` and `amount`: also `payment` (for example a VietQR `qr_payload`). |
-| `create_withdraw_session` | `country`, `amount?`, `max_amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next` |
+| `create_withdraw_session` | `country`, `target?` (only with `withdraw.targets`; required with `requireBoundTarget`), `amount?` (required with `target`), `max_amount?` (not with `requireBoundTarget`), `reference?`, `ttl_minutes?` | Without `target`: `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next`. With `target`: `session_id`, `status`, `target`, `quote`, `expires_at`, `bounds`, `next` (no `pay_url`). |
 | `get_session_status` | `session_id` | `status`, `state`, `done`, `expires_at`. When there is a result: `method`, `provider`, `paid`, `received`, `received_confirmed`, `tx_hashes`. Also `bounds` and `error` when set. |
 | `wait_for_completion` | `session_id`, `timeout_seconds` (default 60, capped by `maxWaitSeconds`) | Like `get_session_status`, plus `waited_seconds`. `timed_out: true` when the payment did not finish in time. |
 
@@ -181,11 +237,19 @@ To skip the method screen, give `method` and `amount`. The tool then starts the 
 3. The person picks how to receive the funds (for example GCash) and enters the account details.
 4. The server sends the USDC from your treasury. The agent calls `wait_for_completion`.
 
+With a bound target:
+
+1. The agent calls `create_withdraw_session` with `target: "ops"` and `amount: "20"`.
+2. The MCP server checks the limits and calls `approve`. Then it creates the session, sets the target, quotes and starts the payout with the client secret. The agent never sees the client secret.
+3. The server sends the USDC from your treasury to the target wallet. The agent calls `wait_for_completion`.
+
 ## Guardrails
 
 - **Destinations.** The agent can fund only a named destination from the config. The `destination` input is an enum of these names. The `custom_destination` input exists only when `allowCustomAddress` is set, and then only for the chains and tokens that you list.
-- **Payout targets.** The agent cannot set where a payout goes. The person picks the target, inside `withdraw.allowedTargets`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
+- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the MCP server makes no pay link, so nobody can change the target. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedTargets`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
 - **Amounts.** Each session gets `amountBounds`, at most the cap in `maxAmounts`. The server enforces the bounds on each quote and each payment.
+- **Limits.** `limits.maxTotalPerDay` and `limits.maxSessionsPerHour` stop a looping agent. A session that passes a limit is refused with `LIMIT_REACHED`, and nothing is counted for it. A session that the server refuses is not counted.
+- **Approval.** `approve` runs before each payout. It fails closed (`NOT_APPROVED`).
 - **Session scope.** The agent can read only the sessions that this MCP server created. Preview sessions are not readable.
 - **No secrets.** The MCP server keeps each client secret in its registry. Tool results never contain a client secret, the app key or the server secret. The `pay_url` has a pay credential that works only for that session and expires.
 - **Bounded waits.** `wait_for_completion` never waits more than `maxWaitSeconds`.
@@ -193,6 +257,23 @@ To skip the method screen, give `method` and `amount`. The tool then starts the 
 ::: warning Bounds and currencies
 The server checks `amountBounds` only when the payment currency is the bounds currency. A deposit with bounds in VND does not limit a payment in USDC from the person's wallet. For a hard cap on deposits, set `allowedMethods` to the cash methods of one currency. Payouts are always capped, because the payment is in the source token.
 :::
+
+::: warning A pay link is a bearer credential
+For a payout without a bound target, the person who opens `pay_url` picks where the funds go, up to the bounds. Send the link only to the person who must receive the funds, on a private channel. The link works until the session expiry plus 30 minutes. You cannot revoke it. When you do not need a person to pick the target, use `withdraw.targets` and `requireBoundTarget`.
+:::
+
+Limit windows are fixed UTC hours and UTC days. At the boundary of a window, an agent can use the limit of the old window and then of the new window. Set limits with this in mind.
+
+Error codes from the guardrails:
+
+| Code | Meaning |
+|---|---|
+| `AMOUNT_TOO_HIGH` | Above the cap in `maxAmounts` |
+| `CURRENCY_NOT_ALLOWED` | The currency is not in `maxAmounts` |
+| `LIMIT_REACHED` | A limit in `limits` is reached. The message says when the window ends. |
+| `NOT_APPROVED` | `approve` did not return `true` |
+| `TARGET_REQUIRED` | `requireBoundTarget` is on and the agent gave no `target` |
+| `TARGET_NOT_ALLOWED` | The `target` is not in `withdraw.targets` |
 
 ## The pay link
 
@@ -231,7 +312,9 @@ import { createOpenRampMcpServer, createMcpHttpHandler, createRampOps, memoryReg
 | `createOpenRampMcpServer(config)` | An `McpServer` with the tools. Connect it to any transport. |
 | `createMcpHttpHandler(config, { bearerToken })` | A `(Request) => Promise<Response>` handler for Streamable HTTP |
 | `createRampOps(config)` | The tool operations without MCP. Pass the result to `createOpenRampMcpServer` to share one registry. |
-| `memoryRegistry(max?)` | The default registry. Write your own `SessionRegistry` (`get`, `set`) to share it between instances. |
+| `memoryRegistry(max?)` | The default registry, in memory, for one process. Write your own `SessionRegistry` to share it between instances. |
+
+A `SessionRegistry` has `get(id)`, `set(id, entry)` and, for `limits`, `incr(key, amount, ttlMs)`. `incr` adds a decimal string (it can be negative) to a counter and returns the new total as a decimal string. The counter starts at `"0"` and is removed `ttlMs` after its first add. `incr` must be atomic across all instances, for example Redis `INCRBYFLOAT` with `PEXPIRE ... NX`, or one database row update.
 
 `config.connection` is one of:
 

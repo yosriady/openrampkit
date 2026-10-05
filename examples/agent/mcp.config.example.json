@@ -15,9 +15,25 @@
   },
   "withdraw": {
     "source": { "chain": "eip155:8453", "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", "symbol": "USDC", "decimals": 6, "custody": "app" },
-    "allowedTargets": { "fiat": { "currencies": ["VND", "IDR", "THB", "MYR", "PHP", "SGD"] } }
+    "allowedTargets": { "fiat": { "currencies": ["VND", "IDR", "THB", "MYR", "PHP", "SGD"] } },
+    "targets": [
+      {
+        "name": "ops",
+        "description": "Operations wallet on Base",
+        "chain": "eip155:8453",
+        "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+        "address": "0x000000000000000000000000000000000000cafe",
+        "symbol": "USDC",
+        "decimals": 6
+      }
+    ],
+    "requireBoundTarget": true
   },
   "maxAmounts": { "VND": "2500000", "IDR": "1500000", "THB": "3500", "MYR": "450", "PHP": "5500", "SGD": "130", "USDC": "100" },
+  "limits": {
+    "maxTotalPerDay": { "VND": "10000000", "IDR": "6000000", "THB": "14000", "MYR": "1800", "PHP": "22000", "SGD": "520", "USDC": "300" },
+    "maxSessionsPerHour": 10
+  },
   "sessionTtlMinutes": 30,
   "maxWaitSeconds": 120
 }

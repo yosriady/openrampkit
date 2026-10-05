@@ -4,12 +4,11 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import * as z from 'zod'
+import { version as VERSION } from '../package.json'
 import { RampError } from './backend.js'
 import type { OpenRampMcpConfig } from './config.js'
 import { createRampOps } from './ramp.js'
-import type { DepositArgs, RampOps } from './ramp.js'
-
-const VERSION = '0.0.1'
+import type { DepositArgs, RampOps, WithdrawArgs } from './ramp.js'
 
 const ok = (data: unknown): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify(data) }] })
 const fail = (code: string, message: string): CallToolResult => ({ content: [{ type: 'text', text: JSON.stringify({ error: { code, message } }) }], isError: true })
@@ -39,6 +38,14 @@ export function createOpenRampMcpServer(configOrOps: OpenRampMcpConfig | RampOps
   const destinations = config.deposit?.destinations ?? []
   const destList = destinations.map((d) => `"${d.name}"${d.description ? ` (${d.description})` : ''}: ${d.symbol ?? d.token} on ${d.chain} to ${d.address}`).join('; ')
   const caps = Object.entries(config.maxAmounts).map(([c, v]) => `${v} ${c}`).join(', ')
+  const lim = config.limits
+  const limitText = [
+    lim?.maxTotalPerDay ? `Daily totals: ${Object.entries(lim.maxTotalPerDay).map(([c, v]) => `${v} ${c}`).join(', ')}.` : '',
+    lim?.maxSessionsPerHour !== undefined ? `At most ${lim.maxSessionsPerHour} sessions per hour.` : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+  const limitNote = limitText ? ` ${limitText} When a tool returns LIMIT_REACHED or NOT_APPROVED, stop and tell the person. Do not retry.` : ''
   const destinationField = destinations.length ? z.enum(destinations.map((d) => d.name) as [string, ...string[]]) : z.string()
 
   server.registerTool(
@@ -89,7 +96,7 @@ export function createOpenRampMcpServer(configOrOps: OpenRampMcpConfig | RampOps
         title: 'Create deposit session',
         description:
           `Create a deposit that a person pays, to fund an allowed wallet. Returns pay_url: show it to the person (as a link or a QR code). They open it on a phone and pay with a local method (VietQR, QRIS, PromptPay, card, crypto). Funds go only to an allowed destination: ${destList || 'custom addresses only'}. ` +
-          `Per-session caps: ${caps}. Give method and amount to also get direct payment instructions (for example a VietQR payload). Then call wait_for_completion.`,
+          `Per-session caps: ${caps}.${limitNote} Give method and amount to also get direct payment instructions (for example a VietQR payload). Then call wait_for_completion.`,
         inputSchema: {
           country: countrySchema,
           ...(destinations.length ? { destination: destinationField.optional().describe(`Allowed destination name. Default: the only one, when there is one. Allowed: ${destList}`) } : {}),
@@ -109,24 +116,36 @@ export function createOpenRampMcpServer(configOrOps: OpenRampMcpConfig | RampOps
   }
 
   if (config.withdraw) {
-    const src = config.withdraw.source
+    const w = config.withdraw
+    const src = w.source
+    const token = src.symbol ?? 'the source token'
+    const targets = w.targets ?? []
+    const targetList = targets.map((t) => `"${t.name}"${t.description ? ` (${t.description})` : ''}: ${t.symbol ?? t.token} on ${t.chain} to ${t.address}`).join('; ')
+    const how = w.requireBoundTarget
+      ? `Give target: the funds go only to that operator-approved wallet, and the payout starts at once (no pay link). Allowed targets: ${targetList}. `
+      : `Without target, it returns pay_url: send it to the person who receives the funds. They choose how to receive them (for example a bank account or e-wallet) and confirm. You cannot choose where the funds go. ` +
+        (targets.length ? `With target, the funds go only to that operator-approved wallet, and the payout starts at once (no pay link). Allowed targets: ${targetList}. ` : '')
+    const targetSchema: Record<string, z.ZodType> = {}
+    if (targets.length) {
+      const field = z.enum(targets.map((t) => t.name) as [string, ...string[]])
+      targetSchema.target = (w.requireBoundTarget ? field : field.optional()).describe(`Operator-approved payout wallet. Needs amount. Allowed: ${targetList}`)
+    }
     server.registerTool(
       'create_withdraw_session',
       {
         title: 'Create payout session',
-        description:
-          `Create a payout to a person, from ${src.symbol ?? src.token} on ${src.chain}. Returns pay_url: send it to the person who receives the funds. They choose how to receive them (for example a bank account or e-wallet) and confirm. You cannot choose where the funds go. ` +
-          `Caps: ${caps}. Then call wait_for_completion.`,
+        description: `Create a payout from ${src.symbol ?? src.token} on ${src.chain}. ${how}${config.approve ? 'The operator must approve each payout. ' : ''}Caps: ${caps}.${limitNote} Then call wait_for_completion.`,
         inputSchema: {
           country: countrySchema,
-          amount: decimal.optional().describe(`Exact amount to pay out, in ${src.symbol ?? 'the source token'}. The person cannot change it.`),
-          max_amount: decimal.optional().describe(`Largest amount, in ${src.symbol ?? 'the source token'}, when the person picks the amount. Default: the cap.`),
+          ...targetSchema,
+          amount: decimal.optional().describe(`Exact amount to pay out, in ${token}. The person cannot change it. Required with target.`),
+          ...(w.requireBoundTarget ? {} : { max_amount: decimal.optional().describe(`Largest amount, in ${token}, when the person picks the amount. Default: the cap.`) }),
           reference: z.string().max(200).optional().describe('Your note or order id. Echoed in webhooks as metadata.reference.'),
           ttl_minutes: z.number().int().min(1).max(1440).optional().describe('Minutes until the session expires. Capped by the server config.'),
         },
-        annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+        annotations: { readOnlyHint: false, destructiveHint: targets.length > 0, idempotentHint: false, openWorldHint: true },
       },
-      (a) => run(() => ops.createWithdrawSession(a)),
+      (a) => run(() => ops.createWithdrawSession(a as WithdrawArgs)),
     )
   }
 

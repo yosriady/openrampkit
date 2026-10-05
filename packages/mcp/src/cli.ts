@@ -6,13 +6,17 @@
 //   OPENRAMP_MCP_CONFIG Path to a JSON file with the guardrails (deposit, withdraw, maxAmounts, ...)
 //   MCP_HTTP_TOKEN      --http only: bearer token that MCP clients must send
 //   PORT                --http only: port (default 3333)
+//   HOST                --http only: interface to listen on (default 127.0.0.1). Set 0.0.0.0 only behind TLS.
+//
+// Payouts: the CLI cannot run an `approve` hook, so it needs bound targets (`withdraw.targets`)
+// unless the config file sets `withdraw.requireBoundTarget` to false.
 
 import { readFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { OpenRampMcpConfig } from './config.js'
-import { createMcpHttpHandler } from './http.js'
+import { createMcpHttpHandler, MAX_BODY_BYTES } from './http.js'
 import { createOpenRampMcpServer } from './server.js'
 
 function arg(name: string): string | undefined {
@@ -28,12 +32,32 @@ function loadConfig(): OpenRampMcpConfig {
   const appKey = process.env.OPENRAMP_APP_KEY
   if (!baseUrl || !appKey) throw new Error('Set OPENRAMP_URL and OPENRAMP_APP_KEY.')
   const { baseUrl: _b, appKeyHeader, ...rest } = file
+  if (rest.withdraw) {
+    // Safe default: no pay link payouts. The file must opt out with `"requireBoundTarget": false`.
+    if (rest.withdraw.requireBoundTarget === undefined) {
+      if (!rest.withdraw.targets?.length) {
+        throw new Error('Payouts in the CLI need withdraw.targets (bound wallets). To allow pay link payouts, set withdraw.requireBoundTarget to false.')
+      }
+      rest.withdraw = { ...rest.withdraw, requireBoundTarget: true }
+    }
+    if (rest.withdraw.requireBoundTarget === false) {
+      console.error('openrampkit-mcp: warning: withdraw.requireBoundTarget is false. Each payout pay link lets whoever opens it pick where the funds go.')
+    }
+    if (!rest.limits) console.error('openrampkit-mcp: warning: payouts are on with no `limits`. Set limits.maxTotalPerDay and limits.maxSessionsPerHour.')
+  }
   return { ...rest, connection: { baseUrl, appKey, ...(appKeyHeader ? { appKeyHeader } : {}) } }
 }
 
+class TooLarge extends Error {}
+
 async function toRequest(req: IncomingMessage, origin: string): Promise<Request> {
   const chunks: Buffer[] = []
-  for await (const c of req) chunks.push(c as Buffer)
+  let size = 0
+  for await (const c of req) {
+    size += (c as Buffer).length
+    if (size > MAX_BODY_BYTES) throw new TooLarge()
+    chunks.push(c as Buffer)
+  }
   const headers = new Headers()
   for (const [k, v] of Object.entries(req.headers)) if (typeof v === 'string') headers.set(k, v)
   const body = chunks.length && req.method !== 'GET' && req.method !== 'HEAD' ? Buffer.concat(chunks) : undefined
@@ -53,15 +77,22 @@ async function main() {
     if (!token) throw new Error('Set MCP_HTTP_TOKEN for --http.')
     const handler = createMcpHttpHandler(config, { bearerToken: token })
     const port = Number(arg('port') ?? process.env.PORT ?? 3333)
+    const host = arg('host') ?? process.env.HOST ?? '127.0.0.1'
     createServer((req, res) => {
+      if (Number(req.headers['content-length'] ?? 0) > MAX_BODY_BYTES) {
+        res.writeHead(413, { connection: 'close' }).end()
+        req.destroy()
+        return
+      }
       toRequest(req, `http://localhost:${port}`)
         .then(handler)
         .then((r) => send(res, r))
-        .catch(() => {
-          res.statusCode = 500
+        .catch((e: unknown) => {
+          res.statusCode = e instanceof TooLarge ? 413 : 500
           res.end()
+          if (e instanceof TooLarge) req.destroy()
         })
-    }).listen(port, () => console.error(`openrampkit-mcp: Streamable HTTP on http://localhost:${port}/mcp`))
+    }).listen(port, host, () => console.error(`openrampkit-mcp: Streamable HTTP on http://${host.includes(':') ? `[${host}]` : host}:${port}/mcp`))
     return
   }
   const server = createOpenRampMcpServer(config)

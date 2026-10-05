@@ -2,6 +2,7 @@ import { cmp, isDecimal } from '@openrampkit/core'
 import type { AllowedTargets, Destination, WithdrawSource } from '@openrampkit/core'
 import type { Connection } from './backend.js'
 import { RampError } from './backend.js'
+import type { Limits } from './limits.js'
 import type { SessionRegistry } from './registry.js'
 
 /** A deposit destination the agent may pick by name. */
@@ -37,9 +38,31 @@ export type OpenRampMcpConfig = {
   withdraw?: {
     /** The asset that leaves, and who holds it. Use `custody: 'app'` with a server `treasury` for agent payouts. */
     source: WithdrawSource
-    /** Where the person may receive the funds. Default: cash only (`{ fiat: {} }`). */
+    /** Where the person may receive the funds on the pay link. Default: cash only (`{ fiat: {} }`). */
     allowedTargets?: AllowedTargets
+    /**
+     * Payout targets bound by the operator. The agent picks one by name. The MCP server sets the
+     * target and starts the payout itself: no pay link is made, so nobody can send the funds elsewhere.
+     * Needs `source.custody: 'app'` and a `treasury` on the OpenRampKit server.
+     */
+    targets?: NamedDestination[]
+    /**
+     * Refuse payouts without a named target (no pay link payouts). Default `false` in the API.
+     * The CLI sets it to `true` unless the config file sets it to `false`.
+     */
+    requireBoundTarget?: boolean
   }
+  /**
+   * Limits across sessions: sessions per hour and total per day. Counters live in `registry`.
+   * Strongly recommended for any agent that can create payouts.
+   */
+  limits?: Limits
+  /**
+   * Operator approval for payouts. Called before each payout session is created. Return `true` to
+   * allow it. Any other value, or an error, refuses it (fail closed). For example, ask a person in
+   * Slack, or check an allowlist of references.
+   */
+  approve?: (request: PayoutApproval) => boolean | Promise<boolean>
   /**
    * Required. Largest amount per session, by currency code (`VND`) or token symbol (`USDC`).
    * The agent can create sessions only in these currencies, and never above these amounts.
@@ -59,6 +82,20 @@ export type OpenRampMcpConfig = {
   serverInfo?: { name: string; version: string }
 }
 
+/** What `approve` gets for a payout that the agent asks for. */
+export type PayoutApproval = {
+  direction: 'withdraw'
+  /** Country of the person who receives */
+  country: string
+  /** The largest amount that can leave, and the smallest when set */
+  amount: { min?: string; max: string; currency: string }
+  source: WithdrawSource
+  /** The bound target, when the agent picked one. Absent: the person picks the target on the pay link. */
+  target?: NamedDestination
+  /** The agent's note or order id */
+  reference?: string
+}
+
 const EVM = /^0x[0-9a-fA-F]{40}$/
 const SOLANA = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 
@@ -74,15 +111,51 @@ export function checkConfig(c: OpenRampMcpConfig): void {
   for (const [cur, v] of Object.entries(c.maxAmounts)) {
     if (!isDecimal(v) || cmp(v, '0') <= 0) throw new Error(`OpenRamp MCP: maxAmounts.${cur} must be a positive decimal string`)
   }
-  const names = new Set<string>()
-  for (const d of c.deposit?.destinations ?? []) {
-    if (!d.name || names.has(d.name)) throw new Error(`OpenRamp MCP: destination names must be unique and not empty (${d.name})`)
-    names.add(d.name)
-    if (!validAddress(d.chain, d.address)) throw new Error(`OpenRamp MCP: destination ${d.name} has an address that is not valid for ${d.chain}`)
+  checkNamed(c.deposit?.destinations ?? [], 'destination')
+  const w = c.withdraw
+  if (w?.targets?.length) {
+    checkNamed(w.targets, 'withdraw target')
+    if (w.source.custody !== 'app') throw new Error('OpenRamp MCP: `withdraw.targets` needs `withdraw.source.custody: "app"`')
   }
+  if (w?.requireBoundTarget && !w.targets?.length) throw new Error('OpenRamp MCP: `withdraw.requireBoundTarget` needs at least one entry in `withdraw.targets`')
+  if (c.approve !== undefined && typeof c.approve !== 'function') throw new Error('OpenRamp MCP: `approve` must be a function')
+  const perDay = c.limits?.maxTotalPerDay
+  if (perDay) {
+    for (const [cur, v] of Object.entries(perDay)) {
+      if (!isDecimal(v) || cmp(v, '0') <= 0) throw new Error(`OpenRamp MCP: limits.maxTotalPerDay.${cur} must be a positive decimal string`)
+    }
+    const keys = Object.keys(perDay).map((k) => k.toUpperCase())
+    const missing = Object.keys(c.maxAmounts).filter((k) => !keys.includes(k.toUpperCase()))
+    if (missing.length) throw new Error(`OpenRamp MCP: limits.maxTotalPerDay must list every currency of maxAmounts. Missing: ${missing.join(', ')}`)
+  }
+  const perHour = c.limits?.maxSessionsPerHour
+  if (perHour !== undefined && (!Number.isInteger(perHour) || perHour < 1)) throw new Error('OpenRamp MCP: limits.maxSessionsPerHour must be a positive integer')
   if (c.deposit && !c.deposit.destinations.length && !c.deposit.allowCustomAddress?.chains.length) {
     throw new Error('OpenRamp MCP: `deposit.destinations` is empty')
   }
+}
+
+function checkNamed(list: NamedDestination[], what: string): void {
+  const names = new Set<string>()
+  for (const d of list) {
+    if (!d.name || names.has(d.name)) throw new Error(`OpenRamp MCP: ${what} names must be unique and not empty (${d.name})`)
+    names.add(d.name)
+    if (!validAddress(d.chain, d.address)) throw new Error(`OpenRamp MCP: ${what} ${d.name} has an address that is not valid for ${d.chain}`)
+  }
+}
+
+/** Resolve the agent's payout target choice against the bound targets. */
+export function resolveTarget(c: OpenRampMcpConfig, name: string | undefined): NamedDestination | undefined {
+  const w = c.withdraw!
+  if (name === undefined) {
+    if (w.requireBoundTarget) {
+      throw new RampError('TARGET_REQUIRED', `Payouts need a named target. Allowed: ${(w.targets ?? []).map((t) => t.name).join(', ')}.`, 403)
+    }
+    return undefined
+  }
+  const t = w.targets?.find((x) => x.name === name)
+  if (!t) throw new RampError('TARGET_NOT_ALLOWED', `Unknown target "${name}". Allowed: ${(w.targets ?? []).map((x) => x.name).join(', ') || 'none'}.`, 403)
+  return t
 }
 
 /** Resolve the agent's destination choice against the allowlist. */

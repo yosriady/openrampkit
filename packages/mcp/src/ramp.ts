@@ -5,9 +5,10 @@ import { cmp, currencyForCountry } from '@openrampkit/core'
 import type { MethodOption, OrkError, PublicSession, Quote, SurfaceKind } from '@openrampkit/core'
 import { createBackend, RampError } from './backend.js'
 import type { Backend, SessionInput } from './backend.js'
-import { checkConfig, resolveBounds, resolveDestination } from './config.js'
-import type { OpenRampMcpConfig } from './config.js'
+import { checkConfig, resolveBounds, resolveDestination, resolveTarget } from './config.js'
+import type { NamedDestination, OpenRampMcpConfig, PayoutApproval } from './config.js'
 import { amountCurrency, boundsText, errorView, methodView, paymentView, quoteView, sessionView, TERMINAL } from './format.js'
+import { createLimiter } from './limits.js'
 import { memoryRegistry } from './registry.js'
 import type { SessionRegistry } from './registry.js'
 
@@ -34,6 +35,8 @@ export type DepositArgs = {
 
 export type WithdrawArgs = {
   country: string
+  /** A name from `withdraw.targets`: the funds go there, and no pay link is made. */
+  target?: string | undefined
   amount?: string | undefined
   max_amount?: string | undefined
   reference?: string | undefined
@@ -51,6 +54,36 @@ export function createRampOps(config: OpenRampMcpConfig) {
   const maxWait = Math.min(config.maxWaitSeconds ?? 120, 600)
   const pollMs = config.pollIntervalMs ?? 3000
   const previews = new Map<string, { id: string; secret: string; exp: number }>()
+  const limiter = createLimiter(config.limits, registry)
+
+  /**
+   * Count the session against `limits`, then run `fn`. When `fn` fails before it calls `keep()`
+   * (that is, before a session exists), the count is undone.
+   */
+  async function counted<T>(direction: Direction, bounds: { max: string; currency: string }, fn: (keep: () => void) => Promise<T>): Promise<T> {
+    const release = await limiter.reserve(direction, bounds.currency, bounds.max)
+    let kept = false
+    try {
+      return await fn(() => {
+        kept = true
+      })
+    } catch (e) {
+      if (!kept) await release()
+      throw e
+    }
+  }
+
+  /** Ask the operator's `approve` hook. Fails closed: false, a non-boolean or an error refuses. */
+  async function approve(request: PayoutApproval): Promise<void> {
+    if (!config.approve) return
+    let ok: unknown
+    try {
+      ok = await config.approve(request)
+    } catch {
+      ok = false
+    }
+    if (ok !== true) throw new RampError('NOT_APPROVED', 'The operator did not approve this payout. Do not retry it. Ask the person who runs this agent.', 403)
+  }
 
   async function create(input: SessionInput) {
     const s = await backend.create(input)
@@ -167,13 +200,16 @@ export function createRampOps(config: OpenRampMcpConfig) {
           throw new RampError('BAD_REQUEST', `amount must be inside ${boundsText(bounds)}.`, 400)
         }
       }
-      const s = await create({
-        ...base('deposit', c, args.reference ? { reference: args.reference.slice(0, 200) } : {}),
-        destination,
-        amountBounds: bounds,
-        ttlMinutes: ttl(args.ttl_minutes),
+      const { s, link } = await counted('deposit', bounds, async (keep) => {
+        const s = await create({
+          ...base('deposit', c, args.reference ? { reference: args.reference.slice(0, 200) } : {}),
+          destination,
+          amountBounds: bounds,
+          ttlMinutes: ttl(args.ttl_minutes),
+        })
+        keep()
+        return { s, link: await payLink(s.id, s.clientSecret) }
       })
-      const link = await payLink(s.id, s.clientSecret)
       const out: Record<string, unknown> = {
         session_id: s.id,
         status: 'open',
@@ -200,25 +236,38 @@ export function createRampOps(config: OpenRampMcpConfig) {
     async createWithdrawSession(args: WithdrawArgs) {
       const c = country(args.country)
       const w = withdrawConfig()
+      const target = resolveTarget(config, args.target)
       const currency = w.source.symbol ?? 'USDC'
+      if (target && args.amount === undefined) throw new RampError('BAD_REQUEST', 'amount is required with target.', 400)
       const bounds = resolveBounds(config, { currency, max: args.max_amount, exact: args.amount })
-      const s = await create({
-        ...base('withdraw', c, args.reference ? { reference: args.reference.slice(0, 200) } : {}),
-        ...w,
+      const reference = args.reference?.slice(0, 200)
+      const source = { chain: w.source.chain, token: currency, custody: w.source.custody }
+      const input: SessionInput = {
+        ...base('withdraw', c, reference ? { reference } : {}),
+        source: w.source,
+        // A bound target: only its chain is allowed, and no pay link exists to change it.
+        allowedTargets: target ? { crypto: { chains: [target.chain] } } : w.allowedTargets,
         amountBounds: bounds,
         ttlMinutes: ttl(args.ttl_minutes),
-      })
-      const link = await payLink(s.id, s.clientSecret)
-      return {
-        session_id: s.id,
-        status: 'open',
-        pay_url: link.url,
-        pay_url_expires_at: link.expiresAt,
-        expires_at: s.expiresAt,
-        source: { chain: w.source.chain, token: currency, custody: w.source.custody },
-        bounds: boundsText(bounds),
-        next: 'Send pay_url to the person who receives the funds. They pick how to receive them (for example a bank or e-wallet) and confirm. Then call wait_for_completion with session_id.',
       }
+      return counted('withdraw', bounds, async (keep) => {
+        await approve({ direction: 'withdraw', country: c, amount: bounds, source: w.source, ...(target ? { target } : {}), ...(reference ? { reference } : {}) })
+        const s = await create(input)
+        // The session exists: it keeps its count, even when the payout does not start.
+        keep()
+        if (target) return { session_id: s.id, ...(await boundPayout(s.id, s.clientSecret, target, args.amount!)), expires_at: s.expiresAt, source, bounds: boundsText(bounds) }
+        const link = await payLink(s.id, s.clientSecret)
+        return {
+          session_id: s.id,
+          status: 'open',
+          pay_url: link.url,
+          pay_url_expires_at: link.expiresAt,
+          expires_at: s.expiresAt,
+          source,
+          bounds: boundsText(bounds),
+          next: 'Send pay_url to the person who receives the funds. They pick how to receive them (for example a bank or e-wallet) and confirm. Then call wait_for_completion with session_id.',
+        }
+      })
     },
 
     async getSessionStatus(sessionId: string) {
@@ -241,6 +290,42 @@ export function createRampOps(config: OpenRampMcpConfig) {
         await sleep(pollMs, opts.signal)
       }
     },
+  }
+
+  /**
+   * Payout to a bound target: set the target, quote the first available method and start it with
+   * the client secret, which only this server holds. The treasury sends the funds (custody `app`).
+   */
+  async function boundPayout(id: string, secret: string, t: NamedDestination, amount: string) {
+    const fail = (e: unknown): never => {
+      const code = e instanceof RampError ? e.code : 'PAYOUT_NOT_STARTED'
+      const message = e instanceof RampError ? e.message : 'The payout could not start.'
+      throw new RampError(code, `${message} Session ${id} did not start a payout. Check it with get_session_status before you try again.`, e instanceof RampError ? e.status : 502)
+    }
+    try {
+      const plan = await backend.call<PlanResult>(secret, 'POST', `/sessions/${id}/target`, {
+        type: 'crypto',
+        chain: t.chain,
+        token: t.token,
+        address: t.address,
+        ...(t.symbol ? { symbol: t.symbol } : {}),
+        ...(t.decimals !== undefined ? { decimals: t.decimals } : {}),
+      })
+      const method = plan.methods.find((m) => m.group !== 'unavailable')
+      if (!method) throw new RampError('NO_METHOD', `No method can pay out to ${t.name} now.`, 422)
+      const r = await backend.call<QuotesResult>(secret, 'POST', `/sessions/${id}/quotes`, { method: method.method, amount })
+      const q = r.quotes[0]
+      if (!q) throw new RampError(r.errors[0]?.code ?? 'NO_QUOTES', r.errors[0]?.message ?? `No quote to pay out to ${t.name}.`, 422)
+      const session = await backend.call<PublicSession>(secret, 'POST', `/sessions/${id}/select`, { quoteId: q.id })
+      return {
+        status: sessionView(session).status,
+        target: { name: t.name, chain: t.chain, token: t.symbol ?? t.token, address: t.address },
+        quote: quoteView(q),
+        next: 'The payout started. No person needs to act. Call wait_for_completion with session_id.',
+      }
+    } catch (e) {
+      return fail(e)
+    }
   }
 
   /** Quote one method for an exact amount and start the payment, so the agent can show a QR code or bank details. */
