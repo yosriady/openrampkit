@@ -81,6 +81,7 @@ export default withMermaid(
               { text: 'Swapped', link: '/adapters/swapped' },
               { text: 'Xendit', link: '/adapters/xendit' },
               { text: 'Coinbase', link: '/adapters/coinbase' },
+              { text: 'Binance', link: '/adapters/binance' },
               { text: 'Transak', link: '/adapters/transak' },
               { text: 'MoonPay', link: '/adapters/moonpay' },
               { text: 'Stripe', link: '/adapters/stripe' },

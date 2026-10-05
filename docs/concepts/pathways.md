@@ -152,7 +152,7 @@ The method `exchange_transfer` ("From an exchange") is for a user who sends cryp
 
 `isAddressTransfer(method)` from `@openrampkit/core` is true for `transfer` and `exchange_transfer` (see `ADDRESS_TRANSFER_METHODS`).
 
-An adapter offers it in the `methods` of a leg with the `DEPOSIT_ADDRESS` surface. The mock adapter offers it with `exchange: true`. The method `exchange` ("Connect exchange") is a different method: it is for a flow where the user connects an exchange account (for example with OAuth). OpenRampKit does not have that flow yet. It is future work.
+An adapter offers it in the `methods` of a leg with the `DEPOSIT_ADDRESS` surface. The mock adapter offers it with `exchange: true`. The method `exchange` ("Connect exchange") is a different method: it is for a flow where the user pays from an exchange account on the exchange page, and the exchange sends the crypto. The [Binance adapter](../adapters/binance.md) offers it.
 
 ## Grouping
 

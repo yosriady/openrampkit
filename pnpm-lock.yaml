@@ -217,6 +217,15 @@ importers:
         specifier: workspace:*
         version: link:../core
 
+  packages/adapters/binance:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/adapters/coinbase:
     dependencies:
       '@openrampkit/adapter':

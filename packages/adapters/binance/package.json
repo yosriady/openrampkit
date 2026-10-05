@@ -1,0 +1,52 @@
+{
+  "name": "@openrampkit/adapter-binance",
+  "version": "0.0.1",
+  "description": "OpenRampKit Binance adapter: deposit from a Binance account (Binance Pay Onchain on-ramp)",
+  "keywords": [
+    "adapter",
+    "onramp",
+    "openrampkit",
+    "binance"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/adapters/binance.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/adapters/binance"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/adapter": "workspace:*"
+  },
+  "peerDependencies": {}
+}
