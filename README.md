@@ -32,14 +32,18 @@ OpenRampKit gives your app one deposit and withdraw modal, a server that you hos
 
 ## Two-minute tour
 
-New here? These six steps show the whole project.
+New here? These seven steps show the whole project.
 
 1. **Try the live demo.** Open the [playground](https://openrampkit-getformo.vercel.app/playground/). It runs the real server in your browser tab, with mock providers. You need no account and no key. Change **User country** to see the local methods of each market.
 2. **Watch a deposit compare quotes.** With country **VN**, click **Use Cash**, then **VietQR**. Type an amount and click **Continue**. Several providers quote the same route, and the best one shows **Best price**. Click **Confirm**, then **Simulate payment**. The right panel shows the widget events and the signed `session.completed` webhook.
 3. **See the onchain settlement.** `OpenRampSettlement` is live at [`0x1219…7Af5` on Arbitrum Sepolia](https://arbitrum-sepolia.blockscout.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5) (same address on Robinhood Chain Testnet and Tempo Testnet). This [`Settled` transaction](https://sepolia.arbiscan.io/tx/0xf370773565bd5340b17f1a00e969fdd15f84229d73be10346c7f0ab197aa4fdf) pays 25 test USDC into an ERC-4626 vault in one transaction. All links are in [contracts/deployments.md](contracts/deployments.md).
 4. **Read the design.** The [architecture](https://openrampkit-getformo.vercel.app/concepts/architecture) page shows the components, the trust boundaries and the data model. The [flows](https://openrampkit-getformo.vercel.app/concepts/flows) page has a sequence diagram for each key flow: local QR, two-leg pathway, wallet payment, onchain settlement, withdraw, webhooks and MCP.
 5. **Check the tests and CI.** [CI](https://github.com/yosriady/openrampkit/actions/workflows/ci.yml) runs typecheck, unit tests with coverage, a package smoke test, an Anvil chain test and Foundry tests on each push. Unit tests sit next to the code (`packages/*/src/*.test.ts`). Browser tests are in [examples/next-demo/e2e](examples/next-demo/e2e) and [examples/playground/e2e](examples/playground/e2e). Contract tests are in [contracts/test](contracts/test).
-6. **Review the security model.** Read [SECURITY.md](SECURITY.md) for the threat model and controls, and the [security guide](https://openrampkit-getformo.vercel.app/guide/security) for what your app must do.
+6. **Open the ops dashboard.** In the playground, press **Open ops dashboard (demo)**. It lists the deposits and withdrawals of your tab, with stats, stuck sessions, webhook replay and a resolve action with an audit note. See the [admin guide](https://openrampkit-getformo.vercel.app/guide/admin).
+
+   <img src="docs/public/screens/admin-dashboard.png" width="720" alt="The ops dashboard: stat cards and a table of recent deposits">
+
+7. **Review the security model.** Read [SECURITY.md](SECURITY.md) for the threat model and controls, and the [security guide](https://openrampkit-getformo.vercel.app/guide/security) for what your app must do.
 
 ## Contents
 

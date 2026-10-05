@@ -59,6 +59,10 @@ Open `{baseUrl}/admin` (for example `https://app.example.com/api/openramp/admin`
 
 The page works in light and dark mode and at phone width. It loads no external scripts.
 
+![The ops dashboard: stat cards for the last 24 hours, completed volume per currency, and a table of recent deposits](/screens/admin-dashboard.png)
+
+![The detail drawer of a completed VietQR deposit: session data, actions, and the payment legs](/screens/admin-session.png)
+
 The [playground](./playground.md) shows the dashboard for the sessions in your browser tab: press "Open ops dashboard (demo)". It uses a fixed demo token. Do not do this in production.
 
 ## Programmatic API
