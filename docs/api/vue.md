@@ -47,6 +47,9 @@ Only one modal is open at a time. When you open a new modal, the previous modal 
 Does the same as `OpenRampProvider`, without a wrapper component. Call it in `setup()`, for example in `App.vue` or in a Nuxt layout. `config` can be an object, a ref or a getter. The function returns the same API as `useOpenRamp()`.
 
 ```ts
+import { ref } from 'vue'
+import { provideOpenRamp, lightTheme } from '@openrampkit/vue'
+
 const theme = ref(lightTheme())
 const ramp = provideOpenRamp(() => ({ baseUrl: '/api/openramp', theme: theme.value }))
 ```
@@ -139,6 +142,9 @@ It makes one controller for each client secret. A new string secret starts a new
 Subscribes to a `DepositController` and returns its `Snapshot` as a shallow ref. Use it for a fully custom UI, or next to `OpenRampEmbedded` with `@controller`. `controller` can be a value, a ref or a getter.
 
 ```ts
+import { shallowRef } from 'vue'
+import { useDepositController, type DepositController } from '@openrampkit/vue'
+
 const controller = shallowRef<DepositController>()
 const snap = useDepositController(controller)
 // snap.value?.screen

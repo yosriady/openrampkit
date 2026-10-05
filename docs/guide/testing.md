@@ -23,6 +23,8 @@ createOpenRamp({
 | `solanaLocalChain` | none | Test only: add a `solana-onchain` leg that pays with a real SPL transfer on Solana devnet |
 | `name` | `'Test provider'` | Name shown to users |
 
+The adapter has more options, for example `id`, `methods`, `countries`, `feeBps`, `spreadBps`, `eta`, `cardCheckout` and `exchange`. See [Mock adapter](../adapters/mock.md).
+
 What each leg does:
 
 | Leg | Methods | Surface | How to finish it |
@@ -35,6 +37,7 @@ What each leg does:
 | `bridge` | (hop) | none shown (the spec declares `DEPOSIT_ADDRESS`) | Settles by itself after `settleMs` |
 | `offramp` | `bank_transfer`, `gcash`, `momo`, `promptpay` | `FORM`, then `WALLET_TX` | Fill in the payout form, then send the USDC with a wallet or the treasury |
 | `onchain` | `wallet` | `WALLET_TX` | Send a real ERC-20 transfer on the local chain |
+| `solana-onchain` | `wallet` | `WALLET_TX` | Send a real SPL transfer on Solana devnet |
 
 See [Mock adapter](../adapters/mock.md) for the details.
 

@@ -4,7 +4,12 @@ The `<openramp-modal>` web component (Lit, Shadow DOM), `openDeposit()`, `openWi
 
 ```ts
 import { openDeposit, openWithdraw, createDepositController, lightTheme, darkTheme, autoTheme, defaultMessages } from '@openrampkit/web'
-import { lightTheme } from '@openrampkit/web/theme' // themes only, no Lit (safe on the server)
+```
+
+In code that runs on the server, import themes from `@openrampkit/web/theme`. It has the theme functions only, with no Lit:
+
+```ts
+import { lightTheme, darkTheme, autoTheme } from '@openrampkit/web/theme'
 ```
 
 Importing `@openrampkit/web` registers the element in the browser. On the server the registration is a no-op.

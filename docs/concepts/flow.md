@@ -209,6 +209,9 @@ type OrkError = {
 | `CLIENT_UPGRADE_REQUIRED` | Update the app to use this method. | No |
 | `SESSION_EXPIRED` | This session expired. Start a new deposit. | No |
 | `UNAUTHORIZED` | This session is not valid. | No |
+| `CONFLICT` | The session changed at the same time. Try again. | Yes |
+| `ADDRESS_REJECTED` | This address cannot receive withdrawals. Use another address. | No |
+| `TARGET_NOT_ALLOWED` | This app does not allow withdrawals to this target. | No |
 | `BAD_REQUEST` | The request is not valid. | No |
 | `NOT_FOUND` | Not found. | No |
 | `INTERNAL` | Something went wrong on our side. | Yes |
@@ -217,6 +220,6 @@ Adapters may add their own codes. Build errors with `orkError(code, overrides)`,
 
 ## The client side
 
-`DepositController` in `@openrampkit/client` turns the steps into screens: `loading`, `methods`, `amount`, `quotes`, `step`, `result`, `error`. See [API: @openrampkit/client](../api/client.md).
+`DepositController` in `@openrampkit/client` turns the steps into screens: `loading`, `target` (withdraw only), `methods`, `amount`, `quotes`, `step`, `result`, `error`. See [API: @openrampkit/client](../api/client.md).
 
 ![Processing, then complete](../screenshots/05-vn-processing.png)

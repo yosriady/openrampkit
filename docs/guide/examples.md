@@ -10,8 +10,11 @@
 
 ![Playground](../screenshots/00-playground.png)
 
+Run these commands from the root of a clone of the repository:
+
 ```bash
 pnpm install
+pnpm build         # the examples import the built packages (dist)
 cp examples/next-demo/.env.example examples/next-demo/.env.local
 pnpm dev:example   # http://localhost:3000
 ```
@@ -22,7 +25,10 @@ pnpm dev:example   # http://localhost:3000
 | `PUBLIC_URL` | `http://localhost:3000` | Used for `baseUrl` and the webhook URL |
 | `OPENRAMP_MOCK` | `1` | `1`: mock providers only, works offline. `0`: real Relay for wallet and transfer, mock fiat. |
 | `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | empty | Only browser wallets work without it |
+| `OPENRAMP_WEBHOOK_SECRET` | a dev value | Signs the webhooks to `/api/hooks`. 16+ characters. Not in `.env.example`: add it for a real deployment. |
 | `XENDIT_SECRET_KEY`, `XENDIT_WEBHOOK_TOKEN` | empty | Adds real Xendit merchant pay-in when both are set |
+| `CRON_SECRET` | empty | Protects `/api/cron`. In production, the route refuses all calls when it is not set. |
+| `RELAY_API_KEY` | empty | Relay API key, for `OPENRAMP_MOCK=0`. Relay needs it for deposit address status. |
 
 What to look at:
 
@@ -65,6 +71,7 @@ Flows to try:
 [`examples/cloudflare-worker`](https://github.com/yosriady/openrampkit/tree/main/examples/cloudflare-worker) runs the server as a standalone Worker with a Durable Object session store (`durableObjectStore`). Your app backend creates sessions over HTTP with a shared API key, through the `authorize` hook. See [Deploy on Cloudflare Workers](../deploy/cloudflare-workers.md).
 
 ```bash
+pnpm install && pnpm build   # from the repository root, once
 cd examples/cloudflare-worker
 cp .dev.vars.example .dev.vars
 pnpm dev   # wrangler dev on http://localhost:8787

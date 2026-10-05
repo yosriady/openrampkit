@@ -69,6 +69,8 @@ Install the wallet adapter in your frontend:
 pnpm add @openrampkit/solana
 ```
 
+The packages are not on npm yet. See [Try it before the npm release](./installation.md#try-it-before-the-npm-release).
+
 `solanaWallet()` finds wallets through [Wallet Standard](https://github.com/wallet-standard/wallet-standard). Phantom, Solflare, Backpack and most other Solana wallets register there.
 
 ```tsx
@@ -231,7 +233,7 @@ The key is in `examples/playground/.solana-devnet-key.json`. This file is in `.g
 
 ## Demo
 
-The Next.js demo has a **USDC on Solana** destination. Pick it in the playground. With mock providers, the QRIS or card pathway goes to Base and then bridges to Solana. Set **Wallet** to "wagmi and Solana wallet" and click **Connect Solana wallet** to pay from Phantom or another wallet.
+The Next.js demo (`pnpm dev:example`) has a **USDC on Solana** destination. Pick it in the playground. With mock providers, the QRIS or card pathway goes to Base and then bridges to Solana. Set **Wallet** to "wagmi and Solana wallet" and click **Connect Solana wallet** to pay from Phantom or another wallet.
 
 ## Proof on devnet
 

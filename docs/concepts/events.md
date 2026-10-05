@@ -39,8 +39,10 @@ Receive them with `onEvent` on `OpenRampProvider`, `DepositButton`, `WithdrawBut
 ```tsx
 <OpenRampProvider
   baseUrl="/api/openramp"
-  onEvent={(e) => analytics.track(`deposit ${e.type}`, { sessionId: e.sessionId, ...e.data.object })}
+  onEvent={(e) => analytics.track(`deposit ${e.type}`, { sessionId: e.sessionId, ...(e.data.object as object) })}
 >
+  <DepositButton getClientSecret={getClientSecret} />
+</OpenRampProvider>
 ```
 
 Browser events are made in the browser. Their ids are not cryptographically random. Never credit anything from them.

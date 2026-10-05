@@ -18,6 +18,9 @@ With `--serve`, the server listens on `http://localhost:8788` and serves the web
 
 ## Claude Desktop
 
+> [!NOTE]
+> The `npx -y @openrampkit/mcp` commands below need the npm release. Until then, build the repository (`pnpm build`) and use `node /absolute/path/to/openrampkit/packages/mcp/dist/cli.js` in place of `npx -y @openrampkit/mcp`.
+
 Run your OpenRampKit server with an `authorize` hook that checks `x-app-key` (see `examples/cloudflare-worker`). Copy `mcp.config.example.json`, set your destinations and caps, then add this to `claude_desktop_config.json`:
 
 ```json

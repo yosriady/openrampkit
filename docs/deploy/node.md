@@ -21,6 +21,8 @@ export const openramp = createOpenRamp({
 })
 ```
 
+This setup needs `ioredis` next to the OpenRampKit packages. The OpenRampKit packages are not on npm yet; see [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
+
 ## Runtimes
 
 ::: code-group
@@ -115,7 +117,8 @@ import { openramp } from './openramp'
 const app = express()
 
 // Mount before any body parser: the handler reads the raw body (webhooks need it).
-app.all('/api/openramp/*', async (req, res) => {
+// `app.use` matches every method and sub-path, in Express 4 and 5.
+app.use('/api/openramp', async (req, res) => {
   const url = new URL(req.originalUrl, `${req.protocol}://${req.get('host')}`)
   const chunks: Buffer[] = []
   for await (const c of req) chunks.push(c as Buffer)

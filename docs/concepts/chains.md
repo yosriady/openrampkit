@@ -15,7 +15,7 @@ OpenRampKit names chains with CAIP-2 ids and tokens with their address (or `nati
 | Monad | `eip155:143` | MON | |
 | HyperEVM | `eip155:999` | HYPE | |
 | Tempo | `eip155:4217` | none (fees in USD stablecoins) | See [Tempo](#tempo) |
-| Tempo Testnet (Moderato) | `eip155:42431` | none (fees in pathUSD) | `OpenRampSettlement` deployed. Playground testnet mode |
+| Tempo Testnet (Moderato) | `eip155:42431` | none (fees in pathUSD) | `TEMPO_TESTNET`. `OpenRampSettlement` deployed. Playground testnet mode |
 | Solana | `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | SOL (9 decimals) | See [Solana](../guide/solana.md) |
 | Solana Devnet | `solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1` | SOL | Metadata and devnet USDC only |
 | Robinhood Chain | `eip155:4663` | ETH | Arbitrum Orbit L2. No USDC in `USDC` yet. |
@@ -72,6 +72,6 @@ await openramp.sessions.create({
 - **Fee token.** A Tempo wallet pays fees in a USD stablecoin. The user needs a stablecoin balance on Tempo to send a transaction there (for example "Pay with wallet" from Tempo, or a withdraw from Tempo). Deposits **to** Tempo through Relay do not need a Tempo balance: Relay pays the destination side.
 - **Tempo transaction features.** OpenRampKit sends standard EVM transactions. It does not use Tempo's own transaction type (fee token choice, batched calls, fee sponsorship).
 - **Direct onramps.** MoonPay announced a Tempo onramp for USDC.e and pathUSD. The MoonPay adapter does not list a Tempo currency code yet, because we could not confirm the code. Until then, fiat reaches Tempo through the two-leg pathway (onramp to Base, then Relay).
-- **Testnet.** The Moderato testnet has metadata only. Relay does not route it, and we do not list testnet token addresses.
+- **Testnet.** Relay does not route the Moderato testnet. `@openrampkit/core` has its metadata (`TEMPO_TESTNET`), but no token addresses for it. `OpenRampSettlement` is deployed there. The [playground](../guide/playground.md#testnet-mode-real-wallet) testnet mode and `NETWORK=tempo-testnet pnpm testnet:settle` pay AlphaUSD (`0x20c0000000000000000000000000000000000001`) through it, with the mock `localChain` leg.
 
 Sources: [Tempo connection details](https://tempo.xyz/developers/docs/quickstart/connection-details), [Tempo FAQ](https://tempo.xyz/faq/), [Bridge stablecoins via Relay (Tempo docs)](https://tempo.xyz/developers/docs/guide/bridge-relay), Relay `GET /chains` (chain `4217`), [MoonPay adds Tempo onramp](https://thepaypers.com/crypto-web3-and-cbdc/news/moonpay-adds-usdce-and-pathusd-support-becomes-tempo-onramp-provider).

@@ -1,8 +1,9 @@
 import { defineConfig } from 'vitepress'
 import { withMermaid } from 'vitepress-plugin-mermaid'
 
-// Public path of the site. GitHub Pages serves it at https://yosriady.github.io/openrampkit/, so the
-// workflow sets DOCS_BASE=/openrampkit/. A custom domain or Cloudflare Pages serves it at the root: leave it unset.
+// Public path of the site. Vercel (https://openrampkit-getformo.vercel.app), Cloudflare Pages and a custom domain
+// serve it at the root: leave DOCS_BASE unset. A GitHub Pages project site needs DOCS_BASE=/openrampkit/
+// (see docs/deploy/docs-site.md).
 const base = (process.env.DOCS_BASE ?? '/').replace(/\/?$/, '/')
 
 // `withMermaid` renders ```mermaid code blocks as diagrams (sequence, state and flowchart diagrams).
@@ -31,21 +32,28 @@ export default withMermaid(
             items: [
               { text: 'Why OpenRampKit?', link: '/guide/why' },
               { text: 'Introduction', link: '/guide/introduction' },
-              { text: 'Features', link: '/guide/features' },
+              { text: 'Quick start (Next.js)', link: '/guide/quick-start-nextjs' },
               { text: 'Prerequisites', link: '/guide/prerequisites' },
               { text: 'Installation', link: '/guide/installation' },
-              { text: 'Quick start (Next.js)', link: '/guide/quick-start-nextjs' },
+              { text: 'Live demo (playground)', link: '/guide/playground' },
+              { text: 'Examples', link: '/guide/examples' },
+              { text: 'Features', link: '/guide/features' },
+            ],
+          },
+          {
+            text: 'Guides',
+            collapsed: false,
+            items: [
               { text: 'Without React (web component)', link: '/guide/web-component' },
-              { text: 'Merchant fiat destination', link: '/guide/merchant-destination' },
+              { text: 'Webhooks to your backend', link: '/guide/webhooks' },
               { text: 'Withdrawals', link: '/guide/withdraw' },
+              { text: 'Merchant fiat destination', link: '/guide/merchant-destination' },
               { text: 'Solana', link: '/guide/solana' },
               { text: 'Theming', link: '/guide/theming' },
-              { text: 'Webhooks to your backend', link: '/guide/webhooks' },
               { text: 'Agents (MCP)', link: '/guide/agents' },
               { text: 'Testing with mocks', link: '/guide/testing' },
               { text: 'Security', link: '/guide/security' },
-              { text: 'Examples', link: '/guide/examples' },
-              { text: 'Live demo (playground)', link: '/guide/playground' },
+              { text: 'Contributing', link: 'https://github.com/yosriady/openrampkit/blob/main/CONTRIBUTING.md' },
             ],
           },
           {
@@ -106,11 +114,11 @@ export default withMermaid(
             collapsed: true,
             items: [
               { text: 'Cloudflare Workers', link: '/deploy/cloudflare-workers' },
-              { text: 'Host the docs and playground', link: '/deploy/docs-site' },
               { text: 'Next.js / Vercel', link: '/deploy/nextjs' },
               { text: 'Node, Bun, Deno', link: '/deploy/node' },
               { text: 'Session stores', link: '/deploy/stores' },
               { text: 'Production checklist', link: '/deploy/checklist' },
+              { text: 'Host the docs and playground', link: '/deploy/docs-site' },
             ],
           },
       ],

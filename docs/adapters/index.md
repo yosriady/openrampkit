@@ -19,6 +19,8 @@ createOpenRamp({
 })
 ```
 
+Each adapter is its own package, for example `@openrampkit/adapter-relay`. The packages are not on npm yet. See [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
+
 Each adapter id may appear once. The server refuses an adapter built for another API version.
 
 For withdrawals, three adapters have legs today: Relay (`wallet`, to any address), Swapped (`sell-*`, to cash) and Mock (`wallet` and `offramp`). See [Withdrawals](../guide/withdraw.md).

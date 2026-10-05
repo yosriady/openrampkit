@@ -21,11 +21,17 @@ pnpm add @openrampkit/mcp
 
 The package has a CLI (`openrampkit-mcp`) and a library.
 
+::: tip Not on npm yet
+`@openrampkit/mcp` is not published yet, so `npx -y @openrampkit/mcp` does not work today. Build the monorepo (`pnpm install && pnpm build`) and run the CLI with `node /absolute/path/to/openrampkit/packages/mcp/dist/cli.js` in place of `npx -y @openrampkit/mcp`. See [Try it before the npm release](./installation.md#try-it-before-the-npm-release).
+:::
+
 ## Prepare the OpenRampKit server
 
 The MCP server creates sessions with `POST {baseUrl}/sessions`. Your OpenRampKit server must have an `authorize` hook that checks an app key:
 
 ```ts
+import { createOpenRamp, type CreateSessionInput } from '@openrampkit/server'
+
 createOpenRamp({
   // ...
   authorize: async (req, body) => {
@@ -120,7 +126,16 @@ claude mcp add openrampkit \
 MCP_HTTP_TOKEN=a-long-random-token npx @openrampkit/mcp --http --port 3333
 ```
 
-Clients connect to `http://localhost:3333/mcp`. Each request must have `Authorization: Bearer <MCP_HTTP_TOKEN>`. The CLI does not start without the token.
+Clients connect to `http://localhost:3333/mcp`. Each request must have `Authorization: Bearer <MCP_HTTP_TOKEN>`. The CLI does not start without the token. The token must have at least 16 characters. `--port` (or `PORT`) sets the port. The default is `3333`.
+
+The CLI reads these environment variables:
+
+| Variable | Description |
+|---|---|
+| `OPENRAMP_URL` | The `baseUrl` of your OpenRampKit server. It can also be `baseUrl` in the config file. |
+| `OPENRAMP_APP_KEY` | The key that your `authorize` hook checks (header `x-app-key`). |
+| `OPENRAMP_MCP_CONFIG` | The path to the JSON file with the guardrails. `--config <path>` also works. |
+| `MCP_HTTP_TOKEN` | With `--http` only: the bearer token that clients send. |
 
 On Cloudflare Workers, Deno or Bun, use the web-standard handler:
 
@@ -139,12 +154,12 @@ All results are compact JSON. An error result has `isError: true` and `{ "error"
 
 | Tool | Input | Result |
 |---|---|---|
-| `list_payment_methods` | `country`, `direction`, `destination?` (only with more than one destination) | The methods in that country: `method`, `name`, `available`, `eta`, `limits` |
-| `get_quotes` | `country`, `amount`, `method?`, `direction`, `destination?` (only with more than one destination) | Quotes: `pay`, `receive`, `fees`, `eta`. Without `method`, it quotes up to 3 cash methods. |
+| `list_payment_methods` | `country`, `direction?` (`deposit` or `withdraw`, default `deposit`), `destination?` (only with more than one destination) | The methods in that country: `method`, `name`, `kind`, `available`, `reason` (when not available), `eta`, `limits`, `providers` |
+| `get_quotes` | `country`, `amount`, `method?`, `direction?`, `destination?` (only with more than one destination) | Quotes: `pay`, `receive`, `fees`, `eta`. Without `method`, it quotes up to 3 cash methods. |
 | `create_deposit_session` | `country`, `destination?`, `custom_destination?` (only with `allowCustomAddress`), `currency?`, `max_amount?`, `min_amount?`, `method?`, `amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next`. With `method` and `amount`: also `payment` (for example a VietQR `qr_payload`). |
-| `create_withdraw_session` | `country`, `amount?`, `max_amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `bounds`, `next` |
-| `get_session_status` | `session_id` | `status`, `state`, `done`, `paid`, `received`, `tx_hashes`, `error` |
-| `wait_for_completion` | `session_id`, `timeout_seconds` (default 60, capped by `maxWaitSeconds`) | Like `get_session_status`. `timed_out: true` when the payment did not finish in time. |
+| `create_withdraw_session` | `country`, `amount?`, `max_amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next` |
+| `get_session_status` | `session_id` | `status`, `state`, `done`, `expires_at`. When there is a result: `method`, `provider`, `paid`, `received`, `received_confirmed`, `tx_hashes`. Also `bounds` and `error` when set. |
+| `wait_for_completion` | `session_id`, `timeout_seconds` (default 60, capped by `maxWaitSeconds`) | Like `get_session_status`, plus `waited_seconds`. `timed_out: true` when the payment did not finish in time. |
 
 `list_payment_methods` and `get_quotes` use a short preview session (10 minutes) on your server. They do not move money.
 
@@ -190,7 +205,7 @@ The pay link opens a page on your OpenRampKit server: `GET {baseUrl}/pay/{sessio
 
 Make a link from your backend with `openramp.sessions.payLink(id)`, or over HTTP with `POST {baseUrl}/sessions/:id/pay-link`. See [HTTP routes](../api/http.md#post-sessions-id-pay-link).
 
-By default, the page loads `@openrampkit/web` from `https://esm.sh`. To serve the script yourself, set `payPage.scriptUrl`:
+By default, the page loads `@openrampkit/web` from `https://esm.sh/@openrampkit/web@0`. To serve the script yourself, set `payPage.scriptUrl`:
 
 ```ts
 createOpenRamp({
@@ -200,6 +215,10 @@ createOpenRamp({
 ```
 
 Set `payPage: false` to turn off the pay page and the pay-link route.
+
+::: warning Until the npm release
+The default script URL works only after `@openrampkit/web` is on npm. Until then, serve a bundle of `@openrampkit/web` yourself and set `payPage.scriptUrl` to it. [`examples/agent`](https://github.com/yosriady/openrampkit/tree/main/examples/agent) does this: it serves `/openramp-web.js` from the local build.
+:::
 
 ## Library
 
@@ -243,3 +262,5 @@ cd examples/agent
 node agent.mjs           # a script plays the person
 node agent.mjs --serve   # you open the pay link in a browser
 ```
+
+With `--serve`, the server listens on `http://localhost:8788`. To open the pay link on a phone on the same network, set `PUBLIC_URL=http://<your-computer-ip>:8788`.

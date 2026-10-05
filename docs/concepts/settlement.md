@@ -51,7 +51,7 @@ This example deposits the payment into an ERC-4626 vault for the recipient:
 destination: {
   type: 'crypto',
   chain: 'eip155:421614',
-  token: USDC,
+  token: TOKEN, // the ERC-20 token address
   address: recipient,
   settlement: { contract: SETTLEMENT },
   calls: [{ to: VAULT, data: encodeFunctionData({ abi: erc4626Abi, functionName: 'deposit', args: [amount, recipient] }) }],
@@ -87,9 +87,9 @@ Today these legs have this capability:
 The [playground](../guide/playground.md#testnet-mode-real-wallet) has a testnet mode. Your browser wallet pays a session on Arbitrum Sepolia, Robinhood Chain Testnet or Tempo Testnet. It uses test tokens with no value.
 
 1. Open the playground. Set **Mode** to **Testnet (real wallet)**.
-2. Connect your wallet. Mint the free test token, or get Circle test USDC from the [Circle faucet](https://faucet.circle.com/).
+2. Select the network and connect your wallet. Mint the free test token. You can also use Circle test USDC from the [Circle faucet](https://faucet.circle.com/) on Arbitrum Sepolia, or AlphaUSD from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet) on Tempo Testnet.
 3. Pay with **Pay with wallet**. Your wallet sends `approve` and `settle`.
-4. The server checks the session with `verifySettlement`. The page links to the transaction on Arbiscan and Blockscout.
+4. The server checks the session with `verifySettlement`. The page links to the transaction on the explorers of the network (for example Arbiscan and Blockscout on Arbitrum Sepolia).
 
 Select **Deposit into vault** to run a destination call. The contract deposits the test token into the test ERC-4626 vault, in the same transaction.
 
@@ -103,7 +103,7 @@ mockAdapter({
 })
 ```
 
-To run the same path from Node with a testnet key, use `pnpm testnet:settle` ([`scripts/testnet-settle.mjs`](https://github.com/yosriady/openrampkit/blob/main/scripts/testnet-settle.mjs)). It pays 5 Circle test USDC for a new session id. It prints the transaction and the result of `verifySettlement`.
+To run the same path from Node with a testnet key, use `pnpm testnet:settle` ([`scripts/testnet-settle.mjs`](https://github.com/yosriady/openrampkit/blob/main/scripts/testnet-settle.mjs)). It pays 5 Circle test USDC on Arbitrum Sepolia for a new session id. It prints the transaction and the result of `verifySettlement`. `NETWORK=tempo-testnet pnpm testnet:settle` pays 5 AlphaUSD on Tempo Testnet. The script reads `DEPLOYER_PRIVATE_KEY` from the environment or from `contracts/.env`. It never prints the key.
 
 ## Signed intents
 
@@ -146,7 +146,7 @@ const r = await verifySettlement({
   rpcUrl: 'https://sepolia-rollup.arbitrum.io/rpc',
   contract: SETTLEMENT,
   sessionId: session.id,
-  expect: { token: USDC, recipient, minAmount: 25_000_000n },
+  expect: { token: TOKEN, recipient, minAmount: 25_000_000n },
 })
 if (r.settled && r.ok) {
   // r.record has payer, amount, txHash, blockNumber, callsHash

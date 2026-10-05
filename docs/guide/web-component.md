@@ -10,7 +10,7 @@ Both need a server (see [Quick start](./quick-start-nextjs.md) steps 3 to 5, or 
 ## openDeposit()
 
 ```ts
-import { openDeposit, lightTheme } from '@openrampkit/web'
+import { openDeposit, lightTheme, type OrkError } from '@openrampkit/web'
 
 const handle = openDeposit({
   baseUrl: '/api/openramp',
@@ -27,9 +27,10 @@ const handle = openDeposit({
 try {
   const session = await handle.done
   console.log('deposit complete', session.id)
-} catch (error) {
+} catch (err) {
   // An OrkError. `code` is 'CLOSED' when the user closed the modal before completion,
   // or the step's error code when the payment failed.
+  const error = err as OrkError
   console.log(error.code, error.message)
 }
 ```

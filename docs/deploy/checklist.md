@@ -9,7 +9,7 @@ Go through this list before real money moves.
 - [ ] `tasksToken` (if you use `POST /tasks/sweep` or `GET /health?deep=1`) is another random value. `CRON_SECRET` on Vercel too.
 - [ ] Provider keys are server-side only. No adapter or server import reaches your client bundle.
 - [ ] You use live provider keys in production and sandbox keys elsewhere. Set `livemode: true` in production, so events carry `livemode` and adapters such as Coinbase leave sandbox mode.
-- [ ] You know how to rotate each secret. Rotating `secret` breaks start URLs made in the last 10 minutes; rotating `webhooks.secret` needs your backend updated at the same time.
+- [ ] You know how to rotate each secret. Rotating `secret` breaks start URLs made in the last 10 minutes and every open pay link; rotating `webhooks.secret` needs your backend updated at the same time.
 
 ## Sessions
 

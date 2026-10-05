@@ -146,6 +146,14 @@ Plain JSON-RPC over `fetch`. No viem.
 | `ERC20_TRANSFER_TOPIC`, `topicAddress(address)` | The `Transfer` event topic, and an address as a 32-byte topic, for `eth_getLogs` filters |
 | `EvmReceipt` | The receipt fields the helpers read (`status`, `blockNumber`, `logs`) |
 
+## Solana helpers
+
+| Export | Description |
+|---|---|
+| `solanaPaidTo(tx, owner, mint)` | The amount (base units, `bigint`) that the transfer instructions of a parsed transaction (`getTransaction` with `jsonParsed`) send to `owner`. With `mint: 'native'`, it counts System Program transfers in lamports. With an SPL mint, it counts SPL Token and Token-2022 `transfer` and `transferChecked` instructions into a token account of `owner`. A failed transaction gives `0n`. |
+
+Types: `SolanaParsedTx`, `SolanaParsedInstruction`, `SolanaTokenBalance`, `SolanaSignatureStatus`.
+
 ## Settlement helpers
 
 Helpers for the `OpenRampSettlement` contract. See [On-chain settlement](../concepts/settlement.md) and the [settlement flow](../concepts/flows.md#on-chain-settlement).

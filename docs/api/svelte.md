@@ -69,6 +69,7 @@ To keep the theme live with runes, call `update` in an effect:
 
 ```svelte
 <script>
+  import { setOpenRamp, lightTheme, darkTheme } from '@openrampkit/svelte'
   const ramp = setOpenRamp({ baseUrl: '/api/openramp' })
   let dark = $state(false)
   $effect(() => ramp.update({ theme: dark ? darkTheme() : lightTheme() }))

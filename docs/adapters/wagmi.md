@@ -42,6 +42,8 @@ pnpm add @openrampkit/wagmi
 # peers: @wagmi/core ^2, viem ^2 (already in any wagmi app)
 ```
 
+The packages are not on npm yet. See [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
+
 ```tsx
 'use client'
 import { useAccount } from 'wagmi'

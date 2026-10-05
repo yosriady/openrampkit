@@ -74,7 +74,7 @@ The options are in the URL. Copy the URL to share a setup, for example `/playgro
 4. Select **Simulate payment (test mode)**.
 5. After a few seconds, the widget shows **Deposit complete**. The log shows the `session.completed` webhook.
 
-The page has a mock wallet with 40 USDC on Base. Use it for **Pay with wallet** and for withdrawals.
+The page has a mock wallet with 250 USDC on Arbitrum and 40 USDC on Base. Use it for **Pay with wallet** and for withdrawals.
 
 ## Try a card deposit
 
@@ -94,14 +94,14 @@ The static page cannot serve the hosted checkout page of the mock. Thus, the moc
 
 ## Testnet mode (real wallet)
 
-Set **Mode** to **Testnet (real wallet)**. The banner changes to "Testnet: real transactions on Arbitrum Sepolia, test tokens with no value."
+Set **Mode** to **Testnet (real wallet)**. The banner names the network, for example "Testnet: real transactions on Arbitrum Sepolia, test tokens with no value."
 
 In this mode, your own wallet pays a session through the [OpenRampSettlement contract](../concepts/settlement.md). The transactions are real. The tokens have no value.
 
 You need these items:
 
 - A browser wallet, for example MetaMask or Rabby (any EIP-1193 wallet).
-- A small amount of test ETH for gas on the network. Tempo Testnet has no gas token: you pay fees in pathUSD. Get pathUSD (and AlphaUSD) from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet).
+- A small amount of test ETH for gas on Arbitrum Sepolia or Robinhood Chain Testnet. Tempo Testnet has no gas token: you pay fees in pathUSD. Get pathUSD (and AlphaUSD) from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet).
 - Test tokens. The page can mint them for you.
 
 ### Steps
@@ -110,14 +110,14 @@ You need these items:
 2. Select the **Token**:
    - **Test token (free, mint in one click)**. Select **Mint 100 tUSDC**. Your wallet sends one `mint` transaction.
    - **Circle test USDC** (Arbitrum Sepolia only). Get it from the [Circle faucet](https://faucet.circle.com/).
-   - **AlphaUSD** (Tempo Testnet only). A TIP-20 test stablecoin. Get it from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet).
+   - **AlphaUSD (TIP-20, Tempo faucet)** (Tempo Testnet only). A TIP-20 test stablecoin. Get it from the [Tempo faucet](https://docs.tempo.xyz/quickstart/faucet).
 3. Select the **Destination**:
    - **Plain settlement**. The contract sends the tokens to the recipient.
-   - **Deposit into vault** (test token only). The contract deposits the tokens into a test ERC-4626 vault for the recipient, in the same transaction. The vault call has a fixed amount, so enter the same amount in the widget.
-4. Select **Connect wallet**. If your wallet is on another network, select **Switch to Arbitrum Sepolia**.
+   - **Deposit into vault** (test token only). The contract deposits the tokens into a test ERC-4626 vault for the recipient, in the same transaction. The vault call has a fixed amount. Set it in **Vault amount** (default 5), and enter the same amount in the widget.
+4. Select **Connect wallet**. If your wallet is on another network, select **Switch to** and the network name (for example **Switch to Arbitrum Sepolia**).
 5. In the widget, select **Pay with wallet**. Enter an amount, then select **Continue** and **Confirm**.
 6. Select **Confirm in wallet**. Your wallet asks you to sign two transactions: `approve` on the token, then `settle` on the contract.
-7. The server reads the contract over the public RPC and checks the session with `verifySettlement`. Then the widget shows **Deposit complete**. The page shows links to the transaction on the explorers of the network (Arbiscan and Blockscout on Arbitrum Sepolia).
+7. The server reads the contract over the public RPC and checks the session with `verifySettlement`. Then the widget shows **Deposit complete**. The page shows links to the transaction on the explorers of the network: Arbiscan and Blockscout on Arbitrum Sepolia, Blockscout on Robinhood Chain Testnet, and Tempo Explorer on Tempo Testnet.
 
 The recipient is your connected wallet. Thus, a plain settlement sends the tokens back to you, and a vault deposit gives you vault shares.
 
@@ -130,13 +130,21 @@ await openramp.sessions.create({
   userId: user.id,
   destination: {
     type: 'crypto',
-    chain: 'eip155:421614', // Arbitrum Sepolia
-    token: TOKEN,
+    chain: 'eip155:421614', // Arbitrum Sepolia (Robinhood Chain Testnet: eip155:46630, Tempo Testnet: eip155:42431)
+    token: TOKEN, // the token that you selected
     address: user.address,
     settlement: { contract: '0xBF66696115128B8f9f794780061348b4213A7132' },
   },
 })
 ```
+
+Each network uses the same contract address. The test token `tUSDC` (`0x9A38C55160186C3E1e770e193fA96997e60ed425`) and the test vault (`0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801`) also have the same address on each network.
+
+| Network | Chain id | RPC | Tokens |
+|---|---|---|---|
+| Arbitrum Sepolia | `eip155:421614` | `https://sepolia-rollup.arbitrum.io/rpc` | tUSDC, Circle test USDC (`0x75faf114eafb1BDbe2F0316DF893fd58CE46AA4d`) |
+| Robinhood Chain Testnet | `eip155:46630` | `https://rpc.testnet.chain.robinhood.com` | tUSDC |
+| Tempo Testnet | `eip155:42431` | `https://rpc.moderato.tempo.xyz` | tUSDC, AlphaUSD (`0x20c0000000000000000000000000000000000001`) |
 
 The wallet leg is the `localChain` leg of `@openrampkit/adapter-mock`. With a destination `settlement`, the leg asks for `approve` and `settle` (from `buildSettlementTxs`). It completes only when `verifySettlement` finds a receipt for the session id that pays the quoted amount. The leg does not call Relay or any other API. It reads the chain only.
 
@@ -210,8 +218,10 @@ To run the same flow from Node with a local devnet key, see [Solana devnet from 
 ```bash
 pnpm install
 pnpm build
-pnpm --filter playground dev   # http://localhost:5175/playground/
+pnpm playground:dev   # http://localhost:5175/playground/
 ```
+
+`pnpm playground:build` writes the static files to `examples/playground/dist`.
 
 The source is in [`examples/playground`](https://github.com/yosriady/openrampkit/tree/main/examples/playground). The server setup is in `src/server.ts`. Testnet mode is in `src/testnet/`.
 

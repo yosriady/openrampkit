@@ -17,12 +17,27 @@ The `DOCS_BASE` environment variable sets the public path of the site. The docs 
 
 | Host | `DOCS_BASE` |
 |---|---|
+| Vercel (the public site, `https://openrampkit-getformo.vercel.app`) | Do not set it (the default is `/`) |
+| Custom domain, or Cloudflare Pages | Do not set it |
 | GitHub Pages project site (`https://yosriady.github.io/openrampkit/`) | `/openrampkit/` |
-| Custom domain, or Cloudflare Pages | Do not set it (the default is `/`) |
 
 ```bash
 DOCS_BASE=/openrampkit/ pnpm site:build
 ```
+
+## Vercel
+
+The public site at [openrampkit-getformo.vercel.app](https://openrampkit-getformo.vercel.app) runs on Vercel.
+
+1. Import the repository as a new Vercel project.
+2. Set **Framework Preset** to **Other**.
+3. Set **Build Command** to `pnpm site:build`.
+4. Set **Output Directory** to `docs/.vitepress/dist`.
+5. Do not set `DOCS_BASE`.
+
+The `vercel.json` file at the repository root sets `cleanUrls: true`. Then `/guide/why` serves `guide/why.html`, as the docs links expect.
+
+Vercel deploys each push to `main`. Commits must be signed.
 
 ## GitHub Pages
 

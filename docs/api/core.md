@@ -116,6 +116,7 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 |---|---|
 | `METHODS` | Built-in method vocabulary: `{ id, name, kind }` with kind `card`, `wallet_pay`, `bank`, `qr`, `ewallet`, `crypto` or `exchange` |
 | `methodName(id)` | Display name, or the id title-cased |
+| `ADDRESS_TRANSFER_METHODS`, `isAddressTransfer(method)` | The methods where the user sends crypto to a deposit address: `transfer` and `exchange_transfer` |
 | `METHOD_COUNTRIES`, `methodAvailableIn(method, country)` | Where local methods exist |
 | `DEFAULT_METHOD_PRIORITY` | Default method order per country |
 | `COUNTRY_CURRENCY`, `currencyForCountry(country)` | Local currency (USD when unknown) |
@@ -128,6 +129,7 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 | `SOLANA_USDC_MINT`, `SOLANA_DEVNET_USDC_MINT`, `TEMPO_USDC`, `TEMPO_PATH_USD` | Token addresses |
 | `normalizeToken(chain, token)`, `sameToken(chain, a, b)` | EVM addresses lowercased, Solana mints as given |
 | `isSolanaAddress`, `isSolanaSignature` | Format checks (base58) |
+| `SOLANA_NATIVE_DECIMALS`, `SOLANA_SYSTEM_PROGRAM`, `SPL_TOKEN_PROGRAM`, `SPL_TOKEN_2022_PROGRAM`, `SPL_ASSOCIATED_TOKEN_PROGRAM` | Solana constants: SOL has 9 decimals; the program ids of the System, SPL Token, Token-2022 and Associated Token programs |
 | `toSplAmount(value, decimals)`, `fromSplAmount(base, decimals)`, `lamportsToSol`, `solToLamports` | SPL amounts. `toSplAmount` is strict: it refuses extra decimals, negative values and values above u64. |
 | `isSolanaTx(tx)`, `isEvmTx(tx)` | Tell `TxRequest` kinds apart |
 | `combineWallets(...wallets)`, `accountFor(accounts, chain)`, `chainNamespace(chain)` | Join an EVM and a Solana wallet adapter; pick the account of a chain |

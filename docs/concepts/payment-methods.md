@@ -62,7 +62,46 @@ Adapters with a live catalog (Transak, Meld, Onramper, Swapped, Coinbase, MoonPa
 | IMPS | `imps` | IN | Meld, Onramper | |
 | PayID | `payid` | AU | Meld | |
 
-For Southeast Asia (VietQR, QRIS, PromptPay, QR Ph, PayNow, GCash and more), see the [README](https://github.com/yosriady/openrampkit#payment-methods).
+
+## Southeast Asia
+
+Xendit pays into your own merchant account (a [merchant fiat destination](../guide/merchant-destination.md)). The other adapters buy crypto.
+
+| Method | Code | Regions | Adapters | Notes |
+|---|---|---|---|---|
+| VietQR | `vietqr` | VN | Swapped | |
+| MoMo | `momo` | VN | Swapped, Xendit | Not the same as `mobile_money` |
+| ZaloPay | `zalopay` | VN | Swapped, Xendit | |
+| QRIS | `qris` | ID | Xendit | |
+| GoPay | `gopay` | ID | Swapped | |
+| DANA | `dana` | ID | Swapped, Xendit | |
+| OVO | `ovo` | ID | Swapped, Xendit | |
+| LinkAja | `linkaja` | ID | None yet | The code exists for the planner and the UI |
+| ShopeePay | `shopeepay` | ID, MY, PH, TH, VN, SG | Transak, Xendit | |
+| QR Ph | `qrph` | PH | Xendit | |
+| GCash | `gcash` | PH | Swapped, Transak, Xendit | |
+| Maya | `maya` | PH | Swapped, Transak, Xendit | |
+| InstaPay | `instapay` | PH | None yet | |
+| GrabPay | `grabpay` | MY, SG, PH | Swapped, Transak, Xendit | |
+| PromptPay | `promptpay` | TH | Swapped, Xendit | |
+| TrueMoney | `truemoney` | TH | Xendit | |
+| DuitNow QR | `duitnow` | MY | Mock only today | |
+| Touch 'n Go | `touchngo` | MY | Swapped, Xendit | |
+| FPX | `fpx` | MY | None yet | |
+| PayNow | `paynow` | SG | Xendit | |
+
+The [mock adapter](../adapters/mock.md) also has VietQR, QRIS, GoPay, DANA, QR Ph, GCash, PromptPay, DuitNow, Touch 'n Go, PayNow and MoMo, so you can try these flows without an account.
+
+## Crypto and exchange methods
+
+| Method | Code | Adapters | Notes |
+|---|---|---|---|
+| Pay with wallet | `wallet` | Relay | The user signs a `WALLET_TX` in a connected wallet |
+| Transfer crypto | `transfer` | Relay | The user sends to a deposit address |
+| From an exchange | `exchange_transfer` | Mock | A deposit address, with exchange wording |
+| Connect exchange | `exchange` | None yet | Reserved for a "connect your exchange account" flow |
+| Binance Pay | `binance_pay` | Meld (catalog) | |
+| Bank transfer | `bank_transfer` | Swapped, Transak, Meld, Onramper | A local bank transfer in the user's currency |
 
 ## Africa
 
@@ -73,7 +112,21 @@ For Southeast Asia (VietQR, QRIS, PromptPay, QR Ph, PayNow, GCash and more), see
 
 ## Local currencies
 
-These countries use their local currency for quotes, so that the local methods can match: PL (PLN), CO (COP), CL (CLP), GH (GHS), UG (UGX), TZ (TZS), ZM (ZMW), RW (RWF), and every euro country (EUR). An adapter that does not accept the currency gives no legs in that country.
+`COUNTRY_CURRENCY` gives the local currency of these countries. Quotes use it, so that the local methods can match:
+
+| Region | Countries (currency) |
+|---|---|
+| Southeast Asia | VN (VND), ID (IDR), TH (THB), MY (MYR), PH (PHP), SG (SGD) |
+| Rest of Asia Pacific | IN (INR), AU (AUD), JP (JPY), KR (KRW), HK (HKD), TW (TWD) |
+| Americas | US (USD), CA (CAD), MX (MXN), BR (BRL), CO (COP), CL (CLP) |
+| Europe | GB (GBP), CH (CHF), PL (PLN), TR (TRY), and every euro country (EUR) |
+| Africa | NG (NGN), KE (KES), GH (GHS), UG (UGX), TZ (TZS), ZM (ZMW), RW (RWF) |
+
+Other countries use USD. An adapter that does not accept the currency gives no legs in that country.
+
+## Default order per country
+
+`DEFAULT_METHOD_PRIORITY` puts the most used methods of each country first. [Pathways and legs](./pathways.md#grouping) has the full table. Change it per app with `policy.methodPriority` in `createOpenRamp`.
 
 ## Methods we did not add
 

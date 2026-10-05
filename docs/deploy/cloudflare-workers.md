@@ -10,6 +10,34 @@ Browser --(client secret)--> Worker (OpenRampKit) <--(x-app-key)-- Your backend
                                    +--> signed webhooks --> Your backend
 ```
 
+## Try the example locally
+
+The example runs with the mock adapter. You need no Cloudflare account and no provider key.
+
+```bash
+git clone https://github.com/yosriady/openrampkit
+cd openrampkit
+pnpm install
+pnpm build
+cd examples/cloudflare-worker
+cp .dev.vars.example .dev.vars   # sets OPENRAMP_SECRET, APP_API_KEY=dev-app-key and MOCK=1
+pnpm dev                         # wrangler dev on http://localhost:8787
+```
+
+In a second terminal, check the Worker and create a session as your backend would:
+
+```bash
+curl http://localhost:8787/health
+# {"ok":true,"adapters":["mock"]}
+
+curl -X POST http://localhost:8787/sessions \
+  -H 'x-app-key: dev-app-key' -H 'content-type: application/json' \
+  -d '{"userId":"u1","country":"VN","destination":{"type":"crypto","chain":"eip155:8453","token":"0x833589fcd6edb6e08f4c7c32d4f71b54bda02913","address":"0x000000000000000000000000000000000000beef"}}'
+# {"id":"ors_...","clientSecret":"ors_....","expiresAt":"..."}
+```
+
+`MOCK=1` uses `mockAdapter({ crypto: true, bridge: true })`. Without it, the Worker uses Relay and the mock adapter. The packages are not on npm yet; see [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
+
 ## The Worker
 
 ```ts
@@ -64,6 +92,8 @@ export default {
 
 Creating the instance per request is cheap. All state lives in the store, so there is nothing to keep between requests.
 
+This is the example without its `MOCK` switch. Set `RELAY_API_KEY` in production. Without a key, deposit-address status checks use Relay's deprecated `/requests/v2`, which Relay retires on 2026-11-24. See [Relay](../adapters/relay.md).
+
 ## wrangler.toml
 
 ```toml
@@ -90,6 +120,8 @@ ALLOWED_ORIGINS = "https://app.example.com"
 ```
 
 Nothing else to create: Wrangler creates the Durable Object class on the first deploy.
+
+The example's `wrangler.toml` sets `PUBLIC_URL = "http://localhost:8787"` and `ALLOWED_ORIGINS = "http://localhost:3000"` for local development. Before you deploy, set them to the Worker's public URL and your app's origins (comma-separated). Then run `pnpm deploy` (`wrangler deploy`).
 
 ## Secrets
 
@@ -137,7 +169,7 @@ The `[triggers]` block runs the Worker's `scheduled()` handler every minute. It 
 - asks providers for the status of open payments (Relay legs have no provider webhooks, so they settle only through status checks after the user leaves),
 - expires idle sessions and sends `session.expired`.
 
-The cron needs no token: Cloudflare calls `scheduled()` directly. Check the runs in the Worker's logs (`openramp sweep {...}`), or with `npx wrangler tail`. To test it locally, run `npx wrangler dev --test-scheduled` and open `/__scheduled`.
+The cron needs no token: Cloudflare calls `scheduled()` directly. Check the runs in the Worker's logs (`openramp sweep {...}`), or with `npx wrangler tail`. `wrangler dev` does not run crons by itself. To test the sweep locally, call `curl http://localhost:8787/cdn-cgi/local/scheduled` while `pnpm dev` runs (Wrangler 4).
 
 If you prefer HTTP (for example an external scheduler), set `tasksToken` and call `POST {PUBLIC_URL}/tasks/sweep` with `Authorization: Bearer {tasksToken}`. See [HTTP routes](../api/http.md#post-tasks-sweep).
 

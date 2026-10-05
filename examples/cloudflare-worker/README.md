@@ -2,9 +2,14 @@
 
 The OpenRampKit server uses only web standards (`Request`, `Response`, WebCrypto), so it runs on Workers as is.
 
+From the repository root, build the packages first:
+
 ```bash
-cp .dev.vars.example .dev.vars
-pnpm dev                      # wrangler dev on http://localhost:8787
+pnpm install
+pnpm build
+cd examples/cloudflare-worker
+cp .dev.vars.example .dev.vars   # MOCK=1 uses the mock adapter: no money moves
+pnpm dev                         # wrangler dev on http://localhost:8787
 
 # App backend: create a session (only your backend knows APP_API_KEY)
 curl -X POST http://localhost:8787/sessions -H 'x-app-key: dev-app-key' -H 'content-type: application/json' \
@@ -15,3 +20,5 @@ curl -X POST http://localhost:8787/sessions -H 'x-app-key: dev-app-key' -H 'cont
 Give `clientSecret` to the browser and point the widget at this worker (`baseUrl: 'http://localhost:8787'`).
 
 Storage: `durableObjectStore` uses a Durable Object (built into Workers, strongly consistent). No extra service is needed.
+
+A Cron Trigger in `wrangler.toml` calls `sweep()` every minute. Read the full guide: [Deploy on Cloudflare Workers](https://openrampkit-getformo.vercel.app/deploy/cloudflare-workers).

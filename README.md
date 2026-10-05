@@ -28,7 +28,7 @@ Solving the onboarding chasm of getting billions of users onchain.
 OpenRampKit gives your app one deposit and withdraw modal, a server that you host, and provider adapters that anyone can write. Withdrawals are supported too. Local payment methods are first class: VietQR, QRIS, PromptPay, QR Ph, PayNow and GCash sit next to cards, Pix, UPI, SEPA Instant, Faster Payments, iDEAL, BLIK, SPEI, PSE, Interac and M-Pesa.
 
 > [!NOTE]
-> **Status: prototype.** Packages are at `0.0.1` and APIs will change. The [live demo](https://openrampkit-getformo.vercel.app/playground/) uses mock providers and moves no real money.
+> **Status: prototype.** The packages are not on npm yet (the first release will be `0.1.0`), and APIs will change. To try them today, see [Try it before the npm release](https://openrampkit-getformo.vercel.app/guide/installation#try-it-before-the-npm-release). The [live demo](https://openrampkit-getformo.vercel.app/playground/) uses mock providers and moves no real money.
 
 ## Two-minute tour
 
@@ -126,6 +126,8 @@ This example uses Next.js and the mock adapter, so you need no provider account.
 ```bash
 pnpm add @openrampkit/server @openrampkit/adapter-mock @openrampkit/react
 ```
+
+The packages are not on npm yet. Until the first release, install local tarballs or run the examples. See [Try it before the npm release](https://openrampkit-getformo.vercel.app/guide/installation#try-it-before-the-npm-release).
 
 ### 2. Create the server
 
@@ -399,6 +401,8 @@ pnpm playground:dev   # static playground, server in the browser: http://localho
 pnpm dev:example      # Next.js demo (examples/next-demo)
 pnpm test:chain       # real WALLET_TX on a local Anvil chain (needs Foundry)
 pnpm live:relay       # live Relay API check with your key (moves no money)
+pnpm testnet:settle   # one real settlement on Arbitrum Sepolia or Tempo Testnet (test tokens)
+pnpm solana:settle    # one real payment on Solana devnet (create the key with pnpm solana:key)
 pnpm --filter next-demo e2e   # Playwright browser tests
 ```
 

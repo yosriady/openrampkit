@@ -1,8 +1,8 @@
 # Quick start (Next.js)
 
-This guide adds a deposit button to a Next.js App Router app. It follows [`examples/next-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/next-demo). It uses the mock adapter first, so no provider account is needed.
+This guide adds a deposit button to a Next.js App Router app. It follows [`examples/next-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/next-demo). It uses the mock adapter first, so you need no provider account.
 
-You will create four files on the server side and one client component:
+Start from a Next.js App Router app with TypeScript, for example from `npx create-next-app@latest`. It sets the `@/*` import alias that this guide uses. Without the alias, use relative imports. You will create four files on the server side and one client component, and then render the component on a page:
 
 | File | Role |
 |---|---|
@@ -11,12 +11,17 @@ You will create four files on the server side and one client component:
 | `app/api/deposit-session/route.ts` | Your backend: creates a session for the signed-in user |
 | `app/api/hooks/route.ts` | Your backend: receives signed events and credits the user |
 | `components/Deposit.tsx` | The provider and the button |
+| `app/page.tsx` | Shows the button |
 
 ## 1. Install
 
 ```bash
 pnpm add @openrampkit/server @openrampkit/adapter-mock @openrampkit/adapter-relay @openrampkit/react
 ```
+
+::: warning Not on npm yet
+The packages are not on npm yet. See [Try it before the npm release](./installation.md#try-it-before-the-npm-release).
+:::
 
 ## 2. Environment
 
@@ -26,6 +31,8 @@ OPENRAMP_SECRET=replace-with-32-plus-random-characters-xxxxxxxx
 OPENRAMP_WEBHOOK_SECRET=replace-with-another-random-secret
 PUBLIC_URL=http://localhost:3000
 ```
+
+`OPENRAMP_SECRET` must have at least 32 characters. `OPENRAMP_WEBHOOK_SECRET` must have at least 16 characters. If a secret is too short, `createOpenRamp` throws. Use `openssl rand -hex 32` to make a strong secret.
 
 ## 3. Create the server
 
@@ -72,6 +79,8 @@ The handler strips the path part of `baseUrl` (`/api/openramp`) from each reques
 
 Your backend decides who the user is and where the money goes. The browser never sends the destination.
 
+`getUser` and `user.depositAddress` stand for your own auth and database. For a first test, you can use a fixed user: `{ id: 'demo-user', depositAddress: '0x000000000000000000000000000000000000dEaD' }`.
+
 ```ts
 // app/api/deposit-session/route.ts
 import { openramp } from '@/lib/openramp'
@@ -85,7 +94,8 @@ export async function POST(req: Request) {
 
   const session = await openramp.sessions.create({
     userId: user.id,
-    country: req.headers.get('x-vercel-ip-country') ?? undefined, // or the user's profile
+    // Vercel sets this header. On localhost it is missing, so use a test country there.
+    country: req.headers.get('x-vercel-ip-country') ?? (process.env.NODE_ENV === 'production' ? undefined : 'VN'),
     destination: {
       type: 'crypto',
       chain: 'eip155:8453', // Base
@@ -155,10 +165,21 @@ export function Deposit() {
 
 `getClientSecret` runs when the user clicks. The modal opens at once and shows a loading state while the secret loads.
 
-To render the widget inline instead of in a modal, use `OpenRampEmbedded`:
+To render the widget inline instead of in a modal, use `OpenRampEmbedded` inside the same `OpenRampProvider`. It takes a client secret, or a function that fetches one:
 
 ```tsx
-<OpenRampEmbedded clientSecret={clientSecret} onComplete={(s) => console.log(s.id)} />
+<OpenRampEmbedded clientSecret={getClientSecret} onComplete={(s) => console.log(s.id)} />
+```
+
+Render the component on a page:
+
+```tsx
+// app/page.tsx
+import { Deposit } from '@/components/Deposit'
+
+export default function Page() {
+  return <Deposit />
+}
 ```
 
 ## 8. Try it
@@ -167,7 +188,7 @@ To render the widget inline instead of in a modal, use `OpenRampEmbedded`:
 pnpm next dev
 ```
 
-Click **Deposit**. With the mock adapter you can pay by card (a mock hosted checkout opens in a new tab), by a local QR method (press "Simulate payment (test mode)"), or by transfer.
+Open `http://localhost:3000` and click **Deposit**. With the mock adapter, you can pay by card (a mock hosted checkout opens in a new tab), by a local QR method (press "Simulate payment (test mode)"), or by transfer. The local QR methods show only when the session has a country with local methods, for example `VN` (VietQR and MoMo).
 
 | Methods | Quote | QR | Complete |
 |---|---|---|---|

@@ -25,7 +25,7 @@ Strongly consistent and part of Workers. The store uses one small Durable Object
 export { OpenRampStore } from '@openrampkit/server'
 import { createOpenRamp, durableObjectStore } from '@openrampkit/server'
 
-createOpenRamp({ store: durableObjectStore(env.OPENRAMP_STORE), ... })
+createOpenRamp({ /* ... */ store: durableObjectStore(env.OPENRAMP_STORE, { sessionTtlSec: 7 * 24 * 3600 }) }) // the default TTL
 ```
 
 ```toml
@@ -127,13 +127,15 @@ Rules:
 
 - `put(rec, expectedVersion)`: when `expectedVersion` is given and a stored record exists with another `version`, throw `VersionConflictError` (exported from `@openrampkit/server`) and do not write. When `expectedVersion` is undefined (a new session), write without a check. The server increments `rec.version` before it calls `put`.
 - The server turns a `VersionConflictError` into a `409` the client can retry, and retries provider webhook events up to 3 times.
-- `kv.put` with `ttlSec` must expire the key after that many seconds. The server uses TTLs of 24 hours (idempotency replays) and 30 days (provider reference index).
+- `kv.put` with `ttlSec` must expire the key after that many seconds. The server uses these TTLs: 2 minutes (rate-limit counters), 24 hours (idempotency replays), 14 days (the webhook outbox and the open-session list) and 30 days (provider reference index). Adapters set their own TTLs. To delete an entry, the server writes `null` with a 60-second TTL.
+- `kv.get` must return `undefined` for a missing or expired key.
 - Store the record as JSON. It holds only JSON values.
 - Keep sessions for at least as long as providers may send webhooks for them (days, not minutes). The built-in stores keep them for 7 days.
 
 A Postgres example:
 
 ```ts
+import type { Sql } from 'postgres'
 import { VersionConflictError } from '@openrampkit/server'
 import type { SessionRecord, SessionStore } from '@openrampkit/server'
 

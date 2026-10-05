@@ -97,6 +97,9 @@ Run these from the repo root.
 | `pnpm site:build` | Build the docs and the playground into one site |
 | `pnpm dev:example` | Next.js demo (`examples/next-demo`) |
 | `pnpm live:relay` | Live Relay API check with your key (moves no money) |
+| `pnpm testnet:settle` | One real settlement on Arbitrum Sepolia (or `NETWORK=tempo-testnet`) with test tokens. Reads `DEPLOYER_PRIVATE_KEY` |
+| `pnpm solana:key` | Create or show the Solana devnet key of the playground (`--airdrop` asks for devnet SOL) |
+| `pnpm solana:settle` | One real payment on Solana devnet with that key |
 | `pnpm changeset` | Add a changeset |
 
 To run one test file: `pnpm vitest run packages/server/src/withdraw.test.ts`.
@@ -125,7 +128,8 @@ To ask for an adapter that you will not write yourself, use the **New adapter re
 | Kind | Where | How to run |
 |---|---|---|
 | Unit and integration | `packages/*/src/*.test.ts`, `packages/adapters/*/src/*.test.ts` | `pnpm test` |
-| Chain (Anvil) | `packages/wagmi/src/anvil.test.ts`, `packages/adapter/src/settlement.anvil.test.ts` | `pnpm test:chain` |
+| Chain (Anvil) | `packages/wagmi/src/anvil.test.ts` | `pnpm test:chain` (needs Foundry) |
+| Settlement helpers (Anvil) | `packages/adapter/src/settlement*.test.ts` | `pnpm exec vitest run packages/adapter/src/settlement` (needs Foundry and the contract submodules; it runs `forge build` itself) |
 | Contracts (Foundry) | `contracts/test/` (unit, fuzz, invariant) | `cd contracts && forge test` |
 | Browser (Next.js demo) | `examples/next-demo/e2e/` (deposit, withdraw, axe, keyboard, locales) | see below |
 | Browser (playground) | `examples/playground/e2e/` | see below |
@@ -190,6 +194,7 @@ There is no formatter config yet. Follow the style of the code around your chang
 The docs use plain, short sentences:
 
 - One idea per sentence. Use the active voice.
+- Follow ASD-STE100 Simplified Technical English: short sentences and simple, approved words.
 - Do not use em dashes or en dashes. Use a colon, a period or parentheses.
 - Use "to" for a range ("5 to 10").
 - Each new public option needs a row in the docs.

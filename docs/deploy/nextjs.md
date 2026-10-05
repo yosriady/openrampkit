@@ -42,6 +42,8 @@ export const openramp =
 
 The `globalThis` cache keeps one instance per process during `next dev`, where modules reload.
 
+This instance needs `@upstash/redis` (`pnpm add @upstash/redis`). The OpenRampKit packages are not on npm yet; see [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
+
 ## Vercel
 
 1. Add the environment variables in the Vercel project settings: `OPENRAMP_SECRET`, `OPENRAMP_WEBHOOK_SECRET`, `PUBLIC_URL`, `CRON_SECRET`, the provider keys, and the store's credentials (`UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` for `Redis.fromEnv()`).
@@ -105,6 +107,30 @@ Vercel runs cron jobs only on production deployments. How often a job can run de
 The server keeps its own list of open sessions, so you do not need to list session ids yourself.
 
 Another option: set `tasksToken` and let any scheduler call `POST {baseUrl}/tasks/sweep` with `Authorization: Bearer {tasksToken}`. It is served by the catch-all route. See [HTTP routes](../api/http.md#post-tasks-sweep).
+
+## The example
+
+[`examples/next-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/next-demo) has this layout: `lib/openramp.ts`, the catch-all route, `app/api/deposit-session`, `app/api/withdraw-session`, `app/api/hooks`, `app/api/cron` and a `vercel.json` with the cron. It uses the default memory store, so it is for local development and demos only. Add a shared store before you deploy it.
+
+```bash
+# from the repository root
+pnpm install && pnpm build
+cp examples/next-demo/.env.example examples/next-demo/.env.local
+pnpm dev:example   # http://localhost:3000
+```
+
+| Variable | Default in the example | Purpose |
+|---|---|---|
+| `OPENRAMP_SECRET` | a dev-only value | Signs start URLs. At least 32 characters. |
+| `OPENRAMP_WEBHOOK_SECRET` | a dev-only value | Signs the webhooks to `/api/hooks`. At least 16 characters. |
+| `PUBLIC_URL` | `http://localhost:3000` | Builds `baseUrl` and the webhook URL |
+| `OPENRAMP_MOCK` | `1` | `1`: mock adapter only. `0`: Relay for wallet and transfer, mock for fiat. |
+| `RELAY_API_KEY` | none | Relay status checks through `/requests/v3` |
+| `XENDIT_SECRET_KEY`, `XENDIT_WEBHOOK_TOKEN` | none | Turn on the Xendit adapter when both are set |
+| `CRON_SECRET` | none | Protects `/api/cron`. Without it, the example route is open in development and refuses every call in production. |
+| `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | none | WalletConnect in the wallet demo |
+
+Set real values for both secrets in production. The dev-only defaults are public.
 
 ## Other Next.js hosts
 

@@ -2,7 +2,7 @@
 
 OpenRampKit is an open-source kit for deposits and withdrawals. It gives your app three things:
 
-1. **A modal.** `<openramp-modal>` is a web component (Lit, Shadow DOM). It works in any framework. A thin React wrapper is included.
+1. **A modal.** `<openramp-modal>` is a web component (Lit, Shadow DOM). It works in any framework. Thin wrappers for React, Vue, Svelte and Solid are included.
 2. **A server you host.** `@openrampkit/server` is a single `Request -> Response` handler. It holds your provider secrets, plans pathways, runs legs, takes provider webhooks and sends signed webhooks to your backend.
 3. **Adapters.** Each payment or crypto provider is an adapter, like a wagmi connector. You pass configured adapters to the server. Anyone can write one with `createAdapter()` and test it with the conformance kit.
 
@@ -13,6 +13,27 @@ A deposit goes to a **destination** that your backend picks: a token on a chain 
 ::: warning Prototype
 OpenRampKit is an early release. APIs can change before 1.0.
 :::
+
+## Concepts in 2 minutes
+
+Learn these words first. The rest of the docs use them.
+
+| Word | Meaning |
+|---|---|
+| **Session** | One deposit or one withdrawal for one user. Your backend creates it. It expires after 30 minutes by default. |
+| **Client secret** | A token for one session. The browser gets it from your backend and sends it to the server. It is the only credential in the browser. |
+| **Destination** | Where a deposit goes: a token at an address on a chain, or your own fiat merchant account. Your backend sets it. |
+| **Source** | What a withdrawal sends: an asset, and who holds it (the user's wallet or your treasury). Your backend sets it. |
+| **Adapter** | The code for one provider, for example Relay or Xendit. It runs on your server with your provider keys. |
+| **Method** | How the user pays, for example `card`, `vietqr` or `transfer`. The modal groups pathways by method. |
+| **Leg** | One step at one provider, for example "VietQR to USDC on Base". |
+| **Pathway** | One or two legs in a row that reach the destination. The planner builds them. |
+| **Quote** | The price of a pathway for an amount: what the user pays, the fees and what arrives. |
+| **Step and surface** | What the modal must show now. The surface is the screen part: a QR code, a redirect, a deposit address or a wallet transaction. |
+| **Webhook** | A signed event from the server to your backend, for example `session.completed`. Credit the user only from it. |
+| **Store and sweep** | The store keeps sessions (memory in dev; Durable Objects, KV or Redis in production). The sweep is a scheduled task that retries webhooks and checks open payments. |
+
+Read in this order: this page, then [Quick start (Next.js)](./quick-start-nextjs.md), then [Sessions and security](../concepts/sessions.md) and [Pathways and legs](../concepts/pathways.md). Or [try the live demo](/playground/){target="_self"} first. It needs no setup.
 
 ## When to use it
 
