@@ -91,7 +91,8 @@ These methods serve withdraw sessions:
 
 | Method | Description |
 |---|---|
-| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedTargets.crypto` is set, `'cash'` ("To cash") when `allowedTargets.fiat` is set, both without `allowedTargets`. With no tab, `start()` shows `TARGET_NOT_ALLOWED`. |
+| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedTargets.crypto` is set, `'cash'` ("To cash") when `allowedTargets.fiat` is set, both without `allowedTargets`. With no tab, `start()` shows `TARGET_NOT_ALLOWED`. A locked target gives one tab. |
+| `lockedTarget()` | The target that the app set and locked (`session.targetLocked`), else `undefined`. With a locked target, `start()` does not show the target screen and never calls `/target`. It gets the plan with `/plan` and shows the methods (or the amount screen when one wallet method is available). `setTab()` keeps the tab of the locked target, and `back()` from the amount screen goes to the methods. See [Locked targets](../guide/withdraw.md#locked-targets). |
 | `withdrawChains()` | The networks for "To wallet": `allowedTargets.crypto.chains`, else every chain with a known USDC address plus the source chain |
 | `targetTokens(chain?)` | Token choices for a chain: USDC when known, the native token, and the source token on the source chain |
 | `setTargetChain(chain)` | Picks a network. The token becomes the source token on the source chain, else USDC, else native. The native token stays native. |

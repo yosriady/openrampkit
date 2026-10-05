@@ -215,10 +215,13 @@ export class RampController {
   }
 
   setTab(tab: Tab) {
+    const locked = this.lockedTarget()
+    if (locked) tab = locked.type === 'crypto' ? 'crypto' : 'cash'
     this.set({ tab })
     if (this.snap.direction !== 'withdraw' || !this.snap.session) return
     this.set({ error: undefined, method: undefined, quotes: [], quoteErrors: [], selectedQuoteId: undefined })
-    if (tab === 'crypto') {
+    if (locked) void this.loadLockedPlan()
+    else if (tab === 'crypto') {
       this.targetSeq++ // drop a cash plan that is still loading
       this.set({ screen: 'target' })
     } else void this.loadCashMethods()
@@ -226,8 +229,20 @@ export class RampController {
 
   // ---------- withdraw ----------
 
-  /** Tabs the app allows for this withdrawal: `crypto` (To wallet) and `cash` (To cash). */
+  /**
+   * The target the app set and locked at creation (`targetLocked`), else undefined. With a locked
+   * target the controller skips the target screen and never calls `/target`.
+   */
+  lockedTarget(): Extract<NonNullable<PublicSession['destination']>, { type: 'crypto' | 'fiat' }> | undefined {
+    const s = this.snap.session
+    const d = s?.direction === 'withdraw' && s.targetLocked ? s.destination : undefined
+    return d && (d.type === 'crypto' || d.type === 'fiat') ? d : undefined
+  }
+
+  /** Tabs the app allows for this withdrawal: `crypto` (To wallet) and `cash` (To cash). A locked target gives one tab. */
   withdrawTabs(): Tab[] {
+    const locked = this.lockedTarget()
+    if (locked) return [locked.type === 'crypto' ? 'crypto' : 'cash']
     const allowed = this.snap.session?.allowedTargets
     if (!allowed) return ['crypto', 'cash']
     return [...(allowed.crypto ? (['crypto'] as const) : []), ...(allowed.fiat ? (['cash'] as const) : [])]
@@ -251,6 +266,18 @@ export class RampController {
     const local = currencyForCountry(session.country).toUpperCase()
     const cashCurrency = !allowedCur?.length || allowedCur.includes(local) ? local : allowedCur[0]!
     this.set({ target: { ...this.draftFor(chain, src), address: accountFor(this.accounts, chain)?.address ?? this.snap.walletAddress ?? '' }, cashCurrency })
+    const locked = this.lockedTarget()
+    if (locked?.type === 'crypto') {
+      // Read only: the UI shows it, and the amount screen names it.
+      const known = this.targetTokens(locked.chain).find((o) => o.token.toLowerCase() === locked.token.toLowerCase())
+      this.set({
+        target: { chain: locked.chain, token: locked.token, symbol: locked.symbol ?? known?.symbol ?? 'TOKEN', decimals: locked.decimals ?? known?.decimals ?? 18, address: locked.address },
+      })
+    } else if (locked?.type === 'fiat') this.set({ cashCurrency: locked.currency })
+    if (locked) {
+      this.set({ tab: locked.type === 'crypto' ? 'crypto' : 'cash' })
+      return this.loadLockedPlan()
+    }
     const tabs = this.withdrawTabs()
     if (!tabs.length) {
       this.set({ screen: 'error', error: orkError('TARGET_NOT_ALLOWED') })
@@ -346,6 +373,23 @@ export class RampController {
 
   /** Increments on every cash target request, to drop stale responses after a tab switch */
   private targetSeq = 0
+
+  /** Locked target: the server already has it, so only get the plan (`/plan`), then show the payout methods. */
+  private async loadLockedPlan() {
+    const seq = ++this.targetSeq
+    this.set({ screen: 'loading', plan: undefined })
+    try {
+      const plan = await this.opts.client.plan(this.opts.clientSecret, this.planFields())
+      if (seq !== this.targetSeq || this.destroyed) return
+      this.set({ plan })
+      const usable = plan.methods.filter((m) => m.group !== 'unavailable')
+      if (this.snap.tab === 'crypto' && usable.length === 1) return this.selectMethod(usable[0]!.method)
+      this.set({ screen: 'methods' })
+    } catch (e) {
+      if (seq !== this.targetSeq || this.destroyed) return
+      this.set({ screen: 'error', error: this.fail(e) })
+    }
+  }
 
   private planFields() {
     return {
@@ -550,7 +594,7 @@ export class RampController {
     clearTimeout(this.quoteTimer)
     if (screen === 'quotes') this.set({ screen: isAddressTransfer(this.snap.method?.method) ? 'methods' : 'amount', error: undefined })
     else if (screen === 'amount') {
-      const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto'
+      const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto' && !this.lockedTarget()
       this.set({ screen: toTarget ? 'target' : 'methods', error: undefined })
     }
     else if (screen === 'step' && this.snap.session?.step.state === 'PAYMENT') void this.restart()

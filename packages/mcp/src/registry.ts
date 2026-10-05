@@ -4,7 +4,14 @@
 
 import { add } from '@openrampkit/core'
 
-export type RegistryEntry = { clientSecret: string; direction: 'deposit' | 'withdraw'; expiresAt: string; preview?: boolean }
+export type RegistryEntry = {
+  clientSecret: string
+  direction: 'deposit' | 'withdraw'
+  expiresAt: string
+  preview?: boolean
+  /** Id of the session's pay link, for `revokePayLink` */
+  payLinkId?: string
+}
 
 export type SessionRegistry = {
   get(sessionId: string): Promise<RegistryEntry | undefined>

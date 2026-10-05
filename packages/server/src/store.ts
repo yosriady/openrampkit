@@ -76,6 +76,10 @@ export type SessionRecord = {
   source?: WithdrawSource
   /** Withdraw only */
   allowedTargets?: AllowedTargets
+  /** Withdraw only: the app set the target at creation with `lockTarget`. `/target` refuses changes. */
+  targetLocked?: boolean
+  /** Ids of pay links that no longer work (see `sessions.revokePayLink`) */
+  revokedPayLinks?: string[]
   country?: string
   region?: string
   email?: string

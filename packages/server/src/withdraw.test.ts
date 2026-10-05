@@ -406,3 +406,67 @@ describe('address format', () => {
     expect(isValidAddress('bip122:000000000019d6689c085ae165831e93', 'short')).toBe(false)
   })
 })
+
+describe('withdraw sessions: locked target', () => {
+  const OTHER = '0x3333333333333333333333333333333333333333'
+
+  it('sets the target at creation; /target answers 409 TARGET_LOCKED for the client secret and a pay link', async () => {
+    const t = make()
+    const s = await t.create({ target: { ...TO_ARB, address: ` ${ARB_ADDR} ` } as never, lockTarget: true })
+    const pub = (await t.ramp.sessions.retrieve(s.id))!
+    expect(pub).toMatchObject({ targetLocked: true, destination: { type: 'crypto', chain: 'eip155:42161', address: ARB_ADDR, symbol: 'USDC', decimals: 6 } })
+    expect(t.hooks.find((h) => h.type === 'session.created')!.data.object.session).toMatchObject({ targetLocked: true, destination: { address: ARB_ADDR } })
+
+    for (const secret of [s.clientSecret, (await t.ramp.sessions.payLink(s.id))!.url.split('/pay/')[1]!]) {
+      const r = await t.call(`/sessions/${s.id}/target`, secret, { ...TO_ARB, address: OTHER })
+      expect(r.status).toBe(409)
+      expect(r.body.error).toMatchObject({ code: 'TARGET_LOCKED', retryable: false })
+      // The same target is refused too: a locked target takes no /target call at all.
+      expect((await t.call(`/sessions/${s.id}/target`, secret, { type: 'fiat', currency: 'PHP' })).body.error?.code).toBe('TARGET_LOCKED')
+    }
+    expect((await t.ramp.sessions.retrieve(s.id))!.destination).toMatchObject({ address: ARB_ADDR })
+
+    // /plan, quotes and select pay out to the locked target.
+    const plan = await t.call<PlanResult>(`/sessions/${s.id}/plan`, s.clientSecret, { walletConnected: true, walletAddress: USER })
+    expect(plan.status).toBe(200)
+    expect(plan.body.methods.find((m) => m.group !== 'unavailable')).toBeDefined()
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '10' })
+    const sel = await t.call<PublicSession>(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })
+    expect(sel.status).toBe(200)
+    expect(sel.body.targetLocked).toBe(true)
+    expect(JSON.stringify(sel.body.step.surface).toLowerCase()).toContain(ARB_ADDR.slice(2))
+  })
+
+  it('a fiat target can be locked; a target without lockTarget can still change', async () => {
+    const t = make()
+    const f = await t.create({ target: { type: 'fiat', currency: 'php' }, lockTarget: true })
+    expect((await t.ramp.sessions.retrieve(f.id))!).toMatchObject({ targetLocked: true, destination: { type: 'fiat', currency: 'PHP' } })
+    expect((await t.call(`/sessions/${f.id}/target`, f.clientSecret, TO_ARB)).status).toBe(409)
+    expect((await t.call<PlanResult>(`/sessions/${f.id}/plan`, f.clientSecret, {})).body.currency).toBe('PHP')
+
+    const open = await t.create({ target: TO_ARB as never })
+    const pub = (await t.ramp.sessions.retrieve(open.id))!
+    expect(pub.targetLocked).toBeUndefined()
+    expect(pub.destination).toMatchObject({ address: ARB_ADDR })
+    expect((await t.call(`/sessions/${open.id}/target`, open.clientSecret, { ...TO_ARB, address: OTHER })).status).toBe(200)
+    expect((await t.ramp.sessions.retrieve(open.id))!.destination).toMatchObject({ address: OTHER })
+  })
+
+  it('checks the target at creation like /target: format, allowedTargets and screenAddress', async () => {
+    const screenAddress = vi.fn(async (address: string) => address !== OTHER)
+    const t = make({ screenAddress })
+    await expect(t.create({ lockTarget: true })).rejects.toMatchObject({ status: 400, error: { message: '`lockTarget` needs `target`.' } })
+    await expect(t.create({ target: TO_ARB as never, lockTarget: 'yes' as never })).rejects.toMatchObject({ status: 400 })
+    await expect(t.ramp.sessions.create({ userId: 'u', destination: { type: 'fiat', currency: 'PHP' } as never, target: { type: 'fiat', currency: 'PHP' } })).rejects.toMatchObject({
+      status: 400,
+      error: { message: expect.stringMatching(/Only a withdraw session/) },
+    })
+    await expect(t.create({ target: { ...TO_ARB, address: '0x12' } as never, lockTarget: true })).rejects.toMatchObject({ status: 400 })
+    await expect(t.create({ target: { type: 'cash' } as never, lockTarget: true })).rejects.toMatchObject({ status: 400 })
+    await expect(t.create({ target: TO_ARB as never, lockTarget: true, allowedTargets: { fiat: {} } })).rejects.toMatchObject({ status: 403, error: { code: 'TARGET_NOT_ALLOWED' } })
+    await expect(t.create({ target: { ...TO_ARB, address: OTHER } as never, lockTarget: true })).rejects.toMatchObject({ status: 403, error: { code: 'ADDRESS_REJECTED' } })
+    expect(screenAddress).toHaveBeenCalledWith(OTHER, 'eip155:42161')
+    // No session was stored for a refused target: no webhook either.
+    expect(t.hooks.filter((h) => h.type === 'session.created')).toHaveLength(0)
+  })
+})

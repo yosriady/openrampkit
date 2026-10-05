@@ -57,7 +57,8 @@ openramp.nextHandlers()       // { GET, POST, OPTIONS } for a Next.js App Router
 await openramp.sessions.create(input)  // Promise<CreatedSession>
 await openramp.sessions.retrieve(id)   // Promise<PublicSession | null>
 await openramp.sessions.refresh(id)    // Promise<PublicSession | null>: ask the active leg's adapter for status now
-await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { url, expiresAt }, a signed link to the pay page
+await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { id, url, expiresAt }, a signed link to the pay page
+await openramp.sessions.revokePayLink(id, linkId)    // Promise<boolean>: make one pay link stop working; false when the session does not exist
 
 await openramp.sweep({ limit? })       // Promise<SweepResult>: retry webhooks, refresh open payments, expire sessions
 
@@ -66,6 +67,8 @@ await openramp.webhooks.replay(sessionId)    // Promise<number>: send the dead l
 ```
 
 `handle` never throws. Errors become JSON responses (see [HTTP routes](./http.md#errors)). It answers `OPTIONS` with `204` and the CORS headers.
+
+`sessions.revokePayLink(id, linkId)` takes the `id` that `payLink` returned. The pay page and the session routes then refuse that link. Other links of the session and the client secret keep working. A session keeps at most 100 revoked link ids. See [`POST /sessions/:id/pay-link/revoke`](./http.md#post-sessions-id-pay-link-revoke).
 
 `sessions.refresh(id)` skips the 2-second rate limit that browser polls have. It sends any webhooks that become due. You rarely need it: `sweep()` refreshes every open session.
 
@@ -111,9 +114,11 @@ The server tracks only the sessions it creates. A session goes back on the open-
 |---|---|---|---|
 | `userId` | `string` | required | Your user id. Passed to adapters and echoed in webhooks. |
 | `direction` | `'deposit' \| 'withdraw'` | `'deposit'` | See [Withdrawals](../guide/withdraw.md) |
-| `destination` | `Destination` | required for a deposit | Where the money goes. See below. A withdraw session must not have one (`400`): the user picks the target. |
+| `destination` | `Destination` | required for a deposit | Where the money goes. See below. A withdraw session must not have one (`400`): the user picks the target, or the app sets `target`. |
 | `source` | `WithdrawSource` | required for a withdrawal | `{ chain, token, symbol?, decimals?, custody }`: the asset that leaves, and who holds it (`'user_wallet'` or `'app'`) |
 | `allowedTargets` | `AllowedTargets` | any target | Withdraw only: `{ crypto?: { chains? }, fiat?: { currencies? } }`. See [Allowed targets](../guide/withdraw.md#allowed-targets). |
+| `target` | `WithdrawTarget` | none | Withdraw only: set the target at creation. Same shape as the body of [`POST /sessions/:id/target`](./http.md#post-sessions-id-target): `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. The server checks the format, `allowedTargets` and `screenAddress`, and stores it as the destination. A refused target throws (`400`, `403` or `503`) and no session is made. |
+| `lockTarget` | `boolean` | `false` | Withdraw with `target` only. Nobody can change the target: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`. The session shows `targetLocked: true`, and the modal skips the target screen. See [Locked targets](../guide/withdraw.md#locked-targets). |
 | `country` | `string` | none | ISO 3166-1 alpha-2. Picks the currency and local methods. |
 | `region` | `string` | none | ISO 3166-2, e.g. `US-NY` |
 | `email` | `string` | none | Prefilled at providers that support it |

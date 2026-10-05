@@ -178,7 +178,9 @@ describe('bound payout targets', () => {
       withdraw: { source: { chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6, custody: 'app' }, targets: [opsTarget] },
       approve: (req) => (approvals.push(req), true),
     })
-    const client = await connect(config)
+    // Record the routes the MCP server calls.
+    const paths: string[] = []
+    const client = await connect({ ...config, connection: { openramp: { handle: (req) => (paths.push(new URL(req.url).pathname), ramp.handle(req)), sessions: ramp.sessions } } })
     const tool = (await client.listTools()).tools.find((t) => t.name === 'create_withdraw_session')!
     expect(Object.keys(tool.inputSchema.properties!)).toContain('target')
     expect(tool.annotations?.destructiveHint).toBe(true)
@@ -192,6 +194,20 @@ describe('bound payout targets', () => {
     const s = (await ramp.sessions.retrieve(r.data.session_id))!
     expect(s.destination).toMatchObject({ type: 'crypto', chain: 'eip155:42161', address: OPS_WALLET })
     expect(s.allowedTargets).toEqual({ crypto: { chains: ['eip155:42161'] } })
+    // The target is set and locked at creation: no /target call, and nobody can change it later.
+    expect(s.targetLocked).toBe(true)
+    expect(paths.some((p) => p.endsWith('/target'))).toBe(false)
+    expect(paths.filter((p) => p.startsWith(`/sessions/${s.id}/`)).map((p) => p.split('/').pop())).toEqual(['plan', 'quotes', 'select'])
+    const cred = (await ramp.sessions.payLink(s.id))!.url.split('/pay/')[1]!
+    const change = await ramp.handle(
+      new Request(`${BASE}/sessions/${s.id}/target`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${cred}`, 'content-type': 'application/json' },
+        body: JSON.stringify({ type: 'crypto', chain: 'eip155:42161', token: ARB_USDC, address: '0x3333333333333333333333333333333333333333' }),
+      }),
+    )
+    expect(change.status).toBe(409)
+    expect(((await change.json()) as { error: { code: string } }).error.code).toBe('TARGET_LOCKED')
     expect(s.amountBounds).toEqual({ min: '20', max: '20', currency: 'USDC' })
     expect(sent).toHaveLength(1)
     expect(JSON.stringify(sent[0]!.txs).toLowerCase()).toContain(OPS_WALLET)
@@ -226,6 +242,26 @@ describe('bound payout targets', () => {
     expect(() => createRampOps({ ...config, withdraw: { source: { ...src, custody: 'user_wallet' }, targets: [opsTarget] } })).toThrow(/custody/)
     expect(() => createRampOps({ ...config, withdraw: { source: src, targets: [{ ...opsTarget, address: '0x12' }] } })).toThrow(/not valid/)
     expect(() => createRampOps({ ...config, withdraw: { source: src, targets: [opsTarget, opsTarget] } })).toThrow(/unique/)
+  })
+})
+
+describe('pay link revocation', () => {
+  it('revokePayLink makes the pay_url stop working; a bound payout has no pay link', async () => {
+    const { ramp, config } = setup({
+      withdraw: { source: { chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6, custody: 'app' }, targets: [opsTarget] },
+    })
+    const ops = createRampOps(config)
+    const w = await ops.createWithdrawSession({ country: 'PH', amount: '5' })
+    const url = w.pay_url as string
+    expect((await ramp.handle(new Request(url))).status).toBe(200)
+    expect(await ops.revokePayLink(w.session_id)).toEqual({ session_id: w.session_id, revoked: true })
+    expect((await ramp.handle(new Request(url))).status).toBe(410)
+    // The MCP server still reads the session with its client secret.
+    expect((await ops.getSessionStatus(w.session_id)).status).toBe('open')
+
+    const bound = await ops.createWithdrawSession({ country: 'SG', target: 'ops', amount: '5' })
+    await expect(ops.revokePayLink(bound.session_id)).rejects.toMatchObject({ code: 'NO_PAY_LINK' })
+    await expect(ops.revokePayLink('ors_unknown')).rejects.toMatchObject({ code: 'UNKNOWN_SESSION' })
   })
 })
 

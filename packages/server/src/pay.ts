@@ -1,24 +1,73 @@
 // Hosted pay links: `GET {baseUrl}/pay/:credential` renders the web component for one session, so a
-// person can open the link on a phone and pay. The credential is `{sessionId}.pay_{exp}_{sig}`:
-// an HMAC over the session id and an expiry, signed with `config.secret` like the start URLs.
-// It works as a client secret for that session until it expires. It cannot mint new links.
+// person can open the link on a phone and pay. The credential is `{sessionId}.pay_{exp}_{linkId}_{sig}`:
+// an HMAC over the session id, an expiry and a random link id, signed with `config.secret` like the
+// start URLs. It works as a client secret for that session until it expires or the app revokes its
+// link id (`sessions.revokePayLink`). It cannot mint or revoke links.
 
 import { OrkException, orkError } from '@openrampkit/core'
 import { PAY_LINK_GRACE_MS } from './config.js'
 import { hmacHex, randomHex, safeEqual } from './crypto.js'
+import { saveSession } from './outbox.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
 
 const PREFIX = 'pay_'
 const DEFAULT_SCRIPT_URL = 'https://esm.sh/@openrampkit/web@0'
 
-export type PayLink = { url: string; expiresAt: string }
+/** `id` identifies the link. Give it to `sessions.revokePayLink` to make the link stop working. */
+export type PayLink = { id: string; url: string; expiresAt: string }
+
+const LINK_ID = /^[0-9a-f]{16}$/
+/** Most revoked link ids kept per session. This keeps the session record small. */
+export const MAX_REVOKED_PAY_LINKS = 100
 
 export const isPayCredential = (secret: string) => secret.startsWith(PREFIX)
 
-async function paySignature(rt: Runtime, sessionId: string, exp: string): Promise<string> {
+async function paySignature(rt: Runtime, sessionId: string, exp: string, linkId: string): Promise<string> {
   // A different message shape from start URLs (`{id}.{token}`), so one signature never passes as the other.
-  return (await hmacHex(rt.config.secret, `pay:${sessionId}:${exp}`)).slice(0, 32)
+  return (await hmacHex(rt.config.secret, `pay:${sessionId}:${exp}:${linkId}`)).slice(0, 32)
+}
+
+/** The parts of a pay credential secret (after the session id), or undefined when the shape is wrong. */
+function parsePaySecret(secret: string): { exp: string; linkId: string; sig: string } | undefined {
+  if (!isPayCredential(secret)) return undefined
+  const [exp, linkId, sig, ...rest] = secret.slice(PREFIX.length).split('_')
+  if (!exp || !linkId || !sig || rest.length || !/^[0-9a-z]{1,12}$/.test(exp) || !LINK_ID.test(linkId)) return undefined
+  return { exp, linkId, sig }
+}
+
+/** True when `secret` is a pay credential whose link the app revoked. */
+export function isRevokedPayLink(rec: SessionRecord, secret: string): boolean {
+  const linkId = parsePaySecret(secret)?.linkId
+  return !!linkId && !!rec.revokedPayLinks?.includes(linkId)
+}
+
+/** Add a link id to the revoked list of `rec`. Throws a 400 when the id is not valid or the list is full. */
+export function revokeOn(rec: SessionRecord, linkId: unknown): void {
+  if (typeof linkId !== 'string' || !LINK_ID.test(linkId)) throw new OrkException(orkError('BAD_REQUEST', { message: '`id` must be a pay link id.' }), 400)
+  const list = rec.revokedPayLinks ?? []
+  if (list.includes(linkId)) return
+  if (list.length >= MAX_REVOKED_PAY_LINKS) throw new OrkException(orkError('BAD_REQUEST', { message: 'Too many revoked pay links for this session.' }), 400)
+  rec.revokedPayLinks = [...list, linkId]
+}
+
+/**
+ * Make one pay link stop working, with a retry on a concurrent change. Returns false when the session
+ * does not exist. A link of another session, or a link id that was never made, changes nothing.
+ */
+export async function revokePayLink(rt: Runtime, sessionId: string, linkId: string): Promise<boolean> {
+  for (let attempt = 0; ; attempt++) {
+    const rec = await rt.store.get(sessionId)
+    if (!rec) return false
+    if (rec.revokedPayLinks?.includes(linkId)) return true
+    revokeOn(rec, linkId)
+    try {
+      await saveSession(rt, rec)
+      return true
+    } catch (e) {
+      if (!(e instanceof OrkException && e.status === 409) || attempt >= 4) throw e
+    }
+  }
 }
 
 /**
@@ -30,16 +79,17 @@ export async function createPayLink(rt: Runtime, rec: SessionRecord, ttlMinutes?
   const max = rec.expiresAt + PAY_LINK_GRACE_MS
   const wanted = ttlMinutes !== undefined && Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? Date.now() + ttlMinutes * 60_000 : max
   const exp = Math.floor(Math.min(wanted, max) / 1000).toString(36)
-  const credential = `${rec.id}.${PREFIX}${exp}_${await paySignature(rt, rec.id, exp)}`
-  return { url: `${rt.base}/pay/${credential}`, expiresAt: new Date(parseInt(exp, 36) * 1000).toISOString() }
+  const linkId = randomHex(8)
+  const credential = `${rec.id}.${PREFIX}${exp}_${linkId}_${await paySignature(rt, rec.id, exp, linkId)}`
+  return { id: linkId, url: `${rt.base}/pay/${credential}`, expiresAt: new Date(parseInt(exp, 36) * 1000).toISOString() }
 }
 
 /** Check the secret part of a pay credential. */
 export async function checkPayCredential(rt: Runtime, sessionId: string, secret: string): Promise<'ok' | 'expired' | 'invalid'> {
-  if (rt.config.payPage === false || !isPayCredential(secret)) return 'invalid'
-  const [exp, sig] = secret.slice(PREFIX.length).split('_')
-  if (!exp || !sig || !/^[0-9a-z]{1,12}$/.test(exp)) return 'invalid'
-  if (!safeEqual(sig, await paySignature(rt, sessionId, exp))) return 'invalid'
+  const parts = parsePaySecret(secret)
+  if (rt.config.payPage === false || !parts) return 'invalid'
+  const { exp, linkId, sig } = parts
+  if (!safeEqual(sig, await paySignature(rt, sessionId, exp, linkId))) return 'invalid'
   return parseInt(exp, 36) * 1000 < Date.now() ? 'expired' : 'ok'
 }
 
@@ -58,6 +108,7 @@ export async function payRoute(rt: Runtime, credential: string): Promise<Respons
   if (check === 'expired') return text('This link expired. Ask for a new link.', 410)
   const rec = await rt.store.get(sid)
   if (!rec) return text('This payment no longer exists.', 404)
+  if (isRevokedPayLink(rec, secret)) return text('This link no longer works. Ask for a new link.', 410)
 
   const opts = rt.config.payPage || {}
   const scriptUrl = new URL(opts.scriptUrl ?? DEFAULT_SCRIPT_URL, rt.base)

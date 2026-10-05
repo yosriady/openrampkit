@@ -240,13 +240,13 @@ To skip the method screen, give `method` and `amount`. The tool then starts the 
 With a bound target:
 
 1. The agent calls `create_withdraw_session` with `target: "ops"` and `amount: "20"`.
-2. The MCP server checks the limits and calls `approve`. Then it creates the session, sets the target, quotes and starts the payout with the client secret. The agent never sees the client secret.
+2. The MCP server checks the limits and calls `approve`. Then it creates the session with the target set and locked (`target` and `lockTarget: true`, see [Locked targets](./withdraw.md#locked-targets)). It plans, quotes and starts the payout with the client secret. The agent never sees the client secret.
 3. The server sends the USDC from your treasury to the target wallet. The agent calls `wait_for_completion`.
 
 ## Guardrails
 
 - **Destinations.** The agent can fund only a named destination from the config. The `destination` input is an enum of these names. The `custom_destination` input exists only when `allowCustomAddress` is set, and then only for the chains and tokens that you list.
-- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the MCP server makes no pay link, so nobody can change the target. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedTargets`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
+- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the server locks the target when it creates the session (`targetLocked: true`), and the MCP server makes no pay link. Nobody can change the target: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`, also for a pay link. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedTargets`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
 - **Amounts.** Each session gets `amountBounds`, at most the cap in `maxAmounts`. The server enforces the bounds on each quote and each payment.
 - **Limits.** `limits.maxTotalPerDay` and `limits.maxSessionsPerHour` stop a looping agent. A session that passes a limit is refused with `LIMIT_REACHED`, and nothing is counted for it. A session that the server refuses is not counted.
 - **Approval.** `approve` runs before each payout. It fails closed (`NOT_APPROVED`).
@@ -259,7 +259,7 @@ The server checks `amountBounds` only when the payment currency is the bounds cu
 :::
 
 ::: warning A pay link is a bearer credential
-For a payout without a bound target, the person who opens `pay_url` picks where the funds go, up to the bounds. Send the link only to the person who must receive the funds, on a private channel. The link works until the session expiry plus 30 minutes. You cannot revoke it. When you do not need a person to pick the target, use `withdraw.targets` and `requireBoundTarget`.
+For a payout without a bound target, the person who opens `pay_url` picks where the funds go, up to the bounds. Send the link only to the person who must receive the funds, on a private channel. The link works until the session expiry plus 30 minutes, or until you revoke it. To revoke it, call `revokePayLink(sessionId)` on the operations from `createRampOps` (see [Library](#library)). When you do not need a person to pick the target, use `withdraw.targets` and `requireBoundTarget`.
 :::
 
 Limit windows are fixed UTC hours and UTC days. At the boundary of a window, an agent can use the limit of the old window and then of the new window. Set limits with this in mind.
@@ -277,11 +277,13 @@ Error codes from the guardrails:
 
 ## The pay link
 
-The pay link opens a page on your OpenRampKit server: `GET {baseUrl}/pay/{sessionId}.pay_{exp}_{sig}`. The page shows the modal ([`<openramp-modal>`](./web-component.md)) for that session, in embedded mode.
+The pay link opens a page on your OpenRampKit server: `GET {baseUrl}/pay/{sessionId}.pay_{exp}_{linkId}_{sig}`. The page shows the modal ([`<openramp-modal>`](./web-component.md)) for that session, in embedded mode.
 
-- The server signs the link with `secret` (HMAC-SHA256), like the start URLs. The signature covers the session id and the expiry.
+- The server signs the link with `secret` (HMAC-SHA256), like the start URLs. The signature covers the session id, the expiry and a random link id.
 - The link expires at the session expiry plus 30 minutes, or earlier when you ask for a shorter time. After that, the page answers `410`.
-- The part after `/pay/` is a credential for that session only. The page gives it to the modal as the client secret. It cannot create a new pay link.
+- The part after `/pay/` is a credential for that session only. The page gives it to the modal as the client secret. It cannot create or revoke a pay link.
+- To make a link stop working before it expires, call `openramp.sessions.revokePayLink(sessionId, linkId)`, or `POST {baseUrl}/sessions/:id/pay-link/revoke` with the client secret. `linkId` is the `id` of the link. Then the page answers `410`. See [HTTP routes](../api/http.md#post-sessions-id-pay-link-revoke).
+- A person with the pay link cannot change a [locked target](./withdraw.md#locked-targets).
 - The page sends `cache-control: no-store`, `referrer-policy: no-referrer` and a strict content security policy (`frame-ancestors 'none'`, a script nonce).
 
 Make a link from your backend with `openramp.sessions.payLink(id)`, or over HTTP with `POST {baseUrl}/sessions/:id/pay-link`. See [HTTP routes](../api/http.md#post-sessions-id-pay-link).
@@ -311,7 +313,7 @@ import { createOpenRampMcpServer, createMcpHttpHandler, createRampOps, memoryReg
 |---|---|
 | `createOpenRampMcpServer(config)` | An `McpServer` with the tools. Connect it to any transport. |
 | `createMcpHttpHandler(config, { bearerToken })` | A `(Request) => Promise<Response>` handler for Streamable HTTP |
-| `createRampOps(config)` | The tool operations without MCP. Pass the result to `createOpenRampMcpServer` to share one registry. |
+| `createRampOps(config)` | The tool operations without MCP. Pass the result to `createOpenRampMcpServer` to share one registry. It also has `revokePayLink(sessionId)`, which is not a tool: it makes the pay link of a session stop working (`NO_PAY_LINK` when this server made no pay link for it). |
 | `memoryRegistry(max?)` | The default registry, in memory, for one process. Write your own `SessionRegistry` to share it between instances. |
 
 A `SessionRegistry` has `get(id)`, `set(id, entry)` and, for `limits`, `incr(key, amount, ttlMs)`. `incr` adds a decimal string (it can be negative) to a counter and returns the new total as a decimal string. The counter starts at `"0"` and is removed `ttlMs` after its first add. `incr` must be atomic across all instances, for example Redis `INCRBYFLOAT` with `PEXPIRE ... NX`, or one database row update.

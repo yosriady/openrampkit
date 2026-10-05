@@ -103,6 +103,7 @@ export function publicSession(rec: SessionRecord): PublicSession {
     ...(rec.destination ? { destination: rec.destination } : {}),
     ...(rec.source ? { source: rec.source } : {}),
     ...(rec.allowedTargets ? { allowedTargets: rec.allowedTargets } : {}),
+    ...(rec.targetLocked ? { targetLocked: true } : {}),
     status: rec.status,
     ...(rec.country ? { country: rec.country } : {}),
     ...(rec.plan ? { currency: rec.plan.currency } : {}),

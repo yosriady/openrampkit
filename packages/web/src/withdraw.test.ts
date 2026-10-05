@@ -4,6 +4,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createMockWallet } from '@openrampkit/client'
+import { USDC } from '@openrampkit/core'
 import type { Snapshot } from '@openrampkit/client'
 import type { CreateSessionInput } from '@openrampkit/server'
 import { BASE, BASE_DEST, BASE_SOURCE, setupServer, sleep, waitFor } from '../../client/src/testctx.js'
@@ -302,5 +303,31 @@ describe('openWithdraw', () => {
     await waitFor(() => c.getSnapshot().screen === 'error')
     await d.element.updateComplete
     expect(d.element.shadowRoot!.textContent).toContain('This is not a withdraw session.')
+  })
+})
+
+describe('withdraw: locked target screens', () => {
+  it('no tabs and no target form; the locked address shows read only', async () => {
+    const target = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: ARB }
+    const h = await mount({ session: { target, lockTarget: true } })
+    // One usable method: straight to the amount screen, which names the locked address.
+    expect(h.c.getSnapshot().screen).toBe('amount')
+    expect(h.$$('[role="tab"]')).toHaveLength(0)
+    expect(h.$('#ork-address')).toBeNull()
+    expect(h.$('.target-summary')!.textContent).toBe('To 0x2222...2222 on Arbitrum')
+    // Back shows the payout methods with the locked address, not the form.
+    await h.click(h.$('.header .icon-btn[aria-label="Back"]')!)
+    expect(h.c.getSnapshot().screen).toBe('methods')
+    expect(h.$('#ork-address')).toBeNull()
+    expect(h.$('.locked-target')!.textContent).toBe('To 0x2222...2222 on Arbitrum')
+    expect(h.server.requests.some((r) => r.url.endsWith('/target'))).toBe(false)
+  })
+
+  it('a locked cash target shows its payout methods with no tabs', async () => {
+    const h = await mount({ session: { target: { type: 'fiat', currency: 'PHP' }, lockTarget: true } })
+    expect(h.c.getSnapshot().screen).toBe('methods')
+    expect(h.$$('[role="tab"]')).toHaveLength(0)
+    expect(h.text()).toContain('Paid out in PHP')
+    expect(h.$$('[data-method]').map((b) => b.dataset.method)).toEqual(['gcash', 'bank_transfer'])
   })
 })
