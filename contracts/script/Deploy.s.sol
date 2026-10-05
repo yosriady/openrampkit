@@ -9,7 +9,8 @@ import {OpenRampSettlement} from "../src/OpenRampSettlement.sol";
 /// Environment:
 /// - `DEPLOYER_PRIVATE_KEY` (required): the deployer key. Never commit it.
 /// - `SETTLEMENT_OWNER` (optional): the owner; default is the deployer. Use a multisig in production.
-/// - `SETTLEMENT_INTENT_SIGNER` (optional): the OpenRampKit server signer; default zero (intents off).
+/// - `SETTLEMENT_INTENT_SIGNER`: the OpenRampKit server signer. Required on every chain that is not a
+///   known testnet (see `isTestnet`). On a testnet the default is zero (intents off).
 /// - `SETTLEMENT_ALLOWED_TARGETS` (optional): comma-separated call targets, e.g. ERC-4626 vaults.
 ///
 /// Dry run against a local anvil:
@@ -20,6 +21,25 @@ import {OpenRampSettlement} from "../src/OpenRampSettlement.sol";
 /// Arbitrum Sepolia (421614):
 ///   forge script script/Deploy.s.sol --rpc-url arbitrum_sepolia --broadcast --verify
 contract Deploy is Script {
+    /// @notice A deploy to a chain that is not a known testnet has no intent signer.
+    error IntentSignerRequired(uint256 chainId);
+
+    /// @notice Chains where a deploy may start with no intent signer. Every other chain id needs one,
+    /// so a new mainnet is safe by default.
+    function isTestnet(uint256 chainId) public pure returns (bool) {
+        return chainId == 31_337 // anvil
+            || chainId == 421_614 // Arbitrum Sepolia
+            || chainId == 46_630 // Robinhood Chain Testnet
+            || chainId == 42_431 // Tempo Testnet (Moderato)
+            || chainId == 11_155_111; // Ethereum Sepolia
+    }
+
+    /// @notice Reverts when the deploy would start a non-testnet contract with no intent signer.
+    /// With no signer, `settle` is open to any payer and anyone can grief a session id.
+    function checkConfig(uint256 chainId, address signer) public pure {
+        if (signer == address(0) && !isTestnet(chainId)) revert IntentSignerRequired(chainId);
+    }
+
     function run() external returns (OpenRampSettlement settlement) {
         uint256 key = vm.envUint("DEPLOYER_PRIVATE_KEY");
         address deployer = vm.addr(key);
@@ -32,6 +52,10 @@ contract Deploy is Script {
         console2.log("owner         ", owner);
         console2.log("intent signer ", signer);
         console2.log("targets       ", targets.length);
+        checkConfig(block.chainid, signer);
+        if (!isTestnet(block.chainid) && owner.code.length == 0) {
+            console2.log("WARNING: the owner is not a contract. Transfer ownership to a Safe (see RUNBOOK.md).");
+        }
 
         vm.startBroadcast(key);
         settlement = new OpenRampSettlement(owner, signer, targets);

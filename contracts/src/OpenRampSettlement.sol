@@ -25,6 +25,12 @@ import {ReentrancyGuardTransient} from "@openzeppelin/contracts/utils/Reentrancy
 /// OpenRampKit server. The intent binds the session id, token, recipient, minimum amount, call
 /// bundle and deadline (and optionally the payer), so a payer cannot redirect the funds.
 ///
+/// `settleFromBalance` pays from tokens that are already in the contract. That balance can hold
+/// funds of more than one session, so its intent is a different EIP-712 type
+/// (`BalanceSettlementIntent`) that binds the exact `amount`, not a minimum. A caller cannot
+/// raise the amount to take funds that belong to other sessions, and a `settle` intent is never
+/// valid on this path.
+///
 /// @dev Design rules:
 /// - No upgradeability. No native ETH. Fee-on-transfer and rebasing tokens are rejected.
 /// - The contract holds no funds between transactions in the normal flow. Every settlement checks
@@ -61,7 +67,8 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
 
     /// @notice The server authorization for a settlement. Ignored by `settle` when `intentSigner` is zero.
     /// @param payer The only address that may use this intent, or zero for any caller.
-    /// @param minAmount The lowest `amount` the server accepts.
+    /// @param minAmount For `settle`: the lowest `amount` the server accepts. For `settleFromBalance`:
+    /// the exact signed `amount` (it must equal `Settlement.amount`).
     /// @param deadline Unix time after which the intent is not valid.
     /// @param signature EIP-712 signature of `intentSigner` (EOA or ERC-1271 contract).
     struct Intent {
@@ -88,6 +95,11 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
     /// @notice EIP-712 type hash of the signed intent.
     bytes32 public constant INTENT_TYPEHASH = keccak256(
         "SettlementIntent(bytes32 sessionId,address payer,address token,address recipient,uint256 minAmount,Call[] calls,uint256 deadline)Call(address target,bytes data)"
+    );
+
+    /// @notice EIP-712 type hash of the signed intent for `settleFromBalance`. It binds the exact amount.
+    bytes32 public constant BALANCE_INTENT_TYPEHASH = keccak256(
+        "BalanceSettlementIntent(bytes32 sessionId,address payer,address token,address recipient,uint256 amount,Call[] calls,uint256 deadline)Call(address target,bytes data)"
     );
 
     // ------------------------------------------------------------------ storage
@@ -140,6 +152,7 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
     error InvalidSignature();
     error PayerMismatch(address expected, address actual);
     error AmountBelowMinimum(uint256 amount, uint256 minAmount);
+    error AmountMismatch(uint256 amount, uint256 signedAmount);
     error TargetNotAllowed(address target);
     error InsufficientBalance(uint256 available, uint256 needed);
     error UnsupportedToken(address token);
@@ -169,8 +182,8 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
     /// @param s What to settle.
     /// @param intent Server authorization. Required when `intentSigner` is set; ignored otherwise.
     function settle(Settlement calldata s, Intent calldata intent) external nonReentrant whenNotPaused {
-        bool signed = intentSigner != address(0);
-        bytes32 callsHash = _checkAndRecord(s, intent, signed);
+        bytes32 typeHash = intentSigner == address(0) ? bytes32(0) : INTENT_TYPEHASH;
+        bytes32 callsHash = _checkAndRecord(s, intent, typeHash);
 
         IERC20 token = IERC20(s.token);
         uint256 baseline = token.balanceOf(address(this));
@@ -182,14 +195,28 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
     }
 
     /// @notice Settle a session with tokens that a bridge or solver already sent to this contract.
-    /// @dev Always needs a valid intent, because anyone can call it. Use it in the same transaction as
-    /// the transfer in, when possible. The intent binds the recipient, so a front-runner can only
-    /// complete the settlement as the server intended.
+    /// @dev Always needs a valid intent, because anyone can call it. When `intentSigner` is zero,
+    /// this function always reverts.
+    ///
+    /// The contract balance is a pool: it can hold the funds of more than one session. So the intent
+    /// for this path is a `BalanceSettlementIntent` that binds the exact `amount`, and
+    /// `intent.minAmount` must equal `s.amount`. Without this, a holder of a valid intent for one
+    /// session could set `amount` to the full balance and take the funds of other sessions.
+    ///
+    /// Why a signed amount and not a per-session credit: a bridge or solver usually fills with a
+    /// plain ERC-20 transfer that cannot carry a session id, so the contract cannot know which
+    /// session a deposit is for. The server can, because it sees the fill. A credit at deposit time
+    /// would need the depositor to call this contract, and that is what `settle` already does.
+    ///
+    /// The server must sign a balance intent only for an amount that it saw arrive for that session,
+    /// or bind `payer` to the solver that fills and settles in the same transaction. The intent also
+    /// binds the recipient and the call bundle, so a front-runner can only complete the settlement
+    /// as the server intended.
     /// @param s What to settle.
-    /// @param intent Server authorization (required).
+    /// @param intent Server authorization (required). `intent.minAmount` is the exact signed amount.
     function settleFromBalance(Settlement calldata s, Intent calldata intent) external nonReentrant whenNotPaused {
         if (intentSigner == address(0)) revert IntentRequired();
-        bytes32 callsHash = _checkAndRecord(s, intent, true);
+        bytes32 callsHash = _checkAndRecord(s, intent, BALANCE_INTENT_TYPEHASH);
 
         IERC20 token = IERC20(s.token);
         uint256 balance = token.balanceOf(address(this));
@@ -225,14 +252,20 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
         return keccak256(abi.encodePacked(hashes));
     }
 
-    /// @notice The EIP-712 digest that `intentSigner` signs for a settlement.
+    /// @notice The EIP-712 digest that `intentSigner` signs for `settle`.
     /// @param s The settlement. `s.amount` is not part of the digest; `minAmount` is.
     function intentDigest(Settlement calldata s, address payer, uint256 minAmount, uint256 deadline)
         public
         view
         returns (bytes32)
     {
-        return _intentDigest(s, payer, minAmount, deadline, hashCalls(s.calls));
+        return _intentDigest(INTENT_TYPEHASH, s, payer, minAmount, deadline, hashCalls(s.calls));
+    }
+
+    /// @notice The EIP-712 digest that `intentSigner` signs for `settleFromBalance`.
+    /// @param s The settlement. `s.amount` is part of the digest, as the exact amount.
+    function balanceIntentDigest(Settlement calldata s, address payer, uint256 deadline) public view returns (bytes32) {
+        return _intentDigest(BALANCE_INTENT_TYPEHASH, s, payer, s.amount, deadline, hashCalls(s.calls));
     }
 
     // ------------------------------------------------------------------ admin
@@ -274,7 +307,9 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
     // ------------------------------------------------------------------ internal
 
     /// @dev Checks the input and the intent, then records the settlement (effects before interactions).
-    function _checkAndRecord(Settlement calldata s, Intent calldata intent, bool signed)
+    /// `typeHash` is zero when no intent is needed, `INTENT_TYPEHASH` for `settle` (a minimum amount),
+    /// or `BALANCE_INTENT_TYPEHASH` for `settleFromBalance` (the exact amount).
+    function _checkAndRecord(Settlement calldata s, Intent calldata intent, bytes32 typeHash)
         private
         returns (bytes32 callsHash)
     {
@@ -286,13 +321,13 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
 
         callsHash = hashCalls(s.calls);
 
-        if (signed) {
+        if (typeHash != bytes32(0)) {
             if (block.timestamp > intent.deadline) revert IntentExpired(intent.deadline);
             if (intent.payer != address(0) && intent.payer != msg.sender) {
                 revert PayerMismatch(intent.payer, msg.sender);
             }
-            if (s.amount < intent.minAmount) revert AmountBelowMinimum(s.amount, intent.minAmount);
-            bytes32 digest = _intentDigest(s, intent.payer, intent.minAmount, intent.deadline, callsHash);
+            _checkAmount(typeHash, s.amount, intent.minAmount);
+            bytes32 digest = _intentDigest(typeHash, s, intent.payer, intent.minAmount, intent.deadline, callsHash);
             if (!SignatureChecker.isValidSignatureNow(intentSigner, digest, intent.signature)) {
                 revert InvalidSignature();
             }
@@ -305,6 +340,16 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
             recipient: s.recipient,
             amount: s.amount
         });
+    }
+
+    /// @dev `settle` accepts any amount at or above the signed minimum, because the payer pays from its
+    /// own funds. `settleFromBalance` pays from a pool, so it accepts only the exact signed amount.
+    function _checkAmount(bytes32 typeHash, uint256 amount, uint256 signedAmount) private pure {
+        if (typeHash == BALANCE_INTENT_TYPEHASH) {
+            if (amount != signedAmount) revert AmountMismatch(amount, signedAmount);
+        } else if (amount < signedAmount) {
+            revert AmountBelowMinimum(amount, signedAmount);
+        }
     }
 
     /// @dev Sends `s.amount` to the recipient, or runs the call bundle with it. Any part the bundle
@@ -332,15 +377,18 @@ contract OpenRampSettlement is Ownable2Step, Pausable, ReentrancyGuardTransient,
         if (leftover != 0) token.safeTransfer(s.recipient, leftover);
     }
 
-    function _intentDigest(Settlement calldata s, address payer, uint256 minAmount, uint256 deadline, bytes32 callsHash)
-        private
-        view
-        returns (bytes32)
-    {
+    /// @dev Both intent types have the same field layout. Only the type hash and the meaning of the
+    /// amount field differ (a minimum for `settle`, the exact amount for `settleFromBalance`).
+    function _intentDigest(
+        bytes32 typeHash,
+        Settlement calldata s,
+        address payer,
+        uint256 amount,
+        uint256 deadline,
+        bytes32 callsHash
+    ) private view returns (bytes32) {
         return _hashTypedDataV4(
-            keccak256(
-                abi.encode(INTENT_TYPEHASH, s.sessionId, payer, s.token, s.recipient, minAmount, callsHash, deadline)
-            )
+            keccak256(abi.encode(typeHash, s.sessionId, payer, s.token, s.recipient, amount, callsHash, deadline))
         );
     }
 

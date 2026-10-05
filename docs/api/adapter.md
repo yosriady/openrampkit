@@ -161,17 +161,18 @@ Helpers for the `OpenRampSettlement` contract. See [On-chain settlement](../conc
 | Export | Description |
 |---|---|
 | `buildSettlementTxs({ chainId, contract, sessionId, token, amount, recipient, calls?, intent? })` | The two WALLET_TX transactions: `approve`, then `settle` |
-| `encodeSettle(params, intent?, { fromBalance? })` | `settle` (or `settleFromBalance`) calldata |
+| `encodeSettle(params, intent?, { fromBalance? })` | `settle` (or `settleFromBalance`) calldata. With `fromBalance`, the intent `minAmount` must equal `amount`. |
 | `erc20ApproveData(spender, amountBase)` | ERC-20 `approve` calldata |
-| `settlementIntentTypedData({ chainId, contract, sessionId, token, recipient, minAmount, calls?, deadline, payer? })` | The EIP-712 typed data for the intent signer |
+| `settlementIntentTypedData({ chainId, contract, sessionId, token, recipient, minAmount, calls?, deadline, payer? })` | The EIP-712 typed data for the intent signer, for `settle` |
+| `settlementBalanceIntentTypedData({ chainId, contract, sessionId, token, recipient, amount, calls?, deadline, payer? })` | The EIP-712 typed data for `settleFromBalance`. It binds the exact amount. |
 | `hashSettlementCalls(calls)` | The calls hash, equal to the contract `hashCalls` and to `callsHash` in `Settled` |
 | `settlementCallsFrom(destination.calls)` | `ContractCall[]` to `SettlementCall[]`. Throws on a bad address, bad data or native value. |
 | `verifySettlement({ rpcUrl, contract, sessionId, fromBlock?, expect? })` | Reads `receiptOf` and the `Settled` log. Returns `{ settled: false }` or `{ settled: true, ok, problem?, record }`. |
 | `sessionIdToBytes32(id)`, `bytes32ToSessionId(word)` | The session id as `bytes32` (UTF-8, padded with zeros), and back |
 | `isEvmAddress(value)`, `keccak256(data)` | Small utilities |
-| `OPEN_RAMP_SETTLEMENT_ABI`, `SETTLEMENT_SELECTORS`, `SETTLED_TOPIC`, `SETTLEMENT_INTENT_TYPES` | The ABI, the function selectors, the `Settled` topic and the EIP-712 types |
+| `OPEN_RAMP_SETTLEMENT_ABI`, `SETTLEMENT_SELECTORS`, `SETTLED_TOPIC`, `SETTLEMENT_INTENT_TYPES`, `SETTLEMENT_BALANCE_INTENT_TYPES` | The ABI, the function selectors, the `Settled` topic and the EIP-712 types |
 
-Types: `SettlementCall`, `SettlementIntent`, `SettlementParams`, `SettlementIntentTypedData`, `SettlementRecord`, `VerifySettlementResult`.
+Types: `SettlementCall`, `SettlementIntent`, `SettlementParams`, `SettlementIntentTypedData`, `SettlementBalanceIntentTypedData`, `SettlementRecord`, `VerifySettlementResult`.
 
 ## Conformance checks (main entry)
 

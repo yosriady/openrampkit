@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { ANVIL_ACCOUNT, ANVIL_CHAIN_ID, deployMockUsdc, erc20BalanceOf, hasAnvil, mintMockUsdc, rpc, sendAndWait, startAnvil } from '../../wagmi/src/testchain.js'
-import { SETTLEMENT_SELECTORS, buildSettlementTxs, encodeSettle, hashSettlementCalls, settlementIntentTypedData, verifySettlement } from './settlement.js'
+import { SETTLEMENT_SELECTORS, buildSettlementTxs, encodeSettle, hashSettlementCalls, settlementBalanceIntentTypedData, settlementIntentTypedData, verifySettlement } from './settlement.js'
 
 const CONTRACTS = fileURLToPath(new URL('../../../contracts/', import.meta.url))
 const RECIPIENT = '0x000000000000000000000000000000000000beef'
@@ -94,5 +94,33 @@ describe.skipIf(!ready && process.env.OPENRAMP_REQUIRE_SETTLEMENT_CHAIN !== '1')
     const other = encodeSettle({ sessionId: 'ors_000000000000000000000003', token: usdc, amount, recipient: ANVIL_ACCOUNT }, intent)
     await sendAndWait(rpcUrl, { to: usdc, data: txs[0]!.data! })
     await expect(sendAndWait(rpcUrl, { to: settlement, data: other })).rejects.toThrow()
+  })
+
+  it('settles from a pooled balance only for the exact signed amount', async () => {
+    // the intent signer is ANVIL_ACCOUNT (set in the test above)
+    const sessionId = 'ors_000000000000000000000004'
+    const amount = 3n * USDC_UNIT
+    const pool = 50n * USDC_UNIT
+    const before = await erc20BalanceOf(rpcUrl, usdc, settlement)
+    // a solver fill for this session, plus funds that belong to other sessions
+    await mintMockUsdc(rpcUrl, usdc, settlement, amount + pool)
+
+    const typed = settlementBalanceIntentTypedData({ chainId: ANVIL_CHAIN_ID, contract: settlement, sessionId, token: usdc, recipient: RECIPIENT, amount, deadline: 4_000_000_000n })
+    const json = JSON.parse(JSON.stringify({ ...typed, types: { EIP712Domain: [{ name: 'name', type: 'string' }, { name: 'version', type: 'string' }, { name: 'chainId', type: 'uint256' }, { name: 'verifyingContract', type: 'address' }], ...typed.types } }, (_k, v) => (typeof v === 'bigint' ? v.toString() : v)))
+    const signature = await rpc<string>(rpcUrl, 'eth_signTypedData_v4', [ANVIL_ACCOUNT, json])
+    const params = { sessionId, token: usdc, amount, recipient: RECIPIENT }
+
+    // the exploit: raise the amount to the whole balance. The signature no longer verifies.
+    const raised = { ...params, amount: amount + pool }
+    const drain = encodeSettle(raised, { payer: typed.message.payer, minAmount: amount + pool, deadline: typed.message.deadline, signature }, { fromBalance: true })
+    await expect(sendAndWait(rpcUrl, { to: settlement, data: drain })).rejects.toThrow()
+
+    // the honest settlement takes only the signed amount
+    const recipientBefore = await erc20BalanceOf(rpcUrl, usdc, RECIPIENT)
+    const data = encodeSettle(params, { payer: typed.message.payer, minAmount: amount, deadline: typed.message.deadline, signature }, { fromBalance: true })
+    await sendAndWait(rpcUrl, { to: settlement, data })
+    expect(await verifySettlement({ rpcUrl, contract: settlement, sessionId, expect: { token: usdc, recipient: RECIPIENT, minAmount: amount } })).toMatchObject({ settled: true, ok: true, record: { amount } })
+    expect(await erc20BalanceOf(rpcUrl, usdc, RECIPIENT)).toBe(recipientBefore + amount)
+    expect(await erc20BalanceOf(rpcUrl, usdc, settlement)).toBe(before + pool)
   })
 })

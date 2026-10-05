@@ -10,6 +10,8 @@
 
 Settings: owner and deployer `0x13B95aeC9277B3aD809737a9A1435bb2e8e77D89` (a testnet key), no intent signer, no call targets at deploy.
 
+> **Note:** These deployments are an older version of the contract. They do not have the `settleFromBalance` amount fix. In that version, the intent for `settleFromBalance` binds only a minimum amount, so a caller with a valid intent can take other funds that the contract holds. The current source binds the exact amount (`BalanceSettlementIntent`). These contracts have no intent signer, so `settleFromBalance` reverts on them. Redeploy before any flow uses `settleFromBalance`, and update the addresses here. `settle` did not change.
+
 ## Demo settlements
 
 `script/Demo.s.sol` settled two sessions on each chain with a **test token that has no value** (open mint) and a test ERC-4626 vault:

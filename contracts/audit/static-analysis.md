@@ -4,6 +4,8 @@ This page records the static analysis of `src/OpenRampSettlement.sol`. Every fin
 
 Result: no high or medium findings. No finding is a real issue, so the contract source did not change. The bytecode on `main` is the same as the bytecode deployed on Arbitrum Sepolia and Robinhood Chain Testnet.
 
+> **Update (settleFromBalance amount fix):** The contract source changed after this record. `settleFromBalance` now needs a `BalanceSettlementIntent` that binds the exact amount (see the README "Security model"). The line numbers and the raw tool outputs below refer to the previous source, which is the deployed testnet bytecode. On the new source, Slither 0.11.6 with `slither.config.json` (the CI configuration) reports 0 results. Coverage is still 100% of lines and branches ([coverage.md](coverage.md)). Run Aderyn and `forge lint` again before the external audit.
+
 ## Tools
 
 | Tool | Version | Raw output |

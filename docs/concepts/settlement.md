@@ -133,7 +133,31 @@ We recommend a signer in production. Without a signer, any wallet can settle a s
 
 ## Funds from a bridge or solver
 
-`settleFromBalance` settles with tokens that are already in the contract. A bridge or solver can fill the contract and call it in the same transaction. This function always needs a signed intent. A front-runner can only complete the settlement as the server signed it.
+`settleFromBalance` settles with tokens that are already in the contract. A bridge or solver can fill the contract and call it in the same transaction. This function always needs a signed intent. When the contract has no intent signer, it reverts.
+
+The contract balance can hold funds of more than one session. So this function uses a different EIP-712 type, `BalanceSettlementIntent`. It binds the exact `amount`, not a minimum:
+
+| Field | Meaning |
+|---|---|
+| `sessionId`, `payer`, `token`, `recipient`, `calls`, `deadline` | The same as in `SettlementIntent` |
+| `amount` | The exact amount to settle from the balance |
+
+Rules:
+
+- Put the signed amount in the `minAmount` field of the intent. It must equal the settled `amount`, or the call reverts with `AmountMismatch`.
+- A caller cannot raise the amount to take funds of other sessions. A changed amount breaks the signature.
+- A `settle` intent is not valid for `settleFromBalance`. A balance intent is not valid for `settle`.
+- Sign a balance intent only after you see the fill arrive for that session. Or set `payer` to the solver that fills and settles in one transaction.
+
+```ts
+import { encodeSettle, settlementBalanceIntentTypedData } from '@openrampkit/adapter'
+
+const typedData = settlementBalanceIntentTypedData({ chainId, contract: SETTLEMENT, sessionId, token, recipient, amount, deadline, payer: solver })
+const signature = await signer.signTypedData(typedData)
+const data = encodeSettle({ sessionId, token, amount, recipient }, { payer: solver, minAmount: amount, deadline, signature }, { fromBalance: true })
+```
+
+> **Note:** The deployed testnet contracts (below) are an older version. In that version, the `settleFromBalance` intent binds only a minimum amount. The testnet contracts have no intent signer, so `settleFromBalance` reverts on them. A redeploy is necessary before you use `settleFromBalance`. `settle` did not change.
 
 ## Verify a settlement
 
@@ -162,7 +186,8 @@ The package also exports these helpers:
 | `OPEN_RAMP_SETTLEMENT_ABI` | The contract ABI, for viem or ethers |
 | `buildSettlementTxs()` | The `approve` and `settle` transactions |
 | `encodeSettle()` | The `settle` calldata |
-| `settlementIntentTypedData()` | The EIP-712 typed data to sign |
+| `settlementIntentTypedData()` | The EIP-712 typed data to sign for `settle` |
+| `settlementBalanceIntentTypedData()` | The EIP-712 typed data to sign for `settleFromBalance` (exact amount) |
 | `hashSettlementCalls()` | The calls hash, equal to the contract `hashCalls` |
 | `sessionIdToBytes32()` | The session id as `bytes32` (UTF-8, padded with zeros) |
 
@@ -175,7 +200,9 @@ The package also exports these helpers:
 | `pause()` and `unpause()` | Stops or starts new settlements |
 | `sweep(token, to, amount)` | Recovers tokens that a user sent to the contract by mistake |
 
-The contract has no upgrade path. Ownership moves in two steps (`transferOwnership`, then `acceptOwnership`). The owner cannot renounce ownership, so the contract always has an owner that can pause it. Use a multisig as the owner in production.
+The contract has no upgrade path. Ownership moves in two steps (`transferOwnership`, then `acceptOwnership`). The owner cannot renounce ownership, so the contract always has an owner that can pause it. Use a multisig as the owner in production. The owner procedures are in [`contracts/RUNBOOK.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/RUNBOOK.md).
+
+The deploy script stops on a chain that is not a known testnet when no intent signer is set.
 
 ## Networks
 
@@ -186,7 +213,7 @@ The contract has no upgrade path. Ownership moves in two steps (`transferOwnersh
 | Tempo Testnet (Moderato) | 42431 | [`0xBF66696115128B8f9f794780061348b4213A7132`](https://explore.testnet.tempo.xyz/address/0xBF66696115128B8f9f794780061348b4213A7132) | No Circle USDC. Test stablecoins from the faucet: AlphaUSD `0x20c0000000000000000000000000000000000001`, pathUSD `0x20c0000000000000000000000000000000000000` (TIP-20) |
 | Arbitrum One | 42161 | Not deployed yet | `0xaf88d065e77c8cC2239327C5EDb3A432268e5831` (Circle) |
 
-The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. Demo settlements, and a settlement through the TypeScript client, are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
+The testnet contracts have verified source code. Their owner is a testnet key, and they have no intent signer. They are an older version without the `settleFromBalance` amount fix, and they need a redeploy (see [Funds from a bridge or solver](#funds-from-a-bridge-or-solver)). Demo settlements, and a settlement through the TypeScript client, are listed in [`contracts/deployments.md`](https://github.com/yosriady/openrampkit/blob/main/contracts/deployments.md).
 
 On every testnet above, a test token with an open mint (no value) is at `0x9A38C55160186C3E1e770e193fA96997e60ed425`. A test ERC-4626 vault for it is at `0xA83fE1B79cEd7772f5d90D19833b2fDD844c7801`. The vault is an allowed call target on each contract.
 

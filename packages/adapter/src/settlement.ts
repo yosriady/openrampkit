@@ -40,6 +40,23 @@ export const SETTLEMENT_INTENT_TYPES = {
   ],
 } as const
 
+/**
+ * EIP-712 types of the intent for `settleFromBalance`. It binds the exact `amount`, not a minimum,
+ * because that path pays from a balance that can hold the funds of other sessions.
+ */
+export const SETTLEMENT_BALANCE_INTENT_TYPES = {
+  BalanceSettlementIntent: [
+    { name: 'sessionId', type: 'bytes32' },
+    { name: 'payer', type: 'address' },
+    { name: 'token', type: 'address' },
+    { name: 'recipient', type: 'address' },
+    { name: 'amount', type: 'uint256' },
+    { name: 'calls', type: 'Call[]' },
+    { name: 'deadline', type: 'uint256' },
+  ],
+  Call: SETTLEMENT_INTENT_TYPES.Call,
+} as const
+
 const CALL_TYPEHASH = keccak256('Call(address target,bytes data)')
 const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000'
 const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/
@@ -48,7 +65,10 @@ const HEX_RE = /^0x([0-9a-fA-F]{2})*$/
 /** One call of the settlement call bundle. `target` gets an allowance of the settled amount for the call. */
 export type SettlementCall = { target: string; data: string }
 
-/** The server authorization for a settlement (empty when the contract has no intent signer) */
+/**
+ * The server authorization for a settlement (empty when the contract has no intent signer).
+ * For `settleFromBalance`, `minAmount` is the exact signed amount and must equal the settled `amount`.
+ */
 export type SettlementIntent = { payer: string; minAmount: bigint; deadline: bigint; signature: string }
 
 export type SettlementParams = {
@@ -75,6 +95,14 @@ export type SettlementIntentTypedData = {
     calls: SettlementCall[]
     deadline: bigint
   }
+}
+
+/** EIP-712 typed data for a `settleFromBalance` intent */
+export type SettlementBalanceIntentTypedData = {
+  domain: SettlementIntentTypedData['domain']
+  types: typeof SETTLEMENT_BALANCE_INTENT_TYPES
+  primaryType: 'BalanceSettlementIntent'
+  message: Omit<SettlementIntentTypedData['message'], 'minAmount'> & { amount: bigint }
 }
 
 // ---------- encoding ----------
@@ -160,8 +188,15 @@ function settlementTuple(p: SettlementParams): AbiValue {
   }
 }
 
-/** Calldata of `settle(settlement, intent)` (or `settleFromBalance` with `fromBalance`) */
+/**
+ * Calldata of `settle(settlement, intent)` (or `settleFromBalance` with `fromBalance`).
+ * With `fromBalance`, the intent must come from `settlementBalanceIntentTypedData` and its
+ * `minAmount` must equal `amount` (the contract reverts otherwise).
+ */
 export function encodeSettle(p: SettlementParams, intent?: SettlementIntent, opts: { fromBalance?: boolean } = {}): string {
+  if (opts.fromBalance && intent && intent.minAmount !== p.amount) {
+    throw new OrkException(orkError('BAD_REQUEST', { message: 'For settleFromBalance, the intent amount must equal the settled amount.' }), 400)
+  }
   const i = intent ?? { payer: ZERO_ADDRESS, minAmount: 0n, deadline: 0n, signature: '0x' }
   const selector = opts.fromBalance ? SETTLEMENT_SELECTORS.settleFromBalance : SETTLEMENT_SELECTORS.settle
   const args = encSeq([settlementTuple(p), { t: 'tuple', v: [word(i.payer), word(i.minAmount), word(i.deadline), { t: 'bytes', v: i.signature }] }])
@@ -214,6 +249,38 @@ export function settlementIntentTypedData(input: {
       token: input.token,
       recipient: input.recipient,
       minAmount: input.minAmount,
+      calls: input.calls ?? [],
+      deadline: input.deadline,
+    },
+  }
+}
+
+/**
+ * The typed data the intent signer signs for `settleFromBalance`. It binds the exact `amount`.
+ * Sign it only for funds that you saw arrive in the contract for this session, or set `payer` to the
+ * solver that fills and settles in one transaction. Pass `amount` as the intent `minAmount`.
+ */
+export function settlementBalanceIntentTypedData(input: {
+  chainId: number
+  contract: string
+  sessionId: string
+  token: string
+  recipient: string
+  amount: bigint
+  calls?: SettlementCall[]
+  deadline: bigint
+  payer?: string
+}): SettlementBalanceIntentTypedData {
+  return {
+    domain: { name: 'OpenRampSettlement', version: '1', chainId: input.chainId, verifyingContract: input.contract },
+    types: SETTLEMENT_BALANCE_INTENT_TYPES,
+    primaryType: 'BalanceSettlementIntent',
+    message: {
+      sessionId: sessionIdToBytes32(input.sessionId),
+      payer: input.payer ?? ZERO_ADDRESS,
+      token: input.token,
+      recipient: input.recipient,
+      amount: input.amount,
       calls: input.calls ?? [],
       deadline: input.deadline,
     },
