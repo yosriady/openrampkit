@@ -98,6 +98,37 @@ export type OpenRampConfig = {
    * Set `false` to turn pay links off.
    */
   payPage?: false | { scriptUrl?: string; title?: string }
+  /**
+   * Admin tools for operators. With `admin` set, the server keeps a time index of new sessions, and
+   * `openramp.admin.*` can list, inspect, resolve and replay them. With `token` (at least 32 characters),
+   * the HTTP routes `{baseUrl}/admin/*` and the dashboard page `GET {baseUrl}/admin` are on. Keep the token
+   * on the server, and put `/admin` behind your own auth or a VPN in production.
+   */
+  admin?: AdminConfig
+  /** Optional metrics callback. See `Telemetry`. */
+  telemetry?: Telemetry
+}
+
+export type AdminConfig = {
+  /** Bearer token for `{baseUrl}/admin/*`. At least 32 characters. Without it, the HTTP routes answer 404. */
+  token?: string
+  /** A session that is not final after this many minutes counts as stuck (default 60) */
+  stuckAfterMinutes?: number
+  /** Days of the time index that `list` and `stats` read, and that the sweep keeps (default 8) */
+  indexDays?: number
+  /** Serve the dashboard page at `GET {baseUrl}/admin` (default true, needs `token`) */
+  page?: boolean
+}
+
+/**
+ * A plain metrics callback. The server calls `onMetric` with a metric name, a number and string tags.
+ * Send them to your metrics system (StatsD, Prometheus, Datadog, OpenTelemetry). An error in the
+ * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`,
+ * `webhook.delivery_failed`, `webhook.dead_letter`, `outbox.depth`, `open_sessions.depth`,
+ * `sweep.lag_ms`, `sweep.duration_ms`, `sessions.stuck`.
+ */
+export type Telemetry = {
+  onMetric(name: string, value: number, tags: Record<string, string>): void
 }
 
 export type TreasurySendInput = {

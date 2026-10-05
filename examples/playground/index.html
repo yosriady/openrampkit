@@ -152,8 +152,21 @@
         <ol class="log" id="events" data-testid="events"></ol>
         <h2>Webhooks received by your backend</h2>
         <ol class="log" id="webhooks" data-testid="webhooks"></ol>
+        <h2>Ops dashboard</h2>
+        <p class="hint">
+          The server's admin page (<code>GET /admin</code>) for the sessions of this tab. Demo only: it uses a fixed demo
+          token. In production, keep the admin token on the server.
+        </p>
+        <button id="admin-open" class="btn-small" type="button" data-testid="admin-open">Open ops dashboard (demo)</button>
       </section>
     </main>
+    <dialog id="admin-dialog" class="admin-dialog" aria-label="Ops dashboard (demo)">
+      <div class="admin-bar">
+        <strong>Ops dashboard (demo only)</strong>
+        <button id="admin-close" class="btn-small" type="button">Close</button>
+      </div>
+      <iframe id="admin-frame" title="Ops dashboard (demo)"></iframe>
+    </dialog>
     <script type="module" src="./src/main.ts"></script>
   </body>
 </html>

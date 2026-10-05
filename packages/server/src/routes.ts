@@ -15,6 +15,8 @@ import type { Runtime } from './runtime.js'
 import { createSession, loadAuthed } from './sessions.js'
 import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
+import { adminRoute } from './admin.js'
+import { addTimeline } from './timeline.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
 import { CAIP2, checkAllowed, isValidToken, parseTarget, screenTarget, targetDestination } from './withdraw.js'
@@ -65,6 +67,7 @@ export async function route(rt: Runtime, req: Request): Promise<Response> {
   if (head === 'adapters' && id) return adapterRoute(rt, req, id, parts.slice(2).join('/'))
   if (head === 'health' && method === 'GET') return healthRoute(rt, req)
   if (head === 'tasks' && id === 'sweep' && method === 'POST') return sweepRoute(rt, req)
+  if (head === 'admin') return adminRoute(rt, req, method, parts.slice(1))
   return errorResponse(orkError('NOT_FOUND'), 404)
 }
 
@@ -88,6 +91,11 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
   const restart = action === 'transitions' && arg === 'restart'
   if (method === 'POST' && (CHANGES_BEFORE_PAYMENT.has(action ?? '') || restart) && Date.now() > rec.expiresAt) {
     return errorResponse(orkError('SESSION_EXPIRED'), 410)
+  }
+
+  // An operator closed this session (`admin.resolve`): the browser cannot change it.
+  if (method === 'POST' && rec.resolution && action !== 'pay-link') {
+    return errorResponse(orkError('BAD_REQUEST', { message: 'This session was closed by the operator.' }), 409)
   }
 
   if (action === 'step' && method === 'GET') {
@@ -198,6 +206,7 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
     // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).
     archiveActive(rec)
+    addTimeline(rec, 'payment.restarted')
     rec.status = 'open'
     rec.step = { sessionId: rec.id, state: 'SELECT_METHOD', transitions: [], expiresAt: new Date(rec.expiresAt).toISOString() }
     // The sweep polls the session again (it left the list when it reached a terminal state).
@@ -246,7 +255,10 @@ async function webhookRoute(rt: Runtime, req: Request, adapterId: string): Promi
   if (!a?.webhook) return errorResponse(orkError('NOT_FOUND'), 404)
   const raw = await readText(req, MAX_WEBHOOK_BODY_BYTES)
   const ctx = { log: rt.log, fetch: rt.fetch, shared: scopedKV(rt.store, `a:${a.id}`) }
-  if (!(await a.webhook.verify(req, raw, ctx))) return errorResponse(orkError('UNAUTHORIZED'), 401)
+  if (!(await a.webhook.verify(req, raw, ctx))) {
+    rt.metric('webhook.verify_failed', 1, { adapter: a.id })
+    return errorResponse(orkError('UNAUTHORIZED'), 401)
+  }
   let retry = false
   for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
     const r = await applyEvent(rt, a.id, ev)

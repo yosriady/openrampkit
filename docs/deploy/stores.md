@@ -123,8 +123,12 @@ interface StoreQueue {
   /** Remove id only when it still has this claim token (no push came after the claim). */
   ack(queue: string, id: string, token: string): Promise<boolean>
   size(queue: string): Promise<number>
+  /** Optional. Read up to limit entries with a due time of at most max, latest first (ties: id from high to low). Changes nothing. */
+  range?(queue: string, opts: { max: number; limit: number }): Promise<Array<{ id: string; dueAt: number }>>
 }
 ```
+
+`range` is for the [admin time index](../guide/admin.md#the-time-index-and-its-limits) (`admin-index:{day}` queues). The sweep does not use it. All built-in stores and the fallback have it.
 
 Why this design:
 
@@ -236,6 +240,11 @@ const queue: StoreQueue = {
   async size(queue) {
     const [row] = await sql`select count(*)::int as n from openramp_queue where queue = ${queue}`
     return row!.n as number
+  },
+  async range(queue, { max, limit }) {
+    const rows = await sql`select id, due_at from openramp_queue where queue = ${queue} and due_at <= ${Number.isFinite(max) ? max : Number.MAX_SAFE_INTEGER}
+                           order by due_at desc, id desc limit ${limit}`
+    return rows.map((r) => ({ id: r.id as string, dueAt: Number(r.due_at) }))
   },
 }
 ```

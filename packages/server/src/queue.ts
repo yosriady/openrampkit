@@ -82,5 +82,6 @@ export function recordQueue(store: SessionStore): StoreQueue {
         return true
       }),
     size: async (name) => Object.keys((await load(name))?.entries ?? {}).length,
+    range: async (name, { max, limit }) => queueOps.range(Object.entries((await load(name))?.entries ?? {}), max, limit),
   }
 }

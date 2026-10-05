@@ -3,7 +3,7 @@
 import { describe, expect, it } from 'vitest'
 import { OpenRampStore, durableObjectStore } from './durable-object-store.js'
 import type { DurableObjectNamespaceLike } from './durable-object-store.js'
-import { QUEUE_ACK_SCRIPT, QUEUE_CLAIM_SCRIPT, QUEUE_PUSH_SCRIPT, QUEUE_SIZE_SCRIPT, redisStore } from './redis-store.js'
+import { QUEUE_ACK_SCRIPT, QUEUE_CLAIM_SCRIPT, QUEUE_PUSH_SCRIPT, QUEUE_RANGE_SCRIPT, QUEUE_SIZE_SCRIPT, redisStore } from './redis-store.js'
 import type { RedisLike } from './redis-store.js'
 import { recordQueue } from './queue.js'
 import { cloudflareKvStore, memoryStore } from './store.js'
@@ -86,6 +86,16 @@ function fakeRedis(): RedisLike {
         return 1
       }
       if (script === QUEUE_SIZE_SCRIPT) return z(k1).size
+      if (script === QUEUE_RANGE_SCRIPT) {
+        // ZREVRANGEBYSCORE max -inf WITHSCORES LIMIT 0 n: score high to low, then member high to low
+        const [max, limit] = args as [string, string]
+        const top = max === '+inf' ? Infinity : Number(max)
+        return [...z(k1)]
+          .filter(([, sc]) => sc <= top)
+          .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : -1))
+          .slice(0, Number(limit))
+          .flatMap(([id, sc]) => [id, String(sc)])
+      }
       // session CAS
       const [expected, json] = args as [string, string]
       const cur = data.get(k1)
@@ -194,5 +204,22 @@ describe.each(stores)('store queue: %s', (_name, make, atomicClaim) => {
     ])
     expect(await q.size('w')).toBe(40)
     if (atomicClaim) expect(new Set(claimed).size).toBe(claimed.length)
+  })
+
+  it('range reads entries latest first, up to a max due time, and changes nothing', async () => {
+    const q = make()
+    await q.push('w', 'a', 100)
+    await q.push('w', 'b', 300)
+    await q.push('w', 'c', 200)
+    await q.push('w', 'd', 300)
+    expect(await q.range!('w', { max: Infinity, limit: 10 })).toEqual([
+      { id: 'd', dueAt: 300 },
+      { id: 'b', dueAt: 300 },
+      { id: 'c', dueAt: 200 },
+      { id: 'a', dueAt: 100 },
+    ])
+    expect(await q.range!('w', { max: 250, limit: 1 })).toEqual([{ id: 'c', dueAt: 200 }])
+    expect(await q.size('w')).toBe(4)
+    expect(await q.claim('w', { now: 1000, limit: 10, leaseMs: 10, token: 't' })).toHaveLength(4)
   })
 })

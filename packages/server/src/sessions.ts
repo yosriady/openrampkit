@@ -7,6 +7,7 @@ import { notify } from './notify.js'
 import { checkPayCredential, isPayCredential, isRevokedPayLink } from './pay.js'
 import { saveSession } from './outbox.js'
 import { trackOpenSession } from './queue.js'
+import { indexSession } from './admin.js'
 import { normalizeDestination } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
@@ -104,6 +105,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     step: { sessionId: id, state: 'SELECT_METHOD', transitions: [], expiresAt: new Date(expiresAt).toISOString() },
     startUrls: {},
     notified: [],
+    updatedAt: now,
   }
   if (direction === 'withdraw' && input.target !== undefined) {
     // The same checks as `POST /sessions/:id/target`: format, `allowedTargets`, then `screenAddress`.
@@ -115,6 +117,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   }
   // On the open list before the write: a session is never stored without it.
   await trackOpenSession(rt, rec.id)
+  await indexSession(rt, rec.id, now)
   await notify(rt, rec, 'session.created')
   await saveSession(rt, rec, { create: true })
   return { id, clientSecret: `${id}.${secret}`, expiresAt: new Date(expiresAt).toISOString() }

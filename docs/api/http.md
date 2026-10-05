@@ -25,6 +25,8 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | any | `/adapters/:adapterId/*` | Adapter decides | Adapter routes |
 | `GET` | `/health` | none (`?deep=1`: tasks token) | Quick check; deep check of each adapter |
 | `POST` | `/tasks/sweep` | Bearer `tasksToken` | Run the background sweep |
+| `GET` | `/admin` | none (the page asks for the token) | Ops dashboard page (only with `admin.token`) |
+| `GET`, `POST` | `/admin/*` | Bearer `admin.token` | [Admin routes](#admin-routes): list, inspect, resolve, replay, stats |
 | `OPTIONS` | any | none | CORS preflight: `204` |
 
 ## Authentication
@@ -312,6 +314,40 @@ Response `200`: a `SweepResult`.
 { "webhooks": { "retried": 1, "delivered": 1, "dropped": 0, "pending": 0 }, "sessions": { "checked": 3, "changed": 1, "expired": 1, "open": 1 } }
 ```
 
+## Admin routes
+
+The routes for operators. See [Admin and observability](../guide/admin.md).
+
+- Header: `Authorization: Bearer {admin.token}`. A wrong or missing token gets `401`. The server compares the token in constant time.
+- Without `admin.token` in the config, every `/admin` path answers `404`.
+- Answers have `cache-control: no-store`. Admin routes never send CORS headers.
+- Put `/admin` behind your own auth or a VPN in production.
+
+| Method | Path | Answer |
+|---|---|---|
+| `GET` | `/admin` | The dashboard page (HTML). `404` when `admin.page` is `false`. |
+| `GET` | `/admin/sessions` | `{ sessions, nextCursor?, scanned }`, newest first. Query: `direction`, `state`, `olderThan` (minutes), `stuck=1`, `limit` (1 to 200), `cursor`. `400` for a bad value. |
+| `GET` | `/admin/sessions/:id` | The `AdminSession` view. `404` when the session does not exist. |
+| `POST` | `/admin/sessions/:id/resolve` | Body `{ "state": "COMPLETED" \| "FAILED" \| "REFUNDED" \| "EXPIRED", "note": "..." }`. Answer: the `AdminSession` view. `400` without a note, `404` for an unknown session, `409` when the session already has that state. |
+| `POST` | `/admin/sessions/:id/replay` | `{ "queued": 1 }`: the dead letters sent again. `404` for an unknown session. |
+| `GET` | `/admin/stats` | `AdminStats`. Query: `since` (ISO 8601 or ms; default 24 hours ago). |
+| `GET` | `/admin/find` | `{ sessions: [...] }`. Query: `provider` and `ref`, or `tx` and an optional `chain`. |
+
+The list, stats and tx search answer `501` when the store queue has no `range` (a custom store). See [The time index](../guide/admin.md#the-time-index-and-its-limits).
+
+### GET /admin
+
+A self-contained HTML page: inline CSS and script, no external requests. Its headers:
+
+```
+content-security-policy: default-src 'none'; script-src 'nonce-{random}'; style-src 'nonce-{random}'; connect-src 'self'; img-src data:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'
+cache-control: no-store
+referrer-policy: no-referrer
+x-robots-tag: noindex
+```
+
+The page asks for the admin token and keeps it in `sessionStorage`. It then calls the routes above.
+
 ## CORS
 
-With `cors: { origins: [...] }`, requests from a listed origin get `access-control-allow-origin`, `access-control-allow-headers: authorization, content-type, idempotency-key`, `access-control-allow-methods: GET, POST, OPTIONS` and `access-control-max-age: 600`. With `'*'`, any origin is allowed. Without `cors`, no CORS headers are sent (same origin only).
+With `cors: { origins: [...] }`, requests from a listed origin get `access-control-allow-origin`, `access-control-allow-headers: authorization, content-type, idempotency-key`, `access-control-allow-methods: GET, POST, OPTIONS` and `access-control-max-age: 600`. With `'*'`, any origin is allowed. Without `cors`, no CORS headers are sent (same origin only). The `/admin` routes never get CORS headers.

@@ -106,7 +106,19 @@ export type SessionRecord = {
   notified: string[]
   /** Webhook events not delivered yet, and dead letters */
   outbox?: OutboxEvent[]
+  /** Time of the last write (ms). Records from earlier versions do not have it. */
+  updatedAt?: number
+  /** What happened to the session, oldest first, for operators (see `admin.get`). At most 100 entries. */
+  timeline?: TimelineEntry[]
+  /** Set when an operator forced a final state with `admin.resolve`. Provider events then change the legs only. */
+  resolution?: Resolution
 }
+
+/** One entry of the session timeline */
+export type TimelineEntry = { at: number; type: string; detail?: Record<string, unknown> }
+
+/** An operator decision on a session (`admin.resolve`) */
+export type Resolution = { state: 'COMPLETED' | 'FAILED' | 'REFUNDED' | 'EXPIRED'; note: string; at: number; previous: string }
 
 /**
  * A work queue in the store. The server uses it for the webhook outbox and the open-session list.
@@ -128,7 +140,16 @@ export interface StoreQueue {
   ack(queue: string, id: string, token: string): Promise<boolean>
   /** Number of ids in the queue */
   size(queue: string): Promise<number>
+  /**
+   * Optional: read up to `limit` entries with a due time of at most `max`, latest due time first (ties:
+   * id from high to low). It changes nothing. The admin index needs it (see `admin.list`). All built-in
+   * stores have it.
+   */
+  range?(queue: string, opts: { max: number; limit: number }): Promise<QueueItem[]>
 }
+
+/** An entry that `StoreQueue.range` returns */
+export type QueueItem = { id: string; dueAt: number }
 
 export interface SessionStore {
   get(id: string): Promise<SessionRecord | null>
@@ -162,6 +183,13 @@ export const queueOps = {
       .slice(0, Math.max(0, limit))
       .map(([id]) => id)
   },
+  range(entries: Iterable<[string, QueueEntry]>, max: number, limit: number): QueueItem[] {
+    return [...entries]
+      .filter(([, e]) => e.dueAt <= max)
+      .sort((a, b) => b[1].dueAt - a[1].dueAt || (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+      .slice(0, Math.max(0, limit))
+      .map(([id, e]) => ({ id, dueAt: e.dueAt }))
+  },
 }
 
 /** In-memory queue. Each call runs to the end with no `await`, so it is atomic in one process. */
@@ -191,6 +219,9 @@ export function memoryQueue(): StoreQueue {
     },
     async size(name) {
       return q(name).size
+    },
+    async range(name, { max, limit }) {
+      return queueOps.range(q(name), max, limit)
     },
   }
 }
@@ -279,6 +310,9 @@ function kvQueue(ns: Required<KVNamespaceLike>): StoreQueue {
     },
     async size(name) {
       return (await all(name)).length
+    },
+    async range(name, { max, limit }) {
+      return queueOps.range(await all(name), max, limit)
     },
   }
 }

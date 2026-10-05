@@ -60,6 +60,9 @@ return 0
 
 export const QUEUE_SIZE_SCRIPT = `return redis.call('ZCARD', KEYS[1])`
 
+// ARGV[1] = max due time, ARGV[2] = limit. Returns id, score pairs, latest first. Read only.
+export const QUEUE_RANGE_SCRIPT = `return redis.call('ZREVRANGEBYSCORE', KEYS[1], ARGV[1], '-inf', 'WITHSCORES', 'LIMIT', 0, tonumber(ARGV[2]))`
+
 function redisQueue(redis: RedisLike, p: string): StoreQueue {
   const keys = (name: string) => [`${p}q:{${name}}`, `${p}qt:{${name}}`]
   return {
@@ -75,6 +78,12 @@ function redisQueue(redis: RedisLike, p: string): StoreQueue {
     },
     async size(name) {
       return Number(await redis.eval(QUEUE_SIZE_SCRIPT, keys(name), []))
+    },
+    async range(name, { max, limit }) {
+      const flat = await redis.eval(QUEUE_RANGE_SCRIPT, keys(name), [Number.isFinite(max) ? String(Math.floor(max)) : '+inf', String(limit)])
+      const out: Array<{ id: string; dueAt: number }> = []
+      if (Array.isArray(flat)) for (let i = 0; i + 1 < flat.length; i += 2) out.push({ id: String(flat[i]), dueAt: Number(flat[i + 1]) })
+      return out
     },
   }
 }

@@ -13,9 +13,12 @@ import { flushOutbox, saveSession } from './outbox.js'
 import { putVersioned } from './runtime.js'
 import { claimToken, OPEN_QUEUE, OUTBOX_QUEUE, queueOf } from './queue.js'
 import type { Runtime } from './runtime.js'
+import { pruneIndex } from './admin.js'
 import type { SessionRecord } from './store.js'
 
 export { trackOpenSession } from './queue.js'
+
+const LAST_SWEEP_KEY = 'sweep:last-run'
 
 /** How long a sweep holds the entries it claimed. Longer than one sweep run. */
 const LEASE_MS = 10 * 60_000
@@ -70,6 +73,13 @@ async function migrateLegacyLists(rt: Runtime): Promise<void> {
 
 export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise<SweepResult> {
   const limit = opts.limit ?? 50
+  const started = Date.now()
+  // Sweep lag: the time since the previous run started. It grows when the scheduler stops.
+  if (rt.config.telemetry) {
+    const previous = await rt.store.kv.get<number>(LAST_SWEEP_KEY)
+    if (typeof previous === 'number') rt.metric('sweep.lag_ms', started - previous, {})
+    await rt.store.kv.put(LAST_SWEEP_KEY, started, 7 * 24 * 60 * 60)
+  }
   await migrateLegacyLists(rt)
   const now = Date.now()
   const q = queueOf(rt.store)
@@ -89,6 +99,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
     else await q.push(OUTBOX_QUEUE, sid, next)
   }
   result.webhooks.pending = await q.size(OUTBOX_QUEUE)
+  rt.metric('outbox.depth', result.webhooks.pending, {})
 
   // 2. Open sessions: expire, or refresh the payment (and earlier attempts that still wait)
   for (const id of await q.claim(OPEN_QUEUE, { now, limit, leaseMs: LEASE_MS, token })) {
@@ -120,6 +131,13 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
     else await q.push(OPEN_QUEUE, id, Date.now())
   }
   result.sessions.open = await q.size(OPEN_QUEUE)
+  rt.metric('open_sessions.depth', result.sessions.open, {})
+  try {
+    await pruneIndex(rt)
+  } catch (e) {
+    rt.log.warn('sweep: admin index cleanup failed', { error: String(e) })
+  }
+  rt.metric('sweep.duration_ms', Date.now() - started, {})
   return result
 }
 

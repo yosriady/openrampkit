@@ -20,6 +20,8 @@ export type Runtime = {
   adapters: Map<string, Adapter>
   livemode: boolean
   adapter(id: string): Adapter
+  /** Report one metric to `config.telemetry`. Never throws. */
+  metric(name: string, value: number, tags?: Record<string, string>): void
 }
 
 export function createRuntime(config: OpenRampConfig): Runtime {
@@ -30,6 +32,9 @@ export function createRuntime(config: OpenRampConfig): Runtime {
   }
   if (config.tasksToken !== undefined && (typeof config.tasksToken !== 'string' || config.tasksToken.length < 16)) {
     throw new Error('OpenRamp: `tasksToken` must be at least 16 characters')
+  }
+  if (config.admin?.token !== undefined && (typeof config.admin.token !== 'string' || config.admin.token.length < 32)) {
+    throw new Error('OpenRamp: `admin.token` must be at least 32 characters')
   }
   const ids = new Set<string>()
   for (const a of config.adapters) {
@@ -55,6 +60,15 @@ export function createRuntime(config: OpenRampConfig): Runtime {
       const a = adapters.get(id)
       if (!a) throw new OrkException(orkError('INTERNAL', { message: `Adapter ${id} is not configured` }), 500)
       return a
+    },
+    metric(name, value, tags = {}) {
+      const t = config.telemetry
+      if (!t) return
+      try {
+        t.onMetric(name, value, tags)
+      } catch {
+        // A metrics failure must never break a payment.
+      }
     },
   }
 }
@@ -86,11 +100,15 @@ export function adapterContext(rt: Runtime, rec: SessionRecord, a: Adapter, path
 /** Persist with an optimistic version check. A concurrent change becomes a 409 the client can retry. Use `saveSession` (outbox.ts), which also delivers new webhook events. */
 export async function putVersioned(rt: Runtime, rec: SessionRecord): Promise<void> {
   const expected = rec.version
+  const updatedAt = rec.updatedAt
   rec.version += 1
+  rec.updatedAt = Date.now()
   try {
     await rt.store.put(rec, expected)
   } catch (e) {
     rec.version -= 1
+    if (updatedAt === undefined) delete rec.updatedAt
+    else rec.updatedAt = updatedAt
     if (e instanceof VersionConflictError) throw new OrkException(orkError('CONFLICT'), 409)
     throw e
   }

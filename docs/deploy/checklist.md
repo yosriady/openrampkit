@@ -7,6 +7,7 @@ Go through this list before real money moves.
 - [ ] `secret` is at least 32 random characters (`openssl rand -hex 32`), unique per environment, and stored as a platform secret.
 - [ ] `webhooks.secret` is a different random value, shared only with your backend.
 - [ ] `tasksToken` (if you use `POST /tasks/sweep` or `GET /health?deep=1`) is another random value. `CRON_SECRET` on Vercel too.
+- [ ] `admin.token` (if you use the [admin tools](../guide/admin.md)) is another random value of at least 32 characters, kept on the server only.
 - [ ] Provider keys are server-side only. No adapter or server import reaches your client bundle.
 - [ ] You use live provider keys in production and sandbox keys elsewhere. Set `livemode: true` in production, so events carry `livemode` and adapters such as Coinbase leave sandbox mode.
 - [ ] You know how to rotate each secret. Rotating `secret` breaks start URLs made in the last 10 minutes and every open pay link; rotating `webhooks.secret` needs your backend updated at the same time.
@@ -43,9 +44,17 @@ Go through this list before real money moves.
 
 - [ ] `openramp.sweep()` runs every minute or so: a [Cloudflare Cron Trigger](./cloudflare-workers.md#cron-trigger), a [Vercel Cron Job](./nextjs.md#background-sweep), or any scheduler calling `POST {baseUrl}/tasks/sweep` with `tasksToken`. Without it, failed webhooks are never retried, and sessions whose users left are not refreshed or expired.
 - [ ] The cron route refuses requests without the secret, and the secret is set in every environment that runs it.
-- [ ] You watch the logs for `webhook moved to dead letter after retries` (after `webhooks.retryHours`, default 24 hours) and `sweep: session check failed`. To send dead letters again, call `openramp.webhooks.replay(sessionId)`.
+- [ ] You watch the logs for `webhook moved to dead letter after retries` (after `webhooks.retryHours`, default 24 hours) and `sweep: session check failed`. To send dead letters again, call `openramp.webhooks.replay(sessionId)` or use "Replay webhooks" in the [ops dashboard](../guide/admin.md#the-dashboard).
 - [ ] Your backend handles `session.late_payment` (a payment the user left with `restart` succeeded after another payment).
 - [ ] Each run has enough time: it retries up to `limit` (default 50) webhooks and checks up to `limit` open sessions, with provider calls for each.
+
+## Admin and monitoring
+
+- [ ] If you turn on the admin routes, `{baseUrl}/admin` is behind your own auth (SSO, an auth proxy) or a VPN. The token is not the only lock.
+- [ ] Only operators who need it know the admin token. You rotate it when one of them leaves.
+- [ ] Each `admin.resolve` has a clear note (who, why, a ticket). Your backend handles the webhook from a resolve like any other, and credits once per session id.
+- [ ] `telemetry.onMetric` sends metrics to your monitoring. You alert on `sweep.lag_ms`, `outbox.depth`, `webhook.dead_letter` and `webhook.verify_failed`.
+- [ ] You know the [limits of the time index](../guide/admin.md#the-time-index-and-its-limits): it lists the last `admin.indexDays` days only. For reports, use your own database.
 
 ## Your backend
 

@@ -14,7 +14,7 @@ const openramp = createOpenRamp({
 
 ## createOpenRamp(config)
 
-`createOpenRamp` throws at startup when `secret` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version, or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
+`createOpenRamp` throws at startup when `secret` or `admin.token` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version, or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -42,6 +42,8 @@ const openramp = createOpenRamp({
 | `screenAddress` | `(address, chain) => Promise<boolean>` | none | Withdraw: check a "To wallet" address. `false` or an error refuses it (fail closed). See [Screen addresses](../guide/withdraw.md#screen-addresses). |
 | `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. See [Custody](../guide/withdraw.md#custody-app). |
 | `payPage` | `false \| { scriptUrl?, title? }` | on, script from esm.sh | The hosted pay page `GET /pay/:credential`. `false` turns it off. See [The pay link](../guide/agents.md#the-pay-link). |
+| `admin` | `{ token?, stuckAfterMinutes?, indexDays?, page? }` | none | Admin tools. With `admin`, the server keeps a time index of new sessions. With `token` (at least 32 characters), the routes `/admin/*` and the dashboard `GET /admin` are on. See [Admin and observability](../guide/admin.md). |
+| `telemetry` | `{ onMetric(name, value, tags) }` | none | A plain metrics callback: quote latency, start errors, webhook failures, outbox depth, sweep lag. See [Metrics](../guide/admin.md#metrics). |
 
 The default geo lookup reads `cf-ipcountry` or `x-vercel-ip-country` (ignoring `XX`), and `x-vercel-ip-country-region` for the region (as `{country}-{region}`).
 
@@ -64,6 +66,14 @@ await openramp.sweep({ limit? })       // Promise<SweepResult>: retry webhooks, 
 
 await openramp.webhooks.verify(req, rawBody) // Promise<boolean>: verify a webhook this server sent
 await openramp.webhooks.replay(sessionId)    // Promise<number>: send the dead letters of a session again
+
+await openramp.admin.list({ direction?, state?, olderThan?, stuck?, limit?, cursor? }) // Promise<AdminListResult>
+await openramp.admin.get(id)                  // Promise<AdminSession | null>: legs, attempts, outbox, refs, timeline
+await openramp.admin.findByRef(provider, ref) // Promise<AdminSession | null>
+await openramp.admin.findByTx(chain, txHash)  // Promise<AdminSessionSummary[]>
+await openramp.admin.stats({ since? })        // Promise<AdminStats>
+await openramp.admin.resolve(id, state, note) // Promise<AdminSession>: force a final state, with an audit note and a webhook
+await openramp.admin.replayWebhooks(id)       // Promise<{ queued: number }>
 ```
 
 `handle` never throws. Errors become JSON responses (see [HTTP routes](./http.md#errors)). It answers `OPTIONS` with `204` and the CORS headers.
@@ -75,6 +85,8 @@ await openramp.webhooks.replay(sessionId)    // Promise<number>: send the dead l
 `webhooks.verify` returns `false` when `config.webhooks` is not set.
 
 `webhooks.replay(sessionId)` sends again the events of one session whose retries stopped (dead letters). They keep their event ids and get a new retry window. It returns the number of events, or `0` when the session has none.
+
+`admin.*` is for your backend and for operators. `list`, `stats` and `findByTx` read the time index, which the server keeps only when `config.admin` is set. See [Admin and observability](../guide/admin.md).
 
 The type of the returned object is exported as `OpenRamp`.
 
@@ -105,6 +117,8 @@ The outbox queue and the open-session list are [store queues](../deploy/stores.m
 ::: warning At-least-once delivery
 A delivery can still arrive more than once, for example after a timeout. A repeat has the same event id. Deduplicate by event id (`openramp-id`) in your backend. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
 :::
+
+With `admin` set, each run also removes days of the admin time index that are older than `admin.indexDays`.
 
 The server tracks only the sessions it creates. A session goes back on the open-session list after a `restart`, and when a provider event arrives for it.
 
@@ -194,10 +208,10 @@ import { memoryStore, durableObjectStore, OpenRampStore, cloudflareKvStore, redi
 | `scopedKV(store, prefix)` | A prefixed key-value view, as adapters get |
 | `VersionConflictError` | Thrown by `put` on a version mismatch |
 
-Types: `SessionStore`, `SessionRecord`, `ActiveLeg`, `StoredQuote`, `DurableObjectNamespaceLike`, `DurableObjectStateLike`, `KVNamespaceLike`, `RedisLike`, `NodeRedisLike`, `NodeRedisV4Like`, `RedisStoreOptions`. See [Session stores](../deploy/stores.md) for the interface and a custom store.
+Types: `SessionStore`, `SessionRecord`, `StoreQueue`, `QueueItem`, `TimelineEntry`, `Resolution`, `ActiveLeg`, `StoredQuote`, `DurableObjectNamespaceLike`, `DurableObjectStateLike`, `KVNamespaceLike`, `RedisLike`, `NodeRedisLike`, `NodeRedisV4Like`, `RedisStoreOptions`. See [Session stores](../deploy/stores.md) for the interface and a custom store.
 
 ## Other exports
 
-Types: `OpenRampConfig`, `CreateSessionInput`, `CreatedSession`, `OpenRamp`, `PayLink`, `SweepResult`, `TreasuryHook`, `TreasurySendInput`.
+Types: `OpenRampConfig`, `CreateSessionInput`, `CreatedSession`, `OpenRamp`, `PayLink`, `SweepResult`, `TreasuryHook`, `TreasurySendInput`, `AdminConfig`, `Telemetry`, `AdminListOptions`, `AdminListResult`, `AdminSessionSummary`, `AdminSession`, `AdminPayment`, `AdminLeg`, `AdminOutboxEvent`, `AdminStats`.
 
 `isValidAddress(chain, address)` checks an address format for a chain: `0x` and 40 hex digits (not the zero address) on EVM chains, base58 of 32 to 44 characters on Solana. The `/target` route uses it.

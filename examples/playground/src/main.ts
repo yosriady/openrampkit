@@ -3,7 +3,7 @@ import { METHODS } from '@openrampkit/core'
 import type { OrkEvent } from '@openrampkit/core'
 import { autoTheme, darkTheme, lightTheme, openDeposit, openWithdraw } from '@openrampkit/web'
 import type { DepositHandle, RadiusScale, Theme, ThemeOptions } from '@openrampkit/web'
-import { BASE_URL, createSession, fakeFetch, onWebhook } from './server.js'
+import { BASE_URL, createSession, DEMO_ADMIN_TOKEN, fakeFetch, onWebhook } from './server.js'
 
 type Options = {
   /** `mock`: mock providers (default). `testnet`: the visitor's wallet pays on a testnet for real. */
@@ -254,6 +254,20 @@ function render(o: Options) {
   btn.hidden = o.display !== 'modal'
   if (o.display === 'embedded') current = open(o, $('widget'))
 }
+
+// Ops dashboard (demo only). The server in this tab renders its admin page (`GET /admin`). The page runs
+// in a same-origin iframe and calls the server through `openrampAdminHost.fetch`, with the demo token.
+;(window as unknown as { openrampAdminHost: unknown }).openrampAdminHost = {
+  fetch: fakeFetch,
+  token: DEMO_ADMIN_TOKEN,
+  demo: 'Demo only: a fixed admin token and the sessions of this browser tab. In production, keep the admin token on your server and put /admin behind your own auth or a VPN.',
+}
+$('admin-open').addEventListener('click', async () => {
+  const res = await fakeFetch(`${BASE_URL}/admin`)
+  $<HTMLIFrameElement>('admin-frame').srcdoc = await res.text()
+  $<HTMLDialogElement>('admin-dialog').showModal()
+})
+$('admin-close').addEventListener('click', () => $<HTMLDialogElement>('admin-dialog').close())
 
 $('open').addEventListener('click', () => {
   current?.close()

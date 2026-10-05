@@ -14,11 +14,14 @@ import { createSession } from './sessions.js'
 import { createPayLink, revokePayLink } from './pay.js'
 import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
+import { adminFindByRef, adminFindByTx, adminGet, adminList, adminReplay, adminResolve, adminStats } from './admin.js'
+import type { AdminListOptions } from './admin.js'
 
 export * from './store.js'
 export * from './durable-object-store.js'
 export { verifyWebhook } from './crypto.js'
-export type { CreateSessionInput, OpenRampConfig, TreasuryHook, TreasurySendInput } from './config.js'
+export type { AdminConfig, CreateSessionInput, OpenRampConfig, Telemetry, TreasuryHook, TreasurySendInput } from './config.js'
+export type { AdminLeg, AdminListOptions, AdminListResult, AdminOutboxEvent, AdminPayment, AdminSession, AdminSessionSummary, AdminStats } from './admin.js'
 export { isValidAddress } from './withdraw.js'
 export type { CreatedSession } from './sessions.js'
 export type { PayLink } from './pay.js'
@@ -27,8 +30,12 @@ export type { SweepResult } from './tasks.js'
 export function createOpenRamp(config: OpenRampConfig) {
   const rt = createRuntime(config)
 
+  const adminPath = `${rt.basePath}/admin`
+
   async function handle(req: Request): Promise<Response> {
-    const cors = corsHeaders(rt, req)
+    // The admin routes are same-origin only: no CORS headers, whatever `cors` allows.
+    const path = new URL(req.url).pathname
+    const cors = path === adminPath || path.startsWith(`${adminPath}/`) ? {} : corsHeaders(rt, req)
     if (req.method === 'OPTIONS') return new Response(null, { status: 204, headers: cors })
     let res: Response
     try {
@@ -93,6 +100,26 @@ export function createOpenRamp(config: OpenRampConfig) {
        * event ids. Returns how many events were queued.
        */
       replay: (sessionId: string) => replayDeadLetters(rt, sessionId),
+    },
+    /**
+     * Operator tools. They work without `admin.token` (that only turns on the HTTP routes), but `list`,
+     * `stats` and `findByTx` read the time index, which the server keeps only when `config.admin` is set.
+     */
+    admin: {
+      /** Recent sessions, newest first, with filters and a cursor */
+      list: (opts?: AdminListOptions) => adminList(rt, opts),
+      /** The full operator view of one session: legs, attempts, outbox, provider refs, timeline */
+      get: (id: string) => adminGet(rt, id),
+      /** The session that owns a provider reference (`provider` is the adapter id) */
+      findByRef: (provider: string, ref: string) => adminFindByRef(rt, provider, ref),
+      /** Sessions with this leg transaction hash, from the time index */
+      findByTx: (chain: string | undefined, txHash: string) => adminFindByTx(rt, chain, txHash),
+      /** Counts by state and direction, completed volume, stuck sessions, outbox and webhook failures */
+      stats: (opts?: { since?: number | string | Date }) => adminStats(rt, opts),
+      /** Force a final state with an audit note, and send the matching webhook */
+      resolve: (id: string, state: 'COMPLETED' | 'FAILED' | 'REFUNDED' | 'EXPIRED', note: string) => adminResolve(rt, id, state, note),
+      /** Send the dead letters of a session again (same as `webhooks.replay`) */
+      replayWebhooks: (id: string) => adminReplay(rt, id),
     },
   }
 }
