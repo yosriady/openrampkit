@@ -70,3 +70,7 @@ For the second session, the server checked the settlement with `verifySettlement
 cast call 0xBF66696115128B8f9f794780061348b4213A7132 'isSettled(bytes32)(bool)' \
   $(cast format-bytes32-string ors_tempo_tip20) --rpc-url https://rpc.moderato.tempo.xyz
 ```
+
+## Solana devnet (no contract)
+
+Solana payments do not use OpenRampSettlement. The server verifies the SPL transfer on chain and allows one signature per session. Proof: [1 devnet USDC](https://explorer.solana.com/tx/4cAv4h7Pv8FGBx55yidQwJcww5uqF54usUy7juR8hnViRm4UBbAZ7NEdTuZuwWJXtyBQ9eLvozWjRPi7MYnBxiKY?cluster=devnet), session `ors_0a715aa02e6fa759a3c522e3`. Details in [docs/guide/solana.md](../docs/guide/solana.md#proof-on-devnet).

@@ -232,3 +232,17 @@ The key is in `examples/playground/.solana-devnet-key.json`. This file is in `.g
 ## Demo
 
 The Next.js demo has a **USDC on Solana** destination. Pick it in the playground. With mock providers, the QRIS or card pathway goes to Base and then bridges to Solana. Set **Wallet** to "wagmi and Solana wallet" and click **Connect Solana wallet** to pay from Phantom or another wallet.
+
+## Proof on devnet
+
+A real payment on Solana devnet went through the same code path as the playground: the mock `solana-onchain` leg, the server, and `solanaPaidTo`.
+
+| Item | Value |
+|---|---|
+| Session | `ors_0a715aa02e6fa759a3c522e3` |
+| Payment | 1 devnet USDC (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`), paid back to the payer |
+| Signature | [4cAv4h7P…MnBxiKY](https://explorer.solana.com/tx/4cAv4h7Pv8FGBx55yidQwJcww5uqF54usUy7juR8hnViRm4UBbAZ7NEdTuZuwWJXtyBQ9eLvozWjRPi7MYnBxiKY?cluster=devnet) |
+| Result | The session moved to `COMPLETED`. |
+| Replay | A second session that used the same signature failed: "This transaction was already used for another payment." |
+
+Run it again with `pnpm solana:settle` after you fund the devnet key (see `pnpm solana:key`).
