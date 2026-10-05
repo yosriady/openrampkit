@@ -1,0 +1,94 @@
+{
+  "url": "https://openrampkit-getformo.vercel.app/playground/",
+  "wallet": "0x13B95aeC9277B3aD809737a9A1435bb2e8e77D89",
+  "before": {
+    "eth": "149784885501564996",
+    "test": "208000000",
+    "usdc": "20000000",
+    "shares": "42000000"
+  },
+  "after": {
+    "eth": "149741624186844996",
+    "test": "306000000",
+    "usdc": "20000000",
+    "shares": "44000000"
+  },
+  "results": [
+    {
+      "name": "A1 mint 100 tUSDC",
+      "pass": true,
+      "hash": "0xa080e8e1a476faccf6041f784bb6539e24d80e22c3e453ca8be090cf3be4dd56",
+      "note": "balance 208000000 -> 308000000"
+    },
+    {
+      "name": "A2 plain settlement 3 tUSDC",
+      "pass": true,
+      "hash": "0x8ce8c2a81e0872c5ae0248e4c9fe8d61de2c40ef3ad78e49586896261fdbdc21",
+      "href": "https://sepolia.arbiscan.io/tx/0x8ce8c2a81e0872c5ae0248e4c9fe8d61de2c40ef3ad78e49586896261fdbdc21",
+      "note": "wallet txs 0x095ea7b3, 0x4fcc438f; session ors_a656d408aa153a3319821372; isSettled true",
+      "approve": "0x04f3d85320ccc8009945a981e3b972771125280795a88844fd54ab931acc0422"
+    },
+    {
+      "name": "E2 settled session cannot be paid again in the UI",
+      "pass": true,
+      "note": "the widget shows only the completed screen; no pay button"
+    },
+    {
+      "name": "B vault deposit 2 tUSDC",
+      "pass": true,
+      "hash": "0x147c616f438ceb152df34c5c427bbd9efaf92678978653c3df382b4c138e3c99",
+      "href": "https://sepolia.arbiscan.io/tx/0x147c616f438ceb152df34c5c427bbd9efaf92678978653c3df382b4c138e3c99",
+      "note": "wallet txs 0x095ea7b3, 0x4fcc438f; session ors_aa7b70021035327dc379ba10; vault shares 42000000 -> 44000000"
+    },
+    {
+      "name": "E1 amount above balance (70 USDC)",
+      "pass": true,
+      "note": "message: \"Not enough USDC. You have 20, and this payment needs 70. Get test USDC at https://faucet.circle.com/\"; wallet requests: 0"
+    },
+    {
+      "name": "C plain settlement 1 Circle USDC",
+      "pass": true,
+      "hash": "0xdb3a5641ac473bb2d6588112fd6917678da3d6f82d4da063ecb9b6505c296de4",
+      "href": "https://sepolia.arbiscan.io/tx/0xdb3a5641ac473bb2d6588112fd6917678da3d6f82d4da063ecb9b6505c296de4",
+      "note": "wallet txs 0x095ea7b3, 0x4fcc438f; session ors_613e36ddc601f4765a6b01df"
+    }
+  ],
+  "sent": [
+    {
+      "to": "0x9A38C55160186C3E1e770e193fA96997e60ed425",
+      "selector": "0x40c10f19",
+      "hash": "0xa080e8e1a476faccf6041f784bb6539e24d80e22c3e453ca8be090cf3be4dd56"
+    },
+    {
+      "to": "0x9a38c55160186c3e1e770e193fa96997e60ed425",
+      "selector": "0x095ea7b3",
+      "hash": "0x04f3d85320ccc8009945a981e3b972771125280795a88844fd54ab931acc0422"
+    },
+    {
+      "to": "0xbf66696115128b8f9f794780061348b4213a7132",
+      "selector": "0x4fcc438f",
+      "hash": "0x8ce8c2a81e0872c5ae0248e4c9fe8d61de2c40ef3ad78e49586896261fdbdc21"
+    },
+    {
+      "to": "0x9a38c55160186c3e1e770e193fa96997e60ed425",
+      "selector": "0x095ea7b3",
+      "hash": "0x109ef065fd6cfa491fde2e8c3829c8346c3d70b99e2322a99e32c92407315bfd"
+    },
+    {
+      "to": "0xbf66696115128b8f9f794780061348b4213a7132",
+      "selector": "0x4fcc438f",
+      "hash": "0x147c616f438ceb152df34c5c427bbd9efaf92678978653c3df382b4c138e3c99"
+    },
+    {
+      "to": "0x75faf114eafb1bdbe2f0316df893fd58ce46aa4d",
+      "selector": "0x095ea7b3",
+      "hash": "0x71c85b390a24557a750ff3108feecab937c3e53c7eed42c2dbcdcbbef228b730"
+    },
+    {
+      "to": "0xbf66696115128b8f9f794780061348b4213a7132",
+      "selector": "0x4fcc438f",
+      "hash": "0xdb3a5641ac473bb2d6588112fd6917678da3d6f82d4da063ecb9b6505c296de4"
+    }
+  ],
+  "pageErrors": []
+}
