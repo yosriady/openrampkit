@@ -207,7 +207,7 @@ sequenceDiagram
   B->>S: POST /sessions/:id/quotes { method, amount }
   S->>S: deliveryAddresses(): the last leg delivers to destination.address
   S->>R: prepareDeposit({ leg })
-  R->>RA: POST /quote/v2 { useDepositAddress: true } (cached per route for 24 h)
+  R->>RA: POST /quote/v2 { useDepositAddress: true } (one per session)
   RA-->>R: open deposit address on the hop chain
   R-->>S: { address }
   S->>On: quote({ amountIn: fiat, deliverTo: Relay deposit address })
