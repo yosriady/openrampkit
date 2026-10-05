@@ -223,6 +223,7 @@ export type OrkErrorCode =
   | 'CONFLICT'
   | 'ADDRESS_REJECTED'
   | 'TARGET_NOT_ALLOWED'
+  | 'TARGET_LOCKED'
   | 'BAD_REQUEST'
   | 'NOT_FOUND'
   | 'INTERNAL'
@@ -402,6 +403,11 @@ export type PublicSession = {
   source?: WithdrawSource
   /** Withdraw only: the targets the app allows */
   allowedTargets?: AllowedTargets
+  /**
+   * Withdraw only: true when the app set the target at creation and locked it (`lockTarget`).
+   * `destination` is that target. `POST /sessions/:id/target` answers `409 TARGET_LOCKED`.
+   */
+  targetLocked?: boolean
   status: SessionStatus
   country?: string
   currency?: string

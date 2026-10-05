@@ -1,6 +1,6 @@
 # Withdrawals
 
-A withdraw session moves funds out of your app. Your backend decides **what** leaves (the source asset) and **who holds it** (the user's wallet or your app). The user picks **where it goes**: a wallet address ("To wallet") or their own bank or e-wallet account ("To cash").
+A withdraw session moves funds out of your app. Your backend decides **what** leaves (the source asset) and **who holds it** (the user's wallet or your app). The user picks **where it goes**: a wallet address ("To wallet") or their own bank or e-wallet account ("To cash"). Your backend can also set the target and lock it (see [Locked targets](#locked-targets)).
 
 The same modal, server and adapters run deposits and withdrawals. The session's `direction` picks the flow.
 
@@ -199,7 +199,30 @@ The server calls it only for crypto targets. Fiat payout accounts are checked by
 
 `POST {baseUrl}/sessions/:id/target` sets the target of a withdraw session and returns the plan. The client calls it for you. See [HTTP routes](../api/http.md#post-sessions-id-target) for the body and the errors.
 
-The user can change the target until a payment starts. Each call replaces the destination and clears the stored quotes.
+The user can change the target until a payment starts. Each call replaces the destination and clears the stored quotes. A [locked target](#locked-targets) cannot change: the route answers `409 TARGET_LOCKED`.
+
+## Locked targets
+
+Your backend can set the target when it creates the session. Add `lockTarget: true`, and nobody can change it later: not the client secret, and not a person with a [pay link](./agents.md#the-pay-link). Use it for payouts to an address that your backend already knows, for example a payout to a saved wallet or to a cash currency that you set.
+
+```ts
+const session = await openramp.sessions.create({
+  userId: user.id,
+  direction: 'withdraw',
+  source: { chain: 'eip155:8453', token: USDC_BASE, custody: 'app' },
+  target: { type: 'crypto', chain: 'eip155:42161', token: USDC_ARB, address: savedWallet },
+  // or: target: { type: 'fiat', currency: 'PHP' },
+  lockTarget: true,
+})
+```
+
+- `target` has the same shape as the body of [`POST /sessions/:id/target`](../api/http.md#post-sessions-id-target).
+- The server checks it at creation, as for `/target`: the format, then [`allowedTargets`](#allowed-targets), then [`screenAddress`](#screen-addresses). A refused target throws (`400`, `403` or `503`), and the server makes no session.
+- The server stores the target as the session destination. `PublicSession` has `destination` and `targetLocked: true`.
+- `POST /sessions/:id/target` answers `409 TARGET_LOCKED` ("The app set where these funds go. You cannot change it."). Get the plan with `POST /sessions/:id/plan`.
+- The modal does not show the target screen or the tabs. A wallet target shows as a read-only line ("To 0x2222...2222 on Arbitrum") on the methods and amount screens. A cash target opens the payout methods in its currency. With one wallet method, the modal goes straight to the amount screen.
+- Without `lockTarget`, `target` is only a first value. The user can change it with `/target`.
+- A locked cash target fixes the currency only. The person still gives their bank or e-wallet account to the offramp provider.
 
 ## Events
 

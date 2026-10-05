@@ -236,3 +236,50 @@ describe('withdraw: to cash', () => {
     expect(c.getSnapshot().error?.message).toMatch(/already in progress/)
   })
 })
+
+describe('withdraw: locked target', () => {
+  const LOCKED = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: ARB }
+
+  it('skips the target form, never calls /target, and back goes to the methods', async () => {
+    const { c, requests } = await make({ session: { target: LOCKED, lockTarget: true } })
+    await c.start()
+    const snap = c.getSnapshot()
+    expect(snap.session).toMatchObject({ targetLocked: true, destination: { type: 'crypto', chain: 'eip155:42161', address: ARB } })
+    expect(c.lockedTarget()).toMatchObject({ address: ARB })
+    expect(c.withdrawTabs()).toEqual(['crypto'])
+    // One usable method (wallet): straight to the amount screen.
+    expect(snap).toMatchObject({ screen: 'amount', tab: 'crypto', method: { method: 'wallet' } })
+    expect(snap.target).toEqual({ chain: 'eip155:42161', token: USDC['eip155:42161'], symbol: 'USDC', decimals: 6, address: ARB })
+    expect(requests.some((r) => r.url.endsWith('/target'))).toBe(false)
+    expect(requests.some((r) => r.url.endsWith('/plan'))).toBe(true)
+    c.back()
+    expect(c.getSnapshot().screen).toBe('methods')
+    // The other tab cannot open.
+    c.setTab('cash')
+    await waitFor(() => c.getSnapshot().screen === 'amount')
+    expect(c.getSnapshot().tab).toBe('crypto')
+    c.setAmount('5')
+    await c.submitAmount()
+    await c.confirm()
+    expect(c.getSnapshot().screen).toBe('step')
+    c.back() // PAYMENT: restart plans again, with no target form
+    await waitFor(() => c.getSnapshot().session?.step.state === 'SELECT_METHOD' && c.getSnapshot().screen === 'amount')
+    expect(requests.some((r) => r.url.endsWith('/target'))).toBe(false)
+    c.destroy()
+  })
+
+  it('a locked cash target shows its payout methods in that currency', async () => {
+    const { c, requests } = await make({ session: { target: { type: 'fiat', currency: 'PHP' }, lockTarget: true } })
+    await c.start()
+    expect(c.getSnapshot()).toMatchObject({ screen: 'methods', tab: 'cash', cashCurrency: 'PHP', plan: { currency: 'PHP' } })
+    expect(c.withdrawTabs()).toEqual(['cash'])
+    expect(requests.some((r) => r.url.endsWith('/target'))).toBe(false)
+  })
+
+  it('a target that is not locked still shows the form', async () => {
+    const { c } = await make({ session: { target: LOCKED } })
+    await c.start()
+    expect(c.getSnapshot().screen).toBe('target')
+    expect(c.lockedTarget()).toBeUndefined()
+  })
+})

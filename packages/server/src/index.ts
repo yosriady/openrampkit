@@ -11,7 +11,7 @@ import { route } from './routes.js'
 import { replayDeadLetters, saveSession } from './outbox.js'
 import { createRuntime, publicSession } from './runtime.js'
 import { createSession } from './sessions.js'
-import { createPayLink } from './pay.js'
+import { createPayLink, revokePayLink } from './pay.js'
 import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
 
@@ -74,6 +74,11 @@ export function createOpenRamp(config: OpenRampConfig) {
         const rec = await rt.store.get(id)
         return rec ? createPayLink(rt, rec, opts.ttlMinutes) : null
       },
+      /**
+       * Make one pay link of a session stop working. `linkId` is the `id` that `payLink` returned.
+       * The page and the API then refuse the link. Returns false when the session does not exist.
+       */
+      revokePayLink: (id: string, linkId: string) => revokePayLink(rt, id, linkId),
     },
     /**
      * Retry failed webhooks, refresh open payments and expire old sessions. Run it every minute or so

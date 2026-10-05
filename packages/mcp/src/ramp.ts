@@ -139,7 +139,10 @@ export function createRampOps(config: OpenRampMcpConfig) {
   const idOf = (secret: string) => secret.split('.')[0]!
 
   async function payLink(sessionId: string, secret: string) {
-    return backend.call<{ url: string; expiresAt: string }>(secret, 'POST', `/sessions/${sessionId}/pay-link`, {})
+    const link = await backend.call<{ id?: string; url: string; expiresAt: string }>(secret, 'POST', `/sessions/${sessionId}/pay-link`, {})
+    const entry = await registry.get(sessionId)
+    if (entry && link.id) await registry.set(sessionId, { ...entry, payLinkId: link.id })
+    return link
   }
 
   return {
@@ -245,8 +248,22 @@ export function createRampOps(config: OpenRampMcpConfig) {
       const input: SessionInput = {
         ...base('withdraw', c, reference ? { reference } : {}),
         source: w.source,
-        // A bound target: only its chain is allowed, and no pay link exists to change it.
+        // A bound target: the server sets and locks it at creation, so nobody can change it later.
+        // Only its chain is allowed, and no pay link is made.
         allowedTargets: target ? { crypto: { chains: [target.chain] } } : w.allowedTargets,
+        ...(target
+          ? {
+              target: {
+                type: 'crypto' as const,
+                chain: target.chain,
+                token: target.token,
+                address: target.address,
+                ...(target.symbol ? { symbol: target.symbol } : {}),
+                ...(target.decimals !== undefined ? { decimals: target.decimals } : {}),
+              },
+              lockTarget: true,
+            }
+          : {}),
         amountBounds: bounds,
         ttlMinutes: ttl(args.ttl_minutes),
       }
@@ -268,6 +285,18 @@ export function createRampOps(config: OpenRampMcpConfig) {
           next: 'Send pay_url to the person who receives the funds. They pick how to receive them (for example a bank or e-wallet) and confirm. Then call wait_for_completion with session_id.',
         }
       })
+    },
+
+    /**
+     * Make the pay link of a session stop working (for example when it went to the wrong person).
+     * For the operator, not an MCP tool. Throws `NO_PAY_LINK` when this server made no pay link for it.
+     */
+    async revokePayLink(sessionId: string) {
+      const secret = await secretFor(sessionId)
+      const linkId = (await registry.get(sessionId))?.payLinkId
+      if (!linkId) throw new RampError('NO_PAY_LINK', 'This session has no pay link from this server.', 404)
+      await backend.call<{ revoked: boolean }>(secret, 'POST', `/sessions/${encodeURIComponent(sessionId)}/pay-link/revoke`, { id: linkId })
+      return { session_id: sessionId, revoked: true }
     },
 
     async getSessionStatus(sessionId: string) {
@@ -293,8 +322,9 @@ export function createRampOps(config: OpenRampMcpConfig) {
   }
 
   /**
-   * Payout to a bound target: set the target, quote the first available method and start it with
-   * the client secret, which only this server holds. The treasury sends the funds (custody `app`).
+   * Payout to a bound target: the session has the locked target from creation. Plan, quote the first
+   * available method and start it with the client secret, which only this server holds. The treasury
+   * sends the funds (custody `app`).
    */
   async function boundPayout(id: string, secret: string, t: NamedDestination, amount: string) {
     const fail = (e: unknown): never => {
@@ -303,14 +333,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
       throw new RampError(code, `${message} Session ${id} did not start a payout. Check it with get_session_status before you try again.`, e instanceof RampError ? e.status : 502)
     }
     try {
-      const plan = await backend.call<PlanResult>(secret, 'POST', `/sessions/${id}/target`, {
-        type: 'crypto',
-        chain: t.chain,
-        token: t.token,
-        address: t.address,
-        ...(t.symbol ? { symbol: t.symbol } : {}),
-        ...(t.decimals !== undefined ? { decimals: t.decimals } : {}),
-      })
+      const plan = await backend.call<PlanResult>(secret, 'POST', `/sessions/${id}/plan`, {})
       const method = plan.methods.find((m) => m.group !== 'unavailable')
       if (!method) throw new RampError('NO_METHOD', `No method can pay out to ${t.name} now.`, 422)
       const r = await backend.call<QuotesResult>(secret, 'POST', `/sessions/${id}/quotes`, { method: method.method, amount })

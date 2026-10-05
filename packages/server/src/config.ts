@@ -1,5 +1,5 @@
 import type { Adapter, Logger } from '@openrampkit/adapter'
-import type { AllowedTargets, CryptoAsset, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource } from '@openrampkit/core'
+import type { AllowedTargets, CryptoAsset, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource, WithdrawTarget } from '@openrampkit/core'
 import type { SessionStore } from './store.js'
 
 export type CreateSessionInput = {
@@ -11,6 +11,16 @@ export type CreateSessionInput = {
   source?: WithdrawSource
   /** Withdraw: limit the targets the user can pick. Default: any. */
   allowedTargets?: AllowedTargets
+  /**
+   * Withdraw: set the target at creation (the same shape as the body of `POST /sessions/:id/target`).
+   * The server checks it with `allowedTargets` and `screenAddress`, and stores it as the destination.
+   */
+  target?: WithdrawTarget
+  /**
+   * Withdraw with `target`: lock the target. Then nobody can change it with the client secret or a pay
+   * link: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`. Default `false`.
+   */
+  lockTarget?: boolean
   country?: string
   region?: string
   email?: string

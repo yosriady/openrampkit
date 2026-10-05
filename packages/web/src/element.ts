@@ -685,6 +685,9 @@ export class OpenRampModal extends LitElement {
       ${this._renderWithdrawTabs(m, s)}
       <div id="ork-panel" role=${tabs ? 'tabpanel' : nothing} aria-labelledby=${tabs ? `ork-tab-${s.tab}` : nothing}>
         ${s.tab === 'cash' && s.plan ? html`<div class="hint" style="margin:0 0 12px">${m.payoutIn(s.plan.currency)}</div>` : nothing}
+        ${s.tab === 'crypto' && s.target && this.controller!.lockedTarget()
+          ? html`<div class="hint locked-target" style="margin:0 0 12px">${m.toAddressOn(shortAddress(s.target.address), displayChain(s.target.chain))}</div>`
+          : nothing}
         ${list.length === 0 ? html`<div class="notice info">${m.noPayoutMethods}</div>` : nothing}
         ${groupMethods(list).map(({ group, items }) => {
           const label = groupLabel(group, m)

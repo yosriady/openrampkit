@@ -13,7 +13,7 @@ import { trackOpenSession } from './queue.js'
 import { adapterContext, publicSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { createSession, loadAuthed } from './sessions.js'
-import { createPayLink, isPayCredential, payRoute } from './pay.js'
+import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
@@ -110,8 +110,15 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
   if (action === 'target' && method === 'POST') return targetRoute(rt, req, rec)
 
   if (action === 'pay-link' && method === 'POST') {
-    // A pay link cannot mint another pay link: only the client secret can.
+    // A pay link cannot mint or revoke pay links: only the client secret can.
     if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(orkError('UNAUTHORIZED'), 403)
+    if (arg === 'revoke') {
+      const body = await readJson<{ id?: unknown }>(req, {})
+      revokeOn(rec, body.id)
+      await saveSession(rt, rec)
+      return json({ revoked: true })
+    }
+    if (arg) return errorResponse(orkError('NOT_FOUND'), 404)
     const body = await readJson<{ ttlMinutes?: number }>(req, {})
     return json(await createPayLink(rt, rec, typeof body.ttlMinutes === 'number' ? body.ttlMinutes : undefined), 201)
   }
@@ -139,9 +146,11 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
  * Body: `{ type: 'crypto', chain, token, address }` or `{ type: 'fiat', currency }`, plus the
  * optional plan fields of `/plan` (`walletConnected`, `walletAddress`, `surfaces`).
  * Checks the format, the app's `allowedTargets` and `screenAddress`, then returns the plan.
+ * A target that the app locked at creation (`lockTarget`) cannot change: 409 `TARGET_LOCKED`.
  */
 async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
   if (rec.direction !== 'withdraw') return errorResponse(orkError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
+  if (rec.targetLocked) return errorResponse(orkError('TARGET_LOCKED'), 409)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
   if (rec.step.state === 'COMPLETED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
   const body = await readJson<Record<string, unknown>>(req)

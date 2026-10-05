@@ -4,13 +4,13 @@ import type { Destination } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
-import { checkPayCredential, isPayCredential } from './pay.js'
+import { checkPayCredential, isPayCredential, isRevokedPayLink } from './pay.js'
 import { saveSession } from './outbox.js'
 import { trackOpenSession } from './queue.js'
 import { normalizeDestination } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
-import { CAIP2, isValidAddress, isValidToken, normalizeSource } from './withdraw.js'
+import { CAIP2, checkAllowed, isValidAddress, isValidToken, normalizeSource, parseTarget, screenTarget, targetDestination } from './withdraw.js'
 
 export type CreatedSession = { id: string; clientSecret: string; expiresAt: string }
 
@@ -62,6 +62,9 @@ function checkInput(input: CreateSessionInput): void {
   } else if (d && (typeof (d as { currency?: unknown }).currency !== 'string' || !/^[A-Za-z]{3}$/.test((d as { currency: string }).currency))) {
     throw bad('`destination.currency` must be an ISO 4217 code, e.g. PHP.')
   }
+  if (input.lockTarget !== undefined && typeof input.lockTarget !== 'boolean') throw bad('`lockTarget` must be a boolean.')
+  if ((input.target !== undefined || input.lockTarget) && input.direction !== 'withdraw') throw bad('Only a withdraw session takes `target` and `lockTarget`.')
+  if (input.lockTarget && input.target === undefined) throw bad('`lockTarget` needs `target`.')
 }
 
 export async function createSession(rt: Runtime, input: CreateSessionInput): Promise<CreatedSession> {
@@ -102,6 +105,14 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     startUrls: {},
     notified: [],
   }
+  if (direction === 'withdraw' && input.target !== undefined) {
+    // The same checks as `POST /sessions/:id/target`: format, `allowedTargets`, then `screenAddress`.
+    const target = parseTarget(input.target)
+    checkAllowed(rec, target)
+    await screenTarget(rt, target)
+    rec.destination = targetDestination(target)
+    if (input.lockTarget) rec.targetLocked = true
+  }
   // On the open list before the write: a session is never stored without it.
   await trackOpenSession(rt, rec.id)
   await notify(rt, rec, 'session.created')
@@ -138,6 +149,7 @@ export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise
   }
   const rec = await rt.store.get(id)
   if (!rec || (!isPayCredential(secret) && !safeEqual(rec.secretHash, await sha256Hex(secret)))) throw new OrkException(orkError('UNAUTHORIZED'), 401)
+  if (isRevokedPayLink(rec, secret)) throw new OrkException(orkError('UNAUTHORIZED', { message: 'This pay link no longer works.' }), 401)
   if (Date.now() > rec.expiresAt && !isTerminal(rec.step.state) && rec.status === 'open') {
     rec.status = 'expired'
     rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: orkError('SESSION_EXPIRED') }

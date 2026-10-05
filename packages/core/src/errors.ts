@@ -18,6 +18,7 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
   CONFLICT: 'The session changed at the same time. Try again.',
   ADDRESS_REJECTED: 'This address cannot receive withdrawals. Use another address.',
   TARGET_NOT_ALLOWED: 'This app does not allow withdrawals to this target.',
+  TARGET_LOCKED: 'The app set where these funds go. You cannot change it.',
   BAD_REQUEST: 'The request is not valid.',
   NOT_FOUND: 'Not found.',
   INTERNAL: 'Something went wrong on our side.',

@@ -17,6 +17,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `POST` | `/sessions/:id/select` | Bearer, `Idempotency-Key` | Confirm a quote and start the first leg |
 | `POST` | `/sessions/:id/transitions/:name` | Bearer, `Idempotency-Key` | Fire a transition |
 | `POST` | `/sessions/:id/pay-link` | Bearer client secret | Make a signed pay link |
+| `POST` | `/sessions/:id/pay-link/revoke` | Bearer client secret | Make one pay link stop working |
 | `GET` | `/start/:token` | Signed token | Popup-safe redirect to a provider |
 | `GET` | `/pay/:credential` | Signed credential | Hosted pay page for one session |
 | `GET` | `/return` | none | "You can close this tab" page |
@@ -34,7 +35,7 @@ Session routes need the client secret:
 Authorization: Bearer ors_6a1f0c2b9d8e7f6a5b4c3d2e.4b1f...
 ```
 
-The session id before the dot must equal `:id`. A missing or wrong secret gets `401 UNAUTHORIZED`. A [pay link](#get-pay-credential) credential (`ors_....pay_{exp}_{sig}`) also works, until it expires. When an open session is past its expiry, loading it moves it to `EXPIRED` first.
+The session id before the dot must equal `:id`. A missing or wrong secret gets `401 UNAUTHORIZED`. A [pay link](#get-pay-credential) credential (`ors_....pay_{exp}_{linkId}_{sig}`) also works, until it expires or the app revokes it. When an open session is past its expiry, loading it moves it to `EXPIRED` first.
 
 Session routes record the caller's IP (`cf-connecting-ip`, `x-real-ip` or the first `x-forwarded-for`) for adapters.
 
@@ -52,7 +53,7 @@ Every error is JSON:
 | `401` | Bad client secret, bad start URL signature, bad webhook signature, bad tasks token, or `authorize` returned `null` |
 | `403` | Withdraw target refused: `TARGET_NOT_ALLOWED` or `ADDRESS_REJECTED` |
 | `404` | Unknown route or adapter (`NOT_FOUND`) |
-| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; or a concurrent change (`CONFLICT`) |
+| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; a locked withdraw target (`TARGET_LOCKED`); or a concurrent change (`CONFLICT`) |
 | `410` | Quote expired (`QUOTE_EXPIRED`), session past its deadline (`SESSION_EXPIRED`), or start URL expired (plain text) |
 | `413` | The body is too large (`BAD_REQUEST`): more than 64 KiB for the browser routes, more than 1 MiB for provider webhooks |
 | `422` | No pathway for the method (`NO_QUOTES`), an amount outside `amountBounds` (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`), or an adapter error |
@@ -84,6 +85,7 @@ type PublicSession = {
   destination?: Destination       // withdraw: absent until the user picks a target
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only, when the app set them
+  targetLocked?: boolean          // withdraw only: true when the app set and locked the target
   status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
   country?: string
   currency?: string             // set after the first plan
@@ -161,10 +163,12 @@ Response `200`: a `PlanResult`.
 |---|---|
 | `400` | The body is not valid (for example "Enter a valid address for this network.") |
 | `403` | `TARGET_NOT_ALLOWED` (not in `allowedTargets`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
-| `409` | Not a withdraw session; a payment is in progress; the withdrawal is complete or expired |
+| `409` | Not a withdraw session; the app locked the target (`TARGET_LOCKED`); a payment is in progress; the withdrawal is complete or expired |
 | `503` | `screenAddress` threw (`PROVIDER_UNAVAILABLE`, "We could not check this address. Try again.") |
 
 On a withdraw session, `/plan` and `/quotes` answer `409` ("Choose where to send the funds first.") until a target is set.
+
+When the app created the session with `target` and `lockTarget: true`, the target is already set. Then this route always answers `409 TARGET_LOCKED`, also for the same target and also for a pay link credential. Call `/plan` to get the plan. The session shows `targetLocked: true`. See [Locked targets](../guide/withdraw.md#locked-targets).
 
 ## POST /sessions/:id/quotes
 
@@ -229,23 +233,33 @@ Checks the HMAC signature (`401` when wrong), then the token's expiry (10 minute
 Makes a signed link to the [pay page](#get-pay-credential). Only the client secret can call it: a pay link credential gets `403`.
 
 - Body (optional): `{ "ttlMinutes": 15 }`. The default and the maximum is the session expiry plus 30 minutes.
-- Response `201`: `{ "url": "https://.../pay/ors_....pay_tm5nzp_c7c8...", "expiresAt": "..." }`
+- Response `201`: `{ "id": "9f2c4a1be07d5c36", "url": "https://.../pay/ors_....pay_tm5nzp_9f2c4a1be07d5c36_c7c8...", "expiresAt": "..." }`
 - `404` when `payPage` is `false`.
 
-The backend API `openramp.sessions.payLink(id, { ttlMinutes? })` returns the same object without a client secret.
+`id` identifies the link. Keep it if you can revoke the link later. The backend API `openramp.sessions.payLink(id, { ttlMinutes? })` returns the same object without a client secret.
+
+## POST /sessions/:id/pay-link/revoke
+
+Makes one pay link of the session stop working. Only the client secret can call it: a pay link credential gets `403`.
+
+- Body: `{ "id": "9f2c4a1be07d5c36" }`, the `id` from `/pay-link`.
+- Response `200`: `{ "revoked": true }`. A repeat call gives the same answer.
+- `400` when `id` is not a pay link id, or when the session has 100 revoked links.
+
+After this call, the pay page answers `410` and the session routes answer `401` ("This pay link no longer works.") for that link. Other links and the client secret keep working. The backend API is `openramp.sessions.revokePayLink(id, linkId)`.
 
 ## GET /pay/:credential
 
 A small HTML page that mounts `<openramp-modal>` for the session in embedded mode (`openDeposit` or `openWithdraw`). A person opens it on a phone and pays. See [Agents (MCP)](../guide/agents.md#the-pay-link).
 
-The credential is `{sessionId}.pay_{exp}_{sig}`: `exp` is the expiry (Unix seconds, base 36) and `sig` is an HMAC-SHA256 of the session id and `exp` with `secret`. The page passes the credential to the modal as the client secret.
+The credential is `{sessionId}.pay_{exp}_{linkId}_{sig}`: `exp` is the expiry (Unix seconds, base 36), `linkId` is a random link id (16 hex digits), and `sig` is an HMAC-SHA256 of the session id, `exp` and `linkId` with `secret`. The page passes the credential to the modal as the client secret.
 
 | Status | When |
 |---|---|
 | `200` | HTML with `cache-control: no-store`, `referrer-policy: no-referrer`, and a content security policy with a script nonce and `frame-ancestors 'none'` |
 | `401` | The signature is wrong (plain text) |
 | `404` | The session does not exist, or `payPage` is `false` |
-| `410` | The link expired (plain text) |
+| `410` | The link expired, or the app revoked it (plain text) |
 
 The page imports `payPage.scriptUrl` (default `https://esm.sh/@openrampkit/web@0`).
 

@@ -97,4 +97,46 @@ describe('pay links', () => {
     expect((await get(off, `${BASE}/pay/${t.id}.pay_zz_x`)).status).toBe(404)
     expect(await ramp.sessions.payLink('ors_missing')).toBeNull()
   })
+
+  it('revokes one link: the page and the API refuse it, other links keep working', async () => {
+    const ramp = setup()
+    const s = await ramp.sessions.create({ userId: 'u', country: 'VN', destination: DEST })
+    const a = (await ramp.sessions.payLink(s.id))!
+    const b = (await ramp.sessions.payLink(s.id))!
+    expect(a.id).toMatch(/^[0-9a-f]{16}$/)
+    expect(a.id).not.toBe(b.id)
+    expect(credentialOf(a.url)).toContain(`_${a.id}_`)
+
+    expect(await ramp.sessions.revokePayLink(s.id, a.id)).toBe(true)
+    expect(await ramp.sessions.revokePayLink(s.id, a.id)).toBe(true) // again: no change
+    const page = await get(ramp, a.url)
+    expect(page.status).toBe(410)
+    expect(await page.text()).toBe('This link no longer works. Ask for a new link.')
+    const api = await get(ramp, `${BASE}/sessions/${s.id}`, credentialOf(a.url))
+    expect(api.status).toBe(401)
+    expect(((await api.json()) as { error: { message: string } }).error.message).toBe('This pay link no longer works.')
+    expect((await get(ramp, b.url)).status).toBe(200)
+    expect((await get(ramp, `${BASE}/sessions/${s.id}`, credentialOf(b.url))).status).toBe(200)
+    // The client secret is not a pay link: it keeps working.
+    expect((await get(ramp, `${BASE}/sessions/${s.id}`, s.clientSecret)).status).toBe(200)
+
+    expect(await ramp.sessions.revokePayLink('ors_missing', a.id)).toBe(false)
+    await expect(ramp.sessions.revokePayLink(s.id, 'not-an-id')).rejects.toMatchObject({ status: 400 })
+  })
+
+  it('POST /sessions/:id/pay-link/revoke takes the client secret, not a pay link', async () => {
+    const ramp = setup()
+    const s = await ramp.sessions.create({ userId: 'u', country: 'VN', destination: DEST })
+    const link = (await ramp.sessions.payLink(s.id))!
+    const revoke = (auth: string, body: unknown) =>
+      ramp.handle(new Request(`${BASE}/sessions/${s.id}/pay-link/revoke`, { method: 'POST', headers: { authorization: `Bearer ${auth}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    expect((await revoke(credentialOf(link.url), { id: link.id })).status).toBe(403)
+    expect((await revoke(s.clientSecret, { id: 'x' })).status).toBe(400)
+    const ok = await revoke(s.clientSecret, { id: link.id })
+    expect(ok.status).toBe(200)
+    expect(await ok.json()).toEqual({ revoked: true })
+    expect((await get(ramp, link.url)).status).toBe(410)
+    const other = await ramp.handle(new Request(`${BASE}/sessions/${s.id}/pay-link/other`, { method: 'POST', headers: { authorization: `Bearer ${s.clientSecret}` } }))
+    expect(other.status).toBe(404)
+  })
 })

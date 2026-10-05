@@ -29,6 +29,7 @@ type PublicSession = {
   destination?: Destination       // deposit: set by the app; withdraw: the target the user picked
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only
+  targetLocked?: boolean          // withdraw only: the app set and locked the target
   status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
   country?: string
   currency?: string
@@ -150,7 +151,7 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 | `OrkException` | `new OrkException(error, status = 400)`: throw it across boundaries; the server turns it into a JSON error response |
 | `isOrkError(value)` | Type guard |
 
-Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED` and `TARGET_NOT_ALLOWED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
+Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED`, `TARGET_NOT_ALLOWED` and `TARGET_LOCKED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
 
 ## URL checks
 
