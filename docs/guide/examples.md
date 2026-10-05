@@ -29,6 +29,7 @@ pnpm dev:example   # http://localhost:3000
 | `XENDIT_SECRET_KEY`, `XENDIT_WEBHOOK_TOKEN` | empty | Adds real Xendit merchant pay-in when both are set |
 | `CRON_SECRET` | empty | Protects `/api/cron`. In production, the route refuses all calls when it is not set. |
 | `RELAY_API_KEY` | empty | Relay API key, for `OPENRAMP_MOCK=0`. Relay needs it for deposit address status. |
+| `OPENRAMP_ADMIN_TOKEN` | empty | 32+ characters. Turns on the [admin tools](./admin.md) and the ops dashboard at `/api/openramp/admin`. |
 
 What to look at:
 

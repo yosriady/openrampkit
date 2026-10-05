@@ -7,6 +7,7 @@ import { OrkException } from '@openrampkit/core'
 import { signWebhook } from './crypto.js'
 import { OUTBOX_QUEUE, queueOf } from './queue.js'
 import { putVersioned, withTimeout } from './runtime.js'
+import { addTimeline } from './timeline.js'
 import type { Runtime } from './runtime.js'
 import type { OutboxEvent, SessionRecord } from './store.js'
 
@@ -37,10 +38,14 @@ export async function deliver(rt: Runtime, id: string, body: string): Promise<bo
       }),
       rt.config.timeouts?.webhook ?? 4000,
     )
-    if (!res.ok) rt.log.warn('webhook delivery failed', { status: res.status, id })
+    if (!res.ok) {
+      rt.log.warn('webhook delivery failed', { status: res.status, id })
+      rt.metric('webhook.delivery_failed', 1, { status: String(res.status) })
+    }
     return res.ok
   } catch (e) {
     rt.log.warn('webhook delivery error', { error: String(e), id })
+    rt.metric('webhook.delivery_failed', 1, { status: 'error' })
     return false
   }
 }
@@ -71,6 +76,7 @@ export function applyOutcomes(rt: Runtime, rec: SessionRecord, outcomes: Map<str
     if ((max !== undefined && attempts >= max) || now - e.firstAt >= windowMs) {
       const d = { ...e, attempts, deadAt: now }
       dead.push(d)
+      addTimeline(rec, 'webhook.dead_letter', { event: e.id, eventType: e.type, attempts })
       return [d]
     }
     return [{ ...e, attempts, nextAt: now + backoff(attempts) }]
@@ -81,7 +87,10 @@ export function applyOutcomes(rt: Runtime, rec: SessionRecord, outcomes: Map<str
 }
 
 function logDead(rt: Runtime, rec: SessionRecord, dead: OutboxEvent[]): void {
-  for (const e of dead) rt.log.error('webhook moved to dead letter after retries', { id: e.id, type: e.type, sessionId: rec.id, attempts: e.attempts })
+  for (const e of dead) {
+    rt.log.error('webhook moved to dead letter after retries', { id: e.id, type: e.type, sessionId: rec.id, attempts: e.attempts })
+    rt.metric('webhook.dead_letter', 1, { type: e.type })
+  }
 }
 
 async function deliverAll(rt: Runtime, events: OutboxEvent[]): Promise<Map<string, boolean>> {
@@ -150,6 +159,7 @@ export async function replayDeadLetters(rt: Runtime, sessionId: string): Promise
     if (!rec || !dead.length) return 0
     const now = Date.now()
     rec.outbox = rec.outbox!.map(({ deadAt, ...e }) => (deadAt === undefined ? e : { ...e, attempts: 0, firstAt: now, nextAt: now }))
+    addTimeline(rec, 'webhook.replayed', { count: dead.length })
     try {
       await saveSession(rt, rec)
       return dead.length

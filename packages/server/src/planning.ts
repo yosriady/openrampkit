@@ -78,10 +78,10 @@ export async function quotePathway(rt: Runtime, rec: SessionRecord, p: Pathway, 
     const leg = p.legs[0]!
     const a = rt.adapter(leg.adapterId)
     legQuotes.push(
-      await a.quote(
+      await timed(rt, a.id, () => a.quote(
         { leg, amountOut: { amount, asset: leg.to.asset }, ...(deliverTo[0] ? { deliverTo: deliverTo[0] } : {}), ...(source ? { source } : {}) },
         adapterContext(rt, rec, a, p, 0),
-      ),
+      )),
     )
   } else {
     let nextIn: Amount | undefined
@@ -96,16 +96,29 @@ export async function quotePathway(rt: Runtime, rec: SessionRecord, p: Pathway, 
               asset: source && leg.from.asset.kind === 'crypto' && leg.from.asset.chain === '*' ? { kind: 'crypto', chain: source.chain, token: source.token } : leg.from.asset,
             }
           : nextIn!
-      const q = await a.quote(
+      const q = await timed(rt, a.id, () => a.quote(
         { leg, amountIn, ...(deliverTo[i] ? { deliverTo: deliverTo[i]! } : {}), ...(i === 0 && source ? { source } : {}) },
         adapterContext(rt, rec, a, p, i),
-      )
+      ))
       legQuotes.push(q)
       nextIn = q.output
     }
   }
   const quote = combineLegQuotes(p, legQuotes)
   return { quote, stored: { quote, pathway: p, deliverTo } }
+}
+
+/** Run one adapter quote and report its latency (`quote.latency_ms`, tags `adapter` and `ok`). */
+async function timed<T>(rt: Runtime, adapter: string, run: () => Promise<T>): Promise<T> {
+  const t0 = Date.now()
+  try {
+    const out = await run()
+    rt.metric('quote.latency_ms', Date.now() - t0, { adapter, ok: 'true' })
+    return out
+  } catch (e) {
+    rt.metric('quote.latency_ms', Date.now() - t0, { adapter, ok: 'false' })
+    throw e
+  }
 }
 
 export function combineLegQuotes(p: Pathway, legQuotes: LegQuote[]): Quote {

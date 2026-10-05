@@ -28,6 +28,9 @@ export const openramp =
         : []),
     ],
     webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_dev_only_not_a_secret' },
+    // Admin tools and the ops dashboard at /api/openramp/admin, only when OPENRAMP_ADMIN_TOKEN is set
+    // (at least 32 random characters). Put /admin behind your own auth or a VPN in production.
+    ...(process.env.OPENRAMP_ADMIN_TOKEN ? { admin: { token: process.env.OPENRAMP_ADMIN_TOKEN } } : {}),
     // Withdraw: screen target addresses. Connect a sanctions API here (e.g. Chainalysis) in production.
     // The demo refuses the well-known burn address.
     screenAddress: async (address) => address.toLowerCase() !== BURN,

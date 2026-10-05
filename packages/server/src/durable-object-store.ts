@@ -53,6 +53,7 @@ type Op =
   | { op: 'qclaim'; now: number; limit: number; leaseMs: number; token: string }
   | { op: 'qack'; id: string; token: string }
   | { op: 'qsize' }
+  | { op: 'qrange'; max: number | null; limit: number }
 
 /** The Durable Object class. Export it from your Worker entry and bind it as `OPENRAMP_STORE`. */
 export class OpenRampStore {
@@ -98,6 +99,8 @@ export class OpenRampStore {
       }
       case 'qsize':
         return { size: (await entries()).length }
+      case 'qrange':
+        return { items: queueOps.range(await entries(), op.max ?? Infinity, op.limit) }
       default:
         return { ok: false }
     }
@@ -154,6 +157,10 @@ export function durableObjectStore(ns: DurableObjectNamespaceLike, opts: { sessi
       },
       async size(name) {
         return (await call<{ size: number }>(`q:${name}`, { op: 'qsize' })).size
+      },
+      async range(name, { max, limit }) {
+        // JSON has no Infinity: a missing `max` means no upper bound.
+        return (await call<{ items: Array<{ id: string; dueAt: number }> }>(`q:${name}`, { op: 'qrange', max: Number.isFinite(max) ? max : null, limit })).items
       },
     } satisfies StoreQueue,
   }

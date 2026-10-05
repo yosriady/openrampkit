@@ -9,6 +9,7 @@ import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
 import { trackOpenSession } from './queue.js'
 import { adapterContext } from './runtime.js'
+import { addTimeline } from './timeline.js'
 import type { Runtime } from './runtime.js'
 import type { ActiveLeg, ActivePayment, SessionRecord, StoredQuote } from './store.js'
 import { withdrawSender } from './withdraw.js'
@@ -162,11 +163,23 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   const act = rec.active!
   const leg = act.legs[i]!
   const wrapped = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
+  if (leg.step?.status !== wrapped.status) {
+    addTimeline(rec, `leg.${wrapped.status}`, {
+      index: i,
+      adapterId: leg.adapterId,
+      ...(wrapped.ref ? { ref: wrapped.ref } : {}),
+      ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}),
+      ...(wrapped.error ? { error: wrapped.error.code } : {}),
+    })
+  }
   leg.step = wrapped
   if (wrapped.ref && wrapped.ref !== leg.ref) {
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)
   }
+  // An operator closed this session (`admin.resolve`). Keep the leg data for the record, but do not
+  // send from the treasury, start the next leg, notify or change the session state.
+  if (rec.resolution) return
   const sent = await treasuryStep(rt, rec, i, wrapped)
   if (sent) return setLegStep(rt, rec, i, sent)
   // Leg events of a later attempt get their own key (and so their own event id).
@@ -242,9 +255,13 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
       }),
     ),
   }
+  addTimeline(rec, 'payment.started', { attempt: n, method: stored.pathway.method, provider: stored.pathway.provider })
   try {
     await startLeg(rt, rec, 0)
   } catch (e) {
+    const adapter = stored.pathway.legs[0]?.adapterId ?? 'unknown'
+    rt.metric('start.error', 1, { adapter, code: e instanceof OrkException ? e.error.code : 'INTERNAL' })
+    addTimeline(rec, 'payment.start_failed', { attempt: n, adapterId: adapter })
     rec.active = before.active
     if (before.attempts) rec.attempts = before.attempts
     else delete rec.attempts
@@ -319,10 +336,11 @@ const MONEY_MOVED: LegStatus[] = ['processing', 'succeeded', 'refunded']
 async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
   const att = rec.attempts![k]!
   const leg = att.legs[i]!
+  if (leg.step?.status !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
   leg.step = ls
   if (!MONEY_MOVED.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
-  if (rec.step.state === 'COMPLETED' || underway) {
+  if (rec.step.state === 'COMPLETED' || underway || rec.resolution) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
       await notify(rt, rec, 'session.late_payment', { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })

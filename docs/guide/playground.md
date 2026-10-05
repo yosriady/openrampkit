@@ -92,6 +92,12 @@ The static page cannot serve the hosted checkout page of the mock. Thus, the moc
 3. The widget shows the deposit address, the network and the token. It tells the user to send from an exchange, for example Binance, Coinbase or OKX, and to choose the correct network.
 4. Select **Simulate deposit (test mode)**.
 
+## Ops dashboard (demo)
+
+Below the webhook log, select **Open ops dashboard (demo)**. It shows the server's [admin page](./admin.md) for the sessions in your tab: stat cards, the session table, and a drawer with the timeline, legs and outbox. Try **Resolve** and **Replay webhooks** there.
+
+This is a demo only. The playground uses a fixed admin token, and the server runs in your tab. In production, keep the admin token on your server and put `/admin` behind your own auth or a VPN.
+
 ## Testnet mode (real wallet)
 
 Set **Mode** to **Testnet (real wallet)**. The banner names the network, for example "Testnet: real transactions on Arbitrum Sepolia, test tokens with no value."

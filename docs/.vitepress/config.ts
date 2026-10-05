@@ -51,6 +51,7 @@ export default withMermaid(
               { text: 'Solana', link: '/guide/solana' },
               { text: 'Theming', link: '/guide/theming' },
               { text: 'Agents (MCP)', link: '/guide/agents' },
+              { text: 'Admin and observability', link: '/guide/admin' },
               { text: 'Testing with mocks', link: '/guide/testing' },
               { text: 'Security', link: '/guide/security' },
               { text: 'Contributing', link: 'https://github.com/yosriady/openrampkit/blob/main/CONTRIBUTING.md' },

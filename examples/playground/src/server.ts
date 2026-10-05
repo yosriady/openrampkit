@@ -29,6 +29,12 @@ function randomSecret(): string {
 const webhookSecret = `whsec_${randomSecret()}`
 
 /**
+ * DEMO ONLY: a fixed admin token, so that the playground can open the ops dashboard for the sessions in
+ * this tab. A real server keeps a random admin token in a secret store and never sends it to a browser.
+ */
+export const DEMO_ADMIN_TOKEN = 'playground-demo-admin-token-not-a-secret'
+
+/**
  * Four mock providers with different fees, FX spreads, speeds and coverage, so that the widget can
  * compare routes. All are test only: they move no money. Card checkout uses test card fields in the
  * widget (`cardCheckout: 'form'`), because a static site cannot serve the hosted checkout page.
@@ -75,6 +81,8 @@ export function createPlaygroundServer(opts: { adapters: Adapter[]; passthrough?
     store: memoryStore(),
     adapters: opts.adapters,
     webhooks: { url: HOOKS_URL, secret: webhookSecret },
+    // Admin tools (time index, `GET /admin` dashboard) with the demo token above.
+    admin: { token: DEMO_ADMIN_TOKEN },
     logger: { debug: () => {}, info: () => {}, warn: (m, d) => console.warn(`[openramp] ${m}`, d ?? ''), error: (m, d) => console.error(`[openramp] ${m}`, d ?? '') },
     // Outgoing requests from the server: the webhook to "your backend", and allowed RPC calls.
     fetch: async (input, init) => {
