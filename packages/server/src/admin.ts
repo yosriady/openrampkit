@@ -225,9 +225,26 @@ function currencyOf(a: Amount): string {
   return a.asset.kind === 'fiat' ? a.asset.currency : (a.asset.symbol ?? `${a.asset.chain}/${a.asset.token}`)
 }
 
+const isPositive = (v: string) => /^\d*\.?\d+$/.test(v) && /[1-9]/.test(v)
+
+/**
+ * The amount to show for a session: what the user pays in, from the first leg's quote. Some flows
+ * have no amount up front (for example a transfer from an exchange quotes 0), so then the amount
+ * that arrived is used: the last leg's confirmed output, else its quoted output.
+ */
+export function amountOf(rec: SessionRecord): Amount | undefined {
+  const legs = rec.active?.legs ?? []
+  const input = legs[0]?.quote.input
+  if (input && isPositive(input.amount)) return input
+  const last = legs[legs.length - 1]
+  const out = last?.step?.output ?? last?.quote.output
+  if (out && isPositive(out.amount)) return out
+  return input
+}
+
 function summarize(rt: Runtime, rec: SessionRecord, now: number): AdminSessionSummary {
   const act = rec.active
-  const input = act?.legs[0]?.quote.input
+  const input = amountOf(rec)
   return {
     id: rec.id,
     direction: rec.direction,
@@ -447,7 +464,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
     dir.total++
     inc(dir.byStatus, rec.status)
     if (rec.resolution) stats.resolved++
-    const input = rec.active?.legs[0]?.quote.input
+    const input = amountOf(rec)
     if (rec.status === 'completed' && input) {
       const currency = currencyOf(input)
       const key = `${rec.direction}|${currency}`

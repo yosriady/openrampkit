@@ -7,7 +7,7 @@ import { USDC } from '@openrampkit/core'
 import type { LegSpec, LegStatus, LegStep } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
 import type { OpenRampConfig, SessionStore } from './index.js'
-import { tokenMatches } from './admin.js'
+import { amountOf, tokenMatches } from './admin.js'
 import * as cryptoMod from './crypto.js'
 
 // Watch the compare that the admin auth uses (the constant-time path).
@@ -392,5 +392,26 @@ describe('admin page', () => {
     const again = (await t.call('/admin')).headers.get('content-security-policy')!
     expect(again).not.toBe(csp)
     expect((await make({ admin: { token: TOKEN, page: false } }).call('/admin')).status).toBe(404)
+  })
+})
+
+describe('amountOf', () => {
+  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } })
+  const vnd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'VND' } })
+  const rec = (legs: Array<{ input: ReturnType<typeof usdc> | ReturnType<typeof vnd>; output: ReturnType<typeof usdc>; done?: ReturnType<typeof usdc> }>) =>
+    ({ active: { legs: legs.map((l) => ({ quote: { input: l.input, output: l.output }, ...(l.done ? { step: { output: l.done } } : {}) })) } }) as unknown as Parameters<typeof amountOf>[0]
+
+  it('shows what the user pays in when the quote has an amount', () => {
+    expect(amountOf(rec([{ input: vnd('500000'), output: usdc('19.61') }]))).toEqual(vnd('500000'))
+  })
+
+  it('shows the amount that arrived when the flow has no amount up front (exchange transfer)', () => {
+    expect(amountOf(rec([{ input: usdc('0'), output: usdc('0'), done: usdc('25') }]))).toEqual(usdc('25'))
+    expect(amountOf(rec([{ input: usdc(''), output: usdc('12.5') }]))).toEqual(usdc('12.5'))
+  })
+
+  it('falls back to the quoted input when nothing is known yet', () => {
+    expect(amountOf(rec([{ input: usdc('0'), output: usdc('0') }]))).toEqual(usdc('0'))
+    expect(amountOf({} as Parameters<typeof amountOf>[0])).toBeUndefined()
   })
 })

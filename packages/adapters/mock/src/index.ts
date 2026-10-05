@@ -98,6 +98,9 @@ export type MockLocalChain = {
 }
 
 /** Payout methods of the mock offramp leg */
+/** The amount a simulated deposit sends when the transfer has no amount up front */
+export const SIMULATED_DEPOSIT = '25'
+
 export const MOCK_PAYOUT_METHODS = ['bank_transfer', 'gcash', 'momo', 'promptpay']
 
 /** Rough FX to USD for quotes. Test data only. */
@@ -747,7 +750,12 @@ export function mockAdapter(opts: MockOptions = {}) {
         throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
       }
       if (t === 'simulate_payment' || t === 'simulate_deposit' || t === 'submit_tx') {
-        await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
+        // A transfer with no amount up front (any amount): the simulated deposit sends a test amount,
+        // so the session and the admin tools show what arrived, as a real provider reports it.
+        const output = t === 'simulate_deposit' && o.output && !/[1-9]/.test(o.output.amount)
+          ? { ...o.output, amount: typeof inputs?.amount === 'string' && /[1-9]/.test(inputs.amount) ? inputs.amount : SIMULATED_DEPOSIT }
+          : o.output
+        await ctx.shared.put(orderKey(ref), { ...o, output, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
         return {
           state: 'PROCESSING', sub: 'SETTLING', status: 'processing', ref,
           transitions: [awaitPoll(POLL)],

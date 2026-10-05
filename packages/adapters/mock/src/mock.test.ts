@@ -4,7 +4,7 @@ import type { LegEvent, RouteContext } from '@openrampkit/adapter'
 import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, isSolanaAddress, planPathways } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, memoryKV, runAdapterConformance } from '@openrampkit/adapter/testing'
-import { mockAdapter } from './index.js'
+import { mockAdapter, SIMULATED_DEPOSIT } from './index.js'
 
 const DEST = '0x000000000000000000000000000000000000beef'
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']! }
@@ -540,5 +540,19 @@ describe('mock adapter: several instances (demo options)', () => {
     const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', warning: 'In your exchange, withdraw USDC and choose the Arbitrum network. This is a test address.' })
     expect(await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)).toMatchObject({ state: 'PROCESSING' })
+  })
+
+  it('exchange: a deposit with no amount up front reports the simulated amount that arrived', async () => {
+    const a = mockAdapter({ crypto: true, exchange: true, settleMs: 0 })
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
+    const q = await a.quote({ leg: transferLeg, amountIn: { amount: '0', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
+    const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
+    await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)
+    expect(await a.status({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', output: { amount: SIMULATED_DEPOSIT } })
+    // A quote with an amount keeps that amount.
+    const q2 = await a.quote({ leg: transferLeg, amountIn: { amount: '10', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
+    const s2 = await a.start({ leg: transferLeg, quote: q2 }, ctx)
+    await a.transition!({ leg: transferLeg, ref: s2.ref!, name: 'simulate_deposit' }, ctx)
+    expect((await a.status({ leg: transferLeg, ref: s2.ref! }, ctx)).output?.amount).toBe(q2.output.amount)
   })
 })
