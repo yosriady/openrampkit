@@ -290,6 +290,7 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Faster Payments, pay by bank (UK), Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
 | `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |
 | `xendit` | [`adapter-xendit`](packages/adapters/xendit) | QRIS, QR Ph, PromptPay, PayNow and e-wallets into your own merchant account | Working. Merchant destination only |
+| `kotani` | [`adapter-kotani`](packages/adapters/kotani) | Kotani Pay: M-Pesa and mobile money in Africa (KE, GH, UG, TZ, ZM, RW, CM, CI, SN, CD), bank checkout (ZA; NG TO VERIFY) to USDC and USDT. Mobile money payouts for withdrawals | New. Self-serve sandbox. Some details TO VERIFY |
 | `meld` | [`adapter-meld`](packages/adapters/meld) | Aggregator: card, UPI, Pix, SEPA, SEPA Instant, ACH, iDEAL, Bancontact, BLIK, PayID, SPEI, PSE, Khipu, M-Pesa, mobile money and more | New. In progress |
 | `onramper` | [`adapter-onramper`](packages/adapters/onramper) | Aggregator: card, SEPA, SEPA Instant, ACH, Pix, UPI, IMPS, iDEAL, Bancontact, Faster Payments, SPEI, Khipu and more | New. In progress |
 | `bridge` | [`adapter-bridge`](packages/adapters/bridge) | Bridge virtual bank accounts (ACH, wire, SEPA, SPEI, Pix, Faster Payments) into USDC, and payouts to a US bank or IBAN | New. Needs a Bridge account and user KYC |

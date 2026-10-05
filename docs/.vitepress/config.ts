@@ -81,6 +81,7 @@ export default withMermaid(
               { text: 'LI.FI', link: '/adapters/lifi' },
               { text: 'Swapped', link: '/adapters/swapped' },
               { text: 'Xendit', link: '/adapters/xendit' },
+              { text: 'Kotani Pay', link: '/adapters/kotani' },
               { text: 'Coinbase', link: '/adapters/coinbase' },
               { text: 'Binance', link: '/adapters/binance' },
               { text: 'Transak', link: '/adapters/transak' },
