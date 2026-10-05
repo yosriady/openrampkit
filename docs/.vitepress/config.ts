@@ -80,6 +80,7 @@ export default withMermaid(
               { text: 'Relay', link: '/adapters/relay' },
               { text: 'Swapped', link: '/adapters/swapped' },
               { text: 'Xendit', link: '/adapters/xendit' },
+              { text: 'Kotani Pay', link: '/adapters/kotani' },
               { text: 'Coinbase', link: '/adapters/coinbase' },
               { text: 'Transak', link: '/adapters/transak' },
               { text: 'MoonPay', link: '/adapters/moonpay' },

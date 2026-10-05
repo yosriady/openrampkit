@@ -226,6 +226,15 @@ importers:
         specifier: workspace:*
         version: link:../../core
 
+  packages/adapters/kotani:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/adapters/meld:
     dependencies:
       '@openrampkit/adapter':
