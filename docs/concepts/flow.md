@@ -161,7 +161,7 @@ type Transition =
 
 The client fires SUBMIT and SURFACE_RESULT with `POST /sessions/:id/transitions/:name`. The server refuses a name that is not in the current step, and refuses AWAIT names.
 
-One name is special: `restart`. It leaves the current payment and goes back to `SELECT_METHOD`. It is allowed before payment starts, while the step is `PAYMENT`, and after a terminal state other than `COMPLETED`. The modal's "Choose another method" button on a `PAYMENT` step fires it, and so does `DepositController.back()` on a `PAYMENT` step.
+One name is special: `restart`. It leaves the current payment and goes back to `SELECT_METHOD`. It is allowed before payment starts, while the step is `PAYMENT`, and after a terminal state other than `COMPLETED`. The modal's "Choose another method" button on a `PAYMENT` step fires it, and so does `DepositController.back()` on a `PAYMENT` step. The server keeps the left payment as an earlier attempt, because the user may have paid it already. A late provider event for it still applies: the session completes with that payment, or the server sends `session.late_payment` when another payment is in progress or complete.
 
 ## Legs and the session step
 

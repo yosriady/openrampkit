@@ -1,5 +1,5 @@
 import { VersionConflictError } from './store.js'
-import type { SessionRecord, SessionStore } from './store.js'
+import type { SessionRecord, SessionStore, StoreQueue } from './store.js'
 
 /**
  * The few Redis calls the store needs. `@upstash/redis` (HTTP, works on Cloudflare Workers and Vercel Edge)
@@ -24,6 +24,61 @@ redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
 return 1
 `
 
+// Queue scripts. Each queue is a sorted set (id -> due time in ms) and a hash (id -> claim token).
+// Both keys share a hash tag, so they live in one slot on Redis Cluster.
+// KEYS[1] = sorted set, KEYS[2] = token hash.
+
+// ARGV[1] = id, ARGV[2] = due time. A claimed id gets the new due time; an unclaimed one keeps the earlier time.
+export const QUEUE_PUSH_SCRIPT = `
+local cur = redis.call('ZSCORE', KEYS[1], ARGV[1])
+local due = ARGV[2]
+if cur and redis.call('HEXISTS', KEYS[2], ARGV[1]) == 0 and tonumber(cur) < tonumber(due) then due = cur end
+redis.call('ZADD', KEYS[1], due, ARGV[1])
+redis.call('HDEL', KEYS[2], ARGV[1])
+return 1
+`
+
+// ARGV[1] = now, ARGV[2] = limit, ARGV[3] = lease end, ARGV[4] = token. Returns the claimed ids.
+export const QUEUE_CLAIM_SCRIPT = `
+local ids = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, tonumber(ARGV[2]))
+for _, id in ipairs(ids) do
+  redis.call('ZADD', KEYS[1], ARGV[3], id)
+  redis.call('HSET', KEYS[2], id, ARGV[4])
+end
+return ids
+`
+
+// ARGV[1] = id, ARGV[2] = token. Removes the id only when it still has this claim.
+export const QUEUE_ACK_SCRIPT = `
+if redis.call('HGET', KEYS[2], ARGV[1]) == ARGV[2] then
+  redis.call('ZREM', KEYS[1], ARGV[1])
+  redis.call('HDEL', KEYS[2], ARGV[1])
+  return 1
+end
+return 0
+`
+
+export const QUEUE_SIZE_SCRIPT = `return redis.call('ZCARD', KEYS[1])`
+
+function redisQueue(redis: RedisLike, p: string): StoreQueue {
+  const keys = (name: string) => [`${p}q:{${name}}`, `${p}qt:{${name}}`]
+  return {
+    async push(name, id, dueAt) {
+      await redis.eval(QUEUE_PUSH_SCRIPT, keys(name), [id, String(Math.floor(dueAt))])
+    },
+    async claim(name, { now, limit, leaseMs, token }) {
+      const ids = await redis.eval(QUEUE_CLAIM_SCRIPT, keys(name), [String(Math.floor(now)), String(limit), String(Math.floor(now + leaseMs)), token])
+      return Array.isArray(ids) ? ids.map(String) : []
+    },
+    async ack(name, id, token) {
+      return Number(await redis.eval(QUEUE_ACK_SCRIPT, keys(name), [id, token])) === 1
+    },
+    async size(name) {
+      return Number(await redis.eval(QUEUE_SIZE_SCRIPT, keys(name), []))
+    },
+  }
+}
+
 export type RedisStoreOptions = {
   /** Key prefix. Default `openramp:` */
   prefix?: string
@@ -31,7 +86,7 @@ export type RedisStoreOptions = {
   sessionTtlSec?: number
 }
 
-/** Session store on Redis with an atomic version check. Suitable for production. */
+/** Session store on Redis with an atomic version check and atomic queues (sorted sets). Suitable for production. */
 export function redisStore(redis: RedisLike, opts: RedisStoreOptions = {}): SessionStore {
   const p = opts.prefix ?? 'openramp:'
   const ttl = opts.sessionTtlSec ?? 60 * 60 * 24 * 7
@@ -56,6 +111,7 @@ export function redisStore(redis: RedisLike, opts: RedisStoreOptions = {}): Sess
         await redis.set(`${p}k:${key}`, JSON.stringify(value), ttlSec ? { ex: Math.max(1, Math.ceil(ttlSec)) } : undefined)
       },
     },
+    queue: redisQueue(redis, p),
   }
 }
 

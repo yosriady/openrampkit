@@ -1,149 +1,125 @@
 // Background work, run by `openramp.sweep()` (for example from a cron trigger or `POST /tasks/sweep`):
-// retry failed webhooks, refresh open payments, expire old sessions.
+// retry webhooks, refresh open payments, expire old sessions.
 //
-// The outbox and the open-session list are small id lists in the store's KV space. KV stores are not
-// atomic, so two sweeps at the same time can deliver a webhook twice. Webhooks are at-least-once anyway:
-// the app must credit idempotently by event or session id.
+// Both lists are store queues (see queue.ts): one entry per session id, with atomic push, claim and ack.
+// A claim takes the entries that are due longest, so every session gets its turn (round robin), and it
+// holds a lease, so a second sweep at the same time skips those entries. Webhooks are still
+// at-least-once (a lease can end during a slow run): the app must dedupe by event id.
 
-import { isTerminal, orkError } from '@openrampkit/core'
-import { signWebhook } from './crypto.js'
-import { refreshActive } from './legs.js'
+import { isTerminal, OrkException, orkError } from '@openrampkit/core'
+import { refreshActive, refreshAttempts } from './legs.js'
 import { notify } from './notify.js'
-import { saveSession, withTimeout } from './runtime.js'
+import { flushOutbox, saveSession } from './outbox.js'
+import { putVersioned } from './runtime.js'
+import { claimToken, OPEN_QUEUE, OUTBOX_QUEUE, queueOf } from './queue.js'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
 
-const OUTBOX = 'outbox'
-const OPEN = 'open-sessions'
-const LIST_TTL_SEC = 60 * 60 * 24 * 14
-const MAX_LIST = 5000
-const RETRY_BASE_MS = 30_000
-const RETRY_MAX_MS = 60 * 60_000
+export { trackOpenSession } from './queue.js'
 
-export type OutboxEntry = { id: string; type: string; sessionId?: string; body: string; attempts: number; nextAt: number }
+/** How long a sweep holds the entries it claimed. Longer than one sweep run. */
+const LEASE_MS = 10 * 60_000
 
 export type SweepResult = {
   webhooks: { retried: number; delivered: number; dropped: number; pending: number }
   sessions: { checked: number; changed: number; expired: number; open: number }
 }
 
-async function readList(rt: Runtime, key: string): Promise<string[]> {
-  return (await rt.store.kv.get<string[]>(key)) ?? []
-}
+type LegacyOutboxEntry = { id: string; type: string; sessionId?: string; body: string; attempts: number; nextAt: number }
 
-async function writeList(rt: Runtime, key: string, ids: string[]): Promise<void> {
-  const unique = [...new Set(ids)]
-  if (unique.length > MAX_LIST) rt.log.warn(`${key} list is full; the oldest ${unique.length - MAX_LIST} ids are dropped (run the sweep more often)`)
-  await rt.store.kv.put(key, unique.slice(-MAX_LIST), LIST_TTL_SEC)
-}
-
-export async function trackOpenSession(rt: Runtime, id: string): Promise<void> {
-  await writeList(rt, OPEN, [...(await readList(rt, OPEN)), id])
-}
-
-/** POST one signed webhook. Returns true on a 2xx answer. */
-export async function deliver(rt: Runtime, id: string, body: string): Promise<boolean> {
-  const hook = rt.config.webhooks
-  if (!hook) return true
-  const ts = Math.floor(Date.now() / 1000)
-  try {
-    const res = await withTimeout(
-      rt.fetch(hook.url, {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'openramp-id': id,
-          'openramp-timestamp': String(ts),
-          'openramp-signature': await signWebhook(hook.secret, id, ts, body),
-        },
-        body,
-      }),
-      rt.config.timeouts?.webhook ?? 4000,
-    )
-    if (!res.ok) rt.log.warn('webhook delivery failed', { status: res.status, id })
-    return res.ok
-  } catch (e) {
-    rt.log.warn('webhook delivery error', { error: String(e), id })
-    return false
+/**
+ * Earlier versions kept the outbox and the open-session list as JSON arrays in the KV space (`outbox`,
+ * `open-sessions`). Move what is left of them to the queues, so nothing in flight is lost on upgrade.
+ */
+async function migrateLegacyLists(rt: Runtime): Promise<void> {
+  const q = queueOf(rt.store)
+  const open = await rt.store.kv.get<string[]>('open-sessions')
+  if (open?.length) {
+    for (const id of open) await q.push(OPEN_QUEUE, id, Date.now())
+    await rt.store.kv.put('open-sessions', null, 60)
   }
-}
-
-/** Keep a failed delivery for retry by `sweep()`. */
-export async function enqueue(rt: Runtime, entry: Omit<OutboxEntry, 'nextAt'>): Promise<void> {
-  const full: OutboxEntry = { ...entry, nextAt: Date.now() + backoff(entry.attempts) }
-  await rt.store.kv.put(`${OUTBOX}:${entry.id}`, full, LIST_TTL_SEC)
-  await writeList(rt, OUTBOX, [...(await readList(rt, OUTBOX)), entry.id])
-}
-
-function backoff(attempts: number): number {
-  return Math.min(RETRY_BASE_MS * 2 ** Math.max(0, attempts - 1), RETRY_MAX_MS)
+  const outbox = await rt.store.kv.get<string[]>('outbox')
+  if (!outbox?.length) return
+  const kept: string[] = []
+  for (const eid of outbox) {
+    const e = await rt.store.kv.get<LegacyOutboxEntry>(`outbox:${eid}`)
+    let moved = !e?.sessionId
+    for (let attempt = 0; !moved && attempt < 3; attempt++) {
+      const rec = await rt.store.get(e!.sessionId!)
+      if (!rec) {
+        rt.log.warn('old outbox entry for a session that is not in the store; dropped', { id: e!.id, sessionId: e!.sessionId })
+        moved = true
+        break
+      }
+      if (!rec.outbox?.some((x) => x.id === e!.id)) {
+        ;(rec.outbox ??= []).push({ id: e!.id, type: e!.type, body: e!.body, attempts: e!.attempts, firstAt: Date.now(), nextAt: e!.nextAt })
+      }
+      await q.push(OUTBOX_QUEUE, rec.id, e!.nextAt)
+      try {
+        await putVersioned(rt, rec)
+        moved = true
+      } catch (err) {
+        if (!(err instanceof OrkException && err.status === 409)) throw err
+      }
+    }
+    if (moved) await rt.store.kv.put(`outbox:${eid}`, null, 60)
+    else kept.push(eid)
+  }
+  await rt.store.kv.put('outbox', kept.length ? kept : null, kept.length ? 60 * 60 * 24 * 14 : 60)
 }
 
 export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise<SweepResult> {
   const limit = opts.limit ?? 50
+  await migrateLegacyLists(rt)
   const now = Date.now()
-  const maxAttempts = rt.config.webhooks?.maxAttempts ?? 8
+  const q = queueOf(rt.store)
+  const token = claimToken()
   const result: SweepResult = { webhooks: { retried: 0, delivered: 0, dropped: 0, pending: 0 }, sessions: { checked: 0, changed: 0, expired: 0, open: 0 } }
 
-  // 1. Webhook outbox
-  const keep: string[] = []
-  for (const id of await readList(rt, OUTBOX)) {
-    const entry = await rt.store.kv.get<OutboxEntry>(`${OUTBOX}:${id}`)
-    if (!entry) continue
-    if (entry.nextAt > now || result.webhooks.retried >= limit) {
-      keep.push(id)
-      continue
+  // 1. Webhook outbox: session ids with events to deliver
+  for (const sid of await q.claim(OUTBOX_QUEUE, { now, limit, leaseMs: LEASE_MS, token })) {
+    let next: number | undefined
+    try {
+      next = await flushOutbox(rt, sid, now, result.webhooks)
+    } catch (e) {
+      rt.log.warn('sweep: webhook retry failed', { sessionId: sid, error: String(e) })
+      continue // the lease ends and a later sweep tries again
     }
-    result.webhooks.retried++
-    if (await deliver(rt, entry.id, entry.body)) {
-      result.webhooks.delivered++
-      await rt.store.kv.put(`${OUTBOX}:${id}`, null, 60)
-      continue
-    }
-    const attempts = entry.attempts + 1
-    if (attempts >= maxAttempts) {
-      result.webhooks.dropped++
-      rt.log.error('webhook dropped after retries', { id, type: entry.type, sessionId: entry.sessionId, attempts })
-      await rt.store.kv.put(`${OUTBOX}:${id}`, null, 60)
-      continue
-    }
-    await rt.store.kv.put(`${OUTBOX}:${id}`, { ...entry, attempts, nextAt: now + backoff(attempts) }, LIST_TTL_SEC)
-    keep.push(id)
+    if (next === undefined) await q.ack(OUTBOX_QUEUE, sid, token)
+    else await q.push(OUTBOX_QUEUE, sid, next)
   }
-  await writeList(rt, OUTBOX, keep)
-  result.webhooks.pending = keep.length
+  result.webhooks.pending = await q.size(OUTBOX_QUEUE)
 
-  // 2. Open sessions: expire, or refresh the active payment
-  const stillOpen: string[] = []
-  for (const id of await readList(rt, OPEN)) {
+  // 2. Open sessions: expire, or refresh the payment (and earlier attempts that still wait)
+  for (const id of await q.claim(OPEN_QUEUE, { now, limit, leaseMs: LEASE_MS, token })) {
     const rec = await rt.store.get(id)
-    if (!rec || isTerminal(rec.step.state)) continue
-    if (result.sessions.checked >= limit) {
-      stillOpen.push(id)
+    if (!rec || isTerminal(rec.step.state)) {
+      await q.ack(OPEN_QUEUE, id, token)
       continue
     }
     result.sessions.checked++
+    let saved = true
     try {
       // Expire when nothing started, or when the payment still waits for the user past the deadline.
       const waitingForUser = rec.active?.legs[rec.active.index]?.step?.status === 'awaiting_user'
       if (Date.now() > rec.expiresAt && (!rec.active || waitingForUser)) {
         expire(rec)
-        await saveSession(rt, rec)
         await notify(rt, rec, 'session.expired')
+        await saveSession(rt, rec)
         result.sessions.expired++
-        continue
-      }
-      if (await refreshActive(rt, rec, true)) {
+      } else if ((await refreshActive(rt, rec, true)) || (await refreshAttempts(rt, rec))) {
         await saveSession(rt, rec)
         result.sessions.changed++
       }
     } catch (e) {
+      saved = false
       rt.log.warn('sweep: session check failed', { id, error: String(e) })
     }
-    if (!isTerminal(rec.step.state)) stillOpen.push(id)
+    // Back of the line: a later push time means a later turn. Keep the session when its save failed.
+    if (saved && isTerminal(rec.step.state)) await q.ack(OPEN_QUEUE, id, token)
+    else await q.push(OPEN_QUEUE, id, Date.now())
   }
-  await writeList(rt, OPEN, stillOpen)
-  result.sessions.open = stillOpen.length
+  result.sessions.open = await q.size(OPEN_QUEUE)
   return result
 }
 

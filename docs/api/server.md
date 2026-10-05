@@ -28,7 +28,7 @@ const openramp = createOpenRamp({
 | `policy.methodPriority` | `Record<country, string[]>` | built-in | Method order per country |
 | `policy.disabledMethods` | `string[]` | none | Methods never offered |
 | `policy.hopPreference` | `CryptoAsset[]` | USDC on Base, Arbitrum, Polygon, Optimism, Ethereum | Hop assets for two-leg pathways, most preferred first. See [Hops](../concepts/pathways.md#hops). |
-| `webhooks` | `{ url: string; secret: string; maxAttempts?: number }` | none | Signed webhooks to your backend. `secret` must have at least 16 characters (use 32 random bytes). `sweep()` retries failed deliveries up to `maxAttempts` (default `8`) times in all. See [Delivery](../guide/webhooks.md#delivery). |
+| `webhooks` | `{ url: string; secret: string; retryHours?: number; maxAttempts?: number }` | none | Signed webhooks to your backend. `secret` must have at least 16 characters (use 32 random bytes). `sweep()` retries failed deliveries for `retryHours` (default `24`), or until `maxAttempts` attempts in all when you set it. Then the event is a dead letter. See [Delivery](../guide/webhooks.md#delivery). |
 | `tasksToken` | `string` | none | Bearer token for `POST /tasks/sweep` and `GET /health?deep=1`. At least 16 characters. Without it, those two are off. |
 | `geo` | `(req) => { country?, region? } \| undefined` | Cloudflare / Vercel headers | Country and region for `POST /sessions` |
 | `authorize` | `(req, body) => Promise<CreateSessionInput \| null>` | none | Enables `POST /sessions` from the browser or another service |
@@ -62,6 +62,7 @@ await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>:
 await openramp.sweep({ limit? })       // Promise<SweepResult>: retry webhooks, refresh open payments, expire sessions
 
 await openramp.webhooks.verify(req, rawBody) // Promise<boolean>: verify a webhook this server sent
+await openramp.webhooks.replay(sessionId)    // Promise<number>: send the dead letters of a session again
 ```
 
 `handle` never throws. Errors become JSON responses (see [HTTP routes](./http.md#errors)). It answers `OPTIONS` with `204` and the CORS headers.
@@ -69,6 +70,8 @@ await openramp.webhooks.verify(req, rawBody) // Promise<boolean>: verify a webho
 `sessions.refresh(id)` skips the 2-second rate limit that browser polls have. It sends any webhooks that become due. You rarely need it: `sweep()` refreshes every open session.
 
 `webhooks.verify` returns `false` when `config.webhooks` is not set.
+
+`webhooks.replay(sessionId)` sends again the events of one session whose retries stopped (dead letters). They keep their event ids and get a new retry window. It returns the number of events, or `0` when the session has none.
 
 The type of the returned object is exported as `OpenRamp`.
 
@@ -81,8 +84,8 @@ Users close tabs, and webhook deliveries fail. `openramp.sweep()` does the backg
 
 Each run does three things:
 
-1. **Retries failed webhooks.** A delivery that fails (no 2xx answer, or a timeout) goes to an outbox in the store. The sweep sends it again when it is due. The wait starts at 30 seconds and doubles after each failed attempt, up to 1 hour. After `webhooks.maxAttempts` attempts in all (default 8), the server drops the event and logs `webhook dropped after retries` as an error.
-2. **Refreshes open payments.** For each open session with an active payment, it asks the active leg's adapter for status, like `sessions.refresh(id)`. This settles legs without provider webhooks (Relay) after the user leaves.
+1. **Retries failed webhooks.** Each event is saved in its session record (the outbox), and the session id goes on the outbox queue. A delivery that fails (no 2xx answer, or a timeout) stays there. The sweep sends it again when it is due. The wait starts at 30 seconds and doubles after each failed attempt, up to 2 hours. After `webhooks.retryHours` (default 24), or `webhooks.maxAttempts` attempts when you set it, the event becomes a dead letter in the session record. The server logs `webhook moved to dead letter after retries` as an error. `openramp.webhooks.replay(sessionId)` sends the dead letters again.
+2. **Refreshes open payments.** For each open session with an active payment, it asks the active leg's adapter for status, like `sessions.refresh(id)`. This settles legs without provider webhooks (Relay) after the user leaves. It also asks for the status of earlier attempts that the user left with `restart` and that still wait. When one of them was paid, the session completes with it.
 3. **Expires idle sessions.** A session past its expiry moves to `EXPIRED` when no payment started, or when the active leg still waits for the user (`awaiting_user`). The server sends `session.expired`. A leg that the provider is processing is not expired: the sweep refreshes it instead.
 
 ```ts
@@ -92,13 +95,15 @@ type SweepResult = {
 }
 ```
 
-`limit` (default `50`) caps the webhooks retried and the sessions checked in one run. The rest wait for the next run.
+`limit` (default `50`) caps the sessions with webhooks to retry and the open sessions to check in one run. The rest wait for the next run. `webhooks.pending` is the number of sessions on the outbox queue. A session can stay there for up to 30 seconds after its last event was sent; the next due run removes it.
+
+The outbox queue and the open-session list are [store queues](../deploy/stores.md#queues): one entry per session id, with an atomic add. A session that is added while a sweep runs is never lost. Each run takes the entries that waited longest, so every open session gets its turn (round robin), also with more than `limit` open sessions. The run holds a 10-minute lease on what it took, so a second sweep at the same time skips those entries.
 
 ::: warning At-least-once delivery
-The outbox and the list of open sessions are small lists in the store's key-value space. Key-value stores are not atomic, so two sweeps that run at the same time can send the same webhook twice. Deduplicate by event id (`openramp-id`) in your backend. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
+A delivery can still arrive more than once, for example after a timeout. A repeat has the same event id. Deduplicate by event id (`openramp-id`) in your backend. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
 :::
 
-The server tracks only the sessions it creates. The open-session list and the outbox list each keep up to the last 5,000 ids. When a list is full, the server drops the oldest ids and logs a warning: run the sweep more often.
+The server tracks only the sessions it creates. A session goes back on the open-session list after a `restart`, and when a provider event arrives for it.
 
 ## CreateSessionInput
 

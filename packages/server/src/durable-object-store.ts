@@ -1,8 +1,9 @@
 // Session store on Cloudflare Durable Objects: strongly consistent and built into Workers (no extra service).
 //
-// One Durable Object per key (`s:<sessionId>` for sessions, `k:<key>` for everything else). A Durable
-// Object handles one request at a time, so the version check and the write are atomic. Values with a
-// TTL are checked on read and deleted by an alarm.
+// One Durable Object per key (`s:<sessionId>` for sessions, `k:<key>` for everything else), and one per
+// queue (`q:<queue>`, one storage key per entry). A Durable Object handles one request at a time, so the
+// version check and the write, and each queue operation, are atomic. Values with a TTL are checked on
+// read and deleted by an alarm.
 //
 // This file has no `cloudflare:*` imports: the class uses the plain `fetch` protocol of Durable Objects,
 // so the server package still builds for Node, Bun and Deno.
@@ -18,8 +19,8 @@
 //   export { OpenRampStore } from '@openrampkit/server'
 //   createOpenRamp({ store: durableObjectStore(env.OPENRAMP_STORE), ... })
 
-import { VersionConflictError } from './store.js'
-import type { SessionRecord, SessionStore } from './store.js'
+import { queueOps, VersionConflictError } from './store.js'
+import type { SessionRecord, SessionStore, StoreQueue } from './store.js'
 
 type Stored = { value: string; exp?: number }
 
@@ -30,6 +31,10 @@ export type DurableObjectStateLike = {
     put(key: string, value: unknown): Promise<void>
     deleteAll(): Promise<void>
     setAlarm(scheduledTime: number): Promise<void>
+    /** Needed for queues. A real Durable Object storage has it. */
+    list?<T = unknown>(opts: { prefix: string }): Promise<Map<string, T>>
+    /** Needed for queues. A real Durable Object storage has it. */
+    delete?(key: string): Promise<unknown>
   }
 }
 
@@ -39,7 +44,15 @@ export type DurableObjectNamespaceLike = {
   get(id: never): { fetch(input: string, init?: RequestInit): Promise<Response> }
 }
 
-type Op = { op: 'get' } | { op: 'put'; value: string; ttlSec?: number; expectedVersion?: number }
+type QueueEntry = { dueAt: number; token?: string }
+
+type Op =
+  | { op: 'get' }
+  | { op: 'put'; value: string; ttlSec?: number; expectedVersion?: number }
+  | { op: 'qpush'; id: string; dueAt: number }
+  | { op: 'qclaim'; now: number; limit: number; leaseMs: number; token: string }
+  | { op: 'qack'; id: string; token: string }
+  | { op: 'qsize' }
 
 /** The Durable Object class. Export it from your Worker entry and bind it as `OPENRAMP_STORE`. */
 export class OpenRampStore {
@@ -47,10 +60,12 @@ export class OpenRampStore {
 
   async fetch(req: Request): Promise<Response> {
     const op = (await req.json()) as Op
+    if (op.op.startsWith('q')) return Response.json(await this.queue(op))
     const now = Date.now()
     const cur = await this.state.storage.get<Stored>('v')
     const live = cur && (!cur.exp || cur.exp > now) ? cur : undefined
     if (op.op === 'get') return Response.json({ value: live?.value ?? null })
+    if (op.op !== 'put') return Response.json({ ok: false })
     if (op.expectedVersion !== undefined && live) {
       const version = (JSON.parse(live.value) as { version?: number }).version
       if (version !== op.expectedVersion) return Response.json({ ok: false })
@@ -59,6 +74,33 @@ export class OpenRampStore {
     await this.state.storage.put('v', { value: op.value, ...(exp ? { exp } : {}) } satisfies Stored)
     if (exp) await this.state.storage.setAlarm(exp)
     return Response.json({ ok: true })
+  }
+
+  /** Queue operations. Entries are stored as `e:<id>`. */
+  private async queue(op: Op): Promise<unknown> {
+    const st = this.state.storage
+    if (!st.list || !st.delete) throw new Error('OpenRampStore: storage.list and storage.delete are needed for queues')
+    const key = (id: string) => `e:${id}`
+    const entries = async () => [...(await st.list!<QueueEntry>({ prefix: 'e:' })).entries()].map(([k, e]): [string, QueueEntry] => [k.slice(2), e])
+    switch (op.op) {
+      case 'qpush':
+        await st.put(key(op.id), queueOps.push(await st.get<QueueEntry>(key(op.id)), op.dueAt))
+        return { ok: true }
+      case 'qclaim': {
+        const ids = queueOps.due(await entries(), op.now, op.limit)
+        for (const id of ids) await st.put(key(id), { dueAt: op.now + op.leaseMs, token: op.token } satisfies QueueEntry)
+        return { ids }
+      }
+      case 'qack': {
+        if ((await st.get<QueueEntry>(key(op.id)))?.token !== op.token) return { ok: false }
+        await st.delete(key(op.id))
+        return { ok: true }
+      }
+      case 'qsize':
+        return { size: (await entries()).length }
+      default:
+        return { ok: false }
+    }
   }
 
   /** TTL cleanup */
@@ -100,5 +142,19 @@ export function durableObjectStore(ns: DurableObjectNamespaceLike, opts: { sessi
         await call(`k:${key}`, { op: 'put', value: JSON.stringify(value), ...(ttlSec ? { ttlSec } : {}) })
       },
     },
+    queue: {
+      async push(name, id, dueAt) {
+        await call(`q:${name}`, { op: 'qpush', id, dueAt })
+      },
+      async claim(name, opts) {
+        return (await call<{ ids: string[] }>(`q:${name}`, { op: 'qclaim', ...opts })).ids
+      },
+      async ack(name, id, token) {
+        return (await call<{ ok: boolean }>(`q:${name}`, { op: 'qack', id, token })).ok
+      },
+      async size(name) {
+        return (await call<{ size: number }>(`q:${name}`, { op: 'qsize' })).size
+      },
+    } satisfies StoreQueue,
   }
 }

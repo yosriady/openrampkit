@@ -39,10 +39,12 @@ export type OpenRampConfig = {
     hopPreference?: CryptoAsset[]
   }
   /**
-   * Signed webhooks to the app backend. Failed deliveries are kept in an outbox and retried by
-   * `sweep()` with backoff (30 s doubling, max 1 h), up to `maxAttempts` (default 8).
+   * Signed webhooks to the app backend. Each event is saved with the session change that made it, and
+   * sent after that save. Failed deliveries are retried by `sweep()` with backoff (30 s doubling, max 2 h)
+   * for `retryHours` (default 24), or until `maxAttempts` attempts when you set it. Then the event stays
+   * in the session as a dead letter (`openramp.webhooks.replay(sessionId)` sends it again).
    */
-  webhooks?: { url: string; secret: string; maxAttempts?: number }
+  webhooks?: { url: string; secret: string; maxAttempts?: number; retryHours?: number }
   /**
    * Bearer token for operational routes: `POST {baseUrl}/tasks/sweep` and `GET {baseUrl}/health?deep=1`.
    * Without it, those routes are off (health answers a quick check only).

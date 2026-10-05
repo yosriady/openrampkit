@@ -43,7 +43,8 @@ Go through this list before real money moves.
 
 - [ ] `openramp.sweep()` runs every minute or so: a [Cloudflare Cron Trigger](./cloudflare-workers.md#cron-trigger), a [Vercel Cron Job](./nextjs.md#background-sweep), or any scheduler calling `POST {baseUrl}/tasks/sweep` with `tasksToken`. Without it, failed webhooks are never retried, and sessions whose users left are not refreshed or expired.
 - [ ] The cron route refuses requests without the secret, and the secret is set in every environment that runs it.
-- [ ] You watch the logs for `webhook dropped after retries` (after `webhooks.maxAttempts`, default 8) and `sweep: session check failed`.
+- [ ] You watch the logs for `webhook moved to dead letter after retries` (after `webhooks.retryHours`, default 24 hours) and `sweep: session check failed`. To send dead letters again, call `openramp.webhooks.replay(sessionId)`.
+- [ ] Your backend handles `session.late_payment` (a payment the user left with `restart` succeeded after another payment).
 - [ ] Each run has enough time: it retries up to `limit` (default 50) webhooks and checks up to `limit` open sessions, with provider calls for each.
 
 ## Your backend

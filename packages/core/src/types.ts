@@ -435,6 +435,8 @@ export type OrkEventType =
   | 'session.completed'
   | 'session.failed'
   | 'session.expired'
+  | 'session.refunded'
+  | 'session.late_payment'
   | 'leg.succeeded'
   | 'leg.failed'
   | 'withdrawal.completed'

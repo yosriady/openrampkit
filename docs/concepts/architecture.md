@@ -45,7 +45,7 @@ flowchart LR
 - The **browser** renders the modal. It knows only the client secret of one session.
 - **Your app backend** knows the user. It creates sessions and receives signed webhooks.
 - The **OpenRampKit server** holds provider keys. It plans, quotes and runs legs. It is one web-standard handler.
-- The **store** keeps sessions and small key-value data (webhook outbox, provider reference index, idempotency records, rate counters).
+- The **store** keeps sessions (with their webhook outbox), small key-value data (provider reference index, idempotency records, rate counters) and two work queues for the sweep.
 - **Providers** move the money. They send webhooks back to the server.
 - **Chains** hold the final crypto. Some adapters read chains directly over JSON-RPC to verify a payment.
 
@@ -78,7 +78,7 @@ flowchart TB
 | Browser to server | The client secret, method, amount, quote id, transition name | The secret is hashed in the store. The browser cannot set the user, the destination or the address. Routes check the body, the step, the rate and the deadline. |
 | App backend to server | `CreateSessionInput` | `sessions.create()` runs in your code. Browser-created sessions need your `authorize` hook. |
 | Server to app backend | Signed webhook events | HMAC-SHA256 over `id.timestamp.body` with `webhooks.secret`. Your backend checks it with `openramp.webhooks.verify()`. |
-| Provider to server | Provider webhooks | Each adapter verifies the signature (`webhook.verify`) before `webhook.parse`. Unknown references are dropped. |
+| Provider to server | Provider webhooks | Each adapter verifies the signature (`webhook.verify`) before `webhook.parse`. An event for an unknown reference gets `503`, so the provider sends it again. |
 | Server to chain | JSON-RPC reads | The server never trusts a transaction hash from the browser alone. It checks the receipt, the amount, the recipient and the age, or the settlement receipt. |
 | Provider page to modal | `postMessage` events from an IFRAME surface | The modal checks the exact origin and the source window. A message only triggers a status check. See [Iframe messages](./flows.md#iframe-message-protocol). |
 
@@ -194,8 +194,8 @@ Key-value records next to the sessions:
 | `ref:{adapterId}:{ref}` | The session id that owns a provider reference (30 days) | `setLegStep` when a leg gets a `ref`. Provider webhooks use it to find the session. |
 | `idem:{sessionId}:{route}:{key}` | The stored response of a request with an `Idempotency-Key` (24 hours) | `select` and `transitions/:name` |
 | `rl:{sessionId}:{minute}` | A request counter | Routes that call provider APIs |
-| `outbox`, `outbox:{eventId}` | Webhooks that failed and wait for a retry | `notify()`, then `sweep()` |
-| `open-sessions` | Ids of sessions that are not final | `sessions.create()`, then `sweep()` |
+| Queue `outbox` (see [Queues](../deploy/stores.md#queues)) | Ids of sessions with webhook events to send. The events are in the session record (`rec.outbox`). | `saveSession()`, then `sweep()` |
+| Queue `open-sessions` | Ids of sessions that are not final | `sessions.create()`, `restart`, provider events, then `sweep()` |
 | `a:{adapterId}:...` | Adapter data (per session, or shared) | Adapters, through `ctx.store` and `ctx.shared` |
 
 ## The packages

@@ -8,9 +8,10 @@ export function randomId(prefix: string, bytes = 12): string {
   return `${prefix}_${s}`
 }
 
-export function createEvent<T>(type: OrkEventType, object: T, opts: { sessionId?: string; livemode?: boolean } = {}): OrkEvent<T> {
+/** Build an event envelope. The id is random unless `opts.id` is given (the server gives a deterministic one). */
+export function createEvent<T>(type: OrkEventType, object: T, opts: { id?: string; sessionId?: string; livemode?: boolean } = {}): OrkEvent<T> {
   return {
-    id: randomId('evt'),
+    id: opts.id ?? randomId('evt'),
     type,
     created: Math.floor(Date.now() / 1000),
     livemode: opts.livemode ?? false,

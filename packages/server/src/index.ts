@@ -8,7 +8,8 @@ import { verifyWebhook } from './crypto.js'
 import { corsHeaders, errorResponse, withCors } from './http.js'
 import { refreshActive } from './legs.js'
 import { route } from './routes.js'
-import { createRuntime, publicSession, saveSession } from './runtime.js'
+import { replayDeadLetters, saveSession } from './outbox.js'
+import { createRuntime, publicSession } from './runtime.js'
 import { createSession } from './sessions.js'
 import { createPayLink } from './pay.js'
 import { sweep } from './tasks.js'
@@ -82,6 +83,11 @@ export function createOpenRamp(config: OpenRampConfig) {
     webhooks: {
       /** Verify an OpenRampKit webhook your backend received */
       verify: (req: Request, body: string) => (config.webhooks ? verifyWebhook(config.webhooks.secret, req.headers, body) : Promise.resolve(false)),
+      /**
+       * Send the dead letters of one session again (events whose retries stopped). They keep their
+       * event ids. Returns how many events were queued.
+       */
+      replay: (sessionId: string) => replayDeadLetters(rt, sessionId),
     },
   }
 }
