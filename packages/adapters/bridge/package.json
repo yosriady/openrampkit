@@ -1,0 +1,53 @@
+{
+  "name": "@openrampkit/adapter-bridge",
+  "version": "0.0.1",
+  "description": "OpenRampKit Bridge adapter: virtual bank accounts (ACH, wire, SEPA, SPEI, Pix) into stablecoins, and payouts to a bank",
+  "keywords": [
+    "adapter",
+    "bridge",
+    "onramp",
+    "openrampkit",
+    "stablecoin"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/adapters/bridge.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/adapters/bridge"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/adapter": "workspace:*"
+  },
+  "peerDependencies": {}
+}
