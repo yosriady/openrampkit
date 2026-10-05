@@ -176,5 +176,6 @@ export function timingSafeEqual(a: string, b: string): boolean {
 export * from './http.js'
 export * from './util.js'
 export * from './evm.js'
+export * from './solana.js'
 export * from './testkit.js'
 export * from './settlement.js'

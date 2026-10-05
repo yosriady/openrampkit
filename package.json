@@ -20,7 +20,9 @@
     "release": "pnpm build && pnpm -r --filter \"./packages/**\" publish --access public",
     "smoke": "bash scripts/smoke-packages.sh",
     "live:relay": "pnpm --filter @openrampkit/adapter --filter @openrampkit/adapter-relay --filter @openrampkit/core build >/dev/null && node scripts/live-relay.mjs",
-    "testnet:settle": "pnpm --filter @openrampkit/core --filter @openrampkit/adapter --filter @openrampkit/adapter-mock --filter @openrampkit/server --filter @openrampkit/client build >/dev/null && node scripts/testnet-settle.mjs"
+    "testnet:settle": "pnpm --filter @openrampkit/core --filter @openrampkit/adapter --filter @openrampkit/adapter-mock --filter @openrampkit/server --filter @openrampkit/client build >/dev/null && node scripts/testnet-settle.mjs",
+    "solana:key": "node scripts/solana-devnet-key.mjs",
+    "solana:settle": "pnpm --filter @openrampkit/core --filter @openrampkit/adapter --filter @openrampkit/adapter-mock --filter @openrampkit/server --filter @openrampkit/client --filter @openrampkit/solana build >/dev/null && node scripts/solana-devnet-settle.mjs"
   },
   "devDependencies": {
     "@changesets/cli": "^2.31.1",

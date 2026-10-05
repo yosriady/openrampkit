@@ -20,6 +20,7 @@ createOpenRamp({
 | `bridge` | `false` | Add a mock `bridge` leg for two-leg pathways (use when Relay is not configured) |
 | `offramp` | `false` | Add a mock `offramp` leg for withdrawals to cash |
 | `localChain` | none | Test only: add an `onchain` leg that pays with a real ERC-20 transfer on a local chain (Anvil) |
+| `solanaLocalChain` | none | Test only: add a `solana-onchain` leg that pays with a real SPL transfer on Solana devnet |
 | `name` | `'Test provider'` | Name shown to users |
 
 What each leg does:

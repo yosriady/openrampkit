@@ -5,7 +5,7 @@
 ::: warning Two modes
 **Demo** is the default. It uses mock providers and moves no real money. You do not need an account or an API key.
 
-**Testnet (real wallet)** sends real transactions from your browser wallet on Arbitrum Sepolia or Robinhood Chain Testnet. It uses test tokens with no value. See [Testnet mode](#testnet-mode-real-wallet).
+**Testnet (real wallet)** sends real transactions from your browser wallet on Arbitrum Sepolia or Robinhood Chain Testnet, or from your Solana wallet on Solana devnet. It uses test tokens with no value. See [Testnet mode](#testnet-mode-real-wallet) and [Solana devnet](#solana-devnet).
 :::
 
 ## What it is
@@ -106,7 +106,7 @@ You need these items:
 
 ### Steps
 
-1. Select the **Network**: Arbitrum Sepolia or Robinhood Chain Testnet.
+1. Select the **Network**: Arbitrum Sepolia or Robinhood Chain Testnet. For Solana, see [Solana devnet](#solana-devnet).
 2. Select the **Token**:
    - **Test token (free, mint in one click)**. Select **Mint 100 tUSDC**. Your wallet sends one `mint` transaction.
    - **Circle test USDC** (Arbitrum Sepolia only). Get it from the [Circle faucet](https://faucet.circle.com/).
@@ -154,12 +154,54 @@ The page uses public testnet contracts and public RPCs. It has no secrets and ne
 | Session already settled | The page checks the contract before the wallet opens. It tells you to start a new deposit. |
 | Not enough test ETH for gas | A message that tells you to get test ETH from a faucet. |
 
+## Solana devnet
+
+Set **Mode** to **Testnet (real wallet)**, then set **Network** to **Solana Devnet**. You can also open `/playground/?mode=testnet&network=solana-devnet`. The banner changes to "Devnet: real transactions on Solana devnet, test tokens with no value."
+
+You need these items:
+
+- A Solana wallet that supports Wallet Standard, for example Phantom, Solflare or Backpack.
+- Devnet USDC. Get it from the [Circle faucet](https://faucet.circle.com/). Choose **Solana Devnet**.
+- A little devnet SOL for fees (0.001 SOL is enough). Get it from the [Solana faucet](https://faucet.solana.com/).
+
+### Steps
+
+1. Select **Connect Solana wallet**. If you have more than one Solana wallet, select one in **Solana wallet** first.
+2. The panel shows your address, your devnet USDC and your devnet SOL.
+3. In the widget, select **Pay with wallet**. Enter an amount, then select **Continue** and **Confirm**.
+4. Select **Confirm in wallet**. Your wallet asks you to sign one USDC transfer to your own address.
+5. The server checks the transfer on chain. Then the widget shows **Deposit complete**. The page shows a link to the transaction in Solana Explorer (`https://explorer.solana.com/tx/<signature>?cluster=devnet`).
+
+The recipient is your connected wallet. Thus you get the USDC back, and you lose only the fee.
+
+### How it works
+
+- The session has a destination of devnet USDC (`4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU`) to your address.
+- The wallet leg is the `solanaLocalChain` leg of `@openrampkit/adapter-mock`. It asks for one SPL transfer (`WALLET_TX`).
+- The wallet is `solanaWallet` from `@openrampkit/solana`. The page asks the wallet to sign only. Then it sends the transaction through `https://api.devnet.solana.com`. Thus the transaction goes to devnet, even when the network setting of the wallet is mainnet.
+- The server reads devnet over JSON-RPC. It completes the payment only when the signature succeeded, the transaction is newer than the payment, the transaction moves at least the amount of the mint to your token account, and no other payment used the signature before.
+
+### What the page checks
+
+| Case | What you see |
+|---|---|
+| No Solana wallet | "No Solana wallet found. Install Phantom, Solflare or Backpack, then reload this page." |
+| Wrong network | Your wallet account does not support devnet. The page tells you to turn on testnet mode in your wallet, pick Devnet, and connect again. |
+| No USDC token account | A message and a link to the Circle faucet. The widget does not open. |
+| Low SOL for fees | A message and a link to the Solana faucet. The widget does not open. |
+| You reject a request | "You rejected the request in your wallet. Nothing was sent." Select **Confirm in wallet** again. |
+| Balance too low | The page checks the balance before the wallet opens. It tells you the balance and the amount. |
+| Signature already used | The server refuses it: "This transaction was already used for another payment." |
+
+To run the same flow from Node with a local devnet key, see [Solana devnet from Node](./solana.md#from-node).
+
 ## Limits
 
 - The card checkout is a test form in the widget, not a hosted page. To try the hosted mock checkout in a new tab, run [`examples/next-demo`](./examples.md).
 - "From an exchange" shows a deposit address only. A "connect your exchange account" flow is not available yet.
 - The sessions are in memory. A page reload removes them.
 - Testnet mode supports deposits only, with **Pay with wallet**.
+- On Solana devnet, the page pays devnet USDC to your own wallet only.
 - The testnet contracts have no intent signer. Do not use this setup in production. Read [Signed intents](../concepts/settlement.md#signed-intents).
 
 ## Run it locally
@@ -173,6 +215,8 @@ pnpm --filter playground dev   # http://localhost:5175/playground/
 The source is in [`examples/playground`](https://github.com/yosriady/openrampkit/tree/main/examples/playground). The server setup is in `src/server.ts`. Testnet mode is in `src/testnet/`.
 
 The Playwright tests run testnet mode against a local Anvil chain. They deploy the real contract with Foundry and inject a test wallet into the page. They are skipped when `anvil` or `forge` is not installed.
+
+The Solana devnet tests inject a fake Wallet Standard wallet and answer the devnet RPC calls with a fake RPC. They need no network.
 
 ```bash
 pnpm --filter playground e2e

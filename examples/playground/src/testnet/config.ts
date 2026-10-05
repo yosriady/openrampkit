@@ -1,6 +1,8 @@
 // Testnet mode: the networks, contracts and tokens that the playground can pay with for real.
 // All of them are public testnet contracts. Nothing here is secret.
 
+import { SOLANA_DEVNET, SOLANA_DEVNET_USDC_MINT } from '@openrampkit/core'
+
 export type TestnetToken = {
   /** Key in the URL and the token select */
   key: string
@@ -110,4 +112,57 @@ export function testnetBanner(network: TestnetNetwork): string {
 /** Transaction links on every explorer of the network */
 export function txLinks(network: TestnetNetwork, hash: string): Array<{ name: string; href: string }> {
   return network.explorers.map((e) => ({ name: e.name, href: `${e.url.replace(/\/+$/, '')}/tx/${hash}` }))
+}
+
+// ---------------- Solana devnet ----------------
+
+/** Solana devnet in testnet mode: the visitor's Wallet Standard wallet pays devnet USDC to itself. */
+export type SolanaDevnetConfig = {
+  /** Key in the network select */
+  key: string
+  name: string
+  /** CAIP-2 chain id */
+  chain: string
+  /** JSON-RPC URL: the wallet adapter reads balances and blockhashes, and the server checks the transfer */
+  rpcUrl: string
+  token: { mint: string; symbol: string; decimals: number; label: string; faucet: string }
+  /** Where to get devnet SOL for fees */
+  gasFaucet: string
+  /** Solana Explorer, for transaction links */
+  explorer: string
+}
+
+export const SOLANA_DEVNET_CONFIG: SolanaDevnetConfig = {
+  key: 'solana-devnet',
+  name: 'Solana Devnet',
+  chain: SOLANA_DEVNET,
+  rpcUrl: 'https://api.devnet.solana.com',
+  token: { mint: SOLANA_DEVNET_USDC_MINT, symbol: 'USDC', decimals: 6, label: 'Devnet USDC (Circle faucet)', faucet: 'https://faucet.circle.com/' },
+  gasFaucet: 'https://faucet.solana.com/',
+  explorer: 'https://explorer.solana.com',
+}
+
+declare global {
+  interface Window {
+    /**
+     * Test only: replace the Solana devnet settings (for example the RPC URL), or hide Solana with
+     * `null`. The page reads it once at startup.
+     */
+    __OPENRAMP_SOLANA__?: Partial<SolanaDevnetConfig> | null
+  }
+}
+
+/** The Solana devnet settings of this page, or undefined when a test hides Solana */
+export function solanaDevnet(): SolanaDevnetConfig | undefined {
+  const o = typeof window !== 'undefined' ? window.__OPENRAMP_SOLANA__ : undefined
+  if (o === null) return undefined
+  return { ...SOLANA_DEVNET_CONFIG, ...(o ?? {}) }
+}
+
+/** The banner text of Solana devnet mode */
+export const DEVNET_BANNER = 'Devnet: real transactions on Solana devnet, test tokens with no value.'
+
+/** The Solana Explorer link of a devnet transaction */
+export function solanaTxLink(cfg: SolanaDevnetConfig, signature: string): string {
+  return `${cfg.explorer.replace(/\/+$/, '')}/tx/${signature}?cluster=devnet`
 }
