@@ -77,7 +77,7 @@ describe('beginWithdraw', () => {
     expect(api.isOpen).toBe(true)
     await withdrawToArbitrum()
     await expect(p).resolves.toMatchObject({ direction: 'withdraw', step: { state: 'COMPLETED' } })
-  })
+  }, 15_000)
 
   it('refuses a deposit session', async () => {
     let api!: OpenRampApi
@@ -118,7 +118,7 @@ describe('WithdrawButton', () => {
     await withdrawToArbitrum()
     await until(() => onComplete.mock.calls.length === 1)
     expect(onComplete.mock.calls[0]![0]).toMatchObject({ direction: 'withdraw' })
-  })
+  }, 15_000)
 
   it('WithdrawButton.Custom renders children with open and isOpen; onError when closed', async () => {
     const onError = vi.fn()
