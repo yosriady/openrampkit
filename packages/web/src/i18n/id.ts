@@ -116,6 +116,7 @@ export const id: Messages = {
   successTitle: 'Isi saldo berhasil',
   successBody: 'Dana Anda sedang dikirim ke akun Anda.',
   youReceived: (amount) => `Anda menerima sekitar ${amount}`,
+  youDeposited: (amount) => `${amount} disetorkan untuk Anda dalam transaksi yang sama`,
   failedTitle: {
     FAILED: 'Pembayaran gagal',
     EXPIRED: 'Sesi kedaluwarsa',

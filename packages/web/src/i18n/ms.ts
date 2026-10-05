@@ -116,6 +116,7 @@ export const ms: Messages = {
   successTitle: 'Tambah nilai berjaya',
   successBody: 'Dana anda sedang dihantar ke akaun anda.',
   youReceived: (amount) => `Anda terima kira-kira ${amount}`,
+  youDeposited: (amount) => `${amount} didepositkan untuk anda dalam transaksi yang sama`,
   failedTitle: {
     FAILED: 'Pembayaran gagal',
     EXPIRED: 'Sesi tamat tempoh',

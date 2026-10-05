@@ -117,6 +117,7 @@ export const fil: Messages = {
   successTitle: 'Tapos na ang deposit',
   successBody: 'Papunta na sa iyong account ang pondo mo.',
   youReceived: (amount) => `Matatanggap mo ang humigit-kumulang ${amount}`,
+  youDeposited: (amount) => `Nai-deposit para sa iyo ang ${amount} sa parehong transaksyon`,
   failedTitle: {
     FAILED: 'Hindi natuloy ang bayad',
     EXPIRED: 'Nag-expire ang session',

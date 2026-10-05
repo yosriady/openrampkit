@@ -160,3 +160,10 @@ describe('locale number and currency formatting', () => {
     expect(formatFiat('1234.5', 'USDC', { locale: 'vi' })).toBe('1.234,5 USDC')
   })
 })
+
+describe('done screen text', () => {
+  it('uses youDeposited when the destination ran contract calls, in every catalog', () => {
+    expect(en.youDeposited('2 tUSDC')).toBe('2 tUSDC was deposited for you in the same transaction')
+    for (const m of Object.values(catalogs)) expect(m.youDeposited('X')).toContain('X')
+  })
+})

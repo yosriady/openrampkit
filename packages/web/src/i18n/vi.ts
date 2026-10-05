@@ -116,6 +116,7 @@ export const vi: Messages = {
   successTitle: 'Nạp tiền thành công',
   successBody: 'Tiền đang được chuyển vào tài khoản của bạn.',
   youReceived: (amount) => `Bạn nhận khoảng ${amount}`,
+  youDeposited: (amount) => `${amount} đã được gửi vào cho bạn trong cùng giao dịch`,
   failedTitle: {
     FAILED: 'Thanh toán thất bại',
     EXPIRED: 'Phiên đã hết hạn',
