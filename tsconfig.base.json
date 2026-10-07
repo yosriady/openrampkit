@@ -45,6 +45,9 @@
       "@openrampkit/solana": [
         "packages/solana/src/index.ts"
       ],
+      "@openrampkit/privy": [
+        "packages/privy/src/index.ts"
+      ],
       "@openrampkit/mcp": [
         "packages/mcp/src/index.ts"
       ],
