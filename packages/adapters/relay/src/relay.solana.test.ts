@@ -387,6 +387,183 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
   })
 })
 
+describe('relay: Solana transfer to the destination itself, each signature claimed once', () => {
+  const SIG3 = '3VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW'
+  const transfer = leg('transfer', SOL_USDC, SOL_DEST)
+  const used = (sig: string) => `txused:${SOL}:${sig}`
+
+  /** memoryKV with an atomic putIfAbsent, like the built-in server stores. Records the TTL of each write. */
+  function atomicKV() {
+    const kv = memoryKV()
+    const ttls = new Map<string, number | undefined>()
+    const put = kv.put.bind(kv)
+    kv.put = async (key, value, ttlSec) => {
+      ttls.set(key, ttlSec)
+      await put(key, value, ttlSec)
+    }
+    kv.putIfAbsent = async (key, value, ttlSec) => {
+      // check and write with no await between them: atomic in one JS thread
+      if (kv.data.has(key)) return false
+      await kv.put(key, value, ttlSec)
+      return true
+    }
+    return Object.assign(kv, { ttls })
+  }
+
+  /** A fake Solana RPC; `gate` holds getTransaction replies until `gate` calls wait (both sessions read the store first) */
+  function chain(gate = 0) {
+    const rpc = {
+      tokenAccounts: [SOL_DEST_ATA],
+      signatures: [] as Array<{ signature: string; err: unknown; blockTime: number }>,
+      txs: {} as Record<string, unknown>,
+    }
+    const base = solanaRpc(rpc)
+    let waiting: Array<() => void> = []
+    const reply = async (c: FakeCall) => {
+      if (gate && (c.body as { method: string }).method === 'getTransaction') {
+        await new Promise<void>((resolve) => {
+          waiting.push(resolve)
+          if (waiting.length >= gate) {
+            for (const r of waiting) r()
+            waiting = []
+          }
+        })
+      }
+      return base(c)
+    }
+    const { fetch } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply }])
+    const now = Math.floor(Date.now() / 1000)
+    /** A confirmed SPL transfer of `amount` to the destination, `ago` seconds ago (newest first, like the RPC) */
+    const send = (signature: string, amount: bigint, ago = 0) => {
+      rpc.txs[signature] = splTx(amount, { blockTime: now - ago })
+      rpc.signatures = [...rpc.signatures, { signature, err: null, blockTime: now - ago }].sort((x, y) => y.blockTime - x.blockTime)
+    }
+    return { fetch, send }
+  }
+
+  async function session(fetch: typeof globalThis.fetch, shared: ReturnType<typeof memoryKV>, id: string, amount: string) {
+    const a = relay()
+    const ctx = makeCtx({ fetch, shared, destination: solDest, session: { id } as never })
+    const q = await a.quote({ leg: transfer, amountIn: { amount, asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT } }, ctx)
+    const step = await a.start({ leg: transfer, quote: q }, ctx)
+    return { owner: `${id}:${step.ref!}`, status: () => a.status!({ leg: transfer, ref: step.ref! }, ctx) }
+  }
+
+  /** Drop the open-leg list of the address, as if `addWatcher` (a read, then a write) lost both entries */
+  async function forgetWatchers(shared: ReturnType<typeof memoryKV>) {
+    for (const k of [...shared.data.keys()]) if (k.startsWith('watch:')) await shared.put(k, [])
+  }
+
+  it('two sessions and one payment: only the session of that amount completes; the other is ambiguous, then waits', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s4 = await session(fetch, shared, 'sess_4', '4')
+    const s3 = await session(fetch, shared, 'sess_3', '3')
+    send(SIG, 4_000_000n, 10)
+    // 4 USDC is at least the minimum of both legs, and exact for sess_4 only: sess_3 does not take it
+    expect(await s3.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(shared.data.has(used(SIG))).toBe(false)
+    expect(await s4.status()).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '4' } })
+    expect(shared.data.get(used(SIG))).toBe(s4.owner)
+    expect(shared.ttls.get(used(SIG))).toBe(90 * 24 * 3600)
+    // sess_4 is done (its watch is gone) and holds the signature: sess_3 waits for its own payment
+    expect(await s3.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s3.status()).not.toHaveProperty('sub')
+    // a retry of sess_4 gives the same answer
+    expect(await s4.status()).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '4' } })
+  })
+
+  it('two sessions of the same amount and one payment: neither completes (ambiguous)', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    const s2 = await session(fetch, shared, 'sess_2', '4')
+    send(SIG, 4_000_000n, 10)
+    expect(await s1.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(shared.data.has(used(SIG))).toBe(false)
+  })
+
+  it('no amount up front: completes when no other open leg watches the address, else ambiguous', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '0')
+    send(SIG, 1_000_000n, 10)
+    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '1' } })
+    const s2 = await session(fetch, shared, 'sess_2', '0')
+    const s3 = await session(fetch, shared, 'sess_3', '0')
+    send(SIG2, 2_000_000n, 0)
+    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(await s3.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(shared.data.has(used(SIG2))).toBe(false)
+  })
+
+  it('small transfers do not add up, and a third-party transfer below the minimum does not complete', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '12.5')
+    send(SIG, 1_000_000n, 40) // a third party sends 1 USDC to the shared address
+    expect(await s1.status()).toMatchObject({ state: 'PAYMENT' })
+    send(SIG2, 6_000_000n, 30)
+    send(SIG3, 6_500_000n, 20) // 13.5 in all, but no single signature pays 12.4375
+    expect(await s1.status()).toMatchObject({ state: 'PAYMENT' })
+    for (const sig of [SIG, SIG2, SIG3]) expect(shared.data.has(used(sig))).toBe(false)
+  })
+
+  it('two sessions race on the same signature (atomic store): exactly one claims it', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain(2)
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    const s2 = await session(fetch, shared, 'sess_2', '4')
+    // without their watches, neither leg sees the other: only the claim can stop a double completion
+    await forgetWatchers(shared)
+    send(SIG, 4_000_000n, 10)
+    // both checks read the store before either one claims
+    const results = await Promise.all([s1.status(), s2.status()])
+    expect(results.filter((r) => r.state === 'COMPLETED')).toHaveLength(1)
+    expect(results.filter((r) => r.state === 'PAYMENT')).toHaveLength(1)
+    const winner = results[0]!.state === 'COMPLETED' ? s1 : s2
+    expect(shared.data.get(used(SIG))).toBe(winner.owner)
+  })
+
+  it('a replayed signature is refused: by another transfer session and by a same-chain wallet payment', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    send(SIG, 4_000_000n, 10)
+    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: SIG })
+    const s2 = await session(fetch, shared, 'sess_2', '4')
+    expect(await s2.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(shared.data.get(used(SIG))).toBe(s1.owner)
+    // the wallet path uses the same key
+    const walletLeg = leg('wallet', SOL_USDC, SOL_DEST)
+    const solSource = { chain: SOL, token: SOLANA_USDC_MINT, address: SOL_USER }
+    const { fetch: walletFetch } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply: solanaRpc({ statuses: { [SIG]: { err: null, confirmationStatus: 'finalized' } }, txs: { [SIG]: splTx(4_000_000n) } }) }])
+    const a = relay()
+    const ctx = makeCtx({ fetch: walletFetch, shared, destination: solDest })
+    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '4', asset: SOL_USDC }, source: solSource }, ctx)
+    const step = await a.start({ leg: walletLeg, quote: q, source: solSource }, ctx)
+    await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
+    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+  })
+
+  it('a store without putIfAbsent (write, then read back): one session claims the signature, the other waits', async () => {
+    const shared = memoryKV()
+    expect(shared.putIfAbsent).toBeUndefined()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    const s2 = await session(fetch, shared, 'sess_2', '10')
+    send(SIG, 4_000_000n, 10)
+    // below the minimum of sess_2: not a rival, not taken by sess_2
+    expect(await s2.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '4' } })
+    expect(shared.data.get(used(SIG))).toBe(s1.owner)
+    const s3 = await session(fetch, shared, 'sess_3', '4')
+    expect(await s3.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(shared.data.get(used(SIG))).toBe(s1.owner)
+  })
+})
+
 describe('relay: Tempo', () => {
   it('quotes Base USDC to USDC on Tempo (Relay chain id 4217)', async () => {
     const { fetch, calls } = fakeFetch([

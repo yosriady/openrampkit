@@ -100,10 +100,13 @@ export function directTransfer(rt: RelayRuntime) {
 
   /**
    * Transfer to the destination itself on Solana: look at recent signatures of the recipient's
-   * token accounts (or of the recipient, for SOL) since the leg started. Each signature counts
-   * for one payment only.
+   * token accounts (or of the recipient, for SOL) since the leg started. The same rules as Transfer
+   * logs on EVM: one signature completes the leg when it pays at least `minBase` on its own (no sum
+   * of small transfers), no other leg has it, and no other open leg on the address could also claim
+   * it. The signature is then claimed with `claimOnce` (`txused:<chain>:<signature>`), so it never
+   * completes a second session or a same-chain wallet payment.
    */
-  async function findSolanaDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord): Promise<LegStep | undefined> {
+  async function findSolanaDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord, waiting: LegStep): Promise<LegStep | undefined> {
     const chain = rec.chain!
     const token = rec.token!
     let watch: string[] = [rec.address]
@@ -113,41 +116,53 @@ export function directTransfer(rt: RelayRuntime) {
       if (!watch.length) return undefined
     }
     const since = Math.floor(rec.since / 1000) - 60
-    // The same address can serve several sessions: a signature belongs to the first session that counts it.
-    const owner = `${ctx.session.id}:${ref}`
+    const owner = ownerOf(ctx, ref)
+    const min = rec.minBase ? BigInt(rec.minBase) : 1n
+    // New, successful signatures on the watched accounts, oldest first (block time, then signature),
+    // so that all sessions on the address look at them in the same order.
     const seen = new Set<string>()
-    let total = 0n
-    let last: string | undefined
-    const counted: string[] = []
+    const sigs: Array<{ signature: string; time: number }> = []
     for (const account of watch) {
-      const sigs = await rpc<Array<{ signature: string; err: unknown; blockTime?: number | null }> | null>(ctx, chain, 'getSignaturesForAddress', [account, { limit: 20, commitment: 'confirmed' }])
-      for (const s of sigs ?? []) {
+      const page = await rpc<Array<{ signature: string; err: unknown; blockTime?: number | null }> | null>(ctx, chain, 'getSignaturesForAddress', [account, { limit: 20, commitment: 'confirmed' }])
+      for (const s of page ?? []) {
         if (s.err || seen.has(s.signature) || typeof s.blockTime !== 'number' || s.blockTime < since) continue
         seen.add(s.signature)
-        const usedBy = await ctx.shared.get<string>(usedKey(chain, s.signature))
-        if (usedBy && usedBy !== owner) continue
-        const tx = await solanaTx(ctx, chain, s.signature)
-        if (!tx?.meta || tx.meta.err) continue
-        const got = solanaReceived(tx, chain, rec.address, token)
-        if (got <= 0n) continue
-        total += got
-        counted.push(s.signature)
-        last ??= s.signature // newest first
+        sigs.push({ signature: s.signature, time: s.blockTime })
       }
     }
-    if (total <= 0n || !last) return undefined
-    // Dust, or less than the user said: wait (and do not take the signatures).
-    if (rec.minBase && total < BigInt(rec.minBase)) return undefined
-    for (const sig of counted) await ctx.shared.put(usedKey(chain, sig), owner, 90 * 24 * 3600)
-    const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
-    return {
-      state: 'COMPLETED',
-      status: 'succeeded',
-      transitions: [],
-      ref,
-      txHash: last,
-      ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(total.toString(), decimals) } } : {}),
+    sigs.sort((x, y) => x.time - y.time || (x.signature < y.signature ? -1 : x.signature > y.signature ? 1 : 0))
+    const owners = await Promise.all(sigs.map((s) => ctx.shared.get<string>(usedKey(chain, s.signature))))
+    // A signature this leg claimed before: the same answer again (a retry, or a check after completion).
+    const mine = sigs.findIndex((_, i) => owners[i] === owner)
+    const candidates = mine >= 0 ? [sigs[mine]!] : sigs.filter((_, i) => !owners[i])
+    let ambiguous = false
+    for (const s of candidates) {
+      const tx = await solanaTx(ctx, chain, s.signature)
+      if (!tx?.meta || tx.meta.err) continue
+      const amount = solanaReceived(tx, chain, rec.address, token)
+      if (mine < 0) {
+        if (amount < min) continue // dust, a third-party transfer, or less than the user said
+        // Another open leg on the address could also claim it: no leg takes it.
+        if (await contested(ctx, rec, owner, { amount, time: s.time * 1000 })) {
+          ambiguous = true
+          continue
+        }
+        // Race: with `putIfAbsent`, when two sessions pick the same signature at the same time,
+        // exactly one claim wins. The loser goes on to the next signature. Without `putIfAbsent`,
+        // `claimOnce` writes, then reads back: this catches most races, not all.
+        if (!(await claimOnce(ctx.shared, usedKey(chain, s.signature), owner, USED_TTL_SEC))) continue
+      }
+      const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
+      return finish(ctx, ref, rec, {
+        state: 'COMPLETED',
+        status: 'succeeded',
+        transitions: [],
+        ref,
+        txHash: s.signature,
+        ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(amount.toString(), decimals) } } : {}),
+      })
     }
+    return ambiguous ? ambiguousStep(ctx, ref, rec.address, waiting) : undefined
   }
 
   type TransferLog = { data: string; transactionHash: string; blockNumber?: string; logIndex?: string; removed?: boolean }
@@ -160,7 +175,7 @@ export function directTransfer(rt: RelayRuntime) {
    * recorded as used, by (chain, tx hash, log index), so it never completes a second session.
    */
   async function findDirectDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord, waiting: LegStep): Promise<LegStep | undefined> {
-    if (rec.chain && rec.token && isSolana(rec.chain)) return findSolanaDeposit(ctx, ref, rec)
+    if (rec.chain && rec.token && isSolana(rec.chain)) return findSolanaDeposit(ctx, ref, rec, waiting)
     if (!rec.chain || !rec.token || !rec.fromBlock || isNative(rec.chain, rec.token)) return undefined
     const chain = rec.chain
     const owner = ownerOf(ctx, ref)
