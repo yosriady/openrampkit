@@ -142,7 +142,13 @@ stateDiagram-v2
 | `refunded` | `REFUNDED` | Yes |
 | `expired` | `EXPIRED` | Yes |
 
-The leg diagram shows the usual moves. The code does not enforce them: it only checks that a final leg does not change again (`isLegTerminal`).
+The server enforces the order of leg statuses for provider events (webhooks and adapter routes). Each status has a rank (`LEG_STATUS_RANK`): `pending` 0, `awaiting_user` 1, `processing` 2, `succeeded`, `failed` and `expired` 3, `refunded` 4. An event can move a leg to the same status or to a status of a higher rank (`isLegalLegMove`). A final leg does not move. So a late `pending` event cannot move a `processing` leg back. The server logs the event, adds 1 to the `event.out_of_order` metric, and answers the provider with `200` (the event is ignored, not an error).
+
+One move back is allowed: from `processing` to `awaiting_user` when the event has a new `surface` and the leg has no transaction yet. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`.
+
+A status check (`status()`) and a transition (`transition()`) give the provider's current state, so the server does not check the order for them. For example, a KYC review (`processing`) can end with a payment step (`awaiting_user`).
+
+When an event has an `eventId`, the server keeps the id in the session (the last 50 ids). An event with an id that the session already applied is ignored.
 
 ## Transitions
 

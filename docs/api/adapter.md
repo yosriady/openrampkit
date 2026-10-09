@@ -73,6 +73,7 @@ type TransitionInput = { leg: PathwayLeg; ref: string; name: string; inputs?: Re
 
 type LegEvent = {
   ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  eventId?: string           // provider event id: the server drops an id that the session already applied
   surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
   transitions?: Transition[] // goes with surface; default: an AWAIT poll
 }

@@ -39,6 +39,30 @@ export function isLegTerminal(status: LegStatus): boolean {
   return TERMINAL_LEG_STATUSES.includes(status)
 }
 
+/**
+ * The order of leg statuses. A provider event can move a leg only to a status of the same rank or a
+ * higher rank, so a late or repeated event cannot move the leg back (for example `pending` after
+ * `processing`).
+ */
+export const LEG_STATUS_RANK: Record<LegStatus, number> = {
+  pending: 0,
+  awaiting_user: 1,
+  processing: 2,
+  succeeded: 3,
+  failed: 3,
+  expired: 3,
+  refunded: 4,
+}
+
+/**
+ * True when a provider event may move a leg from `from` to `to`. A leg that is not final moves to the
+ * same status or to a status of a higher rank. A final leg does not move.
+ */
+export function isLegalLegMove(from: LegStatus, to: LegStatus): boolean {
+  if (isLegTerminal(from)) return false
+  return LEG_STATUS_RANK[to] >= LEG_STATUS_RANK[from]
+}
+
 /** Validate a step's shape against the table. Returns a list of problems (empty when valid). */
 export function validateStep(step: Pick<Step, 'state' | 'transitions'>): string[] {
   const problems: string[] = []

@@ -131,12 +131,13 @@ webhook: {
 }
 type LegEvent = {
   ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  eventId?: string           // the provider event id, when the provider has one
   surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
   transitions?: Transition[] // goes with surface; default: an AWAIT poll
 }
 ```
 
-The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events. `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
+The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
 
 ## Withdraw legs
 

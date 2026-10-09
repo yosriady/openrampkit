@@ -97,6 +97,11 @@ export type TransitionInput = {
 export type LegEvent = {
   ref: string
   status: LegStatus
+  /**
+   * Optional provider event id (or another value that is the same for each delivery of one event).
+   * The server keeps the recent ids of each session and drops an event whose id it already applied.
+   */
+  eventId?: string
   output?: Amount
   txHash?: string
   error?: OrkError

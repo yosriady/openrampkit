@@ -1,7 +1,7 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
+import { OrkException, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
 import type { LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
 import { DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
@@ -317,7 +317,8 @@ export function legStepFromEvent(cur: LegStep | undefined, ev: LegEvent): LegSte
 /**
  * What happened to a provider event:
  * - `applied`: the session changed.
- * - `ignored`: verified, and nothing to do (for example a repeat of a terminal status).
+ * - `ignored`: verified, and nothing to do (for example a repeat of a terminal status, an event that
+ *   would move the leg back, or an event id that the session already applied).
  * - `unknown`: no session for this ref yet (the ref index can lag), or the session is gone.
  * - `conflict`: the session changed at the same time on every try.
  * The webhook route answers 503 for `unknown` and `conflict`, so the provider sends the event again.
@@ -392,7 +393,24 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
   return false
 }
 
-/** Apply a provider event (webhook or adapter route) to the session that owns `ev.ref`. Idempotent. */
+/**
+ * True when a provider event may change the leg step `cur` (see `isLegalLegMove`). One move back is
+ * allowed: from `processing` to `awaiting_user` with a new surface, before the leg has a transaction.
+ * For example, an offramp learns its deposit address from a webhook and now needs a WALLET_TX.
+ */
+export function eventMoveAllowed(cur: LegStep, ev: LegEvent): boolean {
+  if (isLegalLegMove(cur.status, ev.status)) return true
+  return cur.status === 'processing' && ev.status === 'awaiting_user' && !!ev.surface && !cur.txHash
+}
+
+/** Most provider event ids kept per session (see `SessionRecord.providerEvents`) */
+const MAX_PROVIDER_EVENTS = 50
+
+/**
+ * Apply a provider event (webhook or adapter route) to the session that owns `ev.ref`. Idempotent.
+ * The leg moves only forward (see `isLegalLegMove`): an event that would move it back is ignored. An
+ * event with an `eventId` that this session already applied is ignored too.
+ */
 export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): Promise<ApplyResult> {
   const sid = await rt.store.kv.get<string>(`ref:${adapterId}:${ev.ref}`)
   if (!sid) {
@@ -410,12 +428,25 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
       rt.log.warn('event for a ref that no leg of the session has now; ignored', { adapterId, ref: ev.ref, sessionId: sid })
       return 'ignored'
     }
+    const seen = ev.eventId ? `${adapterId}:${ev.ref}:${ev.eventId}` : undefined
+    if (seen && rec.providerEvents?.includes(seen)) {
+      rt.log.info('provider event already applied; ignored', { adapterId, ref: ev.ref, eventId: ev.eventId, sessionId: sid })
+      return 'ignored'
+    }
     const cur = found.act.legs[found.i]!.step
-    if (cur && isLegTerminal(cur.status)) return 'ignored'
+    if (cur && !eventMoveAllowed(cur, ev)) {
+      // A repeat of a final status is normal (providers send events more than once). A move back is not.
+      if (cur.status !== ev.status) {
+        rt.log.warn('provider event would move the leg back; ignored', { adapterId, ref: ev.ref, sessionId: sid, from: cur.status, to: ev.status })
+        rt.metric('event.out_of_order', 1, { adapter: adapterId })
+      }
+      return 'ignored'
+    }
     try {
       const ls = legStepFromEvent(cur, ev)
       if (found.k === -1) await setLegStep(rt, rec, found.i, ls)
       else await applyToAttempt(rt, rec, found.k, found.i, ls)
+      if (seen) rec.providerEvents = [...(rec.providerEvents ?? []), seen].slice(-MAX_PROVIDER_EVENTS)
       await saveSession(rt, rec)
       // A session that became active again (or was dropped from the list) must be polled by the sweep.
       if (!isTerminal(rec.step.state)) await trackOpenSession(rt, rec.id)

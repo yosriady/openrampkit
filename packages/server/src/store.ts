@@ -112,6 +112,8 @@ export type SessionRecord = {
   timeline?: TimelineEntry[]
   /** Set when an operator forced a final state with `admin.resolve`. Provider events then change the legs only. */
   resolution?: Resolution
+  /** Provider event ids applied to this session (`adapterId:ref:eventId`), newest last. At most 50. */
+  providerEvents?: string[]
 }
 
 /** One entry of the session timeline */
