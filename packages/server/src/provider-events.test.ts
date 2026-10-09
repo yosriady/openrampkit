@@ -72,6 +72,8 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
 function bridgeAdapter() {
   let n = 0
   const starts: string[] = []
+  /** Set `down` to make `start` fail (the provider API is down) */
+  const ctl = { down: false }
   const spec: LegSpec = {
     id: 'bridge', kind: 'bridge_swap',
     from: { asset: { kind: 'crypto', chains: { 'eip155:8453': [USDC['eip155:8453']!] } }, location: ['address'] },
@@ -87,6 +89,7 @@ function bridgeAdapter() {
       return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { amount: amountIn!.amount, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
     },
     async start() {
+      if (ctl.down) throw new Error('bridge API down')
       const ref = `bridge-${++n}`
       starts.push(ref)
       return { state: 'PROCESSING', status: 'processing', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
@@ -100,7 +103,7 @@ function bridgeAdapter() {
       },
     },
   })
-  return { adapter, starts }
+  return { adapter, starts, ctl }
 }
 
 /** App backend that records each delivered webhook body. */
@@ -143,7 +146,7 @@ function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> =
     return rec.active!.legs[0]!.ref!
   }
   const record = async (id: string) => (await store.get(id))!
-  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts }
+  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts, bridge: bridge.ctl }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -669,6 +672,32 @@ describe('fourth review: output checks and earlier attempts', () => {
     expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
     expect(t.bridgeStarts).toHaveLength(0)
     expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
+  })
+
+  it('a sweep never saves a half-applied poll: the next leg failed to start, and an earlier attempt changed', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    const first = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const second = await t.pay(s)
+    // In one sweep: the payment succeeds but the bridge API is down, and the left attempt moves on.
+    t.statusOf[second] = { status: 'succeeded' }
+    t.statusOf[first] = { status: 'processing' }
+    t.bridge.down = true
+    await t.ramp.sweep()
+    // Nothing of that sweep is saved: the leg that waits keeps its step, and the next sweep tries again.
+    let rec = await t.record(s.id)
+    expect(rec.active!.index).toBe(0)
+    expect(rec.active!.legs[0]!.step).toBeDefined()
+
+    // The bridge API is back: the next sweep starts the next leg.
+    t.bridge.down = false
+    await t.ramp.sweep()
+    rec = await t.record(s.id)
+    expect(t.bridgeStarts).toHaveLength(1)
+    expect(rec.active!.index).toBe(1)
+    expect(rec.active!.legs[1]!.step!.status).toBe('processing')
+    expect(rec.step.state).toBe('PROCESSING')
   })
 
   it('a refund of an earlier attempt that never succeeded does not replace the payment in progress', async () => {

@@ -431,21 +431,23 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
   if (!a.status) return false
   if (!force && leg.lastCheckedAt && Date.now() - leg.lastCheckedAt < STATUS_CHECK_MIN_INTERVAL_MS) return false
   leg.lastCheckedAt = Date.now()
+  let ls: LegStep
   try {
-    const ls = await a.status({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
-    if (ls.status !== leg.step.status || ls.state !== leg.step.state || ls.sub !== leg.step.sub) {
-      if (!adapterMoveAllowed(leg.step, ls)) {
-        rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
-        rt.metric('event.out_of_order', 1, { adapter: a.id })
-        return false
-      }
-      await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
-      return true
-    }
+    ls = await a.status({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
   } catch (e) {
     rt.log.warn('status check failed', { adapter: a.id, error: String(e) })
+    return false
   }
-  return false
+  if (ls.status === leg.step.status && ls.state === leg.step.state && ls.sub === leg.step.sub) return false
+  if (!adapterMoveAllowed(leg.step, ls)) {
+    rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
+    rt.metric('event.out_of_order', 1, { adapter: a.id })
+    return false
+  }
+  // Not inside the catch: when this fails half way (for example the next leg cannot start), the error
+  // goes to the caller, so the half-changed record is never saved.
+  await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
+  return true
 }
 
 /**
