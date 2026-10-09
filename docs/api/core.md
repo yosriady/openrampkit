@@ -55,8 +55,18 @@ type SessionResult = {
   outputConfirmed: boolean // true when output comes from the provider or the chain; false when it is the quote
   fees: Fee[]             // the fees of every leg's quote
   txHashes: string[]      // transaction hashes the legs reported, in leg order
+  amountMismatch?: AmountMismatch // a leg reported less than its quote (see below)
+}
+
+type AmountMismatch = {
+  legIndex: number   // the leg that delivered less
+  expected: Amount   // its quoted output
+  received: Amount   // the output the provider reported
+  shortfall: string  // expected minus received, in the same asset
 }
 ```
+
+The server compares each leg's reported output with the leg's quote. When the provider reports less than the quote by more than `policy.outputToleranceBps` (default 100, that is 1%), the leg keeps its result and the session can complete, but `amountMismatch` is set. When more than one leg is short, it shows the last one. The timeline gets `leg.amount_mismatch`. The server compares only outputs in the same asset as the quote.
 
 ### Withdraw types
 

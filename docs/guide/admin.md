@@ -168,6 +168,8 @@ All need `Authorization: Bearer {admin.token}`, except the page. See [HTTP route
 | `start.error` | 1 | `adapter`, `code` | The first leg of a payment did not start |
 | `webhook.verify_failed` | 1 | `adapter` | A provider webhook failed verification |
 | `event.out_of_order` | 1 | `adapter` | A provider event would move a leg back; the server ignored it |
+| `leg.amount_mismatch` | 1 | `adapter` | A provider reported less output than the quote, beyond `policy.outputToleranceBps` |
+| `payment.reversed` | 1 | `adapter`, `status` | A provider refunded or charged back a leg after it succeeded |
 | `webhook.delivery_failed` | 1 | `status` | A webhook to your backend failed (HTTP status, or `error`) |
 | `webhook.dead_letter` | 1 | `type` | An event stopped its retries |
 | `outbox.depth` | count | none | Each sweep: sessions on the outbox queue |

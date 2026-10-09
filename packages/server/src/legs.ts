@@ -1,9 +1,9 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
-import type { LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
-import { DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
+import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
+import type { Amount, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
+import { DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
@@ -176,6 +176,36 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   return { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }], txHash: hash }
 }
 
+function sameAsset(a: Asset, b: Asset): boolean {
+  if (a.kind === 'fiat' || b.kind === 'fiat') return a.kind === b.kind && (a as { currency: string }).currency.toUpperCase() === (b as { currency: string }).currency.toUpperCase()
+  return a.chain === b.chain && a.token.toLowerCase() === b.token.toLowerCase()
+}
+
+/**
+ * Compare a leg's reported output with its quote. When the provider reports less than the quote by
+ * more than `policy.outputToleranceBps`, the leg keeps its result but gets `amountMismatch`, and the
+ * timeline gets `leg.amount_mismatch`. `result.amountMismatch` then shows it in every webhook.
+ */
+function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): void {
+  const leg = rec.active!.legs[i]!
+  const expected = leg.quote.output
+  if (!sameAsset(expected.asset, got.asset) || !isDecimal(expected.amount) || !isDecimal(got.amount)) {
+    rt.log.debug('reported output is not comparable with the quote', { sessionId: rec.id, index: i })
+    return
+  }
+  const tolerance = Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)
+  const min = sub(expected.amount, bps(expected.amount, tolerance))
+  if (cmp(got.amount, min) >= 0) {
+    delete leg.amountMismatch
+    return
+  }
+  const shortfall = sub(expected.amount, got.amount)
+  leg.amountMismatch = { expected, received: got, shortfall }
+  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, expected: expected.amount, received: got.amount })
+  rt.log.warn('provider reported less output than the quote', { sessionId: rec.id, adapterId: leg.adapterId, index: i, expected: expected.amount, received: got.amount })
+  rt.metric('leg.amount_mismatch', 1, { adapter: leg.adapterId })
+}
+
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
 export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<void> {
   const act = rec.active!
@@ -191,7 +221,9 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
       ...(wrapped.error ? { error: wrapped.error.code } : {}),
     })
   }
+  const prevOutput = leg.step?.output
   leg.step = wrapped
+  if (wrapped.output && wrapped.output.amount !== prevOutput?.amount) checkOutput(rt, rec, i, wrapped.output)
   if (wrapped.ref && wrapped.ref !== leg.ref) {
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)

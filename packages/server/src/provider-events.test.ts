@@ -214,3 +214,47 @@ describe('P1-2: a refund or a chargeback after success', () => {
     expect(t.app.of('session.reversed')).toHaveLength(0)
   })
 })
+
+describe('P1-3: the reported output is checked against the quote', () => {
+  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
+
+  it('flags a shortfall beyond the tolerance: the session completes, the result and the webhook show it', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'succeeded', output: usdc('8.5') }])
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('COMPLETED')
+    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ expected: { amount: '9' }, received: { amount: '8.5' }, shortfall: '0.5' })
+    expect(rec.timeline!.find((e) => e.type === 'leg.amount_mismatch')).toMatchObject({ detail: { index: 0, expected: '9', received: '8.5' } })
+    const done = t.app.of('session.completed')
+    expect(done).toHaveLength(1)
+    expect(done[0]!.data.object).toMatchObject({
+      session: { result: { output: { amount: '8.5' }, outputConfirmed: true, amountMismatch: { legIndex: 0, expected: { amount: '9' }, received: { amount: '8.5' }, shortfall: '0.5' } } },
+    })
+    expect((await t.ramp.admin.get(s.id))!.payment!.legs[0]).toMatchObject({ amountMismatch: { shortfall: '0.5' } })
+  })
+
+  it('does not flag an output within the default 1% tolerance, or above the quote', async () => {
+    const t = make()
+    const a = await t.toPayment()
+    await t.hook([{ ref: a.ref, status: 'succeeded', output: usdc('8.92') }])
+    const b = await t.toPayment()
+    await t.hook([{ ref: b.ref, status: 'succeeded', output: usdc('9.4') }])
+    for (const id of [a.id, b.id]) {
+      const rec = await t.record(id)
+      expect(rec.active!.legs[0]!.amountMismatch).toBeUndefined()
+      expect(rec.timeline!.some((e) => e.type === 'leg.amount_mismatch')).toBe(false)
+    }
+    expect(t.app.of('session.completed').every((e) => !(e.data.object.session as { result: object }).result.hasOwnProperty('amountMismatch'))).toBe(true)
+  })
+
+  it('uses policy.outputToleranceBps, and skips an output in another asset', async () => {
+    const t = make({ policy: { outputToleranceBps: 0 } })
+    const a = await t.toPayment()
+    await t.hook([{ ref: a.ref, status: 'succeeded', output: usdc('8.99') }])
+    expect((await t.record(a.id)).active!.legs[0]!.amountMismatch).toMatchObject({ shortfall: '0.01' })
+    const b = await t.toPayment()
+    await t.hook([{ ref: b.ref, status: 'succeeded', output: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }])
+    expect((await t.record(b.id)).active!.legs[0]!.amountMismatch).toBeUndefined()
+  })
+})

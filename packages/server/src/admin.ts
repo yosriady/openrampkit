@@ -180,6 +180,8 @@ export type AdminLeg = {
   input: Amount
   output: Amount
   outputConfirmed: boolean
+  /** The provider reported less output than the quote, beyond the tolerance */
+  amountMismatch?: { expected: Amount; received: Amount; shortfall: string }
   fees: Fee[]
   started: boolean
   lastCheckedAt?: string
@@ -292,6 +294,7 @@ function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
         input: l.quote.input,
         output: l.step?.output ?? l.quote.output,
         outputConfirmed: !!l.step?.output,
+        ...(l.amountMismatch ? { amountMismatch: l.amountMismatch } : {}),
         fees: l.quote.fees,
         started: l.started,
         ...(l.lastCheckedAt ? { lastCheckedAt: iso(l.lastCheckedAt)! } : {}),

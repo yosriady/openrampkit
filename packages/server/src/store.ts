@@ -1,6 +1,7 @@
 import type { ScopedKV } from '@openrampkit/adapter'
 import type {
   AllowedTargets,
+  Amount,
   Destination,
   Direction,
   LegQuote,
@@ -25,6 +26,8 @@ export type ActiveLeg = {
   lastCheckedAt?: number
   /** Withdraw with app custody: idempotency keys of WALLET_TX steps already sent by the treasury */
   treasurySent?: string[]
+  /** Set when the provider reported less output than the quote, beyond the tolerance */
+  amountMismatch?: { expected: Amount; received: Amount; shortfall: string }
 }
 
 export type StoredQuote = {

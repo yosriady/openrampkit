@@ -47,6 +47,11 @@ export type OpenRampConfig = {
     disabledMethods?: string[]
     /** Preferred hop assets for two-leg pathways, most preferred first (default: USDC on Base, Arbitrum, Polygon, Optimism, Ethereum) */
     hopPreference?: CryptoAsset[]
+    /**
+     * How much less than the quote a provider may report as a leg's output, in basis points, before
+     * the server flags it (`result.amountMismatch`, timeline entry `leg.amount_mismatch`). Default 100 (1%).
+     */
+    outputToleranceBps?: number
   }
   /**
    * Signed webhooks to the app backend. Each event is saved with the session change that made it, and
@@ -123,7 +128,7 @@ export type AdminConfig = {
 /**
  * A plain metrics callback. The server calls `onMetric` with a metric name, a number and string tags.
  * Send them to your metrics system (StatsD, Prometheus, Datadog, OpenTelemetry). An error in the
- * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`, `event.out_of_order`,
+ * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`, `event.out_of_order`, `leg.amount_mismatch`, `payment.reversed`,
  * `webhook.delivery_failed`, `webhook.dead_letter`, `outbox.depth`, `open_sessions.depth`,
  * `sweep.lag_ms`, `sweep.duration_ms`, `sessions.stuck`.
  */
@@ -168,6 +173,8 @@ export const PAY_LINK_GRACE_MS = 30 * 60_000
 export const IDEMPOTENCY_TTL_SEC = 60 * 60 * 24
 export const REF_INDEX_TTL_SEC = 60 * 60 * 24 * 30
 export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
+/** Default `policy.outputToleranceBps`: 1% */
+export const DEFAULT_OUTPUT_TOLERANCE_BPS = 100
 /** Largest JSON body the browser routes accept */
 export const MAX_JSON_BODY_BYTES = 64 * 1024
 /** Largest provider webhook body */

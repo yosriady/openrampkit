@@ -203,7 +203,7 @@ function legsTable(p) {
     h('tbody', null, p.legs.map((l, i) => h('tr', null,
       h('td', null, String(i)), h('td', null, l.adapterId),
       h('td', null, chip(l.status, l.status === 'succeeded' ? 'completed' : l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
-      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)')),
+      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.amountMismatch ? h('div', null, chip('short by ' + l.amountMismatch.shortfall, 'failed')) : ''),
       h('td', { class: 'mono' }, l.ref || '-'), h('td', { class: 'mono' }, l.txHash || '-'),
     ))),
   ))

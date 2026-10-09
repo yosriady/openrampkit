@@ -139,6 +139,7 @@ Webhooks are delivered **at least once**. A retry after a timeout can send the s
 3. **Handle `session.late_payment`.** The user can leave a payment (the `restart` transition) after they paid it, for example by bank transfer. When the provider reports that payment later, the session completes with it (you get `session.completed`). When the session already completed with another payment, or another payment is in progress, you get `session.late_payment` instead. Refund or credit it by hand.
 4. **Check the session state.** For extra safety, call `openramp.sessions.retrieve(event.sessionId)` and confirm `status === 'completed'` before you credit.
 5. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with `result.txHashes`, or at the provider), or credit the amount you expected on your order. For merchant destinations, the provider's report is the source of truth.
+6. **Check `result.amountMismatch`.** When it is set, a provider reported less than the quote by more than `policy.outputToleranceBps` (default 1%). `received` is what the provider reported, and `shortfall` is the difference. Credit what arrived, not the quote, or hold the credit for review. A shortfall on a leg before the last one can make the last leg deliver less too.
 
 ```ts
 async function handle(event: { id: string; type: string; sessionId?: string; data: { object: any } }) {

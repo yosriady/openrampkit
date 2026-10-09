@@ -440,6 +440,23 @@ export type SessionResult = {
   outputConfirmed: boolean
   fees: Fee[]
   txHashes: string[]
+  /**
+   * Set when a provider reported less output than the quote, by more than the server's tolerance
+   * (`policy.outputToleranceBps`). `received` is the reported amount. Check it before you credit.
+   */
+  amountMismatch?: AmountMismatch
+}
+
+/** A leg delivered less than its quote, by more than the tolerance */
+export type AmountMismatch = {
+  /** Index of the leg in the pathway */
+  legIndex: number
+  /** The quoted output of the leg */
+  expected: Amount
+  /** The output that the provider reported */
+  received: Amount
+  /** `expected - received`, in the same asset */
+  shortfall: string
 }
 
 // ---------- Events ----------
