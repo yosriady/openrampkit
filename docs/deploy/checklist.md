@@ -80,7 +80,7 @@ Go through this list before real money moves.
 ## Adapters
 
 - [ ] You read the TO VERIFY notes on each [adapter page](../adapters/) you use, and tested those paths in sandbox.
-- [ ] Relay has an `apiKey` (the `/requests/v2` fallback retires on 2026-11-24).
+- [ ] Relay has an `apiKey`. Since 2026-10-02, quotes (`/quote/v2`) need one. The `/requests/v2` status fallback retires on 2026-11-24.
 - [ ] Stripe: pass `providerRenderers: { stripe: stripeOnrampRenderer() }` to the modal, or set `surface: 'redirect'` on the adapter.
 - [ ] Coinbase users know they need a Coinbase account.
 

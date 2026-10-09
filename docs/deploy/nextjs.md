@@ -125,7 +125,7 @@ pnpm dev:example   # http://localhost:3000
 | `OPENRAMP_WEBHOOK_SECRET` | a dev-only value | Signs the webhooks to `/api/hooks`. At least 16 characters. |
 | `PUBLIC_URL` | `http://localhost:3000` | Builds `baseUrl` and the webhook URL |
 | `OPENRAMP_MOCK` | `1` | `1`: mock adapter only. `0`: Relay for wallet and transfer, mock for fiat. |
-| `RELAY_API_KEY` | none | Relay status checks through `/requests/v3` |
+| `RELAY_API_KEY` | none | Relay quotes (`/quote/v2` needs a key since 2026-10-02) and status checks through `/requests/v3` (`/requests/v2` retires on 2026-11-24) |
 | `XENDIT_SECRET_KEY`, `XENDIT_WEBHOOK_TOKEN` | none | Turn on the Xendit adapter when both are set |
 | `CRON_SECRET` | none | Protects `/api/cron`. Without it, the example route is open in development and refuses every call in production. |
 | `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | none | WalletConnect in the wallet demo |

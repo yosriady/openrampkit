@@ -30,7 +30,12 @@ relay({
 | `logBlockRange` | `number` | `2000` | The most blocks in one `eth_getLogs` call, for same-chain `transfer` checks. Set it to the limit of your RPC. |
 
 ::: warning No API key
-Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24. The adapter logs a warning once, on its first call. Set an API key.
+Set an API key. Two facts apply:
+
+- Since 2026-10-02, each Relay quote (`POST /quote/v2`) needs a valid API key. The adapter uses quotes for prices and for deposit addresses. Without a key, live quotes fail: Relay returns 401 with `errorCode` `UNAUTHORIZED_QUOTE`. The adapter maps it to `PROVIDER_UNAVAILABLE` (not retryable), with a message that names `RELAY_API_KEY`, and logs a warning.
+- Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24.
+
+When there is no key, the adapter logs a warning once, on its first call.
 :::
 
 ## Legs

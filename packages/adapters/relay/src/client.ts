@@ -18,11 +18,16 @@ export function createRuntime(opts: RelayOptions) {
   const toleranceBps = Math.max(0, Math.min(10_000, Math.round(opts.amountToleranceBps ?? DEFAULT_TOLERANCE_BPS)))
   const logBlockRange = BigInt(Math.max(1, Math.floor(opts.logBlockRange ?? DEFAULT_LOG_BLOCK_RANGE)))
 
-  /** Warn once, on the first adapter call, when no API key is set: status then uses /requests/v2. */
+  /**
+   * Warn once, on the first adapter call, when no API key is set. Since 2026-10-02, Relay quotes
+   * (`POST /quote/v2`) need an API key. Status then also uses /requests/v2, which retires on 2026-11-24.
+   */
   function warnNoKey(log: Pick<Logger, 'warn'>) {
     if (opts.apiKey || warnedV2) return
     warnedV2 = true
-    log.warn('relay: no apiKey, using deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Set relay({ apiKey }) to use /requests/v3.')
+    log.warn(
+      'relay: no apiKey. Relay quotes (POST /quote/v2, used for quotes and deposit addresses) need an API key since 2026-10-02: live quotes fail without one. Status also uses deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Set relay({ apiKey }), for example from RELAY_API_KEY.',
+    )
   }
 
   const headers = (): Record<string, string> => (opts.apiKey ? { 'x-api-key': opts.apiKey } : {})

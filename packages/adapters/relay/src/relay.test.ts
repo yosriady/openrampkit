@@ -419,6 +419,30 @@ describe('relay errors', () => {
     await expect(walletQuote(a, makeCtx({ fetch }))).rejects.toMatchObject({ status: 422, error: { code: 'NO_QUOTES', message: 'Relay could not find a route for this pair right now.' } })
   })
 
+  it('401 UNAUTHORIZED_QUOTE (quote/v2 without a valid API key) is a setup error that names RELAY_API_KEY', async () => {
+    const log = recordingLog()
+    const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', status: 401, reply: () => ({ message: 'Unauthorized', errorCode: 'UNAUTHORIZED_QUOTE' }) }])
+    const err = await walletQuote(relay(), makeCtx({ fetch, log })).catch((e) => e)
+    expect(err).toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', retryable: false } })
+    expect(err.error.message).toContain('RELAY_API_KEY')
+    expect(log.warnings.some((w) => w.includes('UNAUTHORIZED_QUOTE') && w.includes('RELAY_API_KEY'))).toBe(true)
+    // the deposit-address quote path too
+    const { fetch: f2 } = fakeFetch([{ method: 'POST', match: '/quote/v2', status: 401, reply: () => ({ errorCode: 'UNAUTHORIZED_QUOTE' }) }])
+    await expect(relay().quote({ leg: transferLeg, amountIn: { amount: '5', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, makeCtx({ fetch: f2 }))).rejects.toMatchObject({
+      error: { code: 'PROVIDER_UNAVAILABLE', message: expect.stringContaining('RELAY_API_KEY') },
+    })
+  })
+
+  it('without apiKey, the first call warns that quotes need a key and that /requests/v2 retires', async () => {
+    const log = recordingLog()
+    const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', status: 401, reply: () => ({ errorCode: 'UNAUTHORIZED_QUOTE' }) }])
+    await walletQuote(relay(), makeCtx({ fetch, log })).catch(() => undefined)
+    const warning = log.warnings.find((w) => w.startsWith('relay: no apiKey'))
+    expect(warning).toContain('quote/v2')
+    expect(warning).toContain('live quotes fail')
+    expect(warning).toContain('2026-11-24')
+  })
+
   it('an HTML 502 page from a proxy is PROVIDER_UNAVAILABLE, not a JSON SyntaxError', async () => {
     const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => new Response('<html>502 Bad Gateway</html>', { status: 502 }) }])
     await expect(relay().quote({ leg: transferLeg, amountIn: { amount: '5', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, makeCtx({ fetch }))).rejects.toMatchObject({

@@ -92,7 +92,7 @@ export default {
 
 Creating the instance per request is cheap. All state lives in the store, so there is nothing to keep between requests.
 
-This is the example without its `MOCK` switch. Set `RELAY_API_KEY` in production. Without a key, deposit-address status checks use Relay's deprecated `/requests/v2`, which Relay retires on 2026-11-24. See [Relay](../adapters/relay.md).
+This is the example without its `MOCK` switch. Set `RELAY_API_KEY` in production. Since 2026-10-02, Relay quotes (`/quote/v2`) need an API key: without one, live quotes and deposit addresses fail. Also, without a key, deposit-address status checks use Relay's deprecated `/requests/v2`, which Relay retires on 2026-11-24. See [Relay](../adapters/relay.md).
 
 ## wrangler.toml
 

@@ -1,6 +1,6 @@
 // Pure helpers: chain and token ids, assets, fees, and leg steps. No options and no I/O.
 
-import { awaitPoll, httpErrorToOrk } from '@openrampkit/adapter'
+import { awaitPoll, httpErrorToOrk, httpStatus } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { CHAINS, OrkException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, orkError, sameToken } from '@openrampkit/core'
 import type { Amount, CryptoAsset, Fee, LegStep } from '@openrampkit/core'
@@ -114,8 +114,15 @@ export function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: num
   return { min: Math.max(1, Math.round(t)), max: Math.max(fallback.max, Math.round(t * 4)) }
 }
 
-/** Map a failed Relay HTTP call to an OrkException with a safe message. */
+/**
+ * Map a failed Relay HTTP call to an OrkException with a safe message. A 401 with errorCode
+ * `UNAUTHORIZED_QUOTE` means our setup is wrong: since 2026-10-02, `POST /quote/v2` needs a valid API key.
+ */
 export function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
+  if (httpStatus(e) === 401 && (e as { body?: { errorCode?: unknown } } | undefined)?.body?.errorCode === 'UNAUTHORIZED_QUOTE') {
+    log?.warn('relay: quote refused (401 UNAUTHORIZED_QUOTE). Relay quotes need a valid API key. Set relay({ apiKey }), for example from RELAY_API_KEY.')
+    return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Relay quotes need a valid API key. Set relay({ apiKey }), for example from RELAY_API_KEY.', retryable: false }), 502)
+  }
   return httpErrorToOrk(e, 'Relay', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
 }
 
