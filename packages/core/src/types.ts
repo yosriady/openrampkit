@@ -260,6 +260,8 @@ export type OpenRampErrorCode =
   /** The session was canceled */
   | 'CANCELED'
   | 'IDEMPOTENCY_MISMATCH'
+  /** A create repeated an `externalId` for another user, with other input, or after a final status */
+  | 'EXTERNAL_ID_CONFLICT'
   /** The user closed the UI before the session finished (`openDeposit()`, `openWithdraw()` and the UI packages) */
   | 'CLOSED'
 

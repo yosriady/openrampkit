@@ -26,6 +26,7 @@ const DEFAULT_MESSAGES: Partial<Record<OpenRampErrorCode, string>> = {
   PROVIDER_ERROR: 'The provider could not complete this request. Try again or choose another method.',
   CANCELED: 'This session was canceled.',
   IDEMPOTENCY_MISMATCH: 'This Idempotency-Key was used with another request.',
+  EXTERNAL_ID_CONFLICT: 'This externalId is already used. Use a new externalId.',
   CLOSED: 'The window was closed before the payment finished.',
 }
 

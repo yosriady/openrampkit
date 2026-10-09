@@ -68,10 +68,10 @@ function make(extra: Partial<OpenRampConfig> = {}, adapters = [provider()]) {
     return { status: res.status, headers: res.headers, body: (await res.json()) as Record<string, any> }
   }
   const event = (ev: LegEvent) => ramp.handle(new Request(`${BASE}/webhooks/hooked`, { method: 'POST', body: JSON.stringify([ev]) }))
-  const pay = async (s: { id: string; clientSecret: string }) => {
-    await call(`/sessions/${s.id}/plan`, { secret: s.clientSecret, body: {} })
-    const q = await call(`/sessions/${s.id}/quotes`, { secret: s.clientSecret, body: { method: 'card', amount: '10' } })
-    return call(`/sessions/${s.id}/select`, { secret: s.clientSecret, body: { quoteId: q.body.quotes[0].id } })
+  const pay = async (s: { id: string; clientSecret?: string }) => {
+    await call(`/sessions/${s.id}/plan`, { secret: s.clientSecret!, body: {} })
+    const q = await call(`/sessions/${s.id}/quotes`, { secret: s.clientSecret!, body: { method: 'card', amount: '10' } })
+    return call(`/sessions/${s.id}/select`, { secret: s.clientSecret!, body: { quoteId: q.body.quotes[0].id } })
   }
   return { ramp, call, event, pay, hooks, types: () => hooks.map((h) => h.type) }
 }
@@ -91,18 +91,55 @@ describe('externalId', () => {
     expect(pub.body).not.toHaveProperty('userId')
   })
 
-  it('a repeat for a session that is not final returns the same session and client secret', async () => {
+  it('a repeat by the same user with the same input returns the session, with no client secret', async () => {
     const t = make()
-    const a = await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-1' })
-    const b = await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-1' })
-    expect(b).toEqual(a)
-    expect((await t.call(`/sessions/${b.id}`, { secret: b.clientSecret })).status).toBe(200)
+    const a = await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-1', metadata: { cart: '1' } })
+    const b = await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-1', metadata: { cart: '1' } })
+    expect(b).toEqual({ id: a.id, expiresAt: a.expiresAt, existing: true })
+    expect(b.clientSecret).toBeUndefined()
+    // The first secret still works, and only one session was made.
+    expect((await t.call(`/sessions/${a.id}`, { secret: a.clientSecret })).status).toBe(200)
     expect(t.types().filter((x) => x === 'session.created')).toHaveLength(1)
     // While a payment waits for the user, a repeat still returns it.
     await t.pay(a)
-    expect(await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-1' })).toEqual(a)
+    expect(await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-1', metadata: { cart: '1' } })).toMatchObject({ id: a.id, existing: true })
     // Another externalId is another session.
     expect((await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-2' })).id).not.toBe(a.id)
+  })
+
+  it('another user, or other input, with the same externalId is 409 EXTERNAL_ID_CONFLICT and gets no session', async () => {
+    const t = make()
+    const a = await t.ramp.sessions.create({ userId: 'alice', destination: DEST, externalId: 'order-7' })
+    const conflict = { status: 409, error: { code: 'EXTERNAL_ID_CONFLICT', message: 'This externalId is already used by another session. Use a new externalId.' } }
+    // Another user: never a lookup (no id, no secret, no status in the answer)
+    const other = t.ramp.sessions.create({ userId: 'mallory', destination: DEST, externalId: 'order-7' })
+    await expect(other).rejects.toMatchObject(conflict)
+    await expect(other).rejects.not.toMatchObject({ error: { message: expect.stringContaining(a.id) } })
+    // The same user with another destination, metadata or amount bounds
+    const OTHER_DEST = { ...DEST, address: '0x000000000000000000000000000000000000dead' }
+    await expect(t.ramp.sessions.create({ userId: 'alice', destination: OTHER_DEST, externalId: 'order-7' })).rejects.toMatchObject(conflict)
+    await expect(t.ramp.sessions.create({ userId: 'alice', destination: DEST, externalId: 'order-7', metadata: { x: '1' } })).rejects.toMatchObject(conflict)
+    await expect(t.ramp.sessions.create({ userId: 'alice', destination: DEST, externalId: 'order-7', amountBounds: { min: '1', currency: 'USD' } })).rejects.toMatchObject(conflict)
+    expect(t.types().filter((x) => x === 'session.created')).toHaveLength(1)
+  })
+
+  it('POST /sessions (authorize hook): a repeat gets 200 and no client secret; another user gets 409', async () => {
+    let user = 'alice'
+    const t = make({ authorize: async (_req, body) => ({ userId: user, destination: DEST, ...(body as object) }) })
+    const a = await t.call('/sessions', { body: { externalId: 'cart-5' } })
+    expect(a.status).toBe(201)
+    expect(a.body.clientSecret).toMatch(/^ors_/)
+    const again = await t.call('/sessions', { body: { externalId: 'cart-5' } })
+    expect(again.status).toBe(200)
+    expect(again.body).toEqual({ id: a.body.id, expiresAt: a.body.expiresAt, existing: true })
+    user = 'mallory'
+    const stolen = await t.call('/sessions', { body: { externalId: 'cart-5' } })
+    expect(stolen.status).toBe(409)
+    expect(stolen.body.error.code).toBe('EXTERNAL_ID_CONFLICT')
+    expect(JSON.stringify(stolen.body)).not.toContain(a.body.id)
+    // No public or admin route finds a session by externalId without server-side auth.
+    expect((await t.call('/sessions?externalId=cart-5')).status).toBe(404)
+    expect((await t.call('/admin/sessions?externalId=cart-5')).status).toBe(404)
   })
 
   it('a repeat for a final session answers 409', async () => {
@@ -110,7 +147,7 @@ describe('externalId', () => {
     const a = await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-9' })
     await t.pay(a)
     await t.event({ ref: 'order-1', status: 'succeeded' })
-    await expect(t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-9' })).rejects.toMatchObject({ status: 409, error: { code: 'CONFLICT' } })
+    await expect(t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-9' })).rejects.toMatchObject({ status: 409, error: { code: 'EXTERNAL_ID_CONFLICT' } })
     const c = await t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-10' })
     await t.ramp.sessions.cancel(c.id)
     await expect(t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-10' })).rejects.toMatchObject({ status: 409 })
@@ -120,6 +157,7 @@ describe('externalId', () => {
     const t = make()
     const all = await Promise.all([1, 2, 3].map(() => t.ramp.sessions.create({ userId: 'u', destination: DEST, externalId: 'order-race' })))
     expect(new Set(all.map((x) => x.id)).size).toBe(1)
+    expect(all.filter((x) => x.clientSecret)).toHaveLength(1)
   })
 
   it('refuses an externalId that is not 1 to 256 printable characters', async () => {
@@ -202,11 +240,40 @@ describe('cancel', () => {
     expect(t.types()).not.toContain('session.succeeded')
   })
 
-  it('a failing adapter cancel still cancels the session', async () => {
+  it('a provider error on cancel refuses the cancel (409), and the session does not change', async () => {
     const t = make({}, [provider([], true)])
     const s = await t.ramp.sessions.create({ userId: 'u', destination: DEST })
     await t.pay(s)
-    expect(await t.ramp.sessions.cancel(s.id, { reason: 'abandoned' })).toMatchObject({ status: 'canceled', canceled: { reason: 'abandoned' } })
+    await expect(t.ramp.sessions.cancel(s.id, { reason: 'abandoned' })).rejects.toMatchObject({ status: 409, error: { code: 'PROVIDER_UNAVAILABLE' } })
+    expect(await t.ramp.sessions.retrieve(s.id)).toMatchObject({ status: 'requires_action', step: { state: 'PAYMENT' } })
+    expect(t.types()).not.toContain('session.canceled')
+  })
+
+  it('refuses a cancel (and a restart) after a transaction was submitted, also while the leg still waits', async () => {
+    const t = make()
+    const s = await t.ramp.sessions.create({ userId: 'u', destination: DEST })
+    await t.pay(s)
+    // The provider reports the user's transaction, but the leg still waits for the user.
+    await t.event({ ref: 'order-1', status: 'requires_action', sourceTxHash: '0xsent' } as LegEvent)
+    expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('requires_action')
+    await expect(t.ramp.sessions.cancel(s.id)).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/on its way/) } })
+    expect((await t.call(`/sessions/${s.id}/cancel`, { secret: s.clientSecret, body: {} })).status).toBe(409)
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, { secret: s.clientSecret, body: {} })).status).toBe(409)
+    expect(t.types()).not.toContain('session.canceled')
+  })
+
+  it('a provider success after cancel: session.late_payment, in the admin timeline, never session.succeeded', async () => {
+    const t = make({ admin: {} })
+    const s = await t.ramp.sessions.create({ userId: 'u', destination: DEST })
+    await t.pay(s)
+    await t.ramp.sessions.cancel(s.id)
+    expect((await t.event({ ref: 'order-1', status: 'succeeded', txHash: '0xlate' })).status).toBe(200)
+    const v = (await t.ramp.admin.get(s.id))!
+    expect(v.status).toBe('canceled')
+    expect(v.timeline.map((e) => e.type)).toEqual(expect.arrayContaining(['session.canceled', 'leg.succeeded', 'session.late_payment']))
+    expect(v.payment!.legs[0]).toMatchObject({ ref: 'order-1', status: 'succeeded', txHash: '0xlate' })
+    expect(await t.ramp.admin.findByRef('hooked', 'order-1')).toMatchObject({ id: s.id })
+    expect(t.types()).not.toContain('session.succeeded')
   })
 
   it('refuses a cancel while the payment is processing, and after a final status', async () => {
@@ -219,6 +286,28 @@ describe('cancel', () => {
     await t.event({ ref: 'order-1', status: 'succeeded' })
     await expect(t.ramp.sessions.cancel(s.id)).rejects.toMatchObject({ status: 409 })
     expect(t.types()).not.toContain('session.canceled')
+  })
+
+  it('a polled provider (no webhook): the sweep still finds a payment after cancel and sends session.late_payment', async () => {
+    let paid = false
+    const polled = createAdapter({
+      ...provider(),
+      webhook: undefined,
+      async status({ ref }) {
+        return paid
+          ? { state: 'COMPLETED', status: 'succeeded', ref, txHash: '0xpolled', transitions: [] }
+          : { state: 'PAYMENT', status: 'requires_action', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }
+      },
+    })
+    const t = make({ admin: {} }, [polled])
+    const s = await t.ramp.sessions.create({ userId: 'u', destination: DEST })
+    await t.pay(s)
+    await t.ramp.sessions.cancel(s.id)
+    paid = true
+    vi.useFakeTimers({ now: Date.now() + 2 * 60_000, toFake: ['Date'] })
+    expect(await t.ramp.sweep()).toMatchObject({ sessions: { grace: 1, changed: 1 } })
+    expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('canceled')
+    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'after_cancel', txHash: '0xpolled' })
   })
 
   it('a pay link cannot cancel; the client secret can', async () => {

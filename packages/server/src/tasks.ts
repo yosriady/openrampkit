@@ -29,8 +29,8 @@ export type SweepResult = {
 
 const gracePollMs = (rt: Runtime) => Math.max(1, rt.config.latePayments?.pollMinutes ?? DEFAULT_LATE_POLL_MINUTES) * 60_000
 
-/** True when an expired session has a payment that can still arrive and that the sweep can poll. */
-function canArriveLate(rt: Runtime, rec: SessionRecord): boolean {
+/** True when an expired (or canceled) session has a payment that can still arrive and that the sweep can poll. */
+export function canArriveLate(rt: Runtime, rec: SessionRecord): boolean {
   const leg = rec.active?.legs[rec.active.index]
   if (!leg?.ref || !leg.step || isLegTerminal(leg.step.status)) return false
   return !!rt.adapters.get(leg.adapterId)?.status
@@ -149,7 +149,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
   // 3. Grace list: expired sessions whose payment can still arrive (`latePayments`)
   for (const id of await q.claim(GRACE_QUEUE, { now, limit, leaseMs: LEASE_MS, token })) {
     const rec = await rt.store.get(id)
-    const ended = !rec || rec.step.state !== 'EXPIRED' || !!rec.resolution || !!rec.reversal || !inLateGrace(rt, rec) || !canArriveLate(rt, rec)
+    const ended = !rec || (rec.step.state !== 'EXPIRED' && rec.step.state !== 'CANCELED') || !!rec.resolution || !!rec.reversal || !inLateGrace(rt, rec) || !canArriveLate(rt, rec)
     if (ended) {
       await q.ack(GRACE_QUEUE, id, token)
       continue
@@ -163,7 +163,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
     } catch (e) {
       rt.log.warn('sweep: late payment check failed', { id, error: String(e) })
     }
-    if (rec.step.state === 'EXPIRED') {
+    if (rec.step.state === 'EXPIRED' || rec.step.state === 'CANCELED') {
       await q.push(GRACE_QUEUE, id, Date.now() + gracePollMs(rt))
       continue
     }

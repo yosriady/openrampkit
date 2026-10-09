@@ -59,10 +59,10 @@ openramp.handle(req)          // Promise<Response>. Mount at baseUrl.
 openramp.fetch(req)           // Same as handle, for `export default openramp` on Workers, Bun, Deno
 openramp.nextHandlers()       // { GET, POST, OPTIONS } for a Next.js App Router catch-all route
 
-await openramp.sessions.create(input)  // Promise<CreatedSession>
+await openramp.sessions.create(input)  // Promise<CreatedSession>; with externalId: Promise<CreatedSession | ExistingSession>
 await openramp.sessions.retrieve(id)   // Promise<Session | null>: the backend view (PublicSession plus userId and metadata)
 await openramp.sessions.refresh(id)    // Promise<Session | null>: ask the active leg's adapter for status now
-await openramp.sessions.cancel(id, { reason? })        // Promise<Session | null>: cancel while no payment is under way (reason default 'requested_by_app'); 409 otherwise
+await openramp.sessions.cancel(id, { reason? })        // Promise<Session | null>: cancel before money moved (reason default 'requested_by_app'); 409 otherwise (see POST /sessions/:id/cancel)
 await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { id, url, expiresAt }, a signed link to the pay page
 await openramp.sessions.revokePayLink(id, linkId)    // Promise<boolean>: make one pay link stop working; false when the session does not exist
 
@@ -132,7 +132,7 @@ The server tracks only the sessions it creates. A session goes back on the open-
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `userId` | `string` | required | Your user id. Passed to adapters, and in the backend view of the session (`session.userId`) in webhooks. |
-| `externalId` | `string` | none | Your own id for the session (for example an order id): 1 to 256 printable characters, unique per app. A create that repeats the `externalId` of a session that is not final returns that session, with the same client secret. A repeat for a final session throws `409 CONFLICT`. It is in the backend view (`session.externalId`) and the admin views, never in the browser view. |
+| `externalId` | `string` | none | Your own id for the session (for example an order id): 1 to 256 printable characters, unique per app. See [externalId](#externalid). It is in the backend view (`session.externalId`) and the admin views, never in the browser view. |
 | `direction` | `'deposit' \| 'withdraw'` | `'deposit'` | See [Withdrawals](../guide/withdraw.md) |
 | `destination` | `Destination` | required for a deposit | Where the money goes. See below. Withdraw: optional. The app sets the destination at creation: `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }` (the same shape as the body of [`POST /sessions/:id/target`](./http.md#post-sessions-id-target)). The server checks the format, `allowedDestinations` and `screenAddress`. A refused destination throws (`400`, `403` or `503`) and no session is made. Without it, the user picks the destination. |
 | `source` | `WithdrawSource` | required for a withdrawal | `{ chain, token, symbol?, decimals?, custody }`: the asset that leaves, and who holds it (`'user_wallet'` or `'app'`) |
@@ -181,9 +181,25 @@ Provider limits still apply.
 
 ```ts
 type CreatedSession = { id: string; clientSecret: string; expiresAt: string }
+type ExistingSession = { id: string; expiresAt: string; existing: true } // a repeated externalId: no client secret
 ```
 
 Give `clientSecret` to the browser. Keep `id` if you want to look the session up later.
+
+### externalId
+
+`externalId` lets your backend send a create again (for example after a timeout) and get the same session. The rules keep a session, and its client secret, with the caller that made it:
+
+| The create repeats an `externalId` of | Result |
+|---|---|
+| a session that is not final, with the same `userId` and the same input (all fields; the server compares a hash) | `{ id, expiresAt, existing: true }`. No client secret. |
+| a session of another `userId` | `409 EXTERNAL_ID_CONFLICT`. No lookup: the answer has no session id, status or secret. |
+| a session with other input (destination, amount bounds, metadata, ...) | `409 EXTERNAL_ID_CONFLICT` |
+| a final session (`succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) | `409 EXTERNAL_ID_CONFLICT` |
+
+- The server keeps only a hash of each client secret, so it never gives a secret again. Use the secret from the first create (keep it with your order), or make a pay link with `openramp.sessions.payLink(id)`.
+- Two creates at the same time make one session: one gets the client secret, the other gets `existing: true`.
+- Nothing looks a session up by `externalId` from the outside: there is no public or admin route for it. Only your server, with the input of the first create, gets the session id back.
 
 ## verifyWebhook
 

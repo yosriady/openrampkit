@@ -4,11 +4,13 @@ import type { CancelReason } from '@openrampkit/core'
 import type { Destination } from '@openrampkit/core'
 import { EXTERNAL_ID_TTL_SEC } from './config.js'
 import type { CreateSessionInput } from './config.js'
-import { hmacHex, randomHex, safeEqual, sha256Hex } from './crypto.js'
+import { randomHex, safeEqual, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { checkPayCredential, isPayCredential, isRevokedPayLink } from './pay.js'
 import { saveSession } from './outbox.js'
-import { trackOpenSession } from './queue.js'
+import { GRACE_QUEUE, queueOf, trackOpenSession } from './queue.js'
+import { lateGraceMs, moneyMayHaveMoved } from './legs.js'
+import { canArriveLate } from './tasks.js'
 import { indexSession } from './admin.js'
 import { adapterContext, normalizeDestination } from './runtime.js'
 import { addTimeline } from './timeline.js'
@@ -17,7 +19,15 @@ import { SESSION_SCHEMA } from './store.js'
 import type { SessionRecord } from './store.js'
 import { CAIP2, checkAllowed, isValidAddress, isValidToken, normalizeSource, parseTarget, screenTarget, targetDestination } from './withdraw.js'
 
-export type CreatedSession = { id: string; clientSecret: string; expiresAt: string }
+/** A new session. Give `clientSecret` to the browser. */
+export type CreatedSession = { id: string; clientSecret: string; expiresAt: string; existing?: undefined }
+
+/**
+ * A create that repeated the `externalId` of a session that is not final, with the same input and the
+ * same user. The server keeps only a hash of each client secret, so it never gives a secret again: use
+ * the secret from the first create, or make a pay link (`sessions.payLink(id)`).
+ */
+export type ExistingSession = { id: string; clientSecret?: undefined; expiresAt: string; existing: true }
 
 /** Limits for `CreateSessionInput`. The input can come from the browser through the `authorize` hook. */
 export const SESSION_LIMITS = {
@@ -89,39 +99,52 @@ const EXTERNAL_CLAIM_MS = 30_000
 const EXTERNAL_WAIT_TRIES = 40
 const EXTERNAL_WAIT_MS = 50
 
-/** The KV key of the `externalId` index */
+/** The KV key of the `externalId` index. One index per app (per store). */
 const externalKey = async (externalId: string) => `ext:${(await sha256Hex(externalId)).slice(0, 40)}`
 
-/**
- * The client secret of a session with an `externalId`. It comes from the server secret and the session
- * id, so a repeated create can give the same secret again. The record keeps only its hash.
- */
-async function derivedSecret(rt: Runtime, id: string): Promise<string> {
-  return (await hmacHex(rt.config.secret, `client-secret:${id}`)).slice(0, 48)
-}
-
-/**
- * A create that repeats an `externalId`: the existing session when it is not final, a `409` when it is
- * final. Undefined when no session has this `externalId` (or its record is gone).
- */
-async function existingFor(rt: Runtime, externalId: string): Promise<CreatedSession | undefined> {
-  const claim = await rt.store.kv.get<ExternalClaim>(await externalKey(externalId))
-  const rec = claim?.id ? await rt.store.get(claim.id) : null
-  if (!rec || rec.externalId !== externalId) return undefined
-  if (isFinalStatus(rec.status)) {
-    throw new OpenRampException(openRampError('CONFLICT', { message: `The session with this externalId is already ${rec.status}. Use a new externalId.`, retryable: false }), 409)
+/** JSON with sorted object keys, so the same input always gives the same text */
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(',')}]`
+  if (v && typeof v === 'object') {
+    return `{${Object.keys(v)
+      .filter((k) => (v as Record<string, unknown>)[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${canonical((v as Record<string, unknown>)[k])}`)
+      .join(',')}}`
   }
-  return { id: rec.id, clientSecret: `${rec.id}.${await derivedSecret(rt, rec.id)}`, expiresAt: new Date(rec.expiresAt).toISOString() }
+  return JSON.stringify(v) ?? 'null'
 }
 
-export async function createSession(rt: Runtime, input: CreateSessionInput): Promise<CreatedSession> {
+/** The hash of a create input (with `externalId`) that the record keeps, to compare a repeated create */
+const inputHash = async (input: CreateSessionInput) => (await sha256Hex(canonical(input))).slice(0, 40)
+
+const externalConflict = (message: string) => new OpenRampException(openRampError('EXTERNAL_ID_CONFLICT', { message, retryable: false }), 409)
+
+/**
+ * A create that repeats an `externalId`. The existing session comes back only when it is not final and
+ * the request is the same: the same `userId` and the same input (compared by hash). It comes back with
+ * no client secret. Anything else is `409 EXTERNAL_ID_CONFLICT`. Undefined when no session has this
+ * `externalId` (or its record is gone).
+ */
+async function existingFor(rt: Runtime, input: CreateSessionInput, hash: string): Promise<ExistingSession | undefined> {
+  const claim = await rt.store.kv.get<ExternalClaim>(await externalKey(input.externalId!))
+  const rec = claim?.id ? await rt.store.get(claim.id) : null
+  if (!rec || rec.externalId !== input.externalId) return undefined
+  // Another user, or other parameters: never a lookup, and the message tells nothing about the session.
+  if (rec.userId !== input.userId || rec.externalHash !== hash) throw externalConflict('This externalId is already used by another session. Use a new externalId.')
+  if (isFinalStatus(rec.status)) throw externalConflict(`The session with this externalId is already ${rec.status}. Use a new externalId.`)
+  return { id: rec.id, expiresAt: new Date(rec.expiresAt).toISOString(), existing: true }
+}
+
+export async function createSession(rt: Runtime, input: CreateSessionInput): Promise<CreatedSession | ExistingSession> {
   checkInput(input)
+  const extHash = input.externalId ? await inputHash(input) : undefined
   if (input.externalId) {
-    const found = await existingFor(rt, input.externalId)
+    const found = await existingFor(rt, input, extHash!)
     if (found) return found
   }
   const id = `ors_${randomHex(12)}`
-  const secret = input.externalId ? await derivedSecret(rt, id) : randomHex(24)
+  const secret = randomHex(24)
   const now = Date.now()
   const expiresAt = now + (input.ttlMinutes ?? 30) * 60_000
   const direction = input.direction ?? 'deposit'
@@ -134,7 +157,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     schema: SESSION_SCHEMA,
     version: 1,
     userId: input.userId,
-    ...(input.externalId ? { externalId: input.externalId } : {}),
+    ...(input.externalId ? { externalId: input.externalId, externalHash: extHash! } : {}),
     direction,
     ...(direction === 'deposit' && input.destination ? { destination: normalizeDestination(input.destination) } : {}),
     ...(direction === 'withdraw' ? { source: normalizeSource(input.source) } : {}),
@@ -173,13 +196,13 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     if (!claimed) {
       // Another create has the claim. Wait a short time for its session, then return it.
       for (let i = 0; i < EXTERNAL_WAIT_TRIES; i++) {
-        const found = await existingFor(rt, input.externalId)
+        const found = await existingFor(rt, input, extHash!)
         if (found) return found
         const other = await kv.get<ExternalClaim>(key)
         if (!other || Date.now() - other.at > EXTERNAL_CLAIM_MS) break
         await new Promise((r) => setTimeout(r, EXTERNAL_WAIT_MS))
       }
-      const found = await existingFor(rt, input.externalId)
+      const found = await existingFor(rt, input, extHash!)
       if (found) return found
       const other = await kv.get<ExternalClaim>(key)
       if (other && Date.now() - other.at <= EXTERNAL_CLAIM_MS) {
@@ -241,11 +264,16 @@ export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise
 const CANCELABLE = new Set(['requires_payment_method', 'requires_action'])
 
 /**
- * Cancel a session that has no payment under way (status `requires_payment_method` or
- * `requires_action`). The server asks the adapter of a started leg to void its order (`cancel()`, best
- * effort), sets the step to CANCELED and the status to `canceled`, and sends `session.canceled`. A
- * session that is already canceled is returned as it is. A payment that arrives later takes the late
- * payment path (`session.late_payment` with `reason: 'after_cancel'`). The caller saves the session.
+ * Cancel a session that has no payment under way, so the cancel never strands funds:
+ * - `requires_payment_method` (nothing started, or the last attempt failed): allowed;
+ * - `requires_action`: allowed only before any money moved (see `moneyMayHaveMoved`). When the leg's
+ *   adapter has `cancel()`, the server asks it to void the provider order first; a provider error
+ *   refuses the cancel (`409`), and the session does not change;
+ * - every other status: `409`.
+ * Then the step is CANCELED, the status `canceled`, and the server sends `session.canceled`. A session
+ * that is already canceled is returned as it is. The leg refs stay indexed: a payment that still
+ * arrives (a webhook, or the sweep's grace poll for an adapter with `status()`) is recorded in the
+ * timeline and sent as `session.late_payment` (`reason: 'after_cancel'`). The caller saves the session.
  */
 export async function cancelSession(rt: Runtime, rec: SessionRecord, reason: CancelReason): Promise<void> {
   if (rec.status === 'canceled') return
@@ -255,14 +283,19 @@ export async function cancelSession(rt: Runtime, rec: SessionRecord, reason: Can
     throw new OpenRampException(openRampError('BAD_REQUEST', { message }), 409)
   }
   const act = rec.active
+  if (rec.status === 'requires_action' && act && moneyMayHaveMoved(act)) {
+    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Money of this payment may be on its way. It cannot be canceled now.' }), 409)
+  }
   const leg = act?.legs[act.index]
-  if (act && leg?.ref && leg.step && !isLegTerminal(leg.step.status)) {
-    const a = rt.adapters.get(leg.adapterId)
+  const open = !!act && !!leg?.ref && !!leg.step && !isLegTerminal(leg.step.status)
+  if (open) {
+    const a = rt.adapters.get(leg!.adapterId)
     if (a?.cancel) {
       try {
-        await a.cancel({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
+        await a.cancel({ leg: act!.pathway.legs[act!.index]!, ref: leg!.ref! }, adapterContext(rt, rec, a, act!.pathway, act!.index))
       } catch (e) {
-        rt.log.error('adapter cancel failed; the session is canceled anyway', { sessionId: rec.id, adapter: a.id, error: e instanceof Error ? e.message : String(e) })
+        rt.log.warn('adapter cancel failed; the session is not canceled', { sessionId: rec.id, adapter: a.id, error: e instanceof Error ? e.message : String(e) })
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The provider could not cancel this payment. Try again later.' }), 409)
       }
     }
   }
@@ -272,4 +305,6 @@ export async function cancelSession(rt: Runtime, rec: SessionRecord, reason: Can
   rec.step = { sessionId: rec.id, state: 'CANCELED', transitions: [], error: openRampError('CANCELED'), ...(rec.step.progress ? { progress: rec.step.progress } : {}) }
   addTimeline(rec, 'session.cancel_requested', { reason })
   await notify(rt, rec, 'session.canceled', { reason })
+  // The provider may still report a payment for the open leg: poll it like an expired session.
+  if (open && lateGraceMs(rt) > 0 && canArriveLate(rt, rec)) await queueOf(rt.store).push(GRACE_QUEUE, rec.id, Date.now() + 60_000)
 }

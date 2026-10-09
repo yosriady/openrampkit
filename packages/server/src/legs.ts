@@ -515,8 +515,9 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
 /** Ask the active leg's adapter for status (rate-limited). Returns true when the session changed. */
 export async function refreshActive(rt: Runtime, rec: SessionRecord, force = false, opts: { late?: boolean } = {}): Promise<boolean> {
   const act = rec.active
-  // `late`: the sweep polls an EXPIRED session in its grace window (`latePayments`).
-  if (!act || (isTerminal(rec.step.state) && !(opts.late && rec.step.state === 'EXPIRED' && !rec.resolution && !rec.reversal && inLateGrace(rt, rec)))) return false
+  // `late`: the sweep polls an EXPIRED or CANCELED session in its grace window (`latePayments`).
+  const lateState = rec.step.state === 'EXPIRED' || rec.step.state === 'CANCELED'
+  if (!act || (isTerminal(rec.step.state) && !(opts.late && lateState && !rec.resolution && !rec.reversal && inLateGrace(rt, rec)))) return false
   const leg = act.legs[act.index]!
   if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) return false
   const a = rt.adapter(leg.adapterId)
@@ -749,4 +750,22 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
   }
   rt.log.warn('event not applied: the session kept changing; the provider should send it again', { adapterId, ref: ev.ref })
   return 'conflict'
+}
+
+/**
+ * True when money of the active payment may have moved or be on its way: a leg after the first
+ * started, a leg went past `requires_action` (processing, succeeded, ...), a transaction was submitted
+ * (a tx hash or a source tx hash), or the treasury sent. A leg that a provider event moved from
+ * `processing` back to `requires_action` (`surface_after_processing`) has no transaction by rule, so it
+ * counts as not moved. Cancel and restart refuse such a payment, so they never strand funds.
+ */
+export function moneyMayHaveMoved(act: ActivePayment): boolean {
+  if (act.index > 0) return true
+  return act.legs.some(
+    (l) =>
+      !!l.treasurySent?.length ||
+      !!l.step?.txHash ||
+      !!l.step?.sourceTxHash ||
+      (l.step !== undefined && l.step.status !== 'pending' && l.step.status !== 'requires_action'),
+  )
 }

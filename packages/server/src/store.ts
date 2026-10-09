@@ -88,6 +88,8 @@ export type SessionRecord = {
   userId: string
   /** The app's own id (`CreateSessionInput.externalId`), unique per app */
   externalId?: string
+  /** Hash of the create input with `externalId`: a repeated create must match it */
+  externalHash?: string
   direction: Direction
   /** Deposit: set at creation. Withdraw: the target the user picked, absent until then. */
   destination?: Destination

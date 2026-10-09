@@ -16,7 +16,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `POST` | `/sessions/:id/quotes` | Bearer | Quote a method |
 | `POST` | `/sessions/:id/select` | Bearer, `Idempotency-Key` | Confirm a quote and start the first leg |
 | `POST` | `/sessions/:id/transitions/:name` | Bearer, `Idempotency-Key` | Fire a transition |
-| `POST` | `/sessions/:id/cancel` | Bearer client secret | Cancel the session while no payment is under way |
+| `POST` | `/sessions/:id/cancel` | Bearer client secret | Cancel the session before money moved |
 | `POST` | `/sessions/:id/pay-link` | Bearer client secret | Make a signed pay link |
 | `POST` | `/sessions/:id/pay-link/revoke` | Bearer client secret | Make one pay link stop working |
 | `GET` | `/start/:token` | Signed token | Popup-safe redirect to a provider |
@@ -78,7 +78,7 @@ Available only when `authorize` is set; otherwise `404`.
 - The hook returns a `CreateSessionInput` or `null` (`401`).
 - `country` and `region` from geo headers are the defaults; the hook's values win.
 - Response `201`: `{ "id": "ors_...", "clientSecret": "ors_....", "expiresAt": "2026-09-29T10:30:00.000Z" }`
-- With an `externalId` in the input: a repeat for a session that is not final returns that session (the same body). A repeat for a final session answers `409 CONFLICT`.
+- With an `externalId` in the input: a repeat by the same user with the same input, for a session that is not final, answers `200` with `{ id, expiresAt, existing: true }` and no client secret. Another user, other input or a final session answers `409 EXTERNAL_ID_CONFLICT`. See [externalId](./server.md#externalid).
 - An `Idempotency-Key` here is scoped to the `userId` that `authorize` returns.
 
 ## GET /sessions/:id
@@ -241,13 +241,16 @@ After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` tr
 
 ## POST /sessions/:id/cancel
 
-Cancels the session while no payment is under way: the status is `requires_payment_method` or `requires_action`. The client secret only: a pay link gets `403`.
+Cancels the session when no money of a payment can be on its way. The client secret only: a pay link gets `403`.
 
-- When a leg started and waits for the user, the server asks its adapter to void the provider order (`adapter.cancel()`, when the adapter has it). This is best effort.
-- The step becomes `CANCELED` (with the error `CANCELED`), the status `canceled`, and `canceled: { at, reason: 'requested_by_user' }` is set. The server sends `session.canceled`.
+- `requires_payment_method` (nothing started, or the last attempt failed): allowed.
+- `requires_action`: allowed only before any money moved. The server refuses (`409`) when a leg submitted a transaction (a tx hash or a source tx hash), the treasury sent, a leg is past `requires_action`, or a leg after the first started.
+- When the waiting leg's adapter has `cancel()`, the server asks the provider to void the order first. A provider error refuses the cancel: `409 PROVIDER_UNAVAILABLE`, and the session does not change.
+- Then the step becomes `CANCELED` (with the error `CANCELED`), the status `canceled`, and `canceled: { at, reason: 'requested_by_user' }` is set. The server sends `session.canceled`.
 - Response `200`: the `PublicSession`. A session that is already canceled is returned as it is.
 - `409` while the payment is `processing`, and after another final status.
-- A payment that arrives after the cancel does not complete the session: the server sends `session.late_payment` with `reason: 'after_cancel'`.
+- The leg refs stay indexed. A payment that still arrives (a provider webhook, or the sweep's grace poll for an adapter with `status()`) goes into the timeline and the leg data, and the server sends `session.late_payment` with `reason: 'after_cancel'`. The session stays `canceled`: refund or credit the payment by hand.
+- The `restart` transition has the same rule while the user still has to pay: `409` when money may be on its way.
 
 Your backend can also call `openramp.sessions.cancel(id, { reason })`.
 

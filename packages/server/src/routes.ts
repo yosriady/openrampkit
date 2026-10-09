@@ -6,7 +6,7 @@ import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
 import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
-import { adapterMoveAllowed, applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
+import { adapterMoveAllowed, applyEvent, archiveActive, beginPayment, moneyMayHaveMoved, refreshActive, setLegStep, startSignature } from './legs.js'
 import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
 import { saveSession } from './outbox.js'
@@ -100,7 +100,11 @@ async function createSessionRoute(rt: Runtime, req: Request): Promise<Response> 
   const input = await rt.config.authorize(req, body)
   if (!input) return errorResponse(openRampError('UNAUTHORIZED'), 401)
   const scopeId = `create:${(await sha256Hex(String(input.userId))).slice(0, 32)}`
-  return withIdempotency(rt, scopeId, 'sessions', req, async () => json(await createSession(rt, { ...geoOf(rt, req), ...input }), 201))
+  return withIdempotency(rt, scopeId, 'sessions', req, async () => {
+    const created = await createSession(rt, { ...geoOf(rt, req), ...input })
+    // A repeated externalId: the existing session, with no client secret
+    return json(created, created.existing ? 200 : 201)
+  })
 }
 
 async function sessionRoute(rt: Runtime, req: Request, method: string, id: string, action?: string, arg?: string): Promise<Response> {
@@ -244,6 +248,11 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     if (isFinalStatus(rec.status)) return errorResponse(openRampError('BAD_REQUEST', { message: finalMessage(rec) }), 409)
     if (rec.status !== 'requires_payment_method' && rec.step.state !== 'PAYMENT') {
       return errorResponse(openRampError('BAD_REQUEST', { message: 'This payment can no longer be changed.' }), 409)
+    }
+    // While the user still has to pay: only before any money moved (no submitted transaction, no
+    // treasury send, no provider status past requires_action).
+    if (rec.status !== 'requires_payment_method' && rec.active && moneyMayHaveMoved(rec.active)) {
+      return errorResponse(openRampError('BAD_REQUEST', { message: 'Money of this payment may be on its way. It cannot be changed now.' }), 409)
     }
     // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
     // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).

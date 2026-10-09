@@ -15,6 +15,7 @@ import { cancelSession, createSession } from './sessions.js'
 import { createPayLink, revokePayLink } from './pay.js'
 import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
+import type { CreatedSession, ExistingSession } from './sessions.js'
 import { adminFindByRef, adminFindByTx, adminGet, adminList, adminReplay, adminResolve, adminStats } from './admin.js'
 import type { AdminListOptions } from './admin.js'
 
@@ -25,12 +26,23 @@ export type { ClientEvent, Session, WebhookEvent, WebhookEventOf, WebhookEventTy
 export type { AdminConfig, CreateSessionInput, OpenRampConfig, Telemetry, TreasuryHook, TreasurySendInput } from './config.js'
 export type { AdminLeg, AdminListOptions, AdminListResult, AdminOutboxEvent, AdminPayment, AdminSession, AdminSessionSummary, AdminStats } from './admin.js'
 export { isValidAddress } from './withdraw.js'
-export type { CreatedSession } from './sessions.js'
+export type { CreatedSession, ExistingSession } from './sessions.js'
 export type { PayLink } from './pay.js'
 export type { SweepResult } from './tasks.js'
 
 export function createOpenRamp(config: OpenRampConfig) {
   const rt = createRuntime(config)
+
+  /**
+   * Create a session from your backend. Give `clientSecret` to the browser. With `externalId`, a repeat
+   * for a session that is not final, by the same user with the same input, returns
+   * `{ id, expiresAt, existing: true }` with no client secret. Other repeats throw `409 EXTERNAL_ID_CONFLICT`.
+   */
+  function create(input: CreateSessionInput & { externalId: string }): Promise<CreatedSession | ExistingSession>
+  function create(input: CreateSessionInput): Promise<CreatedSession>
+  function create(input: CreateSessionInput): Promise<CreatedSession | ExistingSession> {
+    return createSession(rt, input)
+  }
 
   const adminPath = `${rt.basePath}/admin`
 
@@ -65,8 +77,7 @@ export function createOpenRamp(config: OpenRampConfig) {
     /** Next.js App Router: `export const { GET, POST, OPTIONS } = openramp.nextHandlers()` */
     nextHandlers: () => ({ GET: handle, POST: handle, OPTIONS: handle }),
     sessions: {
-      /** Create a session from your backend. Give `clientSecret` to the browser. */
-      create: (input: CreateSessionInput) => createSession(rt, input),
+      create,
       /** The backend view of a session (`Session`: the browser view plus `userId` and `metadata`), or null */
       async retrieve(id: string): Promise<Session | null> {
         const rec = await rt.store.get(id)
