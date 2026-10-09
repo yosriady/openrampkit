@@ -73,7 +73,7 @@ The server compares each leg's reported output with the leg's quote. It fails cl
 - `asset_mismatch`: the output is in another asset (another token, chain or currency) than the quote.
 - `invalid_amount`: the reported or the quoted amount is not a decimal number.
 
-For `asset_mismatch` and `invalid_amount`, `outputConfirmed` is `false` on the last leg. On a leg before the last, the next leg does not start: the step becomes `FAILED` with `DELIVERY_FAILED` (recovery `contact_support`), and an operator checks the funds. When more than one leg has a mismatch, `amountMismatch` shows the last one. The timeline gets `leg.amount_mismatch` with the reason.
+For `asset_mismatch` and `invalid_amount`, `outputConfirmed` is `false` on the last leg. On a leg before the last, the next leg does not start: the step becomes `FAILED` with `DELIVERY_FAILED` (recovery `contact_support`), and an operator checks the funds. When more than one leg has a mismatch, `amountMismatch` shows the last one. The timeline gets `leg.amount_mismatch` with the reason. The server checks the output again each time its amount or its asset changes.
 
 ### Withdraw types
 

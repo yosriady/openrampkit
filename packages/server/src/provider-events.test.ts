@@ -72,6 +72,8 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
 function bridgeAdapter() {
   let n = 0
   const starts: string[] = []
+  /** Set `down` to make `start` fail (the provider API is down) */
+  const ctl = { down: false }
   const spec: LegSpec = {
     id: 'bridge', kind: 'bridge_swap',
     from: { asset: { kind: 'crypto', chains: { 'eip155:8453': [USDC['eip155:8453']!] } }, location: ['address'] },
@@ -87,6 +89,7 @@ function bridgeAdapter() {
       return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { amount: amountIn!.amount, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
     },
     async start() {
+      if (ctl.down) throw new Error('bridge API down')
       const ref = `bridge-${++n}`
       starts.push(ref)
       return { state: 'PROCESSING', status: 'processing', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
@@ -100,7 +103,7 @@ function bridgeAdapter() {
       },
     },
   })
-  return { adapter, starts }
+  return { adapter, starts, ctl }
 }
 
 /** App backend that records each delivered webhook body. */
@@ -143,7 +146,7 @@ function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> =
     return rec.active!.legs[0]!.ref!
   }
   const record = async (id: string) => (await store.get(id))!
-  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts }
+  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts, bridge: bridge.ctl }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -638,5 +641,107 @@ describe('third review: who can move a session on, and how far', () => {
       }
       expect((await t.call(`/sessions/${s.id}`, { secret: s.clientSecret })).status).toBe(200)
     }
+  })
+})
+
+describe('fourth review: output checks and earlier attempts', () => {
+  const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
+  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
+  const other = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } })
+
+  it('checks the output again when only its asset changes: another asset with the same amount does not start the next leg', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    await t.hook([{ ref: s.ref, status: 'processing', output: usdc('9') }])
+    await t.hook([{ ref: s.ref, status: 'succeeded', output: other('9') }])
+    const rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
+    expect(t.bridgeStarts).toHaveLength(0)
+    expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
+  })
+
+  it('checks the output of an earlier attempt that becomes the payment again', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    const first = s.ref
+    expect((await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)).status).toBe(200)
+    await t.pay(s)
+    await t.hook([{ ref: first, status: 'succeeded', output: other('9') }])
+    const rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(first)
+    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
+    expect(t.bridgeStarts).toHaveLength(0)
+    expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
+  })
+
+  it('a sweep never saves a half-applied poll: the next leg failed to start, and an earlier attempt changed', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    const first = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const second = await t.pay(s)
+    // In one sweep: the payment succeeds but the bridge API is down, and the left attempt moves on.
+    t.statusOf[second] = { status: 'succeeded' }
+    t.statusOf[first] = { status: 'processing' }
+    t.bridge.down = true
+    await t.ramp.sweep()
+    // Nothing of that sweep is saved: the leg that waits keeps its step, and the next sweep tries again.
+    let rec = await t.record(s.id)
+    expect(rec.active!.index).toBe(0)
+    expect(rec.active!.legs[0]!.step).toBeDefined()
+
+    // The bridge API is back: the next sweep starts the next leg.
+    t.bridge.down = false
+    await t.ramp.sweep()
+    rec = await t.record(s.id)
+    expect(t.bridgeStarts).toHaveLength(1)
+    expect(rec.active!.index).toBe(1)
+    expect(rec.active!.legs[1]!.step!.status).toBe('processing')
+    expect(rec.step.state).toBe('PROCESSING')
+  })
+
+  it('a sweep never saves a half-applied earlier attempt: it became the payment again, then its next leg failed to start', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    const a0 = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const a1 = await t.pay(s)
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const a2 = await t.pay(s)
+    t.statusOf[a1] = { status: 'succeeded' }
+    t.statusOf[a0] = { status: 'processing' }
+    t.bridge.down = true
+    await t.ramp.sweep()
+    let rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(a2)
+    expect(rec.active!.legs[rec.active!.index]!.step).toBeDefined()
+
+    t.bridge.down = false
+    await t.ramp.sweep()
+    rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(a1)
+    expect(t.bridgeStarts).toHaveLength(1)
+    expect(rec.active!.legs[1]!.step!.status).toBe('processing')
+  })
+
+  it('a refund of an earlier attempt that never succeeded does not replace the payment in progress', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    const first = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const second = await t.pay(s)
+    await t.hook([{ ref: first, status: 'refunded' }])
+    let rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(second)
+    expect(rec.step.state).toBe('PAYMENT')
+    expect(rec.attempts![0]!.legs[0]!.step!.status).toBe('refunded')
+    expect(t.app.of('session.refunded')).toHaveLength(0)
+
+    // The user pays the payment in progress: the session completes.
+    await t.hook([{ ref: second, status: 'succeeded' }])
+    rec = await t.record(s.id)
+    expect(rec.step.state).toBe('COMPLETED')
+    expect(t.app.of('session.completed')).toHaveLength(1)
+    expect(t.app.of('session.late_payment')).toHaveLength(0)
   })
 })

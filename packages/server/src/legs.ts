@@ -156,7 +156,8 @@ function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
 /**
  * Withdraw with `custody: 'app'`: when the first leg asks for a WALLET_TX, the app's treasury signs
  * it instead of the user, and the leg reports the hash at once. Returns the leg's next step, or
- * undefined when this step is not for the treasury (or it already sent this step).
+ * undefined when this step is not for the treasury. A step that the treasury already sent is never
+ * sent again: it becomes a `processing` step that waits for the provider.
  */
 async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
   if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0 || rec.reversal) return undefined
@@ -165,7 +166,12 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   const leg = act.legs[i]!
   const { chain, txs } = ls.surface
   const key = `${rec.id}:${i}:${(await sha256Hex(`${leg.ref ?? ''}|${chain}|${JSON.stringify(txs)}`)).slice(0, 24)}`
-  if (leg.treasurySent?.includes(key)) return undefined
+  // The funds of this step left (or may have left): no WALLET_TX for the user, wait for the provider.
+  const { surface: _sent, ...rest } = ls
+  const sending: LegStep = { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }] }
+  // Already sent, but its result was not saved (a failure or a conflict after the send): do not send
+  // again, and do not show the step to the user.
+  if (leg.treasurySent?.includes(key)) return sending
   const failed = (message: string): LegStep => ({
     state: 'FAILED',
     status: 'failed',
@@ -177,8 +183,14 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   if (!treasury) return failed('Withdrawals are not set up for this app yet.')
   // Mark and save before sending: at most one send per step from our side. When two requests start
   // this step at the same time, the version check fails one of the saves (409), so only one sends.
-  // The key lets the app dedupe retries.
+  // The key lets the app dedupe retries. The saved session shows the leg as `processing`: when the
+  // process stops or a later save fails after the send, the session cannot start a new payment (a
+  // second send) and shows no WALLET_TX. The sweep then polls the provider.
   leg.treasurySent = [...(leg.treasurySent ?? []), key]
+  if (leg.step?.status !== 'processing') addTimeline(rec, 'leg.processing', { index: i, adapterId: leg.adapterId, ...(leg.ref ? { ref: leg.ref } : {}) })
+  leg.step = sending
+  rec.step = composeStep(rt, rec)
+  rec.status = sessionStatusFor(rec.step.state, true)
   await saveSession(rt, rec)
   let hash: string
   try {
@@ -196,8 +208,7 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
     )
   }
   // No transition to report the hash: wait for the provider to see the transfer.
-  const { surface: _sent, ...rest } = ls
-  return { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }], txHash: hash }
+  return { ...sending, txHash: hash }
 }
 
 /** Same asset: the same currency, or the same chain and token. Provider data is not trusted to be well formed. */
@@ -280,7 +291,8 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   }
   const prevOutput = leg.step?.output
   leg.step = wrapped
-  if (wrapped.output && wrapped.output.amount !== prevOutput?.amount) checkOutput(rt, rec, i, wrapped.output)
+  // Check again when the amount or the asset changes (the same amount in another asset is not the quote).
+  if (wrapped.output && JSON.stringify(wrapped.output) !== JSON.stringify(prevOutput)) checkOutput(rt, rec, i, wrapped.output)
   if (wrapped.ref && wrapped.ref !== leg.ref) {
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)
@@ -383,6 +395,7 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
     quoteId,
     pathway: stored.pathway,
     index: 0,
+    ...(rec.destination ? { destination: rec.destination } : {}),
     legs: stored.pathway.legs.map(
       (l, i): ActiveLeg => ({
         adapterId: l.adapterId,
@@ -418,21 +431,23 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
   if (!a.status) return false
   if (!force && leg.lastCheckedAt && Date.now() - leg.lastCheckedAt < STATUS_CHECK_MIN_INTERVAL_MS) return false
   leg.lastCheckedAt = Date.now()
+  let ls: LegStep
   try {
-    const ls = await a.status({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
-    if (ls.status !== leg.step.status || ls.state !== leg.step.state || ls.sub !== leg.step.sub) {
-      if (!adapterMoveAllowed(leg.step, ls)) {
-        rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
-        rt.metric('event.out_of_order', 1, { adapter: a.id })
-        return false
-      }
-      await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
-      return true
-    }
+    ls = await a.status({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
   } catch (e) {
     rt.log.warn('status check failed', { adapter: a.id, error: String(e) })
+    return false
   }
-  return false
+  if (ls.status === leg.step.status && ls.state === leg.step.state && ls.sub === leg.step.sub) return false
+  if (!adapterMoveAllowed(leg.step, ls)) {
+    rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
+    rt.metric('event.out_of_order', 1, { adapter: a.id })
+    return false
+  }
+  // Not inside the catch: when this fails half way (for example the next leg cannot start), the error
+  // goes to the caller, so the half-changed record is never saved.
+  await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
+  return true
 }
 
 /**
@@ -472,17 +487,23 @@ export type ApplyResult = 'applied' | 'ignored' | 'unknown' | 'conflict'
 /** Legs whose status shows that money moved */
 const MONEY_MOVED: LegStatus[] = ['processing', 'succeeded', 'refunded']
 
+/** Leg statuses that can make an earlier attempt the payment again: money is under way or arrived */
+const REVIVES: LegStatus[] = ['processing', 'succeeded']
+
 /**
- * A status for a leg of an earlier attempt (one the user left with `restart`). When money moved on it
- * and the session has no other payment under way, that attempt becomes the active payment again, so
- * the session completes. When the session already completed or another payment is under way, a
- * succeeded leg sends `session.late_payment` instead, so the app can refund or credit by hand.
+ * A status for a leg of an earlier attempt (one the user left with `restart`). When money is under way
+ * or arrived on it and the session has no other payment under way, that attempt becomes the active
+ * payment again, so the session completes. A refund before success only updates the attempt. When
+ * the session already completed or another payment is under way, or the attempt paid to another
+ * withdraw target than the current one, a succeeded leg sends `session.late_payment` instead, so the
+ * app can refund or credit by hand.
  */
 async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
   const att = rec.attempts![k]!
   const leg = att.legs[i]!
   const before = leg.step?.status
   if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+  const prev = leg.step
   leg.step = ls
   if (isReversal(before, ls.status)) {
     // The session moved on from this attempt, so its state stays. The app may have credited this
@@ -494,10 +515,13 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
     if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
     return
   }
-  if (!MONEY_MOVED.includes(ls.status)) return
+  if (!REVIVES.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
+  // The user picked another withdraw target after the restart: the session must not complete with a
+  // destination that this payment did not pay to.
+  const otherTarget = !!att.destination && JSON.stringify(att.destination) !== JSON.stringify(rec.destination)
   // A REVERSED or EXPIRED session: an earlier attempt never becomes its payment again.
-  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution) {
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution || otherTarget) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
       await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
@@ -509,6 +533,10 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   archiveActive(rec)
   const { endedAt: _ended, ...payment } = att
   rec.active = { ...payment, index: i }
+  // `setLegStep` records the new step itself, from the step before it: the output check, the ref index
+  // and the timeline.
+  if (prev) leg.step = prev
+  else delete leg.step
   await setLegStep(rt, rec, i, ls)
 }
 
@@ -535,15 +563,20 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
       if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) continue
       const a = rt.adapters.get(leg.adapterId)
       if (!a?.status) continue
+      let ls: LegStep
       try {
-        const ls = await a.status({ leg: att.pathway.legs[i]!, ref: leg.ref }, adapterContext(rt, rec, a, att.pathway, i))
-        if (ls.status === leg.step.status) continue
-        const { surface: _s, ...rest } = ls
-        await applyToAttempt(rt, rec, k, i, { ...rest, ref: ls.ref ?? leg.ref })
-        return true
+        ls = await a.status({ leg: att.pathway.legs[i]!, ref: leg.ref }, adapterContext(rt, rec, a, att.pathway, i))
       } catch (e) {
         rt.log.warn('status check failed', { adapter: a.id, error: String(e) })
+        continue
       }
+      // Forward only, like a provider event (see `isLegalLegMove`).
+      if (ls.status === leg.step.status || !isLegalLegMove(leg.step.status, ls.status)) continue
+      const { surface: _s, ...rest } = ls
+      // Not inside the catch: when this fails half way (for example the attempt became the payment
+      // again and its next leg cannot start), the error goes to the caller and nothing is saved.
+      await applyToAttempt(rt, rec, k, i, { ...rest, ref: ls.ref ?? leg.ref })
+      return true
     }
   }
   return false

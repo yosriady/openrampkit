@@ -74,7 +74,7 @@ The server signs each webhook with HMAC-SHA256 over `{id}.{timestamp}.{body}`. `
 - The target address must have a valid format. The zero EVM address is refused.
 - `allowedTargets` limits the chains and currencies.
 - `screenAddress` fails closed: `false`, any other value, or an error refuses the address.
-- With `custody: 'app'`, the server saves the session (with the version check) before it calls `treasury.send`. Two requests at the same time cannot both send. The `idempotencyKey` lets your hook drop a retry.
+- With `custody: 'app'`, the server saves the session (with the version check) before it calls `treasury.send`. Two requests at the same time cannot both send. The `idempotencyKey` lets your hook drop a retry. The saved session shows the leg as `processing`, so a failure after the send cannot start a second payment from the treasury.
 
 ### Same-chain payments (Relay)
 
