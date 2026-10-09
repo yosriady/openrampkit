@@ -224,7 +224,11 @@ describe('admin get, find and stats', () => {
     const t = make()
     const s = await t.pay('25')
     const v = (await t.ramp.admin.get(s.id))!
-    expect(v).toMatchObject({ id: s.id, direction: 'deposit', status: 'processing', state: 'PAYMENT', amount: '25', currency: 'SGD', method: 'card', provider: 'Hooked' })
+    // The user still has to pay: `awaiting_user`, not `processing`.
+    expect(v).toMatchObject({ id: s.id, direction: 'deposit', status: 'awaiting_user', state: 'PAYMENT', amount: '25', currency: 'SGD', method: 'card', provider: 'Hooked' })
+    expect((await t.ramp.admin.list({ state: 'awaiting_user' })).sessions.map((x) => x.id)).toEqual([s.id])
+    expect((await t.ramp.admin.list({ state: 'processing' })).sessions).toEqual([])
+    expect((await t.ramp.admin.stats()).byStatus).toMatchObject({ awaiting_user: 1 })
     expect(v.payment!.legs[0]).toMatchObject({ adapterId: 'hooked', ref: s.ref, status: 'awaiting_user', started: true })
     expect(v.providerRefs).toEqual([{ adapterId: 'hooked', ref: s.ref, attempt: 0, active: true }])
     expect(v.timeline.map((e) => e.type)).toEqual(['session.created', 'payment.started', 'leg.awaiting_user'])

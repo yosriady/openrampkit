@@ -51,7 +51,7 @@ const openramp = createOpenRamp({
 
 Open `{baseUrl}/admin` (for example `https://app.example.com/api/openramp/admin`) and enter the token.
 
-- Stat cards for the last 24 hours: sessions, completed, open, stuck, failed, dead letters, webhook failures, outbox queue, deposits and withdrawals. Completed volume per currency.
+- Stat cards for the last 24 hours: sessions, completed, open or processing, waiting for the user (`awaiting_user`), stuck, failed, dead letters, webhook failures, outbox queue, deposits and withdrawals. Completed volume per currency.
 - A table of recent deposits and withdrawals, newest first, with filters (direction, state, stuck only) and "Load more".
 - A search box: a session id, a transaction hash, or `provider:ref` (for example `xendit:inv_123`).
 - A detail drawer: the session data, the active payment and earlier attempts with their legs, the provider refs, the outbox and the timeline.
@@ -85,7 +85,7 @@ Recent sessions, newest first.
 | Option | Description |
 |---|---|
 | `direction` | `'deposit'` or `'withdraw'` |
-| `state` | A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`) or a step state (`PAYMENT`, `PROCESSING`, ...) |
+| `state` | A session status (`open`, `awaiting_user`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, `PROCESSING`, ...) |
 | `olderThan` | Minutes. Only sessions created at least this long ago. |
 | `stuck` | Only sessions that are not final after `admin.stuckAfterMinutes` |
 | `limit` | 1 to 200, default 50 |
@@ -105,7 +105,7 @@ The timeline keeps the last 100 events of a session: webhook event types (`sessi
 
 `findByRef(provider, ref)` uses the provider reference index. The server keeps it 30 days.
 
-`findByTx(chain, txHash)` has no index. It reads the time index (at most 1000 sessions in `admin.indexDays`) and compares the transaction hash of each leg, without case. When you give `chain`, the leg input or output must be on that chain.
+`findByTx(chain, txHash)` has no index. It reads the time index (at most 1000 sessions in `admin.indexDays`) and compares the transaction hash of each leg (`txHash`), without case. When you give `chain`, the leg input or output must be on that chain.
 
 ### stats
 

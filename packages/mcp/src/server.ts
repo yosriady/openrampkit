@@ -153,7 +153,7 @@ export function createOpenRampMcpServer(configOrOps: OpenRampMcpConfig | RampOps
     'get_session_status',
     {
       title: 'Get session status',
-      description: 'Read the status of a session that you created: open, processing, completed, failed, expired or refunded, with what was paid and received. Read only.',
+      description: 'Read the status of a session that you created: open, awaiting_user (the user must pay or act), processing, completed, failed, expired, refunded or reversed, with what was paid and received. Read only.',
       inputSchema: { session_id: z.string().describe('The session_id from create_deposit_session or create_withdraw_session') },
       annotations: { readOnlyHint: true, openWorldHint: true },
     },

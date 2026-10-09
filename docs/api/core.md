@@ -30,7 +30,7 @@ type PublicSession = {
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only
   targetLocked?: boolean          // withdraw only: the app set and locked the target
-  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
+  status: 'open' | 'awaiting_user' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string
   locale?: string
@@ -41,6 +41,21 @@ type PublicSession = {
   livemode: boolean
 }
 ```
+
+### Session status
+
+| `status` | Meaning |
+|---|---|
+| `open` | No payment started yet. The user picks a method, an amount and a quote. |
+| `awaiting_user` | A payment started, and the active leg waits for the user: to pay, to send from the wallet, or to finish a provider step (the leg status is `awaiting_user`). No money moved on this leg yet. |
+| `processing` | The user paid or acted. The provider or the chain is working. |
+| `completed` | Every leg succeeded. |
+| `failed` | The step is `FAILED` or `BLOCKED`. |
+| `expired` | The session or the payment expired. |
+| `refunded` | The provider returned the payment before it completed. |
+| `reversed` | The payment completed, then the provider refunded it or took it back. |
+
+`awaiting_user` is new. Before, a session that waited for the user to pay had the status `processing`. To find sessions that are not final, check for `open`, `awaiting_user` and `processing`.
 
 ### SessionResult
 

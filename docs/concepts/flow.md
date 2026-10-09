@@ -198,7 +198,7 @@ Adapters return a `LegStep` for their leg. The server wraps it into the session'
 - When every leg succeeded, the step is `COMPLETED`.
 - A provider event (webhook) maps a leg status to a state: `awaiting_user` to `PAYMENT`, `pending` and `processing` to `PROCESSING`, `succeeded` to `COMPLETED`, and so on. The current surface stays until the leg ends.
 
-The session's `status` follows the step: `open` (no active payment), `processing`, `completed`, `failed` (`FAILED` or `BLOCKED`), `expired`, `refunded`, `reversed`.
+The session's `status` follows the step: `open` (no active payment), `awaiting_user` (the active leg waits for the user, for example to pay), `processing` (the user paid or acted, and the provider or the chain is working), `completed`, `failed` (`FAILED` or `BLOCKED`), `expired`, `refunded`, `reversed`. See [Session status](../api/core.md#session-status).
 
 ## Errors as fields
 

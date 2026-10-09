@@ -107,18 +107,29 @@ export async function startSignature(rt: Runtime, sessionId: string, token: stri
   return (await hmacHex(rt.config.secret, `${sessionId}.${token}`)).slice(0, 32)
 }
 
-export function sessionStatusFor(state: StateName, hasActive: boolean): SessionStatus {
+/**
+ * The session status for a step state. With an active payment that is not final: `awaiting_user` when
+ * the active leg waits for the user (`waitingForUser`), else `processing`. Without one: `open`.
+ */
+export function sessionStatusFor(state: StateName, hasActive: boolean, waitingForUser = false): SessionStatus {
   if (state === 'COMPLETED') return 'completed'
   if (state === 'FAILED' || state === 'BLOCKED') return 'failed'
   if (state === 'EXPIRED') return 'expired'
   if (state === 'REFUNDED') return 'refunded'
   if (state === 'REVERSED') return 'reversed'
-  return hasActive ? 'processing' : 'open'
+  if (!hasActive) return 'open'
+  return waitingForUser ? 'awaiting_user' : 'processing'
+}
+
+/** True when the active leg of the session waits for the user (to pay, sign, or finish a provider step) */
+export function waitsForUser(rec: SessionRecord): boolean {
+  const act = rec.active
+  return !!act && act.legs[act.index]?.step?.status === 'awaiting_user'
 }
 
 async function settleStatus(rt: Runtime, rec: SessionRecord) {
   const before = rec.status
-  rec.status = sessionStatusFor(rec.step.state, !!rec.active)
+  rec.status = sessionStatusFor(rec.step.state, !!rec.active, waitsForUser(rec))
   if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded', 'reversed'].includes(rec.status)) {
     const extra = rec.status === 'reversed' ? reversalDetail(rec) : undefined
     await notify(rt, rec, `session.${rec.status}`, extra)

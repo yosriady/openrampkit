@@ -428,8 +428,14 @@ export type LegStep = {
 
 // ---------- Sessions ----------
 
-/** `reversed`: the payment completed, then the provider refunded it or took it back. Take back or freeze the credit. */
-export type SessionStatus = 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
+/**
+ * - `open`: no payment started yet (the user picks a method, an amount and a quote).
+ * - `awaiting_user`: a payment started, and the active leg waits for the user (`awaiting_user`): for
+ *   example to pay, send from the wallet, or finish a provider step. No money moved on this leg yet.
+ * - `processing`: the user paid (or acted), and the provider or the chain is working.
+ * - `reversed`: the payment completed, then the provider refunded it or took it back. Take back or freeze the credit.
+ */
+export type SessionStatus = 'open' | 'awaiting_user' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
 
 export type PublicSession = {
   id: string

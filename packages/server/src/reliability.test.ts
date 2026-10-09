@@ -249,11 +249,32 @@ describe('P0-2: events are saved with the change and delivered after the commit'
     const s = await toPayment()
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(503)
     expect(app.sent.filter((e) => e.type === 'session.completed' || e.type === 'leg.succeeded')).toEqual([])
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('processing')
+    // not saved: the session still waits for the user to pay
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('awaiting_user')
     // the provider sends it again
     block = false
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
     expect(app.delivered('session.completed')).toHaveLength(1)
+  })
+})
+
+describe('session status while the user must act', () => {
+  it('is awaiting_user while the active leg waits for the user, then processing, then completed', async () => {
+    const { hook, toPayment, post, ramp } = make()
+    const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('open')
+    await toPayment(s)
+    let pub = await ramp.sessions.retrieve(s.id)
+    expect(pub).toMatchObject({ status: 'awaiting_user', step: { state: 'PAYMENT', progress: { legs: [{ status: 'awaiting_user' }] } } })
+    expect((await hook([{ ref: 'order-1', status: 'processing' }])).status).toBe(200)
+    pub = await ramp.sessions.retrieve(s.id)
+    expect(pub).toMatchObject({ status: 'processing', step: { state: 'PROCESSING' } })
+    expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    // restart from a waiting payment goes back to open
+    const s2 = await toPayment()
+    const r = await (await post(`/sessions/${s2.id}/transitions/restart`, s2.clientSecret)).json()
+    expect(r.status).toBe('open')
   })
 })
 

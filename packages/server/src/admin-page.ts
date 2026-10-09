@@ -42,7 +42,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);verti
 th{font-size:12px;color:var(--muted);font-weight:600}
 tbody tr:last-child td{border-bottom:0}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px}
-.chip.completed{color:var(--ok)}.chip.failed,.chip.refunded,.chip.reversed{color:var(--bad)}.chip.expired{color:var(--muted)}.chip.stuck{color:var(--warn)}
+.chip.completed{color:var(--ok)}.chip.failed,.chip.refunded,.chip.reversed{color:var(--bad)}.chip.expired{color:var(--muted)}.chip.stuck,.chip.awaiting_user{color:var(--warn)}
 .muted{color:var(--muted)}
 .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;white-space:normal}
 #status{min-height:20px;margin:8px 0;color:var(--muted)}
@@ -140,6 +140,7 @@ async function loadStats() {
     card('Sessions in 24 h', s.total + (s.truncated ? '+' : '')),
     card('Completed', s.byStatus.completed || 0),
     card('Open or processing', (s.byStatus.open || 0) + (s.byStatus.processing || 0)),
+    card('Waiting for the user', s.byStatus.awaiting_user || 0),
     card('Stuck after ' + s.stuck.afterMinutes + ' min', s.stuck.count, s.stuck.count ? 'warn' : ''),
     card('Failed or refunded', failed, failed ? 'bad' : ''),
     card('Reversed after success', s.byStatus.reversed || 0, s.byStatus.reversed ? 'bad' : ''),
@@ -348,7 +349,7 @@ const BODY = `<div id="demo" class="banner" role="note" hidden></div>
 <form id="find" class="row" role="search"><label for="find-value">Find by session id, tx hash, or provider:ref<input id="find-value" type="search" size="40"></label><button type="submit">Find</button></form>
 <div class="row" role="group" aria-label="Filters">
 <label for="f-direction">Direction<select id="f-direction"><option value="">All</option><option value="deposit">Deposit</option><option value="withdraw">Withdraw</option></select></label>
-<label for="f-state">State<select id="f-state"><option value="">All</option><option>open</option><option>processing</option><option>completed</option><option>failed</option><option>expired</option><option>refunded</option><option>reversed</option></select></label>
+<label for="f-state">State<select id="f-state"><option value="">All</option><option>open</option><option>awaiting_user</option><option>processing</option><option>completed</option><option>failed</option><option>expired</option><option>refunded</option><option>reversed</option></select></label>
 <label class="inline" for="f-stuck"><input id="f-stuck" type="checkbox">Stuck only</label>
 </div>
 <div class="table-wrap"><table><caption class="sr">Recent sessions, newest first</caption>

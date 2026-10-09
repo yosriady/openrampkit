@@ -350,7 +350,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
 
 export type AdminListOptions = {
   direction?: Direction
-  /** A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
+  /** A session status (`open`, `awaiting_user`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
   state?: string
   /** Only sessions created at least this many minutes ago */
   olderThan?: number
