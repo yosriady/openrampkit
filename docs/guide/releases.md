@@ -40,7 +40,7 @@ Releases run in GitHub Actions only. Nobody publishes from a laptop. The workflo
 1. A contributor adds a changeset to a pull request (`pnpm changeset`). The changeset names the packages, the bump (`patch` or `minor`) and a note for users.
 2. When the pull request merges into `main`, the Release workflow opens or updates a pull request with the title **Version packages**. That pull request sets the new versions and writes the changelogs.
 3. A maintainer reviews the **Version packages** pull request and merges it.
-4. The Release workflow sees versions that are not on npm. It builds, typechecks, tests and smoke tests the packages. Then it publishes them to npm with provenance, pushes a git tag for each package and makes a GitHub release.
+4. The Release workflow sees versions that are not on npm. A `verify` job builds, typechecks, tests and smoke tests the packages. This job has no secrets and no OIDC token. Then the `publish` job builds the packages again and publishes them to npm with provenance, pushes a git tag for each package and makes a GitHub release. The Release workflow uses no dependency cache, so a cache entry from another workflow cannot reach the job that publishes.
 
 `pnpm release` stops with an error when it runs outside the Release workflow.
 
@@ -96,7 +96,7 @@ If `NPM_TOKEN` is not set, the publish job writes a warning (`npm publish skippe
 1. Merge the **Version packages** pull request. It sets all packages to `0.1.0`.
 2. Watch the **Publish to npm** job. Make sure that each package on npm shows a provenance statement.
 
-A pull request that the workflow opens does not start the CI workflow (a GitHub rule for `GITHUB_TOKEN`). To run CI on the **Version packages** pull request, close it and open it again. The publish job also runs the build, the tests and the smoke test before it publishes.
+A pull request that the workflow opens does not start the CI workflow (a GitHub rule for `GITHUB_TOKEN`). To run CI on the **Version packages** pull request, close it and open it again. The `verify` job also runs the build, the tests and the smoke test before the publish job starts.
 
 ### 5. Change to trusted publishing and delete the token
 
