@@ -1,5 +1,5 @@
 import { OrkException, currencyForCountry, orkError, planPathways, rankQuotes, cmp } from '@openrampkit/core'
-import type { Amount, Fee, LegQuote, OrkError, Pathway, PlanResult, Quote, SurfaceKind } from '@openrampkit/core'
+import type { Amount, Fee, LegQuote, OrkError, Pathway, PlanResult, PublicLegQuote, PublicQuote, Quote, SurfaceKind } from '@openrampkit/core'
 import { ALL_SURFACES, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
 import { randomHex } from './crypto.js'
 import { adapterContext, destinationOf, withTimeout } from './runtime.js'
@@ -140,8 +140,25 @@ export function combineLegQuotes(p: Pathway, legQuotes: LegQuote[]): Quote {
   }
 }
 
-/** Quote up to MAX_QUOTED_PATHWAYS pathways for a method in parallel. Failures become errors, not exceptions. */
-export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody): Promise<{ quotes: Quote[]; errors: OrkError[] }> {
+/**
+ * The browser view of a quote: each leg without its adapter `data`. That data can hold a provider
+ * URL with a session token, a request body, or a nonce that is an idempotency key. It stays in the
+ * server store (`StoredQuote`) and goes only to the adapter's `start()`.
+ */
+export function publicQuote(q: Quote): PublicQuote {
+  return { ...q, legs: q.legs.map(publicLegQuote) }
+}
+
+function publicLegQuote(l: LegQuote): PublicLegQuote {
+  const { data: _data, ...rest } = l
+  return rest
+}
+
+/**
+ * Quote up to MAX_QUOTED_PATHWAYS pathways for a method in parallel. Failures become errors, not exceptions.
+ * Returns the public view of each quote (see `publicQuote`); the full quotes go into `rec.quotes`.
+ */
+export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody): Promise<{ quotes: PublicQuote[]; errors: OrkError[] }> {
   if (!rec.plan) await plan(rt, rec, { walletConnected: rec.walletConnected ?? false })
   const candidates = rec.plan!.pathways.filter((p) => p.method === body.method && p.group !== 'unavailable')
   if (!candidates.length) throw new OrkException(orkError('NO_QUOTES'), 422)
@@ -176,7 +193,7 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
     }
   }
   pruneQuotes(rec)
-  return { quotes: rankQuotes(out), errors }
+  return { quotes: rankQuotes(out).map(publicQuote), errors }
 }
 
 function pruneQuotes(rec: SessionRecord) {

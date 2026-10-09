@@ -10,7 +10,7 @@ The full definitions are in `packages/core/src/types.ts`. The concept pages expl
 |---|---|
 | `Asset`, `FiatAsset`, `CryptoAsset`, `Location`, `Endpoint`, `Destination`, `ContractCall` | [Pathways and legs](../concepts/pathways.md) |
 | `LegSpec`, `LegKind`, `EndpointMatcher`, `AssetMatcher`, `RegionPolicy` | [Pathways and legs](../concepts/pathways.md#leg-specs) |
-| `Pathway`, `PathwayLeg`, `PathwayGroup`, `LegQuote`, `Quote`, `Fee`, `Amount` | [Pathways and legs](../concepts/pathways.md#quoting) |
+| `Pathway`, `PathwayLeg`, `PathwayGroup`, `LegQuote`, `Quote`, `PublicLegQuote`, `PublicQuote`, `Fee`, `Amount` | [Pathways and legs](../concepts/pathways.md#quoting) |
 | `Step`, `StateName`, `Transition`, `PollSpec`, `LegStep`, `LegStatus`, `FieldSpec`, `TxRequest` | [Flow state machine](../concepts/flow.md) |
 | `Surface`, `SurfaceKind`, `IframeMessages` | [Surfaces](../concepts/surfaces.md) |
 | `OrkError`, `OrkErrorCode` | [Flow: errors as fields](../concepts/flow.md#errors-as-fields) |
@@ -112,7 +112,13 @@ type Quote = {
   expiresAt?: string
   badges?: Array<'best_price' | 'fastest'>
 }
+
+/** What the browser gets from `POST /sessions/:id/quotes` */
+type PublicLegQuote = Omit<LegQuote, 'data'>
+type PublicQuote = Omit<Quote, 'legs'> & { legs: PublicLegQuote[] }
 ```
+
+`Quote` is the server-side quote. Each `LegQuote` has the adapter's opaque `data`, which can hold a provider URL with a session token, a request body or an idempotency nonce. The server keeps the full quote in its store and gives `data` only to the adapter's `start()`. The browser, the client and the MCP server get a `PublicQuote`: the same quote without `legs[].data`.
 
 ## Money
 

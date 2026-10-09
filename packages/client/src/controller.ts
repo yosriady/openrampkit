@@ -10,7 +10,7 @@ import type {
   OrkEvent,
   PlanResult,
   PublicSession,
-  Quote,
+  PublicQuote,
   Step,
   Transition,
   WalletAdapter,
@@ -40,7 +40,7 @@ export type Snapshot = {
   method?: MethodOption
   amount: string
   amountSide: 'source' | 'destination'
-  quotes: Quote[]
+  quotes: PublicQuote[]
   quoteErrors: OrkError[]
   quotesLoading: boolean
   selectedQuoteId?: string

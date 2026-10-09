@@ -2,7 +2,7 @@
 
 import type { Snapshot } from '@openrampkit/client'
 import { CHAINS, USDC, mulRatio } from '@openrampkit/core'
-import type { IframeMessages, MethodOption, OrkError, PathwayGroup, Quote, Step, Surface, WalletBalance } from '@openrampkit/core'
+import type { IframeMessages, MethodOption, OrkError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
 import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -158,7 +158,7 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
 }
 
 /** Second line of a quote row: what the user pays and the fees. */
-export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
+export function quoteSubtitle(q: PublicQuote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
   if (Number(q.input.amount) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
@@ -169,7 +169,7 @@ export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'wit
 }
 
 /** The quote after (dir 1) or before (dir -1) the selected one, wrapping around. */
-export function nextQuoteId(quotes: Quote[], selectedId: string | undefined, dir: 1 | -1): string | undefined {
+export function nextQuoteId(quotes: PublicQuote[], selectedId: string | undefined, dir: 1 | -1): string | undefined {
   if (!quotes.length) return undefined
   const i = quotes.findIndex((q) => q.id === selectedId)
   return quotes[(i + dir + quotes.length) % quotes.length]?.id

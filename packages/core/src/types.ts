@@ -216,6 +216,15 @@ export type Quote = {
   badges?: Array<'best_price' | 'fastest'>
 }
 
+/** A leg quote as the browser sees it: no adapter `data` (provider URLs, request bodies, idempotency nonces). */
+export type PublicLegQuote = Omit<LegQuote, 'data'>
+
+/**
+ * A quote as the browser sees it (`POST /sessions/:id/quotes`). The server keeps the full `Quote`,
+ * with each leg's adapter `data`, in its store, and never sends it to the browser.
+ */
+export type PublicQuote = Omit<Quote, 'legs'> & { legs: PublicLegQuote[] }
+
 export type OrkErrorCode =
   | 'REGION_UNSUPPORTED'
   | 'AMOUNT_TOO_LOW'

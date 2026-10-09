@@ -5,7 +5,7 @@ import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
 import { isAddressTransfer, isWebUrl, methodName } from '@openrampkit/core'
-import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
+import type { FieldSpec, MethodOption, OrkError, PublicQuote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
 import { resolveMessages } from './messages.js'
@@ -337,7 +337,7 @@ export class OpenRampModal extends LitElement {
     return screenOf(this._snap, this.error)
   }
 
-  private get _selectedQuote(): Quote | undefined {
+  private get _selectedQuote(): PublicQuote | undefined {
     const s = this._snap
     return s?.quotes.find((q) => q.id === s.selectedQuoteId)
   }
@@ -869,7 +869,7 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  private _renderQuoteRow(m: Messages, s: Snapshot, q: Quote) {
+  private _renderQuoteRow(m: Messages, s: Snapshot, q: PublicQuote) {
     const selected = q.id === s.selectedQuoteId
     return html`<button
       class="row"

@@ -169,4 +169,4 @@ Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 | `defineOpenRampModal()` | Registers the element if it is not registered |
 | `DepositController`, `WithdrawController`, `RampController` | Re-exported from `@openrampkit/client` (one class) |
 
-Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.
+Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.
