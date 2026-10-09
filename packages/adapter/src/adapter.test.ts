@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OrkException, orkError } from '@openrampkit/core'
+import { OrkException, orkError, timingSafeEqual as coreTimingSafeEqual } from '@openrampkit/core'
 import type { LegQuote, LegSpec, LegStep, PathwayLeg } from '@openrampkit/core'
 import {
   POLL,
@@ -55,6 +55,10 @@ describe('crypto helpers', () => {
     expect(timingSafeEqual('abc', 'abcd')).toBe(false)
     expect(randomHex(4)).toMatch(/^[0-9a-f]{8}$/)
     expect(randomHex()).toMatch(/^[0-9a-f]{16}$/)
+  })
+
+  it('timingSafeEqual is the one implementation from core', () => {
+    expect(timingSafeEqual).toBe(coreTimingSafeEqual)
   })
 })
 

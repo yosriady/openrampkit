@@ -162,6 +162,14 @@ isSafeLinkUrl(url)             // true for a web URL or an app scheme; false for
 
 The server, the client and the web component use them on surface URLs. See [Surface URLs](../guide/security.md#surface-urls).
 
+## Constant-time compare
+
+```ts
+timingSafeEqual(a, b)  // true when the strings are equal
+```
+
+Compares two strings in constant time for a given length, for tokens and signatures. Strings of different lengths give `false` at once, so only the length can leak. When the length is secret too, compare fixed-length values, such as hex digests. `@openrampkit/adapter` exports the same function.
+
 ## Flow table
 
 | Export | Description |

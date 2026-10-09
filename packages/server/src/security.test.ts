@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { Adapter } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
-import { USDC } from '@openrampkit/core'
+import { USDC, timingSafeEqual } from '@openrampkit/core'
 import type { LegSpec, Surface } from '@openrampkit/core'
+import { safeEqual } from './crypto.js'
 import { createOpenRamp } from './index.js'
 import type { OpenRampConfig, TreasurySendInput } from './index.js'
 
@@ -53,6 +54,12 @@ async function selectWith(adapter: Adapter, livemode = false) {
   const q = await (await call(`/sessions/${s.id}/quotes`, post(s.clientSecret, { method: 'card', amount: '10' }))).json()
   return (await call(`/sessions/${s.id}/select`, post(s.clientSecret, { quoteId: q.quotes[0].id }))).json()
 }
+
+describe('constant-time compare', () => {
+  it('the server uses the one implementation from core', () => {
+    expect(safeEqual).toBe(timingSafeEqual)
+  })
+})
 
 describe('config: secret lengths', () => {
   it('refuses a short webhooks.secret and a short tasksToken', () => {

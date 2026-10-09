@@ -172,12 +172,8 @@ export async function hmacSha256(secret: string, message: string, encoding: 'hex
   return btoa(bin)
 }
 
-export function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let r = 0
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return r === 0
-}
+/** Constant-time string compare. The one implementation lives in `@openrampkit/core`. */
+export { timingSafeEqual } from '@openrampkit/core'
 
 export * from './http.js'
 export * from './claim.js'

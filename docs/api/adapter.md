@@ -153,7 +153,7 @@ Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 | `decimalFrom(n, digits = 8)` | Provider number to an exact decimal string; missing or non-finite gives `'0'` |
 | `randomHex(bytes = 8)` | Random hex string |
 | `hmacSha256(secret, message, 'hex' \| 'base64')` | WebCrypto HMAC |
-| `timingSafeEqual(a, b)` | Constant-time string compare |
+| `timingSafeEqual(a, b)` | Constant-time string compare (the same function as in `@openrampkit/core`) |
 
 ## EVM helpers
 

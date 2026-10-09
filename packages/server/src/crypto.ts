@@ -1,5 +1,7 @@
 // WebCrypto only, so the server runs on Node 20+, Bun, Deno and Cloudflare Workers.
 
+import { timingSafeEqual } from '@openrampkit/core'
+
 const enc = new TextEncoder()
 
 export function randomHex(bytes = 16): string {
@@ -19,12 +21,8 @@ export async function hmacHex(secret: string, message: string): Promise<string> 
   return [...sig].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
-export function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let r = 0
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return r === 0
-}
+/** Constant-time string compare (`timingSafeEqual` from core). Server modules import it from here, so tests can watch it. */
+export const safeEqual: (a: string, b: string) => boolean = timingSafeEqual
 
 /** Sign an outbound webhook: HMAC-SHA256 over `id.timestamp.body`. */
 export async function signWebhook(secret: string, id: string, timestamp: number, body: string): Promise<string> {
