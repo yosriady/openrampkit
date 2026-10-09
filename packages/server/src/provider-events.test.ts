@@ -26,7 +26,7 @@ const STATE: Record<string, LegStep['state']> = {
 }
 
 /** A card provider with webhooks and status polling. `statusOf` sets what `status` answers. */
-function hookedAdapter() {
+function hookedAdapter(specExtra: Partial<LegSpec> = {}) {
   let n = 0
   const statusOf: Record<string, Partial<LegStep> & { status: LegStatus }> = {}
   const spec: LegSpec = {
@@ -34,6 +34,7 @@ function hookedAdapter() {
     from: { asset: { kind: 'fiat', currencies: '*' }, location: ['user_account'] },
     to: { asset: { kind: 'crypto', chains: { 'eip155:8453': [USDC['eip155:8453']!] } }, location: ['address'] },
     regions: { allow: ['*'], deny: [] }, eta: { min: 1, max: 2 }, surfaces: ['REDIRECT'],
+    ...specExtra,
   }
   const poll = [{ name: 'poll', kind: 'AWAIT' as const, poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }]
   const adapter = createAdapter({
@@ -98,7 +99,7 @@ function bridgeAdapter() {
 
 /** App backend that records each delivered webhook body. */
 function appBackend() {
-  const sent: Array<{ id: string; type: string; data: { object: Record<string, unknown> } }> = []
+  const sent: Array<{ id: string; type: string; sessionId?: string; data: { object: Record<string, unknown> } }> = []
   const fetchFn: typeof fetch = async (_u, init) => {
     sent.push(JSON.parse(String(init?.body)))
     return new Response('ok', { status: 200 })
@@ -106,8 +107,8 @@ function appBackend() {
   return { sent, fetchFn, of: (type: string) => sent.filter((e) => e.type === type) }
 }
 
-function make(extra: Partial<OpenRampConfig> = {}) {
-  const hooked = hookedAdapter()
+function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> = {}) {
+  const hooked = hookedAdapter(specExtra)
   const bridge = bridgeAdapter()
   const app = appBackend()
   const store = memoryStore()
@@ -178,16 +179,44 @@ describe('P1-1: the leg moves only forward', () => {
     expect(t.app.of('session.completed')).toHaveLength(1)
   })
 
-  it('allows awaiting_user with a new surface after processing only before the leg has a transaction', async () => {
+  const depositSurface = (address: string) => ({ kind: 'DEPOSIT_ADDRESS' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, address })
+
+  it('refuses awaiting_user with a new surface after processing when the leg does not opt in', async () => {
     const t = make()
     const s = await t.toPayment()
-    const surface = { kind: 'DEPOSIT_ADDRESS' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x00000000000000000000000000000000000000aa' }
     await t.hook([{ ref: s.ref, status: 'processing' }])
-    await t.hook([{ ref: s.ref, status: 'awaiting_user', surface }])
-    expect((await t.record(s.id)).step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'DEPOSIT_ADDRESS' } })
-    await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
-    await t.hook([{ ref: s.ref, status: 'awaiting_user', surface }])
-    expect((await t.record(s.id)).step.state).toBe('PROCESSING')
+    await t.hook([{ ref: s.ref, status: 'awaiting_user', surface: depositSurface('0x00000000000000000000000000000000000000aa') }])
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('PROCESSING')
+    expect(rec.step.surface?.kind).not.toBe('DEPOSIT_ADDRESS')
+  })
+
+  it('with surface_after_processing: allows it once, with a declared surface kind, before the leg has a transaction', async () => {
+    const t = make({}, { capabilities: ['webhooks', 'surface_after_processing'], surfaces: ['REDIRECT', 'DEPOSIT_ADDRESS'] })
+    // A surface kind the leg does not declare is refused.
+    const a = await t.toPayment()
+    await t.hook([{ ref: a.ref, status: 'processing' }])
+    await t.hook([{ ref: a.ref, status: 'awaiting_user', surface: { kind: 'QR', payload: 'x', amount: '1', currency: 'SGD' } }])
+    expect((await t.record(a.id)).step.state).toBe('PROCESSING')
+
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'processing' }])
+    await t.hook([{ ref: s.ref, status: 'awaiting_user', surface: depositSurface('0x00000000000000000000000000000000000000aa') }])
+    let rec = await t.record(s.id)
+    expect(rec.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'DEPOSIT_ADDRESS', address: '0x00000000000000000000000000000000000000aa' } })
+    expect(rec.timeline!.some((e) => e.type === 'leg.surface_after_processing')).toBe(true)
+    // Only once: a second move back with another address is refused.
+    await t.hook([{ ref: s.ref, status: 'processing' }])
+    await t.hook([{ ref: s.ref, status: 'awaiting_user', surface: depositSurface('0x00000000000000000000000000000000000000bb') }])
+    rec = await t.record(s.id)
+    expect(rec.step.state).toBe('PROCESSING')
+    expect(JSON.stringify(rec.step)).not.toContain('00bb')
+
+    // Never after the leg has a transaction.
+    const b = await t.toPayment()
+    await t.hook([{ ref: b.ref, status: 'processing', txHash: '0xaa' }])
+    await t.hook([{ ref: b.ref, status: 'awaiting_user', surface: depositSurface('0x00000000000000000000000000000000000000aa') }])
+    expect((await t.record(b.id)).step.state).toBe('PROCESSING')
   })
 
   it('drops a provider event whose id the session already applied', async () => {
@@ -366,13 +395,46 @@ describe('P1-3: the reported output is checked against the quote', () => {
     expect(t.app.of('session.completed').every((e) => !(e.data.object.session as { result: object }).result.hasOwnProperty('amountMismatch'))).toBe(true)
   })
 
-  it('uses policy.outputToleranceBps, and skips an output in another asset', async () => {
+  it('uses policy.outputToleranceBps', async () => {
     const t = make({ policy: { outputToleranceBps: 0 } })
     const a = await t.toPayment()
     await t.hook([{ ref: a.ref, status: 'succeeded', output: usdc('8.99') }])
-    expect((await t.record(a.id)).active!.legs[0]!.amountMismatch).toMatchObject({ shortfall: '0.01' })
+    expect((await t.record(a.id)).active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'short', shortfall: '0.01' })
+  })
+
+  it('fails closed: an output in another asset, or with an amount that is not a number, is flagged and not confirmed', async () => {
+    const t = make()
+    const a = await t.toPayment()
+    // The right amount, but on another chain.
+    await t.hook([{ ref: a.ref, status: 'succeeded', output: { amount: '9', asset: { kind: 'crypto', chain: 'eip155:1', token: USDC['eip155:1']! } } }])
+    const ra = await t.record(a.id)
+    expect(ra.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch', shortfall: '9' })
+    expect(ra.timeline!.find((e) => e.type === 'leg.amount_mismatch')).toMatchObject({ detail: { reason: 'asset_mismatch' } })
+    const done = t.app.of('session.completed').find((e) => e.sessionId === a.id) ?? t.app.of('session.completed')[0]!
+    expect(done.data.object).toMatchObject({ session: { result: { outputConfirmed: false, amountMismatch: { reason: 'asset_mismatch', legIndex: 0 } } } })
+
     const b = await t.toPayment()
-    await t.hook([{ ref: b.ref, status: 'succeeded', output: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }])
-    expect((await t.record(b.id)).active!.legs[0]!.amountMismatch).toBeUndefined()
+    await t.hook([{ ref: b.ref, status: 'succeeded', output: { amount: '9e9', asset: usdc('9').asset } }])
+    const rb = await t.record(b.id)
+    expect(rb.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'invalid_amount' })
+    expect((await t.ramp.admin.get(b.id))!.payment!.legs[0]).toMatchObject({ amountMismatch: { reason: 'invalid_amount' } })
+  })
+
+  it('does not start the next leg when a leg before the last delivered another asset', async () => {
+    const t = make()
+    const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
+    const s = await t.toPayment({ destination: ARB })
+    await t.hook([{ ref: s.ref, status: 'succeeded', output: { amount: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } } }])
+    const rec = await t.record(s.id)
+    expect(t.bridgeStarts).toHaveLength(0)
+    expect(rec.active!.index).toBe(0)
+    expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED', recovery: 'contact_support' } })
+    expect(t.app.of('session.failed')).toHaveLength(1)
+    expect(t.app.of('session.failed')[0]!.data.object).toMatchObject({ session: { result: { amountMismatch: { reason: 'asset_mismatch', legIndex: 0 } } } })
+
+    // A short (but same asset) delivery still starts the next leg: it bridges what arrived.
+    const u = await t.toPayment({ destination: ARB })
+    await t.hook([{ ref: u.ref, status: 'succeeded', output: usdc('8') }])
+    expect(t.bridgeStarts).toHaveLength(1)
   })
 })

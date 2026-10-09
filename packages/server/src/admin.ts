@@ -8,7 +8,7 @@
 // `StoreQueue.range` reads them, latest first. The sweep removes days older than `admin.indexDays`.
 
 import { add, isTerminal, OrkException, orkError } from '@openrampkit/core'
-import type { Amount, Direction, Fee, OrkError, StateName } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Direction, Fee, OrkError, StateName } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { json, readJson } from './http.js'
 import { sessionStatusFor } from './legs.js'
@@ -180,8 +180,8 @@ export type AdminLeg = {
   input: Amount
   output: Amount
   outputConfirmed: boolean
-  /** The provider reported less output than the quote, beyond the tolerance */
-  amountMismatch?: { expected: Amount; received: Amount; shortfall: string }
+  /** The reported output is short of the quote beyond the tolerance, or not comparable with it */
+  amountMismatch?: Omit<AmountMismatch, 'legIndex'>
   fees: Fee[]
   started: boolean
   lastCheckedAt?: string

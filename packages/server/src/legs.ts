@@ -2,7 +2,7 @@
 
 import type { LegEvent } from '@openrampkit/adapter'
 import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
-import type { Amount, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
 import { DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
@@ -41,6 +41,13 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
   // A refund or a chargeback after success ends the session, whatever the other legs do.
   if (rec.reversal) {
     return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: orkError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), progress, legIndex: act.index }
+  }
+  // A leg before the last delivered another asset (or no valid amount): the next leg cannot take it,
+  // so it does not start. An operator checks the funds (`admin.resolve`).
+  const cur = act.legs[act.index]!
+  if (act.index < act.legs.length - 1 && cur.step?.status === 'succeeded' && deliveredWrongAsset(cur)) {
+    const error = orkError('DELIVERY_FAILED', { message: 'The provider delivered another asset than the quote. Contact support.', recovery: 'contact_support', legId: cur.legId })
+    return { sessionId: rec.id, state: 'FAILED', transitions: [], error, progress, legIndex: act.index }
   }
   if (act.legs.every((l) => l.step?.status === 'succeeded')) {
     return { sessionId: rec.id, state: 'COMPLETED', transitions: [], progress, legIndex: act.index }
@@ -193,9 +200,11 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   return { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }], txHash: hash }
 }
 
+/** Same asset: the same currency, or the same chain and token. Provider data is not trusted to be well formed. */
 function sameAsset(a: Asset, b: Asset): boolean {
-  if (a.kind === 'fiat' || b.kind === 'fiat') return a.kind === b.kind && (a as { currency: string }).currency.toUpperCase() === (b as { currency: string }).currency.toUpperCase()
-  return a.chain === b.chain && a.token.toLowerCase() === b.token.toLowerCase()
+  if (a.kind === 'fiat' && b.kind === 'fiat') return typeof a.currency === 'string' && typeof b.currency === 'string' && a.currency.toUpperCase() === b.currency.toUpperCase()
+  if (a.kind === 'crypto' && b.kind === 'crypto') return typeof a.token === 'string' && typeof b.token === 'string' && a.chain === b.chain && a.token.toLowerCase() === b.token.toLowerCase()
+  return false
 }
 
 /**
@@ -206,21 +215,29 @@ function sameAsset(a: Asset, b: Asset): boolean {
 function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): void {
   const leg = rec.active!.legs[i]!
   const expected = leg.quote.output
-  if (!sameAsset(expected.asset, got.asset) || !isDecimal(expected.amount) || !isDecimal(got.amount)) {
-    rt.log.debug('reported output is not comparable with the quote', { sessionId: rec.id, index: i })
-    return
+  // Fail closed: an output that cannot be compared with the quote never counts as a full delivery.
+  let reason: AmountMismatch['reason'] | undefined
+  let shortfall = expected.amount
+  if (!got?.asset || !sameAsset(expected.asset, got.asset)) reason = 'asset_mismatch'
+  else if (typeof got.amount !== 'string' || !isDecimal(got.amount) || !isDecimal(expected.amount)) reason = 'invalid_amount'
+  else {
+    const tolerance = Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)
+    if (cmp(got.amount, sub(expected.amount, bps(expected.amount, tolerance))) >= 0) {
+      delete leg.amountMismatch
+      return
+    }
+    reason = 'short'
+    shortfall = sub(expected.amount, got.amount)
   }
-  const tolerance = Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)
-  const min = sub(expected.amount, bps(expected.amount, tolerance))
-  if (cmp(got.amount, min) >= 0) {
-    delete leg.amountMismatch
-    return
-  }
-  const shortfall = sub(expected.amount, got.amount)
-  leg.amountMismatch = { expected, received: got, shortfall }
-  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, expected: expected.amount, received: got.amount })
-  rt.log.warn('provider reported less output than the quote', { sessionId: rec.id, adapterId: leg.adapterId, index: i, expected: expected.amount, received: got.amount })
-  rt.metric('leg.amount_mismatch', 1, { adapter: leg.adapterId })
+  leg.amountMismatch = { reason, expected, received: got, shortfall }
+  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, reason, expected: expected.amount, received: String(got?.amount) })
+  rt.log.warn('provider reported an output that is not the quoted delivery', { sessionId: rec.id, adapterId: leg.adapterId, index: i, reason, expected: expected.amount, received: String(got?.amount) })
+  rt.metric('leg.amount_mismatch', 1, { adapter: leg.adapterId, reason })
+}
+
+/** True when leg `l` delivered something that the next leg cannot take: another asset, or no valid amount. */
+function deliveredWrongAsset(l: ActiveLeg): boolean {
+  return !!l.amountMismatch && l.amountMismatch.reason !== 'short'
 }
 
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
@@ -266,7 +283,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   const scope = act.n ? `a${act.n}` : undefined
   if (wrapped.status === 'succeeded') await notify(rt, rec, 'leg.succeeded', { index: i, adapterId: leg.adapterId, legId: leg.legId }, scope)
   if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error }, scope)
-  if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1) {
+  if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1 && !deliveredWrongAsset(leg)) {
     act.index = i + 1
     await startLeg(rt, rec, act.index)
     return
@@ -488,13 +505,16 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
 }
 
 /**
- * True when a provider event may change the leg step `cur` (see `isLegalLegMove`). One move back is
- * allowed: from `processing` to `awaiting_user` with a new surface, before the leg has a transaction.
+ * The one move back that a provider event may make: from `processing` to `awaiting_user` with a new
+ * surface. Only when the leg's spec opts in (capability `surface_after_processing`), the surface kind
+ * is one the spec declares, the leg has no transaction yet, and the leg did not move back before.
  * For example, an offramp learns its deposit address from a webhook and now needs a WALLET_TX.
  */
-export function eventMoveAllowed(cur: LegStep, ev: LegEvent): boolean {
-  if (isLegalLegMove(cur.status, ev.status)) return true
-  return cur.status === 'processing' && ev.status === 'awaiting_user' && !!ev.surface && !cur.txHash
+export function surfaceMoveBack(rt: Runtime, leg: ActiveLeg, cur: LegStep, ev: LegEvent): boolean {
+  if (cur.status !== 'processing' || ev.status !== 'awaiting_user' || !ev.surface || cur.txHash || leg.surfaceReopened) return false
+  // Fail closed: a leg with no static spec (for example from a live catalog only) does not opt in.
+  const spec = rt.adapters.get(leg.adapterId)?.legs.find((l) => l.id === leg.legId)
+  return !!spec?.capabilities?.includes('surface_after_processing') && spec.surfaces.includes(ev.surface.kind)
 }
 
 /** Most provider event ids kept per session (see `SessionRecord.providerEvents`) */
@@ -527,14 +547,20 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
       rt.log.info('provider event already applied; ignored', { adapterId, ref: ev.ref, eventId: ev.eventId, sessionId: sid })
       return 'ignored'
     }
-    const cur = found.act.legs[found.i]!.step
-    if (cur && !eventMoveAllowed(cur, ev)) {
+    const leg = found.act.legs[found.i]!
+    const cur = leg.step
+    const back = !!cur && surfaceMoveBack(rt, leg, cur, ev)
+    if (cur && !back && !isLegalLegMove(cur.status, ev.status)) {
       // A repeat of a final status is normal (providers send events more than once). A move back is not.
       if (cur.status !== ev.status) {
         rt.log.warn('provider event would move the leg back; ignored', { adapterId, ref: ev.ref, sessionId: sid, from: cur.status, to: ev.status })
         rt.metric('event.out_of_order', 1, { adapter: adapterId })
       }
       return 'ignored'
+    }
+    if (back) {
+      leg.surfaceReopened = true
+      addTimeline(rec, 'leg.surface_after_processing', { index: found.i, adapterId, surface: ev.surface!.kind })
     }
     try {
       const ls = legStepFromEvent(cur, ev)

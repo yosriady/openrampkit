@@ -151,7 +151,14 @@ stateDiagram-v2
 
 The server enforces the order of leg statuses for provider events (webhooks and adapter routes). Each status has a rank (`LEG_STATUS_RANK`): `pending` 0, `awaiting_user` 1, `processing` 2, `succeeded`, `failed` and `expired` 3, `refunded` and `reversed` 4. An event can move a leg to the same status or to a status of a higher rank (`isLegalLegMove`). A final leg does not move, with one exception: a `succeeded` leg can become `refunded` or `reversed`. So a late `pending` event cannot move a `processing` leg back. The server logs the event, adds 1 to the `event.out_of_order` metric, and answers the provider with `200` (the event is ignored, not an error).
 
-One move back is allowed: from `processing` to `awaiting_user` when the event has a new `surface` and the leg has no transaction yet. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`.
+One move back can be allowed: from `processing` to `awaiting_user` with a new `surface`. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`. A new surface can send the user's funds to a new place, so the server allows this move only when all of these are true:
+
+- the leg's spec has the capability `surface_after_processing`,
+- the surface kind is in the spec's `surfaces`,
+- the leg has no transaction yet,
+- the leg did not move back before (once per leg).
+
+The timeline gets `leg.surface_after_processing`. No built-in adapter needs this move today.
 
 A status check (`status()`) and a transition (`transition()`) give the provider's current state, so the server does not check the order for them. For example, a KYC review (`processing`) can end with a payment step (`awaiting_user`).
 

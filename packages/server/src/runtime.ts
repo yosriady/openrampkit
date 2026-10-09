@@ -149,7 +149,8 @@ export function sessionResult(rec: SessionRecord): SessionResult {
     provider: act.pathway.provider,
     input: first.quote.input,
     output: reported ?? last.quote.output,
-    outputConfirmed: !!reported,
+    // An output in another asset (or not a number) is not a confirmed delivery of the quote.
+    outputConfirmed: !!reported && (!last.amountMismatch || last.amountMismatch.reason === 'short'),
     fees: act.legs.flatMap((l) => l.quote.fees),
     txHashes: act.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h),
     ...(mismatch ? { amountMismatch: { legIndex: k, ...mismatch } } : {}),

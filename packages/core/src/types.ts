@@ -140,8 +140,14 @@ export type LegSpec = {
   eta: { min: number; max: number }
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  /** `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`) */
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement'>
+  /**
+   * `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
+   * `surface_after_processing`: a provider event may move the leg from `processing` back to
+   * `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
+   * learns where the user must pay after it started (for example an offramp that gets its deposit
+   * address in a webhook). The surface kind must be one of `surfaces`.
+   */
+  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement' | 'surface_after_processing'>
 }
 
 export type Fee = {
@@ -442,20 +448,27 @@ export type SessionResult = {
   txHashes: string[]
   /**
    * Set when a provider reported less output than the quote, by more than the server's tolerance
-   * (`policy.outputToleranceBps`). `received` is the reported amount. Check it before you credit.
+   * (`policy.outputToleranceBps`), or an output that is not comparable with the quote (another asset,
+   * or not a number). `received` is the reported output. Check it before you credit.
    */
   amountMismatch?: AmountMismatch
 }
 
-/** A leg delivered less than its quote, by more than the tolerance */
+/**
+ * A leg's reported output that the server cannot accept as a full delivery:
+ * - `short`: less than the quote, by more than the tolerance.
+ * - `asset_mismatch`: in another asset (another token, chain or currency) than the quote.
+ * - `invalid_amount`: the reported or the quoted amount is not a decimal number.
+ */
 export type AmountMismatch = {
+  reason: 'short' | 'asset_mismatch' | 'invalid_amount'
   /** Index of the leg in the pathway */
   legIndex: number
   /** The quoted output of the leg */
   expected: Amount
   /** The output that the provider reported */
   received: Amount
-  /** `expected - received`, in the same asset */
+  /** `expected - received` for `short`. The full expected amount for the other reasons. */
   shortfall: string
 }
 

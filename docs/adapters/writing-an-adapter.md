@@ -137,7 +137,7 @@ type LegEvent = {
 }
 ```
 
-The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
+The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. Events move a leg only forward. When your leg learns where the user must pay after it started (for example a deposit address in a webhook, while the leg is `processing`), add `'surface_after_processing'` to the leg's `capabilities` and the surface kind to its `surfaces`. The server then allows one move from `processing` back to `awaiting_user` with that surface, before the leg has a transaction. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
 
 ## Withdraw legs
 

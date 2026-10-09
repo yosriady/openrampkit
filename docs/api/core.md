@@ -59,14 +59,21 @@ type SessionResult = {
 }
 
 type AmountMismatch = {
-  legIndex: number   // the leg that delivered less
+  reason: 'short' | 'asset_mismatch' | 'invalid_amount'
+  legIndex: number   // the leg
   expected: Amount   // its quoted output
   received: Amount   // the output the provider reported
-  shortfall: string  // expected minus received, in the same asset
+  shortfall: string  // short: expected minus received. Other reasons: the full expected amount.
 }
 ```
 
-The server compares each leg's reported output with the leg's quote. When the provider reports less than the quote by more than `policy.outputToleranceBps` (default 100, that is 1%), the leg keeps its result and the session can complete, but `amountMismatch` is set. When more than one leg is short, it shows the last one. The timeline gets `leg.amount_mismatch`. The server compares only outputs in the same asset as the quote.
+The server compares each leg's reported output with the leg's quote. It fails closed:
+
+- `short`: the provider reports less than the quote by more than `policy.outputToleranceBps` (default 100, that is 1%). The leg keeps its result. The next leg starts (it takes what arrived), and the session can complete.
+- `asset_mismatch`: the output is in another asset (another token, chain or currency) than the quote.
+- `invalid_amount`: the reported or the quoted amount is not a decimal number.
+
+For `asset_mismatch` and `invalid_amount`, `outputConfirmed` is `false` on the last leg. On a leg before the last, the next leg does not start: the step becomes `FAILED` with `DELIVERY_FAILED` (recovery `contact_support`), and an operator checks the funds. When more than one leg has a mismatch, `amountMismatch` shows the last one. The timeline gets `leg.amount_mismatch` with the reason.
 
 ### Withdraw types
 
