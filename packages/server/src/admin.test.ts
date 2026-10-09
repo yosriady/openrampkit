@@ -242,12 +242,15 @@ describe('admin get, find and stats', () => {
     const t = make()
     const s = await t.pay()
     const tx = `0x${'ab'.repeat(32)}`
-    await t.hook([{ ref: s.ref, status: 'succeeded', txHash: tx }])
+    const src = `0x${'cd'.repeat(32)}`
+    await t.hook([{ ref: s.ref, status: 'succeeded', txHash: tx, sourceTxHash: src }])
     expect((await t.ramp.admin.findByRef('hooked', s.ref))!.id).toBe(s.id)
     expect(await t.ramp.admin.findByRef('hooked', 'nope')).toBeNull()
     expect((await t.ramp.admin.findByTx(undefined, tx.toUpperCase().replace('0X', '0x'))).map((x) => x.id)).toEqual([s.id])
     expect((await t.ramp.admin.findByTx('eip155:8453', tx)).map((x) => x.id)).toEqual([s.id])
     expect(await t.ramp.admin.findByTx('eip155:1', tx)).toEqual([])
+    // The user's own origin transaction finds the session too.
+    expect((await t.ramp.admin.findByTx(undefined, src)).map((x) => x.id)).toEqual([s.id])
     const r = await (await t.admin(`/find?provider=hooked&ref=${s.ref}`)).json()
     expect(r.sessions[0].id).toBe(s.id)
     expect((await (await t.admin(`/find?tx=${tx}`)).json()).sessions[0].id).toBe(s.id)

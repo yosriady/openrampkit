@@ -397,7 +397,7 @@ export async function adminFindByRef(rt: Runtime, provider: string, ref: string)
 }
 
 /**
- * Sessions with a leg transaction `txHash`. No store index has transaction hashes, so this reads the
+ * Sessions with a leg transaction `txHash` or source transaction `sourceTxHash`. No store index has transaction hashes, so this reads the
  * time index (at most `MAX_SCAN` sessions of the last `admin.indexDays` days). `chain` (CAIP-2) is
  * optional; when set, the leg's input or output must be on that chain.
  */
@@ -409,7 +409,7 @@ export async function adminFindByTx(rt: Runtime, chain: string | undefined, txHa
   await visitSessions(rt, indexEntries(rt, now, now - indexDays(rt) * DAY_MS), MAX_SCAN, (rec) => {
     const legs = [...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])].flatMap((p) => p.legs)
     const hit = legs.some((l) => {
-      if (l.step?.txHash?.toLowerCase() !== want) return false
+      if (l.step?.txHash?.toLowerCase() !== want && l.step?.sourceTxHash?.toLowerCase() !== want) return false
       if (!chain) return true
       return [l.quote.input.asset, l.quote.output.asset].some((a) => a.kind === 'crypto' && a.chain === chain)
     })
