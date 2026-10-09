@@ -1,6 +1,6 @@
 // The Relay HTTP API and the JSON-RPC calls, with the options of one adapter instance.
 
-import { evmRpc, fetchJson } from '@openrampkit/adapter'
+import { cachedJson, evmRpc, fetchJson } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { OpenRampException, chainName, openRampError } from '@openrampkit/core'
 import type { CryptoAsset } from '@openrampkit/core'
@@ -57,20 +57,24 @@ export function createRuntime(opts: RelayOptions) {
     if (typeof asset.decimals === 'number') return asset.decimals
     const known = knownDecimals(asset.chain, asset.token)
     if (known !== undefined) return known
-    const key = `dec:${asset.chain}:${isSolana(asset.chain) ? asset.token : asset.token.toLowerCase()}`
-    const cached = await ctx.shared.get<number>(key)
-    if (typeof cached === 'number') return cached
-    const list = await api<Array<{ decimals: number }>>(ctx, '/currencies/v2', {
-      chainIds: [relayChainId(asset.chain)],
-      address: relayCurrency(asset.chain, asset.token),
-      limit: 1,
-    }).catch((e) => {
-      throw toOpenRamp(e, ctx.log)
-    })
-    const d = list?.[0]?.decimals
-    if (typeof d !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Relay does not know this token.' }))
-    await ctx.shared.put(key, d, 7 * 24 * 60 * 60)
-    return d
+    return cachedJson(
+      ctx.shared,
+      `dec:${asset.chain}:${isSolana(asset.chain) ? asset.token : asset.token.toLowerCase()}`,
+      7 * 24 * 60 * 60,
+      async () => {
+        const list = await api<Array<{ decimals: number }>>(ctx, '/currencies/v2', {
+          chainIds: [relayChainId(asset.chain)],
+          address: relayCurrency(asset.chain, asset.token),
+          limit: 1,
+        }).catch((e) => {
+          throw toOpenRamp(e, ctx.log)
+        })
+        const d = list?.[0]?.decimals
+        if (typeof d !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Relay does not know this token.' }))
+        return d
+      },
+      { valid: (d) => typeof d === 'number' },
+    )
   }
 
   function refundTo(originChain: string): string {

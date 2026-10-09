@@ -3,7 +3,7 @@
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
-import { createAdapter, fetchJson, httpErrorToOpenRamp, resolveEnv, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
+import { createAdapter, fetchJson, httpErrorToOpenRamp, quoteExpiresAt, resolveEnv, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, add, bps as applyBps, cmp, minorUnits, openRampError, roundTo, sub } from '@openrampkit/core'
 import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
@@ -240,7 +240,7 @@ export function xendit(opts: XenditOptions) {
         output: { value: roundTo(net, minorUnits(c.currency)), asset: { kind: 'fiat', currency: c.currency } },
         fees,
         eta: legs.find((l) => l.id === leg.legId)!.eta,
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(10),
         limits: { min: c.min, max: c.max, currency: c.currency },
         // A new key per quote: "Try again" after a failure creates a new payment request,
         // while a retried start for the same quote reuses the first one.

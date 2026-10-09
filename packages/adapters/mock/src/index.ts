@@ -1,7 +1,7 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { POLL as POLLS, awaitPoll, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, quoteExpiresAt, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
 import { CHAINS, OpenRampException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, minorUnits, mulRatio, nativeDecimals, normalizeToken, openRampError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
@@ -524,8 +524,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       refuseLive(ctx)
       const spec = legs.find((l) => l.id === leg.legId)
       if (!spec) throw unknownLeg(leg.legId)
-      const now = Date.now()
-      const expiresAt = new Date(now + 60_000).toISOString()
+      const expiresAt = quoteExpiresAt(1)
       if (spec.kind === 'crypto_offramp') {
         // USDC in, fiat out: 1 USDC = 1 USD, minus 1%.
         const fiat = (leg.to.asset.kind === 'fiat' ? leg.to.asset.currency : ctx.destination.type === 'fiat' ? ctx.destination.currency : 'USD').toUpperCase()

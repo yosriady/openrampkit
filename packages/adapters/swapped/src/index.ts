@@ -17,6 +17,7 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
   deliverableToAsset,
@@ -24,6 +25,7 @@ import {
   hmacSha256,
   httpErrorToOpenRamp,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
   requireDeliverAsset,
   resolveEnv,
@@ -235,21 +237,19 @@ export function swapped(opts: SwappedOptions) {
   const assetOf = deliverableToAsset
 
   async function methodsByCountry(ctx: Pick<AdapterContext, 'fetch' | 'shared'>): Promise<Record<string, SwappedMethod[]>> {
-    const cached = await ctx.shared.get<Record<string, SwappedMethod[]>>('methods')
-    if (cached) return cached
-    const res = await fetchJson<{ success?: boolean; message?: string; data?: Record<string, SwappedMethod[]> | SwappedMethod[] }>(
-      ctx.fetch,
-      `${apiUrl}/api/v1/merchant/get_payment_methods?apiKey=${encodeURIComponent(opts.publicKey)}`,
-    )
-    // A refused or empty answer is a failure, not "no methods": throw (the server then uses the
-    // static legs) and do not cache it.
-    if (res.success === false || !res.data || typeof res.data !== 'object') {
-      throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `Swapped returned no payment methods${res.message ? `: ${res.message}` : ''}.`.slice(0, 200) }), 502)
-    }
-    // The live API returns { data: { [country]: Method[] } }. The docs show a flat list; accept both.
-    const data = Array.isArray(res.data) ? { '*': res.data } : res.data
-    await ctx.shared.put('methods', data, METHODS_TTL_SEC)
-    return data
+    return cachedJson(ctx.shared, 'methods', METHODS_TTL_SEC, async () => {
+      const res = await fetchJson<{ success?: boolean; message?: string; data?: Record<string, SwappedMethod[]> | SwappedMethod[] }>(
+        ctx.fetch,
+        `${apiUrl}/api/v1/merchant/get_payment_methods?apiKey=${encodeURIComponent(opts.publicKey)}`,
+      )
+      // A refused or empty answer is a failure, not "no methods": throw (the server then uses the
+      // static legs) and do not cache it.
+      if (res.success === false || !res.data || typeof res.data !== 'object') {
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `Swapped returned no payment methods${res.message ? `: ${res.message}` : ''}.`.slice(0, 200) }), 502)
+      }
+      // The live API returns { data: { [country]: Method[] } }. The docs show a flat list; accept both.
+      return Array.isArray(res.data) ? { '*': res.data } : res.data
+    })
   }
 
   async function signedWidgetUrl(params: Array<[string, string | undefined]>, path = '/'): Promise<string> {
@@ -262,16 +262,14 @@ export function swapped(opts: SwappedOptions) {
 
   async function sellCatalog(input: { country?: string; currency: string }, ctx: Pick<AdapterContext, 'fetch' | 'shared' | 'log'>): Promise<LegSpec[]> {
     type Payout = { slug: string; currency: string[]; disabled: boolean; min_amount?: number; max_amount?: number }
-    let byCountry = await ctx.shared.get<Record<string, Payout[]>>('payouts')
-    if (!byCountry) {
+    const byCountry = await cachedJson<Record<string, Payout[]>>(ctx.shared, 'payouts', METHODS_TTL_SEC, async () => {
       const res = await fetchJson<{ success?: boolean; data?: Record<string, Payout[]> | Payout[] }>(
         ctx.fetch,
         `${apiUrl}/api/v1/merchant/sell/get_payout_methods?api_key=${encodeURIComponent(opts.publicKey)}`,
       )
       if (res.success === false || !res.data) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Swapped returned no payout methods.' }), 502)
-      byCountry = Array.isArray(res.data) ? { '*': res.data } : res.data
-      await ctx.shared.put('payouts', byCountry, METHODS_TTL_SEC)
-    }
+      return Array.isArray(res.data) ? { '*': res.data } : res.data
+    })
     const currency = input.currency.toUpperCase()
     const countries = input.country ? [input.country.toUpperCase(), '*'] : Object.keys(byCountry)
     const out = new Map<string, LegSpec>()
@@ -390,7 +388,7 @@ export function swapped(opts: SwappedOptions) {
       output: { value: dec(p.fiat_amount_excl_fees_local ?? p.fiat_amount_excl_fees, 2), asset: { kind: 'fiat', currency: fiat } },
       fees,
       eta: { min: 600, max: 3 * 24 * 3600 },
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: quoteExpiresAt(10),
       data: { slug, currencyCode: d.currencyCode, fiat, estimate: true },
     }
   }
@@ -496,7 +494,7 @@ export function swapped(opts: SwappedOptions) {
         fees,
         eta: input.leg.legId === 'creditcard' || input.leg.legId.endsWith('-pay') ? { min: 120, max: 900 } : { min: 120, max: 1800 },
         // Swapped prices move with the market; the widget shows the final price.
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(10),
         data: { group, currencyCode: target.currencyCode, fiat, fiatAmount: inputAmount, region },
       }
     },

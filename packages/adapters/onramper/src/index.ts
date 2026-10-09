@@ -18,6 +18,7 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
   deliverableToAsset,
@@ -28,6 +29,7 @@ import {
   legStepFromEvent,
   providerMessage,
   providerSetupError,
+  quoteExpiresAt,
   randomHex,
   requireDeliverAsset,
   resolveEnv,
@@ -282,17 +284,21 @@ export function onramper(opts: OnramperOptions) {
       const country = input.country?.toUpperCase()
       const target = deliver[0]!
       const cacheKey = `pt:${fiat}:${country ?? '*'}`
-      let types = await ctx.shared.get<OrPaymentType[]>(cacheKey)
-      if (!types) {
-        const q = new URLSearchParams({ type: 'buy', destination: target.cryptoId })
-        if (country) q.set('country', country)
-        const res = await get<{ message?: OrPaymentType[] }>(ctx, `/supported/payment-types/${encodeURIComponent(fiat)}?${q}`)
-        if (!Array.isArray(res.message) || !res.message.length) {
-          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Onramper returned no payment types.' }), 502)
-        }
-        types = res.message
-        await ctx.shared.put(cacheKey, types, CATALOG_TTL_SEC)
-      }
+      const types = await cachedJson(
+        ctx.shared,
+        cacheKey,
+        CATALOG_TTL_SEC,
+        async () => {
+          const q = new URLSearchParams({ type: 'buy', destination: target.cryptoId })
+          if (country) q.set('country', country)
+          const res = await get<{ message?: OrPaymentType[] }>(ctx, `/supported/payment-types/${encodeURIComponent(fiat)}?${q}`)
+          if (!Array.isArray(res.message) || !res.message.length) {
+            throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Onramper returned no payment types.' }), 502)
+          }
+          return res.message
+        },
+        { valid: (t) => Array.isArray(t) && t.length > 0 },
+      )
       const byId = new Map<string, { min?: number; max?: number }>()
       for (const t of types) {
         const id = onramperMethodId(t.paymentTypeId)
@@ -372,7 +378,7 @@ export function onramper(opts: OnramperOptions) {
         output: { value: best.payout, asset: assetOf(target) },
         fees,
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: { onramp: best.ramp, providers, paymentMethod, cryptoId: target.cryptoId, network: target.network, fiat, country },
       }
     },

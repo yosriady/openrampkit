@@ -18,7 +18,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOpenRamp, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, cachedJson, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, verifyTimestampedHmac } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
@@ -519,12 +519,10 @@ export function coinbase(opts: CoinbaseOptions) {
       // Countries and payment methods from the Buy Config API, cached for a day. The API spec
       // (GetBuyConfigResponse) has `{ countries }`; the older `{ data: { countries } }` shape is accepted too.
       type Config = { countries?: Array<{ id: string; payment_methods?: Array<{ id: string }> }> }
-      let cfg = await ctx.shared.get<Config>('config')
-      if (!cfg) {
+      const cfg = await cachedJson<Config>(ctx.shared, 'config', 24 * 60 * 60, async () => {
         const res = await cdp<Config & { data?: Config }>(ctx, onrampApi, 'GET', '/onramp/v1/buy/config')
-        cfg = res.data ?? res
-        await ctx.shared.put('config', cfg, 24 * 60 * 60)
-      }
+        return res.data ?? res
+      })
       const countries = cfg.countries ?? []
       const allowFor = (l: LegSpec) => {
         const pms = CONFIG_METHODS[l.id]!
@@ -657,20 +655,14 @@ export function coinbase(opts: CoinbaseOptions) {
           ctx.log.warn('coinbase: webhookSecret is not set; rejecting webhook')
           return false
         }
-        const header = req.headers.get('x-hook0-signature')
-        if (!header) return false
-        const parts = Object.fromEntries(
-          header.split(',').map((kv) => {
-            const i = kv.indexOf('=')
-            return [kv.slice(0, i).trim(), kv.slice(i + 1).trim()]
-          }),
-        ) as Record<string, string>
-        const t = Number(parts.t)
-        if (!parts.t || !parts.v0 || !Number.isFinite(t)) return false
-        if (Math.abs(Date.now() / 1000 - t) > 5 * 60) return false
-        // v0 = hex HMAC-SHA256 over "{t}.{body}"
-        const expected = await hmacSha256(opts.webhookSecret, `${parts.t}.${rawBody}`, 'hex')
-        return timingSafeEqual(parts.v0.toLowerCase(), expected)
+        // `t=<unix s>,v0=<hex HMAC-SHA256 over "{t}.{body}">`, within 5 minutes
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          header: req.headers.get('x-hook0-signature'),
+          signatureKey: 'v0',
+          toleranceSec: 5 * 60,
+        })
       },
       async parse(rawBody, ctx) {
         let tx: CbTransaction

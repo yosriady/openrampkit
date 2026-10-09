@@ -19,7 +19,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, POLL as POLLS, randomHex, requireDeliverAsset } from '@openrampkit/adapter'
+import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, POLL as POLLS, quoteExpiresAt, randomHex, requireDeliverAsset } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, SOLANA_MAINNET, USDC, isDecimal, isWebUrl, openRampError } from '@openrampkit/core'
 import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, RegionPolicy } from '@openrampkit/core'
@@ -318,7 +318,7 @@ export function binance(opts: BinanceOptions) {
         fees,
         eta: { min: 60, max: 1800 },
         // An estimate: Binance shows the final price on its page. TO VERIFY the quote lifetime.
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: {
           fiat,
           amountType: byFiat ? 1 : 2,

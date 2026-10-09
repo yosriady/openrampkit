@@ -21,14 +21,15 @@ import {
   awaitPoll,
   createAdapter,
   fetchJson,
-  hmacSha256,
   httpErrorToOpenRamp,
   httpStatus,
   legStepFromEvent,
+  parseSignatureHeader,
+  quoteExpiresAt,
   randomHex,
   requireDeliverAsset,
   resolveEnv,
-  timingSafeEqual,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
@@ -153,16 +154,11 @@ function form(params: Array<[string, string | undefined]>): string {
   return q.toString()
 }
 
+/** The `t` and `v1` values of a `Stripe-Signature` header (several `v1` during a secret rotation) */
 export function parseStripeSignature(header: string): { t?: string; v1: string[] } {
-  const out: { t?: string; v1: string[] } = { v1: [] }
-  for (const part of header.split(',')) {
-    const i = part.indexOf('=')
-    const k = part.slice(0, i).trim()
-    const v = part.slice(i + 1).trim()
-    if (k === 't') out.t = v
-    else if (k === 'v1') out.v1.push(v)
-  }
-  return out
+  const parts = parseSignatureHeader(header)
+  const t = parts.t?.[0]
+  return { ...(t ? { t } : {}), v1: parts.v1 ?? [] }
 }
 
 export function stripe(opts: StripeOptions) {
@@ -303,7 +299,7 @@ export function stripe(opts: StripeOptions) {
         output: { value: out, asset: assetOf(target) },
         fees,
         eta: d.eta,
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: {
           network: target.network,
           sourceCurrency: fiat,
@@ -374,14 +370,13 @@ export function stripe(opts: StripeOptions) {
           ctx.log.warn('stripe: webhookSecret is not set; rejecting webhook')
           return false
         }
-        const header = req.headers.get('stripe-signature')
-        if (!header) return false
-        const { t, v1 } = parseStripeSignature(header)
-        const ts = Number(t)
-        if (!t || !v1.length || !Number.isFinite(ts)) return false
-        if (Math.abs(Date.now() / 1000 - ts) > TOLERANCE_SEC) return false
-        const expected = await hmacSha256(opts.webhookSecret, `${t}.${rawBody}`, 'hex')
-        return v1.some((s) => timingSafeEqual(s.toLowerCase(), expected))
+        // `t=<unix s>,v1=<hex HMAC-SHA256 over "{t}.{body}">`; every v1 is tried
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          header: req.headers.get('stripe-signature'),
+          toleranceSec: TOLERANCE_SEC,
+        })
       },
       async parse(rawBody, ctx) {
         let ev: { type?: string; data?: { object?: OnrampSession } }

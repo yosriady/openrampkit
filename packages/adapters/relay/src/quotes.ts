@@ -1,10 +1,11 @@
 // Leg specs, and quotes for the wallet leg and the deposit-address legs.
 
+import { quoteExpiresAt } from '@openrampkit/adapter'
 import type { AdapterContext, QuoteInput } from '@openrampkit/adapter'
 import { OpenRampException, USDC, chainName, cmp, openRampError, toBaseUnits } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, LegSpec } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
-import { HOP_CHAINS, SOLANA_CAIP2, WALLET_QUOTE_TTL_MS } from './config.js'
+import { HOP_CHAINS, SOLANA_CAIP2, WALLET_QUOTE_TTL_MIN } from './config.js'
 import type { DepositAddresses } from './deposit-address.js'
 import { cryptoAsset, destAsset, etaFrom, feesFrom, fmt, minOutputOf, quoteUser, recipientOf, requestIdOf, sameAsset, settlementOf, toOpenRamp, withMeta } from './helpers.js'
 import type { RelayQuoteResponse } from './types.js'
@@ -111,7 +112,7 @@ export function quotes(rt: RelayRuntime, deposits: Pick<DepositAddresses, 'depos
       output: { value: fmt(cout), asset: withMeta(dest, cout.currency.decimals, cout.currency.symbol) },
       fees: feesFrom(q),
       eta: etaFrom(q, legEta),
-      expiresAt: new Date(Date.now() + WALLET_QUOTE_TTL_MS).toISOString(),
+      expiresAt: quoteExpiresAt(WALLET_QUOTE_TTL_MIN),
       data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps ?? [], requestId: requestIdOf(q), ...minOutputOf(q) },
     }
   }

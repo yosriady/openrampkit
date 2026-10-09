@@ -17,17 +17,18 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
   deliverableToAsset,
   fetchJson,
-  hmacSha256,
   httpErrorToOpenRamp,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
   requireDeliverAsset,
   resolveEnv,
-  timingSafeEqual,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, USDC, cmp, openRampError, roundTo } from '@openrampkit/core'
@@ -197,10 +198,6 @@ const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '
 
 const dec = decimalFrom
 
-function base64url(b64: string): string {
-  return b64.replace(/\+/g, '-').replace(/\//g, '_')
-}
-
 export function meld(opts: MeldOptions) {
   const env = resolveEnv('meld', opts.env, undefined, 'production')
   const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
@@ -274,18 +271,23 @@ export function meld(opts: MeldOptions) {
     async catalog(input, ctx) {
       const country = input.country?.toUpperCase()
       const key = `pm:${country ?? '*'}:${input.currency.toUpperCase()}`
-      let methods = await ctx.shared.get<MeldPaymentMethod[]>(key)
-      if (!methods) {
-        const q = new URLSearchParams({ categories: 'CRYPTO_ONRAMP', fiatCurrencies: input.currency.toUpperCase() })
-        if (country) q.set('countries', country)
-        if (opts.serviceProviders?.length) q.set('serviceProviders', opts.serviceProviders.join(','))
-        methods = await call<MeldPaymentMethod[]>(ctx, 'GET', `/service-providers/properties/payment-methods?${q}`)
-        // An empty or odd answer is a failure: throw so the server keeps the static legs, and do not cache it.
-        if (!Array.isArray(methods) || !methods.length) {
-          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld returned no payment methods.' }), 502)
-        }
-        await ctx.shared.put(key, methods, CATALOG_TTL_SEC)
-      }
+      const methods = await cachedJson(
+        ctx.shared,
+        key,
+        CATALOG_TTL_SEC,
+        async () => {
+          const q = new URLSearchParams({ categories: 'CRYPTO_ONRAMP', fiatCurrencies: input.currency.toUpperCase() })
+          if (country) q.set('countries', country)
+          if (opts.serviceProviders?.length) q.set('serviceProviders', opts.serviceProviders.join(','))
+          const list = await call<MeldPaymentMethod[]>(ctx, 'GET', `/service-providers/properties/payment-methods?${q}`)
+          // An empty or odd answer is a failure: throw so the server keeps the static legs, and do not cache it.
+          if (!Array.isArray(list) || !list.length) {
+            throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld returned no payment methods.' }), 502)
+          }
+          return list
+        },
+        { valid: (m) => Array.isArray(m) && m.length > 0 },
+      )
       const ids = [...new Set(methods.map((m) => meldMethodId(m.paymentMethod)))]
       return ids.map((id) => {
         const s = STATIC.find((x) => x.id === id)
@@ -348,7 +350,7 @@ export function meld(opts: MeldOptions) {
         output: { value: providers[0]!.destinationAmount, asset: assetOf(target) },
         fees,
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: { serviceProvider: best.serviceProvider, providers, paymentMethodType, currencyCode: target.currencyCode, fiat, country },
       }
     },
@@ -413,15 +415,18 @@ export function meld(opts: MeldOptions) {
           ctx.log.warn('meld: webhookSecret is not set; rejecting webhook')
           return false
         }
-        const sig = req.headers.get('meld-signature')
-        const ts = req.headers.get('meld-signature-timestamp')
-        if (!sig || !ts) return false
-        const when = Date.parse(ts)
-        // TO VERIFY: Meld documents no tolerance window; we reject timestamps more than 5 minutes off.
-        if (Number.isNaN(when) || Math.abs(Date.now() - when) > WEBHOOK_TOLERANCE_SEC * 1000) return false
         const url = opts.webhookUrl ?? req.url
-        const expected = base64url(await hmacSha256(opts.webhookSecret, `${ts}.${url}.${rawBody}`, 'base64'))
-        return timingSafeEqual(sig.trim(), expected)
+        // TO VERIFY: Meld documents no tolerance window; we reject timestamps more than 5 minutes off.
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          // Meld sends base64url with padding; the helper compares without padding
+          header: req.headers.get('meld-signature')?.trim().replace(/=+$/, ''),
+          timestamp: req.headers.get('meld-signature-timestamp'),
+          toleranceSec: WEBHOOK_TOLERANCE_SEC,
+          message: (ts) => `${ts}.${url}.${rawBody}`,
+          encoding: 'base64url',
+        })
       },
       async parse(rawBody, ctx) {
         let ev: { eventType?: string; payload?: { externalSessionId?: string; paymentTransactionId?: string; paymentTransactionStatus?: string } }

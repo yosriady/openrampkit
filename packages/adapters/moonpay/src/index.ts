@@ -17,6 +17,7 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
   deliverableToAsset,
@@ -25,10 +26,11 @@ import {
   httpErrorToOpenRamp,
   httpStatus,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
   requireDeliverAsset,
   resolveEnv,
-  timingSafeEqual,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, USDC, openRampError, roundTo } from '@openrampkit/core'
@@ -179,15 +181,6 @@ export const MOONPAY_METHODS: MethodDef[] = [
 
 const dec = decimalFrom
 
-function parseSigHeader(header: string): Record<string, string> {
-  return Object.fromEntries(
-    header.split(',').map((kv) => {
-      const i = kv.indexOf('=')
-      return [kv.slice(0, i).trim(), kv.slice(i + 1).trim()]
-    }),
-  )
-}
-
 export function moonpay(opts: MoonPayOptions) {
   const env = resolveEnv('moonpay', opts.env, undefined, 'production')
   const apiUrl = (opts.apiUrl ?? 'https://api.moonpay.com').replace(/\/+$/, '')
@@ -272,14 +265,19 @@ export function moonpay(opts: MoonPayOptions) {
     legs,
 
     async catalog(_input, ctx) {
-      let countries = await ctx.shared.get<MpCountry[]>('countries')
-      if (!countries) {
-        countries = await fetchJson<MpCountry[]>(ctx.fetch, `${apiUrl}/v3/countries`)
-        if (!Array.isArray(countries) || !countries.length) {
-          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'MoonPay returned no countries.' }), 502)
-        }
-        await ctx.shared.put('countries', countries, COUNTRIES_TTL_SEC)
-      }
+      const countries = await cachedJson(
+        ctx.shared,
+        'countries',
+        COUNTRIES_TTL_SEC,
+        async () => {
+          const list = await fetchJson<MpCountry[]>(ctx.fetch, `${apiUrl}/v3/countries`)
+          if (!Array.isArray(list) || !list.length) {
+            throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'MoonPay returned no countries.' }), 502)
+          }
+          return list
+        },
+        { valid: (c) => Array.isArray(c) && c.length > 0 },
+      )
       const allowed = countries.filter((c) => c.isBuyAllowed ?? c.isAllowed).map((c) => c.alpha2.toUpperCase())
       const deniedStates = countries.flatMap((c) => (c.states ?? []).filter((s) => (s.isBuyAllowed ?? s.isAllowed) === false).map((s) => `${c.alpha2.toUpperCase()}-${s.code.toUpperCase()}`))
       return defs
@@ -324,7 +322,7 @@ export function moonpay(opts: MoonPayOptions) {
         output: { value: dec(res.quoteCurrencyAmount, target.decimals ?? 8), asset: assetOf(target) },
         fees,
         eta: d.eta,
-        expiresAt: res.expiresAt && !Number.isNaN(Date.parse(res.expiresAt)) ? res.expiresAt : new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5, res.expiresAt),
         data: { currencyCode: target.currencyCode, paymentMethod: d.paymentMethod, fiat, total },
       }
     },
@@ -383,15 +381,15 @@ export function moonpay(opts: MoonPayOptions) {
           ctx.log.warn('moonpay: webhookKey is not set; rejecting webhook')
           return false
         }
-        const header = req.headers.get('moonpay-signature-v2')
-        if (!header) return false
-        const parts = parseSigHeader(header)
-        const t = Number(parts.t)
-        if (!parts.t || !parts.s || !Number.isFinite(t)) return false
-        if (Math.abs(Date.now() / 1000 - t) > WEBHOOK_TOLERANCE_SEC) return false
+        // `t=<unix s>,s=<HMAC-SHA256 over "{t}.{body}">`.
         // TO VERIFY: hex output (inferred from the 64-hex-char example in the docs)
-        const expected = await hmacSha256(opts.webhookKey, `${parts.t}.${rawBody}`, 'hex')
-        return timingSafeEqual(parts.s.toLowerCase(), expected)
+        return verifyTimestampedHmac({
+          secret: opts.webhookKey,
+          rawBody,
+          header: req.headers.get('moonpay-signature-v2'),
+          signatureKey: 's',
+          toleranceSec: WEBHOOK_TOLERANCE_SEC,
+        })
       },
       async parse(rawBody, ctx) {
         let body: { type?: string; data?: MpTransaction }

@@ -26,14 +26,15 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   fetchJson,
-  hmacSha256,
   httpErrorToOpenRamp,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
   resolveEnv,
-  timingSafeEqual,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, bps, cmp, fromScaled, isDecimal, openRampError, roundTo, sub, toScaled } from '@openrampkit/core'
@@ -216,14 +217,11 @@ export function peer(opts: PeerOptions) {
   }
 
   async function orderbook(ctx: Pick<AdapterContext, 'fetch' | 'shared'>, rail: string, currency: string): Promise<OrderbookEntry[]> {
-    const key = `ob:${rail}:${currency}`
-    const cached = await ctx.shared.get<OrderbookEntry[]>(key)
-    if (cached) return cached
-    const q = new URLSearchParams({ currency, paymentPlatform: rail, chainId: '8453', sortBy: 'price', sortDirection: 'asc', limit: '50' })
-    const res = await fetchJson<Envelope<{ entries?: OrderbookEntry[] }>>(ctx.fetch, `${orderbookApi}/v3/orderbook?${q}`)
-    const entries = (res.responseObject?.entries ?? []).filter((e) => (e.paymentPlatform ?? rail) === rail)
-    await ctx.shared.put(key, entries, ORDERBOOK_TTL_SEC)
-    return entries
+    return cachedJson(ctx.shared, `ob:${rail}:${currency}`, ORDERBOOK_TTL_SEC, async () => {
+      const q = new URLSearchParams({ currency, paymentPlatform: rail, chainId: '8453', sortBy: 'price', sortDirection: 'asc', limit: '50' })
+      const res = await fetchJson<Envelope<{ entries?: OrderbookEntry[] }>>(ctx.fetch, `${orderbookApi}/v3/orderbook?${q}`)
+      return (res.responseObject?.entries ?? []).filter((e) => (e.paymentPlatform ?? rail) === rail)
+    })
   }
 
   /** Gross USDC for `fiat` at the best orderbook price that can fill it (price: fiat per USDC, 18 decimals) */
@@ -345,7 +343,7 @@ export function peer(opts: PeerOptions) {
         fees,
         eta: { min: 120, max: 3600 },
         // Availability is advisory and reserves nothing.
-        expiresAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(2),
         limits: { min: MIN_USDC, currency: 'USD' },
         data: { rail: d.rail, currency, amount, nonce: randomHex(8), ...(avail.quoteCount !== undefined ? { quoteCount: avail.quoteCount } : {}) },
       }
@@ -431,12 +429,16 @@ export function peer(opts: PeerOptions) {
 
     webhook: {
       async verify(req, rawBody) {
-        const sig = req.headers.get('x-webhook-signature')
         const ts = req.headers.get('x-webhook-timestamp')
-        if (!sig || !ts || !/^\d+$/.test(ts)) return false
-        if (Math.abs(Date.now() / 1000 - Number(ts)) > TOLERANCE_SEC) return false
-        const expected = await hmacSha256(opts.webhookSecret, `${ts}.${rawBody}`, 'hex')
-        return timingSafeEqual(sig.trim().toLowerCase(), expected)
+        // Peer sends Unix seconds only
+        if (ts && !/^\d+$/.test(ts)) return false
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          header: req.headers.get('x-webhook-signature'),
+          timestamp: ts,
+          toleranceSec: TOLERANCE_SEC,
+        })
       },
       async parse(rawBody, ctx) {
         let ev: { type?: string; data?: { order?: PeerOrder | null; payment?: PeerPayment | null; test?: boolean } }

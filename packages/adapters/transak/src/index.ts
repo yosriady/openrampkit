@@ -16,7 +16,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOpenRamp, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, cachedJson, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOpenRamp, quoteExpiresAt, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, USDC, openRampError } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
@@ -295,14 +295,12 @@ export function transak(opts: TransakOptions) {
     legs,
 
     async catalog(input, ctx) {
-      let list = await ctx.shared.get<FiatCurrency[]>('fiat')
-      if (!list) {
+      const list = await cachedJson(ctx.shared, 'fiat', 60 * 60, async () => {
         const res = await fetchJson<{ response?: FiatCurrency[] }>(ctx.fetch, `${urls.api}/fiat/public/v1/currencies/fiat-currencies`)
         // A missing list is a failure, not "no methods": throw (the server then uses the static legs) and do not cache it.
         if (!Array.isArray(res?.response)) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak returned no fiat currency list.' }), 502)
-        list = res.response
-        await ctx.shared.put('fiat', list, 60 * 60)
-      }
+        return res.response
+      })
       const cur = list.find((c) => c.symbol.toUpperCase() === input.currency.toUpperCase() && c.isAllowed !== false)
       if (!cur) return []
       const out: LegSpec[] = []
@@ -367,7 +365,7 @@ export function transak(opts: TransakOptions) {
         output: { value: dec(r.cryptoAmount, 6), asset: t.asset },
         fees,
         eta: legs.find((l) => l.id === input.leg.legId)?.eta ?? { min: 120, max: 1800 },
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(10),
         data: { quoteId: r.quoteId, paymentMethod, network: t.network },
       }
     },

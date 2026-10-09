@@ -88,7 +88,8 @@ export const DEFAULT_LOG_BLOCK_RANGE = 2000
 /** Most `eth_getLogs` pages in one status check; the next check goes on from where this one stopped */
 export const LOG_PAGES_PER_CHECK = 5
 export const WALLET_QUOTE_REUSE_MS = 20_000
-export const WALLET_QUOTE_TTL_MS = 60_000
+/** Lifetime of a wallet quote, in minutes */
+export const WALLET_QUOTE_TTL_MIN = 1
 
 export const RELAY_POLL: PollSpec = POLL.onchain
 export const RECORD_TTL_SEC = 7 * 24 * 60 * 60

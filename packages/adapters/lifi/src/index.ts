@@ -17,7 +17,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch), so it runs on Cloudflare Workers.
 
-import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOpenRamp, httpStatus, randomHex, topicAddress } from '@openrampkit/adapter'
+import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, cachedJson, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOpenRamp, httpStatus, quoteExpiresAt, randomHex, topicAddress } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
@@ -85,7 +85,8 @@ const PLACEHOLDER_USER = '0x000000000000000000000000000000000000dEaD'
 const PLACEHOLDER_SOLANA_USER = SOLANA_NATIVE
 
 const WALLET_QUOTE_REUSE_MS = 20_000
-const WALLET_QUOTE_TTL_MS = 60_000
+/** Lifetime of a wallet quote, in minutes */
+const WALLET_QUOTE_TTL_MIN = 1
 /** How long a payment record stays in the session store */
 const RECORD_TTL_SEC = 7 * 24 * 60 * 60
 /** How long a used transaction or log stays recorded */
@@ -336,15 +337,19 @@ export function lifi(opts: LifiOptions = {}) {
     if (typeof asset.decimals === 'number') return asset.decimals
     const known = knownDecimals(asset.chain, asset.token)
     if (known !== undefined) return known
-    const k = `dec:${asset.chain}:${key(asset.token)}`
-    const cached = await ctx.shared.get<number>(k)
-    if (typeof cached === 'number') return cached
-    const t = await api<LifiToken>(ctx, '/token', { chain: String(lifiChainId(asset.chain)), token: lifiToken(asset.chain, asset.token) }).catch((e) => {
-      throw toOpenRamp(e)
-    })
-    if (typeof t?.decimals !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'LI.FI does not know this token.' }))
-    await ctx.shared.put(k, t.decimals, 7 * 24 * 60 * 60)
-    return t.decimals
+    return cachedJson(
+      ctx.shared,
+      `dec:${asset.chain}:${key(asset.token)}`,
+      7 * 24 * 60 * 60,
+      async () => {
+        const t = await api<LifiToken>(ctx, '/token', { chain: String(lifiChainId(asset.chain)), token: lifiToken(asset.chain, asset.token) }).catch((e) => {
+          throw toOpenRamp(e)
+        })
+        if (typeof t?.decimals !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'LI.FI does not know this token.' }))
+        return t.decimals
+      },
+      { valid: (d) => typeof d === 'number' },
+    )
   }
 
   function withMeta(asset: CryptoAsset, decimals: number, symbol?: string): CryptoAsset {
@@ -452,7 +457,7 @@ export function lifi(opts: LifiOptions = {}) {
       output: { value: fromBaseUnits(q.estimate.toAmount, to.decimals), asset: withMeta(dest, to.decimals, to.symbol) },
       fees: feesFrom(q),
       eta: etaFrom(q, legs[0]!.eta),
-      expiresAt: new Date(Date.now() + WALLET_QUOTE_TTL_MS).toISOString(),
+      expiresAt: quoteExpiresAt(WALLET_QUOTE_TTL_MIN),
       data: {
         params,
         exactOut,

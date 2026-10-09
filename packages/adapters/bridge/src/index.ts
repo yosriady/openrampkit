@@ -27,7 +27,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOpenRamp, importRsaPublicKey, randomHex, resolveEnv, rsaVerify } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, cachedJson, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOpenRamp, importRsaPublicKey, quoteExpiresAt, randomHex, resolveEnv, rsaVerify } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   OpenRampException,
@@ -374,16 +374,20 @@ export function bridge(opts: BridgeOptions) {
   /** Units of `to` per unit of `from`, from GET /v0/exchange_rates (`buy_rate` includes Bridge's FX fee). */
   async function rate(from: string, to: string, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<string> {
     if (from === to) return '1'
-    const key = `rate:${from}:${to}`
-    const cached = await ctx.shared.get<string>(key)
-    if (cached) return cached
-    const r = await call<{ buy_rate?: string; midmarket_rate?: string }>(ctx, 'GET', `/exchange_rates?from=${from}&to=${to}`, 'price this currency')
-    // TO VERIFY: `buy_rate` is "the rate for buying the target currency, including Bridge's fee". We read it
-    // as the rate the user gets when converting `from` into `to`.
-    const v = dec(r.buy_rate) ?? dec(r.midmarket_rate)
-    if (!v || cmp(v, '0') <= 0) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Bridge returned no exchange rate.' }), 422)
-    await ctx.shared.put(key, v, RATE_TTL_SEC)
-    return v
+    return cachedJson(
+      ctx.shared,
+      `rate:${from}:${to}`,
+      RATE_TTL_SEC,
+      async () => {
+        const r = await call<{ buy_rate?: string; midmarket_rate?: string }>(ctx, 'GET', `/exchange_rates?from=${from}&to=${to}`, 'price this currency')
+        // TO VERIFY: `buy_rate` is "the rate for buying the target currency, including Bridge's fee". We read it
+        // as the rate the user gets when converting `from` into `to`.
+        const v = dec(r.buy_rate) ?? dec(r.midmarket_rate)
+        if (!v || cmp(v, '0') <= 0) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Bridge returned no exchange rate.' }), 422)
+        return v
+      },
+      { valid: (v) => !!v },
+    )
   }
 
   /** Fees in percent of the input (developer fee) and in bps (Bridge fee, from the options) */
@@ -448,7 +452,7 @@ export function bridge(opts: BridgeOptions) {
       fees: feesFor(fiat, cur, digits),
       eta: r.eta,
       // Bridge has no rate lock; the rate moves about every 30 s. The bank transfer settles later at the rate of that day.
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: quoteExpiresAt(10),
       limits: { min: r.min, ...(r.max ? { max: r.max } : {}), currency: cur },
       data: { nonce: randomHex(8) },
     }
@@ -476,7 +480,7 @@ export function bridge(opts: BridgeOptions) {
       output: { value: output, asset: { kind: 'fiat', currency: cur } },
       fees: feesFor(usdc, 'USDC', 6),
       eta: r.eta,
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: quoteExpiresAt(10),
       limits: { min: r.min, currency: 'USDC' },
       data: { nonce: randomHex(8) },
     }
