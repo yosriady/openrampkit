@@ -227,12 +227,12 @@ export class RampController {
   // ---------- withdraw ----------
 
   /**
-   * The target the app set and locked at creation (`targetLocked`), else undefined. With a locked
+   * The target the app set and locked at creation (`destinationLocked`), else undefined. With a locked
    * target the controller skips the target screen and never calls `/target`.
    */
   lockedTarget(): Extract<NonNullable<PublicSession['destination']>, { type: 'crypto' | 'fiat' }> | undefined {
     const s = this.snap.session
-    const d = s?.direction === 'withdraw' && s.targetLocked ? s.destination : undefined
+    const d = s?.direction === 'withdraw' && s.destinationLocked ? s.destination : undefined
     return d && (d.type === 'crypto' || d.type === 'fiat') ? d : undefined
   }
 
@@ -240,7 +240,7 @@ export class RampController {
   withdrawTabs(): Tab[] {
     const locked = this.lockedTarget()
     if (locked) return [locked.type === 'crypto' ? 'crypto' : 'cash']
-    const allowed = this.snap.session?.allowedTargets
+    const allowed = this.snap.session?.allowedDestinations
     if (!allowed) return ['crypto', 'cash']
     return [...(allowed.crypto ? (['crypto'] as const) : []), ...(allowed.fiat ? (['cash'] as const) : [])]
   }
@@ -248,7 +248,7 @@ export class RampController {
   /** Networks the user may withdraw to: the allowed chains, else every chain with USDC plus the source chain. */
   withdrawChains(): string[] {
     const src = this.snap.session?.source
-    const allowed = this.snap.session?.allowedTargets?.crypto?.chains
+    const allowed = this.snap.session?.allowedDestinations?.crypto?.chains
     if (allowed?.length) return allowed
     const chains = Object.keys(USDC)
     if (src && !chains.includes(src.chain)) chains.unshift(src.chain)
@@ -259,7 +259,7 @@ export class RampController {
     const src = session.source
     const chains = this.withdrawChains()
     const chain = src && chains.includes(src.chain) ? src.chain : chains[0] ?? 'eip155:8453'
-    const allowedCur = session.allowedTargets?.fiat?.currencies?.map((c) => c.toUpperCase())
+    const allowedCur = session.allowedDestinations?.fiat?.currencies?.map((c) => c.toUpperCase())
     const local = currencyForCountry(session.country).toUpperCase()
     const cashCurrency = !allowedCur?.length || allowedCur.includes(local) ? local : allowedCur[0]!
     this.set({ target: { ...this.draftFor(chain, src), address: accountFor(this.accounts, chain)?.address ?? this.snap.walletAddress ?? '' }, cashCurrency })
@@ -277,7 +277,7 @@ export class RampController {
     }
     const tabs = this.withdrawTabs()
     if (!tabs.length) {
-      this.set({ screen: 'error', error: openRampError('TARGET_NOT_ALLOWED') })
+      this.set({ screen: 'error', error: openRampError('DESTINATION_NOT_ALLOWED') })
       return
     }
     this.setTab(tabs[0]!)

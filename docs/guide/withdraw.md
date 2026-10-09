@@ -23,7 +23,7 @@ export async function POST() {
       custody: 'user_wallet', // or 'app'
     },
     // Optional: limit where the user can send it
-    allowedTargets: {
+    allowedDestinations: {
       crypto: { chains: ['eip155:8453', 'eip155:42161', 'eip155:10'] },
       fiat: {}, // any currency
     },
@@ -80,7 +80,7 @@ The user picks a network, a token and an address. The token list has USDC (when 
 | ![](../screenshots/withdraw-01-to-wallet.png) | ![](../screenshots/withdraw-02-amount.png) | ![](../screenshots/withdraw-03-quote.png) |
 
 1. The modal checks the address format. Then it sends the target to the server with `POST /sessions/:id/target`.
-2. The server checks the format again, then [`allowedTargets`](#allowed-targets), then your [`screenAddress`](#screen-addresses) hook. It stores the target as the session destination and returns the plan.
+2. The server checks the format again, then [`allowedDestinations`](#allowed-targets), then your [`screenAddress`](#screen-addresses) hook. It stores the target as the session destination and returns the plan.
 3. When only one method is available, the modal goes straight to the amount screen. The amount is in the source token. The modal shows the wallet balance of the source token when the wallet reports it.
 4. The user confirms a quote. The leg asks for a wallet transaction (`WALLET_TX`). With `custody: 'user_wallet'`, the user approves it in the wallet. With `custody: 'app'`, the server sends it through your [treasury hook](#custody-app).
 5. The leg completes. The server sends `session.succeeded`.
@@ -93,7 +93,7 @@ The [Relay adapter](../adapters/relay.md) runs "To wallet" in production. Its `w
 
 ## To cash
 
-The "To cash" tab pays out in the user's local currency (from the session `country`). When `allowedTargets.fiat.currencies` does not have that currency, the tab uses the first allowed currency. The modal sends `{ type: 'fiat', currency }` to `POST /sessions/:id/target` and shows the payout methods.
+The "To cash" tab pays out in the user's local currency (from the session `country`). When `allowedDestinations.fiat.currencies` does not have that currency, the tab uses the first allowed currency. The modal sends `{ type: 'fiat', currency }` to `POST /sessions/:id/target` and shows the payout methods.
 
 | Payout methods | Quote |
 |---|---|
@@ -159,17 +159,17 @@ Set `treasury.address` when you use Relay. Relay builds its transactions for a s
 
 ## Allowed targets
 
-`allowedTargets` limits what the user can pick. Without it, the user can pick any target.
+`allowedDestinations` limits what the user can pick. Without it, the user can pick any target.
 
 ```ts
-type AllowedTargets = {
+type AllowedDestinations = {
   crypto?: { chains?: string[] }       // absent: no "To wallet". chains absent: any chain
   fiat?: { currencies?: string[] }     // absent: no "To cash". currencies absent: any currency
 }
 ```
 
 - The modal shows only the allowed tabs. With `crypto.chains`, the network list shows only those chains. Without it, the list has every chain with a known USDC address, plus the source chain.
-- The server checks every target. A target that is not allowed gets `403 TARGET_NOT_ALLOWED`.
+- The server checks every target. A target that is not allowed gets `403 DESTINATION_NOT_ALLOWED`.
 - When the app allows neither type, the modal shows an error.
 
 ## Screen addresses
@@ -200,29 +200,29 @@ The server calls it only for crypto targets. Fiat payout accounts are checked by
 
 `POST {baseUrl}/sessions/:id/target` sets the target of a withdraw session and returns the plan. The client calls it for you. See [HTTP routes](../api/http.md#post-sessions-id-target) for the body and the errors.
 
-The user can change the target until a payment starts. Each call replaces the destination and clears the stored quotes. A [locked target](#locked-targets) cannot change: the route answers `409 TARGET_LOCKED`.
+The user can change the target until a payment starts. Each call replaces the destination and clears the stored quotes. A [locked target](#locked-targets) cannot change: the route answers `409 DESTINATION_LOCKED`.
 
 ## Locked targets
 
-Your backend can set the target when it creates the session. Add `lockTarget: true`, and nobody can change it later: not the client secret, and not a person with a [pay link](./agents.md#the-pay-link). Use it for payouts to an address that your backend already knows, for example a payout to a saved wallet or to a cash currency that you set.
+Your backend can set the destination when it creates the session (`destination`). Add `lockDestination: true`, and nobody can change it later: not the client secret, and not a person with a [pay link](./agents.md#the-pay-link). Use it for payouts to an address that your backend already knows, for example a payout to a saved wallet or to a cash currency that you set.
 
 ```ts
 const session = await openramp.sessions.create({
   userId: user.id,
   direction: 'withdraw',
   source: { chain: 'eip155:8453', token: USDC_BASE, custody: 'app' },
-  target: { type: 'crypto', chain: 'eip155:42161', token: USDC_ARB, address: savedWallet },
-  // or: target: { type: 'fiat', currency: 'PHP' },
-  lockTarget: true,
+  destination: { type: 'crypto', chain: 'eip155:42161', token: USDC_ARB, address: savedWallet },
+  // or: destination: { type: 'fiat', currency: 'PHP' },
+  lockDestination: true,
 })
 ```
 
-- `target` has the same shape as the body of [`POST /sessions/:id/target`](../api/http.md#post-sessions-id-target).
-- The server checks it at creation, as for `/target`: the format, then [`allowedTargets`](#allowed-targets), then [`screenAddress`](#screen-addresses). A refused target throws (`400`, `403` or `503`), and the server makes no session.
-- The server stores the target as the session destination. `PublicSession` has `destination` and `targetLocked: true`.
-- `POST /sessions/:id/target` answers `409 TARGET_LOCKED` ("The app set where these funds go. You cannot change it."). Get the plan with `POST /sessions/:id/plan`.
+- `destination` has the same shape as the body of [`POST /sessions/:id/target`](../api/http.md#post-sessions-id-target).
+- The server checks it at creation, as for `/target`: the format, then [`allowedDestinations`](#allowed-targets), then [`screenAddress`](#screen-addresses). A refused target throws (`400`, `403` or `503`), and the server makes no session.
+- The server stores it as the session destination. `PublicSession` has `destination` and `destinationLocked: true`.
+- `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED` ("The app set where these funds go. You cannot change it."). Get the plan with `POST /sessions/:id/plan`.
 - The modal does not show the target screen or the tabs. A wallet target shows as a read-only line ("To 0x2222...2222 on Arbitrum") on the methods and amount screens. A cash target opens the payout methods in its currency. With one wallet method, the modal goes straight to the amount screen.
-- Without `lockTarget`, `target` is only a first value. The user can change it with `/target`.
+- Without `lockDestination`, `destination` is only a first value. The user can change it with `/target`.
 - A locked cash target fixes the currency only. The person still gives their bank or e-wallet account to the offramp provider.
 
 ## Events

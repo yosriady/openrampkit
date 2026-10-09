@@ -59,7 +59,8 @@ function checkInput(input: CreateSessionInput): void {
   if (b !== undefined && (typeof b?.currency !== 'string' || (b.min !== undefined && !DECIMAL.test(b.min)) || (b.max !== undefined && !DECIMAL.test(b.max)))) {
     throw bad('`amountBounds` needs `currency`, and `min` and `max` must be decimal strings.')
   }
-  const d = input.destination
+  // A withdraw destination gets the checks of `POST /sessions/:id/target` in `createSession`.
+  const d = input.direction === 'withdraw' ? undefined : input.destination
   if (d?.type === 'crypto') {
     if (typeof d.chain !== 'string' || !CAIP2.test(d.chain)) throw bad('`destination.chain` must be a CAIP-2 chain id, e.g. eip155:8453.')
     if (typeof d.token !== 'string' || !isValidToken(d.chain, d.token)) throw bad('`destination.token` must be a token address or "native".')
@@ -67,9 +68,13 @@ function checkInput(input: CreateSessionInput): void {
   } else if (d && (typeof (d as { currency?: unknown }).currency !== 'string' || !/^[A-Za-z]{3}$/.test((d as { currency: string }).currency))) {
     throw bad('`destination.currency` must be an ISO 4217 code, e.g. PHP.')
   }
-  if (input.lockTarget !== undefined && typeof input.lockTarget !== 'boolean') throw bad('`lockTarget` must be a boolean.')
-  if ((input.target !== undefined || input.lockTarget) && input.direction !== 'withdraw') throw bad('Only a withdraw session takes `target` and `lockTarget`.')
-  if (input.lockTarget && input.target === undefined) throw bad('`lockTarget` needs `target`.')
+  if (input.lockDestination !== undefined && typeof input.lockDestination !== 'boolean') throw bad('`lockDestination` must be a boolean.')
+  // The names before 0.1.0: refuse them, so a lock is never lost without a word.
+  for (const [was, now] of [['target', 'destination'], ['lockTarget', 'lockDestination'], ['allowedTargets', 'allowedDestinations']] as const) {
+    if ((input as Record<string, unknown>)[was] !== undefined) throw bad(`\`${was}\` is now \`${now}\`.`)
+  }
+  if (input.lockDestination && input.direction !== 'withdraw') throw bad('Only a withdraw session takes `lockDestination`: a deposit destination is always locked.')
+  if (input.lockDestination && input.destination === undefined) throw bad('`lockDestination` needs `destination`.')
   if (input.externalId !== undefined && (typeof input.externalId !== 'string' || !EXTERNAL_ID.test(input.externalId))) {
     throw bad('`externalId` must be 1 to 256 printable characters.')
   }
@@ -121,11 +126,8 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   const expiresAt = now + (input.ttlMinutes ?? 30) * 60_000
   const direction = input.direction ?? 'deposit'
   if (direction !== 'deposit' && direction !== 'withdraw') throw new OpenRampException(openRampError('BAD_REQUEST', { message: '`direction` must be "deposit" or "withdraw".' }), 400)
-  if (input.destination?.type === 'crypto') checkSettlement(input.destination)
+  if (direction === 'deposit' && input.destination?.type === 'crypto') checkSettlement(input.destination)
   if (direction === 'deposit' && !input.destination) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A deposit session needs `destination`.' }), 400)
-  if (direction === 'withdraw' && input.destination) {
-    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A withdraw session takes `source`, not `destination`: the user picks the target.' }), 400)
-  }
   const rec: SessionRecord = {
     id,
     secretHash: await sha256Hex(secret),
@@ -134,9 +136,9 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     userId: input.userId,
     ...(input.externalId ? { externalId: input.externalId } : {}),
     direction,
-    ...(input.destination ? { destination: normalizeDestination(input.destination) } : {}),
+    ...(direction === 'deposit' && input.destination ? { destination: normalizeDestination(input.destination) } : {}),
     ...(direction === 'withdraw' ? { source: normalizeSource(input.source) } : {}),
-    ...(direction === 'withdraw' && input.allowedTargets ? { allowedTargets: input.allowedTargets } : {}),
+    ...(direction === 'withdraw' && input.allowedDestinations ? { allowedDestinations: input.allowedDestinations } : {}),
     ...(input.country ? { country: input.country.toUpperCase() } : {}),
     ...(input.region ? { region: input.region.toUpperCase() } : {}),
     ...(input.email ? { email: input.email } : {}),
@@ -154,13 +156,13 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     notified: [],
     updatedAt: now,
   }
-  if (direction === 'withdraw' && input.target !== undefined) {
-    // The same checks as `POST /sessions/:id/target`: format, `allowedTargets`, then `screenAddress`.
-    const target = parseTarget(input.target)
+  if (direction === 'withdraw' && input.destination !== undefined) {
+    // The same checks as `POST /sessions/:id/target`: format, `allowedDestinations`, then `screenAddress`.
+    const target = parseTarget(input.destination as unknown as Record<string, unknown>)
     checkAllowed(rec, target)
     await screenTarget(rt, target)
     rec.destination = targetDestination(target)
-    if (input.lockTarget) rec.targetLocked = true
+    if (input.lockDestination) rec.destinationLocked = true
   }
   if (input.externalId) {
     // Claim the externalId. With an atomic store, two creates at the same time make one session.

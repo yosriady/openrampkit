@@ -210,8 +210,8 @@ export type AdminSession = AdminSessionSummary & {
   expiresAt: string
   destination?: SessionRecord['destination']
   source?: SessionRecord['source']
-  allowedTargets?: SessionRecord['allowedTargets']
-  targetLocked: boolean
+  allowedDestinations?: SessionRecord['allowedDestinations']
+  destinationLocked: boolean
   amountBounds?: SessionRecord['amountBounds']
   allowedMethods?: string[]
   revokedPayLinks: number
@@ -326,8 +326,8 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     expiresAt: iso(rec.expiresAt)!,
     ...(rec.destination ? { destination: rec.destination } : {}),
     ...(rec.source ? { source: rec.source } : {}),
-    ...(rec.allowedTargets ? { allowedTargets: rec.allowedTargets } : {}),
-    targetLocked: !!rec.targetLocked,
+    ...(rec.allowedDestinations ? { allowedDestinations: rec.allowedDestinations } : {}),
+    destinationLocked: !!rec.destinationLocked,
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     ...(rec.allowedMethods ? { allowedMethods: rec.allowedMethods } : {}),
     revokedPayLinks: rec.revokedPayLinks?.length ?? 0,

@@ -153,7 +153,7 @@ describe('withdraw: to wallet screens', () => {
     await h.click(h.$$('[role="tab"]')[0]!) // the active tab: no change
     expect(h.c.getSnapshot().screen).toBe('target')
 
-    const one = await mount({ session: { allowedTargets: { crypto: { chains: ['eip155:42161'] } } } })
+    const one = await mount({ session: { allowedDestinations: { crypto: { chains: ['eip155:42161'] } } } })
     expect(one.$$('[role="tab"]')).toHaveLength(0)
     expect(one.$('#ork-panel')!.getAttribute('role')).toBeNull()
     expect(one.$<HTMLSelectElement>('select')!.value).toBe('eip155:42161')
@@ -228,7 +228,7 @@ describe('withdraw: to cash screens', () => {
   })
 
   it('shows a notice when no payout method serves the currency', async () => {
-    const h = await mount({ session: { allowedTargets: { fiat: { currencies: ['CHF'] } } } })
+    const h = await mount({ session: { allowedDestinations: { fiat: { currencies: ['CHF'] } } } })
     await h.until(() => h.c.getSnapshot().screen === 'methods')
     expect(h.text()).toContain('No payout methods are available for this withdrawal.')
     expect(h.text()).toContain('Paid out in CHF')
@@ -309,7 +309,7 @@ describe('openWithdraw', () => {
 describe('withdraw: locked target screens', () => {
   it('no tabs and no target form; the locked address shows read only', async () => {
     const target = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: ARB }
-    const h = await mount({ session: { target, lockTarget: true } })
+    const h = await mount({ session: { destination: target, lockDestination: true } })
     // One usable method: straight to the amount screen, which names the locked address.
     expect(h.c.getSnapshot().screen).toBe('amount')
     expect(h.$$('[role="tab"]')).toHaveLength(0)
@@ -324,7 +324,7 @@ describe('withdraw: locked target screens', () => {
   })
 
   it('a locked cash target shows its payout methods with no tabs', async () => {
-    const h = await mount({ session: { target: { type: 'fiat', currency: 'PHP' }, lockTarget: true } })
+    const h = await mount({ session: { destination: { type: 'fiat', currency: 'PHP' }, lockDestination: true } })
     expect(h.c.getSnapshot().screen).toBe('methods')
     expect(h.$$('[role="tab"]')).toHaveLength(0)
     expect(h.text()).toContain('Paid out in PHP')

@@ -96,7 +96,7 @@ Put the guardrails in a JSON file. Keep secrets (the URL and the app key) in env
 | `deposit.destinations` | none | The only wallets that the agent can fund. The agent picks one by `name`. Without `deposit`, the deposit tool is off. |
 | `deposit.allowCustomAddress` | off | `{ chains, tokens? }`: let the agent give its own address, on these chains and tokens only. |
 | `withdraw.source` | none | The asset that leaves and who holds it. For agent payouts, use `custody: 'app'` and a server [`treasury`](./withdraw.md#custody-app). Without `withdraw`, the payout tool is off. |
-| `withdraw.allowedTargets` | cash only | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
+| `withdraw.allowedDestinations` | cash only | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
 | `withdraw.targets` | none | Bound payout wallets, in the same form as `deposit.destinations`. The agent picks one by `name`. The MCP server sets the target and starts the payout. No pay link is made. Needs `custody: 'app'`. |
 | `withdraw.requireBoundTarget` | `false` in the library, `true` in the CLI | Refuse payouts without a bound target. Then the agent cannot make a payout pay link. |
 | `limits.maxTotalPerDay` | none | The largest total per UTC day, by currency. When set, it must list each currency of `maxAmounts`. Each session counts its largest amount. Payouts and deposits have separate totals. |
@@ -240,13 +240,13 @@ To skip the method screen, give `method` and `amount`. The tool then starts the 
 With a bound target:
 
 1. The agent calls `create_withdraw_session` with `target: "ops"` and `amount: "20"`.
-2. The MCP server checks the limits and calls `approve`. Then it creates the session with the target set and locked (`target` and `lockTarget: true`, see [Locked targets](./withdraw.md#locked-targets)). It plans, quotes and starts the payout with the client secret. The agent never sees the client secret.
+2. The MCP server checks the limits and calls `approve`. Then it creates the session with the destination set and locked (`destination` and `lockDestination: true`, see [Locked targets](./withdraw.md#locked-targets)). It plans, quotes and starts the payout with the client secret. The agent never sees the client secret.
 3. The server sends the USDC from your treasury to the target wallet. The agent calls `wait_for_completion`.
 
 ## Guardrails
 
 - **Destinations.** The agent can fund only a named destination from the config. The `destination` input is an enum of these names. The `custom_destination` input exists only when `allowCustomAddress` is set, and then only for the chains and tokens that you list.
-- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the server locks the target when it creates the session (`targetLocked: true`), and the MCP server makes no pay link. Nobody can change the target: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`, also for a pay link. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedTargets`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
+- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the server locks the target when it creates the session (`destinationLocked: true`), and the MCP server makes no pay link. Nobody can change the target: `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED`, also for a pay link. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedDestinations`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
 - **Amounts.** Each session gets `amountBounds`, at most the cap in `maxAmounts`. The server enforces the bounds on each quote and each payment.
 - **Limits.** `limits.maxTotalPerDay` and `limits.maxSessionsPerHour` stop a looping agent. A session that passes a limit is refused with `LIMIT_REACHED`, and nothing is counted for it. A session that the server refuses is not counted.
 - **Approval.** `approve` runs before each payout. It fails closed (`NOT_APPROVED`).
@@ -273,7 +273,7 @@ Error codes from the guardrails:
 | `LIMIT_REACHED` | A limit in `limits` is reached. The message says when the window ends. |
 | `NOT_APPROVED` | `approve` did not return `true` |
 | `TARGET_REQUIRED` | `requireBoundTarget` is on and the agent gave no `target` |
-| `TARGET_NOT_ALLOWED` | The `target` is not in `withdraw.targets` |
+| `DESTINATION_NOT_ALLOWED` | The `target` is not in `withdraw.targets` |
 
 ## The pay link
 

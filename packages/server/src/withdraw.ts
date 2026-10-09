@@ -1,7 +1,7 @@
 // Withdraw sessions: validate the source at creation, and the target the user picks.
 
 import { CHAINS, OpenRampException, isUsdc, nativeDecimals, normalizeToken, openRampError } from '@openrampkit/core'
-import type { Destination, WithdrawSource, WithdrawTarget } from '@openrampkit/core'
+import type { Destination, WithdrawSource, WithdrawDestination } from '@openrampkit/core'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
 
@@ -51,7 +51,7 @@ export function normalizeSource(src: WithdrawSource | undefined): WithdrawSource
 }
 
 /** Parse the body of `POST /sessions/:id/target`. Throws a 400 when it is not valid. */
-export function parseTarget(body: unknown): WithdrawTarget {
+export function parseTarget(body: unknown): WithdrawDestination {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
   if (b.type === 'fiat') {
     const currency = typeof b.currency === 'string' ? b.currency.toUpperCase() : ''
@@ -74,10 +74,10 @@ export function parseTarget(body: unknown): WithdrawTarget {
 }
 
 /** Throw a 403 when the app does not allow this target. */
-export function checkAllowed(rec: SessionRecord, t: WithdrawTarget): void {
-  const allowed = rec.allowedTargets
+export function checkAllowed(rec: SessionRecord, t: WithdrawDestination): void {
+  const allowed = rec.allowedDestinations
   if (!allowed) return
-  const refuse = () => new OpenRampException(openRampError('TARGET_NOT_ALLOWED'), 403)
+  const refuse = () => new OpenRampException(openRampError('DESTINATION_NOT_ALLOWED'), 403)
   if (t.type === 'crypto') {
     if (!allowed.crypto) throw refuse()
     if (allowed.crypto.chains && !allowed.crypto.chains.includes(t.chain)) throw refuse()
@@ -88,7 +88,7 @@ export function checkAllowed(rec: SessionRecord, t: WithdrawTarget): void {
 }
 
 /** Run the app's `screenAddress` hook. Refused or failed checks throw (fail closed). */
-export async function screenTarget(rt: Runtime, t: WithdrawTarget): Promise<void> {
+export async function screenTarget(rt: Runtime, t: WithdrawDestination): Promise<void> {
   if (t.type !== 'crypto' || !rt.config.screenAddress) return
   let ok: boolean
   try {
@@ -101,7 +101,7 @@ export async function screenTarget(rt: Runtime, t: WithdrawTarget): Promise<void
 }
 
 /** The session destination for a target. Adapters read it as `ctx.destination`. */
-export function targetDestination(t: WithdrawTarget): Destination {
+export function targetDestination(t: WithdrawDestination): Destination {
   if (t.type === 'fiat') return { type: 'fiat', currency: t.currency }
   return {
     type: 'crypto',

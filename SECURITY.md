@@ -87,7 +87,7 @@ Limits:
 - Provider webhook verification with the raw body, constant-time comparison and a replay window. For providers that sign no time, a 7-day replay key per body.
 - Signed outgoing webhooks (HMAC-SHA256 over id, timestamp and body) with a 5-minute window in `verifyWebhook`.
 - Iframe messages: the exact origin and the iframe window must match. A message never sets the outcome: the server status does.
-- Withdrawals: address format checks, `allowedTargets`, `screenAddress` (fail closed), and a single treasury send per step.
+- Withdrawals: address format checks, `allowedDestinations`, `screenAddress` (fail closed), and a single treasury send per step.
 - Relay same-chain payments: receipt status, amount, recipient, block time, and one use per transaction hash.
 - The mock adapter refuses live sessions.
 - CORS: an allow list of origins, no credentials.

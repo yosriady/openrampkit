@@ -118,7 +118,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
   function withdrawConfig() {
     const w = config.withdraw
     if (!w) throw new RampError('NOT_ALLOWED', 'Payouts are turned off in this MCP server.', 403)
-    return { source: w.source, allowedTargets: w.allowedTargets ?? { fiat: {} } }
+    return { source: w.source, allowedDestinations: w.allowedDestinations ?? { fiat: {} } }
   }
 
   /** A short-lived session used only to list methods and quote. Reused per direction, country and destination. */
@@ -250,10 +250,10 @@ export function createRampOps(config: OpenRampMcpConfig) {
         source: w.source,
         // A bound target: the server sets and locks it at creation, so nobody can change it later.
         // Only its chain is allowed, and no pay link is made.
-        allowedTargets: target ? { crypto: { chains: [target.chain] } } : w.allowedTargets,
+        allowedDestinations: target ? { crypto: { chains: [target.chain] } } : w.allowedDestinations,
         ...(target
           ? {
-              target: {
+              destination: {
                 type: 'crypto' as const,
                 chain: target.chain,
                 token: target.token,
@@ -261,7 +261,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
                 ...(target.symbol ? { symbol: target.symbol } : {}),
                 ...(target.decimals !== undefined ? { decimals: target.decimals } : {}),
               },
-              lockTarget: true,
+              lockDestination: true,
             }
           : {}),
         amountBounds: bounds,

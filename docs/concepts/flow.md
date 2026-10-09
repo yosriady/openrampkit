@@ -269,8 +269,8 @@ type OpenRampError = {
 | `UNAUTHORIZED` | This session is not valid. | No |
 | `CONFLICT` | The session changed at the same time. Try again. | Yes |
 | `ADDRESS_REJECTED` | This address cannot receive withdrawals. Use another address. | No |
-| `TARGET_NOT_ALLOWED` | This app does not allow withdrawals to this target. | No |
-| `TARGET_LOCKED` | The app set where these funds go. You cannot change it. | No |
+| `DESTINATION_NOT_ALLOWED` | This app does not allow withdrawals to this target. | No |
+| `DESTINATION_LOCKED` | The app set where these funds go. You cannot change it. | No |
 | `BAD_REQUEST` | The request is not valid. | No |
 | `NOT_FOUND` | Not found. | No |
 | `INTERNAL` | Something went wrong on our side. | Yes |

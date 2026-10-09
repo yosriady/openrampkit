@@ -80,13 +80,13 @@ export type WithdrawSource = {
  * Where the user may send a withdrawal. Absent: any target. Present: only the listed types;
  * inside a type, an absent list means "any" (any chain, any currency).
  */
-export type AllowedTargets = {
+export type AllowedDestinations = {
   crypto?: { chains?: string[] }
   fiat?: { currencies?: string[] }
 }
 
 /** The target the user picks for a withdrawal (`POST /sessions/:id/target`). */
-export type WithdrawTarget =
+export type WithdrawDestination =
   | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number }
   | { type: 'fiat'; currency: string }
 
@@ -250,8 +250,8 @@ export type OpenRampErrorCode =
   | 'UNAUTHORIZED'
   | 'CONFLICT'
   | 'ADDRESS_REJECTED'
-  | 'TARGET_NOT_ALLOWED'
-  | 'TARGET_LOCKED'
+  | 'DESTINATION_NOT_ALLOWED'
+  | 'DESTINATION_LOCKED'
   | 'BAD_REQUEST'
   | 'NOT_FOUND'
   | 'INTERNAL'
@@ -540,12 +540,12 @@ export type PublicSession = {
   /** Withdraw only: the asset the session sends out, and who holds it */
   source?: WithdrawSource
   /** Withdraw only: the targets the app allows */
-  allowedTargets?: AllowedTargets
+  allowedDestinations?: AllowedDestinations
   /**
-   * Withdraw only: true when the app set the target at creation and locked it (`lockTarget`).
-   * `destination` is that target. `POST /sessions/:id/target` answers `409 TARGET_LOCKED`.
+   * Withdraw only: true when the app set the target at creation and locked it (`lockDestination`).
+   * `destination` is that target. `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED`.
    */
-  targetLocked?: boolean
+  destinationLocked?: boolean
   status: SessionStatus
   country?: string
   currency?: string

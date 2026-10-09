@@ -1,5 +1,5 @@
 import type { Adapter, Logger } from '@openrampkit/adapter'
-import type { AllowedTargets, CryptoAsset, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource, WithdrawTarget } from '@openrampkit/core'
+import type { AllowedDestinations, CryptoAsset, Destination, Direction, PollSpec, RegionPolicy, SurfaceKind, TxRequest, WithdrawSource } from '@openrampkit/core'
 import type { SessionStore } from './store.js'
 
 export type CreateSessionInput = {
@@ -11,22 +11,23 @@ export type CreateSessionInput = {
    */
   externalId?: string
   direction?: Direction
-  /** Deposit: where the money ends (required). Withdraw: leave it out; the user picks the target. */
+  /**
+   * Where the money ends. Deposit: required. Withdraw: optional, a destination that the app sets at
+   * creation (`{ type: 'crypto', chain, token, address }` or `{ type: 'fiat', currency }`, the same shape
+   * as the body of `POST /sessions/:id/target`). The server checks it with `allowedDestinations` and
+   * `screenAddress`. Without it, the user picks the destination.
+   */
   destination?: Destination
   /** Withdraw: the asset to send out and who holds it (required for withdraw) */
   source?: WithdrawSource
-  /** Withdraw: limit the targets the user can pick. Default: any. */
-  allowedTargets?: AllowedTargets
+  /** Withdraw: limit the destinations the user can pick. Default: any. */
+  allowedDestinations?: AllowedDestinations
   /**
-   * Withdraw: set the target at creation (the same shape as the body of `POST /sessions/:id/target`).
-   * The server checks it with `allowedTargets` and `screenAddress`, and stores it as the destination.
+   * Withdraw with `destination`: lock it. Then nobody can change it with the client secret or a pay
+   * link: `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED`. Default `false`. A deposit
+   * destination is always locked.
    */
-  target?: WithdrawTarget
-  /**
-   * Withdraw with `target`: lock the target. Then nobody can change it with the client secret or a pay
-   * link: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`. Default `false`.
-   */
-  lockTarget?: boolean
+  lockDestination?: boolean
   country?: string
   region?: string
   email?: string

@@ -1,6 +1,6 @@
 import type { ScopedKV } from '@openrampkit/adapter'
 import type {
-  AllowedTargets,
+  AllowedDestinations,
   AmountMismatch,
   CancelReason,
   Destination,
@@ -94,9 +94,9 @@ export type SessionRecord = {
   /** Withdraw only */
   source?: WithdrawSource
   /** Withdraw only */
-  allowedTargets?: AllowedTargets
-  /** Withdraw only: the app set the target at creation with `lockTarget`. `/target` refuses changes. */
-  targetLocked?: boolean
+  allowedDestinations?: AllowedDestinations
+  /** Withdraw only: the app set the target at creation with `lockDestination`. `/target` refuses changes. */
+  destinationLocked?: boolean
   /** Ids of pay links that no longer work (see `sessions.revokePayLink`) */
   revokedPayLinks?: string[]
   country?: string
@@ -234,7 +234,7 @@ function isSessionRecord(rec: unknown): rec is SessionRecord {
  * `notified` and `outbox` when absent; each step `sub` in lower case when that is in `STEP_SUBS`, else removed.
  *
  * Schema 1 to 2 (see `migrateToV2`): the new status names (`requires_payment_method`, `requires_action`,
- * `succeeded`) and `Amount.value`.
+ * `succeeded`), `Amount.value`, and the withdraw names `allowedDestinations` and `destinationLocked`.
  *
  * A record with a newer schema (written by a newer server) is returned as it is. Other records (for
  * example the queue records of a custom store) are returned as they are.
@@ -290,7 +290,8 @@ function renameAmounts(v: unknown): void {
 /**
  * Schema 1 to 2: the session status `open` is `requires_payment_method`, `awaiting_user` is
  * `requires_action` and `completed` is `succeeded`; the leg status `awaiting_user` is `requires_action`;
- * every `Amount` is `{ value, asset }` (was `{ amount, asset }`); `notified` keys use the new event names.
+ * every `Amount` is `{ value, asset }` (was `{ amount, asset }`); `notified` keys use the new event names;
+ * the withdraw fields `allowedTargets` and `targetLocked` are `allowedDestinations` and `destinationLocked`.
  * Events already in the outbox keep the body they were made with.
  */
 function migrateToV2(rec: SessionRecord): void {
@@ -301,6 +302,16 @@ function migrateToV2(rec: SessionRecord): void {
   }
   for (const p of [rec.active, ...(rec.attempts ?? [])]) for (const l of p?.legs ?? []) legStatus(l.step)
   for (const l of rec.step.progress?.legs ?? []) legStatus(l)
+  // The withdraw names: `allowedTargets` is `allowedDestinations`, `targetLocked` is `destinationLocked`.
+  const old = rec as SessionRecord & { allowedTargets?: SessionRecord['allowedDestinations']; targetLocked?: boolean }
+  if (old.allowedTargets !== undefined) {
+    old.allowedDestinations ??= old.allowedTargets
+    delete old.allowedTargets
+  }
+  if (old.targetLocked !== undefined) {
+    old.destinationLocked ??= old.targetLocked
+    delete old.targetLocked
+  }
   rec.notified = rec.notified.map((k) => {
     const [name] = k.split(':', 1)
     const next = name ? V1_EVENTS[name] : undefined

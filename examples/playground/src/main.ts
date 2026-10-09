@@ -125,7 +125,7 @@ const { clientSecret } = await openramp.sessions.create({
   country: '${o.country}',
   locale: '${o.locale}',${allowedLine}
   source: { chain: 'eip155:8453', token: USDC_BASE, custody: 'user_wallet' },
-  allowedTargets: { crypto: { chains: ['eip155:8453', 'eip155:42161'] }, fiat: {} },
+  allowedDestinations: { crypto: { chains: ['eip155:8453', 'eip155:42161'] }, fiat: {} },
 })`
       : `// Your server
 const { clientSecret } = await openramp.sessions.create({

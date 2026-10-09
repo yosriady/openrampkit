@@ -194,12 +194,12 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
  * POST /sessions/:id/target (withdraw only): the user picks where the funds go.
  * Body: `{ type: 'crypto', chain, token, address }` or `{ type: 'fiat', currency }`, plus the
  * optional plan fields of `/plan` (`walletConnected`, `walletAddress`, `surfaces`).
- * Checks the format, the app's `allowedTargets` and `screenAddress`, then returns the plan.
- * A target that the app locked at creation (`lockTarget`) cannot change: 409 `TARGET_LOCKED`.
+ * Checks the format, the app's `allowedDestinations` and `screenAddress`, then returns the plan.
+ * A target that the app locked at creation (`lockDestination`) cannot change: 409 `DESTINATION_LOCKED`.
  */
 async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
   if (rec.direction !== 'withdraw') return errorResponse(openRampError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
-  if (rec.targetLocked) return errorResponse(openRampError('TARGET_LOCKED'), 409)
+  if (rec.destinationLocked) return errorResponse(openRampError('DESTINATION_LOCKED'), 409)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
   if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED' || rec.status === 'expired') return errorResponse(openRampError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
   const body = await readJson<Record<string, unknown>>(req)

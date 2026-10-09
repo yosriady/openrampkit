@@ -102,7 +102,7 @@ export function Playground({ mock }: { mock: boolean }) {
   direction: 'withdraw',
   country: '${country}',
   source: { chain: 'eip155:8453', token: USDC_BASE, custody: '${custody}' },
-  allowedTargets: { crypto: { chains: [...] }, fiat: {} },
+  allowedDestinations: { crypto: { chains: [...] }, fiat: {} },
 })
 
 <OpenRampProvider baseUrl="/api/openramp" theme={${mode}Theme({ accent: '${accent}' })}>

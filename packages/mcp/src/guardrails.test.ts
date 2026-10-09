@@ -193,9 +193,9 @@ describe('bound payout targets', () => {
 
     const s = (await ramp.sessions.retrieve(r.data.session_id))!
     expect(s.destination).toMatchObject({ type: 'crypto', chain: 'eip155:42161', address: OPS_WALLET })
-    expect(s.allowedTargets).toEqual({ crypto: { chains: ['eip155:42161'] } })
+    expect(s.allowedDestinations).toEqual({ crypto: { chains: ['eip155:42161'] } })
     // The target is set and locked at creation: no /target call, and nobody can change it later.
-    expect(s.targetLocked).toBe(true)
+    expect(s.destinationLocked).toBe(true)
     expect(paths.some((p) => p.endsWith('/target'))).toBe(false)
     expect(paths.filter((p) => p.startsWith(`/sessions/${s.id}/`)).map((p) => p.split('/').pop())).toEqual(['plan', 'quotes', 'select'])
     const cred = (await ramp.sessions.payLink(s.id))!.url.split('/pay/')[1]!
@@ -207,7 +207,7 @@ describe('bound payout targets', () => {
       }),
     )
     expect(change.status).toBe(409)
-    expect(((await change.json()) as { error: { code: string } }).error.code).toBe('TARGET_LOCKED')
+    expect(((await change.json()) as { error: { code: string } }).error.code).toBe('DESTINATION_LOCKED')
     expect(s.amountBounds).toEqual({ min: '20', max: '20', currency: 'USDC' })
     expect(sent).toHaveLength(1)
     expect(JSON.stringify(sent[0]!.txs).toLowerCase()).toContain(OPS_WALLET)

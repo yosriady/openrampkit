@@ -56,9 +56,9 @@ Every error is JSON:
 |---|---|
 | `400` | Body is not JSON (`BAD_REQUEST`), a field that is not valid (amount, address, source, target, `Idempotency-Key`), or an adapter refused the input |
 | `401` | Bad client secret, bad start URL signature, bad webhook signature, bad tasks token, or `authorize` returned `null` |
-| `403` | Withdraw target refused: `TARGET_NOT_ALLOWED` or `ADDRESS_REJECTED` |
+| `403` | Withdraw target refused: `DESTINATION_NOT_ALLOWED` or `ADDRESS_REJECTED` |
 | `404` | Unknown route or adapter (`NOT_FOUND`) |
-| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; a locked withdraw target (`TARGET_LOCKED`); or a concurrent change (`CONFLICT`) |
+| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; a locked withdraw target (`DESTINATION_LOCKED`); or a concurrent change (`CONFLICT`) |
 | `410` | Quote expired (`QUOTE_EXPIRED`), session past its deadline (`SESSION_EXPIRED`), or start URL expired (plain text) |
 | `413` | The body is too large (`BAD_REQUEST`): more than 64 KiB for the browser routes, more than 1 MiB for provider webhooks |
 | `422` | No pathway for the method (`NO_QUOTES`), an amount outside `amountBounds` (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`), or an adapter error |
@@ -91,8 +91,8 @@ type PublicSession = {
   direction: 'deposit' | 'withdraw'
   destination?: Destination       // withdraw: absent until the user picks a target
   source?: WithdrawSource         // withdraw only
-  allowedTargets?: AllowedTargets // withdraw only, when the app set them
-  targetLocked?: boolean          // withdraw only: true when the app set and locked the target
+  allowedDestinations?: AllowedDestinations // withdraw only, when the app set them
+  destinationLocked?: boolean          // withdraw only: true when the app set and locked the destination
   status: 'requires_payment_method' | 'requires_action' | 'processing' | 'succeeded' | 'failed' | 'canceled' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string             // set after the first plan
@@ -160,7 +160,7 @@ Both can also carry the `/plan` fields `walletConnected`, `walletAddress` and `s
 The server:
 
 1. checks the format: a CAIP-2 `chain`, a token address or `native`, and an address that is valid for the chain; or an ISO 4217 `currency` (uppercased),
-2. checks the session's `allowedTargets`,
+2. checks the session's `allowedDestinations`,
 3. calls `screenAddress(address, chain)` for a crypto target,
 4. stores the target as the session `destination`, clears the stored quotes, and plans.
 
@@ -169,13 +169,13 @@ Response `200`: a `PlanResult`.
 | Status | When |
 |---|---|
 | `400` | The body is not valid (for example "Enter a valid address for this network.") |
-| `403` | `TARGET_NOT_ALLOWED` (not in `allowedTargets`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
-| `409` | Not a withdraw session; the app locked the target (`TARGET_LOCKED`); a payment is in progress; the withdrawal is complete or expired |
+| `403` | `DESTINATION_NOT_ALLOWED` (not in `allowedDestinations`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
+| `409` | Not a withdraw session; the app locked the target (`DESTINATION_LOCKED`); a payment is in progress; the withdrawal is complete or expired |
 | `503` | `screenAddress` threw (`PROVIDER_UNAVAILABLE`, "We could not check this address. Try again.") |
 
 On a withdraw session, `/plan` and `/quotes` answer `409` ("Choose where to send the funds first.") until a target is set.
 
-When the app created the session with `target` and `lockTarget: true`, the target is already set. Then this route always answers `409 TARGET_LOCKED`, also for the same target and also for a pay link credential. Call `/plan` to get the plan. The session shows `targetLocked: true`. See [Locked targets](../guide/withdraw.md#locked-targets).
+When the app created the session with `destination` and `lockDestination: true`, the target is already set. Then this route always answers `409 DESTINATION_LOCKED`, also for the same target and also for a pay link credential. Call `/plan` to get the plan. The session shows `destinationLocked: true`. See [Locked targets](../guide/withdraw.md#locked-targets).
 
 ## POST /sessions/:id/quotes
 

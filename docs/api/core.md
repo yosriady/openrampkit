@@ -17,7 +17,7 @@ The full definitions are in `packages/core/src/types.ts`. The concept pages expl
 | `WebhookEvent`, `WebhookEventOf`, `WebhookEventType`, `WebhookEventFields` (with `WEBHOOK_EVENT_TYPES` and `API_VERSION`), `ClientEvent`, `ClientEventType`, `ClientEventFields` | [Events](../concepts/events.md) |
 | `Session` (the backend view), `PublicSession`, `SessionStatus` (with `isFinalStatus`) | [Sessions](#publicsession) |
 | `WalletAdapter`, `WalletBalance` | [Wallets (wagmi)](../adapters/wagmi.md) |
-| `WithdrawSource`, `Custody`, `AllowedTargets`, `WithdrawTarget` | [Withdrawals](../guide/withdraw.md) |
+| `WithdrawSource`, `Custody`, `AllowedDestinations`, `WithdrawDestination` | [Withdrawals](../guide/withdraw.md) |
 
 ### PublicSession
 
@@ -29,8 +29,8 @@ type PublicSession = {
   direction: 'deposit' | 'withdraw'
   destination?: Destination       // deposit: set by the app; withdraw: the target the user picked
   source?: WithdrawSource         // withdraw only
-  allowedTargets?: AllowedTargets // withdraw only
-  targetLocked?: boolean          // withdraw only: the app set and locked the target
+  allowedDestinations?: AllowedDestinations // withdraw only
+  destinationLocked?: boolean          // withdraw only: the app set and locked the destination
   status: 'requires_payment_method' | 'requires_action' | 'processing' | 'succeeded' | 'failed' | 'canceled' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string
@@ -123,12 +123,12 @@ type Custody = 'user_wallet' | 'app'
 
 type WithdrawSource = { chain: string; token: string; symbol?: string; decimals?: number; custody: Custody }
 
-type AllowedTargets = {
+type AllowedDestinations = {
   crypto?: { chains?: string[] }
   fiat?: { currencies?: string[] }
 }
 
-type WithdrawTarget =
+type WithdrawDestination =
   | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number }
   | { type: 'fiat'; currency: string }
 ```
@@ -219,7 +219,7 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 | `OpenRampException` | `new OpenRampException(error, status = 400)`: throw it across boundaries; the server turns it into a JSON error response |
 | `isOpenRampError(value)` | Type guard |
 
-Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED`, `TARGET_NOT_ALLOWED` and `TARGET_LOCKED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
+Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED`, `DESTINATION_NOT_ALLOWED` and `DESTINATION_LOCKED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
 
 ## URL checks
 

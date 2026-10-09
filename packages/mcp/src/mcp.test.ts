@@ -191,7 +191,7 @@ describe('@openrampkit/mcp', () => {
     expect(r.data).toMatchObject({ bounds: 'exactly 20 USDC', source: { token: 'USDC', custody: 'app' } })
     const s = (await ramp.sessions.retrieve(r.data.session_id))!
     expect(s.direction).toBe('withdraw')
-    expect(s.allowedTargets).toEqual({ fiat: {} })
+    expect(s.allowedDestinations).toEqual({ fiat: {} })
     expect(s.amountBounds).toEqual({ min: '20', max: '20', currency: 'USDC' })
     const page = await (await ramp.handle(new Request(r.data.pay_url))).text()
     expect(page).toContain('"direction":"withdraw"')

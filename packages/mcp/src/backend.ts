@@ -1,19 +1,18 @@
 // How the MCP server reaches an OpenRampKit server: over HTTP (base URL plus an app key that the
 // server's `authorize` hook checks), or in-process (an `OpenRamp` instance from `createOpenRamp`).
 
-import type { AllowedTargets, Destination, WithdrawSource, WithdrawTarget } from '@openrampkit/core'
+import type { AllowedDestinations, Destination, WithdrawSource, WithdrawDestination } from '@openrampkit/core'
 
 /** The subset of `CreateSessionInput` (from `@openrampkit/server`) that the MCP server sends. */
 export type SessionInput = {
   userId: string
   direction: 'deposit' | 'withdraw'
-  destination?: Destination
+  destination?: Destination | WithdrawDestination
   source?: WithdrawSource
-  allowedTargets?: AllowedTargets
-  /** Withdraw: the target, set at creation */
-  target?: WithdrawTarget
-  /** Withdraw with `target`: nobody can change the target later */
-  lockTarget?: boolean
+  allowedDestinations?: AllowedDestinations
+  /** Deposit: where the money ends. Withdraw: the destination, set at creation (`lockDestination` locks it). */
+  /** Withdraw with `destination`: nobody can change the destination later */
+  lockDestination?: boolean
   country?: string
   locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }

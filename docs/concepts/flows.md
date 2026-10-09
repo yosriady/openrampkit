@@ -420,13 +420,13 @@ sequenceDiagram
   participant A as Adapter (Relay or offramp)
   participant Tr as config.treasury
   participant App as Your backend
-  App->>S: sessions.create({ direction: 'withdraw', source: { chain, token, custody }, allowedTargets })
+  App->>S: sessions.create({ direction: 'withdraw', source: { chain, token, custody }, allowedDestinations })
   S-->>App: { id, clientSecret }
   B->>S: GET /sessions/:id
   alt To wallet
     U->>B: Pick a network, a token and an address
     B->>S: POST /sessions/:id/target { type: 'crypto', chain, token, address }
-    S->>S: parseTarget(), checkAllowed() (403 TARGET_NOT_ALLOWED)
+    S->>S: parseTarget(), checkAllowed() (403 DESTINATION_NOT_ALLOWED)
     S->>Scr: screenAddress(address, chain)
     alt false
       S-->>B: 403 ADDRESS_REJECTED

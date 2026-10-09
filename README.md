@@ -108,7 +108,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 
 **Withdraw**
 - To a wallet on any chain (Relay), or to cash (Swapped payouts: bank transfer, Skrill, Pix, Interac).
-- User wallet custody, or app custody with your own treasury hook. Address checks, `allowedTargets` and `screenAddress` (fails closed).
+- User wallet custody, or app custody with your own treasury hook. Address checks, `allowedDestinations` and `screenAddress` (fails closed).
 
 **i18n**
 - English by default. Override any string with `messages`. Optional built-in translations (vi, id, th, ms, fil) turn on only when your app sets `locale`.

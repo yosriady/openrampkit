@@ -85,6 +85,15 @@ describe('migrateRecord: schema 1 to 2', () => {
     if (surface?.kind === 'QR') expect(surface.amount).toBeTruthy()
   })
 
+  it('renames the withdraw fields allowedTargets and targetLocked', () => {
+    const rec = migrateRecord(fresh().sessions.withdrawLocked.record)
+    expect(raw(rec)).not.toHaveProperty('allowedTargets')
+    expect(raw(rec)).not.toHaveProperty('targetLocked')
+    expect(rec.allowedDestinations).toEqual({ crypto: { chains: ['eip155:42161'] }, fiat: { currencies: ['PHP'] } })
+    expect(rec.destinationLocked).toBe(true)
+    expect(rec.status).toBe('requires_payment_method')
+  })
+
   it('is idempotent', () => {
     for (const { record } of Object.values(fresh().sessions)) {
       const once = structuredClone(migrateRecord(record))
@@ -125,6 +134,18 @@ describe('schema 1 records load and work', () => {
     expect(done).toMatchObject({ status: 'succeeded', step: { state: 'COMPLETED' } })
     expect(sent.map((e) => e.type)).toContain('session.succeeded')
     expect(sent.map((e) => e.type)).not.toContain('session.completed')
+  })
+
+  it('a locked withdraw destination stays locked', async () => {
+    at(60_000)
+    const f = fresh()
+    const { call } = make(await loadedStore(f))
+    const { clientSecret, record } = f.sessions.withdrawLocked
+    const pub = await (await call(`/sessions/${record.id}`, clientSecret)).json()
+    expect(pub).toMatchObject({ direction: 'withdraw', destinationLocked: true, allowedDestinations: { crypto: { chains: ['eip155:42161'] } }, destination: { type: 'crypto', chain: 'eip155:42161' } })
+    const r = await call(`/sessions/${record.id}/target`, clientSecret, { type: 'fiat', currency: 'PHP' })
+    expect(r.status).toBe(409)
+    expect((await r.json()).error.code).toBe('DESTINATION_LOCKED')
   })
 
   it('a completed payment is succeeded, and stays final with no second success event', async () => {

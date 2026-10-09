@@ -38,7 +38,7 @@ What to look at:
 | `lib/openramp.ts` | `createOpenRamp` with mock (including `offramp: true`), Relay and Xendit adapters, webhooks, and the withdraw hooks `screenAddress` and `treasury` |
 | `app/api/openramp/[...path]/route.ts` | Mounting the handler with `nextHandlers()` |
 | `app/api/deposit-session/route.ts` | Creating a session in your backend |
-| `app/api/withdraw-session/route.ts` | Creating a withdraw session with `source`, `custody` and `allowedTargets` |
+| `app/api/withdraw-session/route.ts` | Creating a withdraw session with `source`, `custody` and `allowedDestinations` |
 | `app/api/cron/route.ts`, `vercel.json` | The background sweep as a Vercel Cron Job, checked with `CRON_SECRET` |
 | `app/api/hooks/route.ts` | Verifying webhooks with `openramp.webhooks.verify` |
 | `components/Playground.tsx` | `OpenRampProvider`, `DepositButton`, `WithdrawButton`, `OpenRampEmbedded`, themes, `createMockWallet`, `wagmiWallet` |
