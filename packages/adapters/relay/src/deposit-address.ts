@@ -8,13 +8,13 @@ import type { Amount, CryptoAsset, LegQuote, LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEPOSIT_ADDRESS_TTL_SEC, RECORD_TTL_SEC, USED_TTL_SEC } from './config.js'
 import type { DirectTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, addrKey, caip2FromRelay, cryptoAsset, fmt, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
 import type { DepositRecord, RelayQuoteResponse, RelayRequest } from './types.js'
 
 export type DepositAddresses = ReturnType<typeof depositAddresses>
 
 export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
-  const { opts, warnNoKey, api, decimalsOf, refundTo, baseBody, rpc } = rt
+  const { api, listRequests, decimalsOf, refundTo, baseBody, rpc } = rt
   const { ownerOf, minFor, addWatcher, contested, finish, ambiguousStep } = direct
 
   // ---------- open deposit addresses ----------
@@ -73,13 +73,6 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
 
   // ---------- status of deposit-address legs ----------
 
-  async function listRequests(ctx: AdapterContext, query: string): Promise<RelayRequest[]> {
-    warnNoKey(ctx.log)
-    const path = opts.apiKey ? '/requests/v3' : '/requests/v2'
-    const res = await api<{ requests?: RelayRequest[] }>(ctx, `${path}?${query}`)
-    return res.requests ?? []
-  }
-
   /** The deposit of a Relay request, in base units of the origin token (`metadata.currencyIn`) */
   function requestDeposit(r: RelayRequest): bigint | undefined {
     const a = r.data?.metadata?.currencyIn?.amount
@@ -105,7 +98,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     if (rec?.bound) {
       const bound = rec.bound
       const r = list.find((x) => requestKey(x) === bound.key) ?? (await listRequests(ctx, `id=${encodeURIComponent(bound.id)}`))[0]
-      return r ? finish(ctx, ref, rec, mapRequest(r, ref)) : { state: 'PROCESSING', sub: 'processing', status: 'processing', transitions: [POLL_TRANSITION], ref }
+      return r ? finish(ctx, ref, rec, mapRequest(r, ref, rec?.output)) : { state: 'PROCESSING', sub: 'processing', status: 'processing', transitions: [POLL_TRANSITION], ref }
     }
     const since = rec?.since ?? 0
     const min = rec?.minBase ? BigInt(rec.minBase) : undefined
@@ -131,19 +124,16 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
         rec.bound = { key, id: r.id }
         await ctx.store.put(`d:${addrKey(ref)}`, rec, RECORD_TTL_SEC)
       }
-      return finish(ctx, ref, rec, mapRequest(r, ref))
+      return finish(ctx, ref, rec, mapRequest(r, ref, rec?.output))
     }
     if (ambiguous) return ambiguousStep(ctx, ref, address, waiting)
     return waiting
   }
 
-  function requestOutput(r: RelayRequest): Amount | undefined {
+  /** The request's output. Same asset as the quote: the quoted asset (see `relayOutput`). */
+  function requestOutput(r: RelayRequest, expected?: Amount): Amount | undefined {
     const out = r.data?.route?.actual?.destination?.outputCurrency ?? r.data?.route?.quoted?.destination?.outputCurrency ?? r.data?.metadata?.currencyOut
-    if (!out?.currency || !out.amount) return undefined
-    return {
-      amount: fmt(out),
-      asset: { kind: 'crypto', chain: caip2FromRelay(out.currency.chainId), token: out.currency.address, symbol: out.currency.symbol, decimals: out.currency.decimals },
-    }
+    return relayOutput(out, expected)
   }
 
   function requestTxHash(r: RelayRequest): string | undefined {
@@ -157,10 +147,10 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     return r.depositAddress?.depositTxHash ?? t?.txHash ?? t?.hash
   }
 
-  function mapRequest(r: RelayRequest, ref: string): LegStep {
+  function mapRequest(r: RelayRequest, ref: string, expected?: Amount): LegStep {
     const txHash = requestTxHash(r)
     const sourceTxHash = requestSourceTxHash(r)
-    const output = requestOutput(r)
+    const output = requestOutput(r, expected)
     const extra = { ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}), ...(output ? { output } : {}) }
     return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
   }

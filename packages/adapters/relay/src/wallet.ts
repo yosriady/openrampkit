@@ -272,7 +272,7 @@ export function walletLeg(rt: RelayRuntime) {
         }),
       }
     }
-    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref, chain: origin.chain } satisfies WalletRecord, RECORD_TTL_SEC)
+    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref, chain: origin.chain, output: input.quote.output } satisfies WalletRecord, RECORD_TTL_SEC)
     const first = txs[0]!
     return payStep(isSolanaTx(first) ? origin.chain : caip2FromRelay(first.chainId), txs, ref)
   }

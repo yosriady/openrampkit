@@ -19,7 +19,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `apiKey` | `string` | none | Sent as `x-api-key`. Needed for `GET /requests/v3` (status of deposit-address legs) and higher rate limits. |
+| `apiKey` | `string` | none | Sent as `x-api-key`. Needed for `GET /requests/v3` (status of deposit-address legs, and the delivered amount of a `wallet` leg) and higher rate limits. |
 | `baseUrl` | `string` | `https://api.relay.link` | Use `https://api.testnets.relay.link` for testnets |
 | `appFee` | `{ bps: number; recipient: string }` | none | Your fee in basis points. It accrues as a claimable balance at Relay. |
 | `referrer` | `string` | none | Relay `referrer`, for attribution |
@@ -35,7 +35,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
 Set an API key. Two facts apply:
 
 - Relay requires an API key for quotes (`POST /quote/v2`) under its announced policy from 2 Oct 2026. Some requests without a key may still work today, but Relay can refuse them at any time. Always set `RELAY_API_KEY`. The adapter uses quotes for prices and for deposit addresses. Source: [Relay API keys](https://docs.relay.link/references/api/api-keys). On 9 Oct 2026, some quotes without a key still returned `200`. A quote that sets `referrer` without a key is refused now. When Relay refuses a quote, it returns 401 with `errorCode` `UNAUTHORIZED_QUOTE`. The adapter maps it to `PROVIDER_UNAVAILABLE` (not retryable), with a message that names `RELAY_API_KEY`, and logs a warning.
-- Without `apiKey`, status checks for `transfer` and `bridge` use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24.
+- Without `apiKey`, status checks for `transfer` and `bridge`, and the delivered amount of a `wallet` leg, use the deprecated `GET /requests/v2`. Relay retires it on 2026-11-24.
 
 When there is no key, the adapter logs a warning once, on its first call.
 :::
@@ -132,6 +132,12 @@ A shared destination (one treasury or vault address for all users) cannot tell t
 | `failure` | `failed` with `DELIVERY_FAILED` |
 | `refund` | `refunded` (`REFUNDED`) |
 | other | `processing` (the Relay status is the `sub` state) |
+
+The output of a completed leg:
+
+- `wallet`: the intent status has no amount. When it is `success`, the adapter reads the request (`GET /requests/v3?id=<requestId>`). The leg's `output` is `data.route.actual.destination.outputCurrency`, else `data.metadata.currencyOut`. The adapter never uses the quoted route as the output. The server compares the output with the quote, and `result.outputConfirmed` is `true`. When the lookup fails, the leg completes without an output, and `outputConfirmed` stays `false`.
+- `transfer` and `bridge`: the request output (`data.route.actual`, else `data.route.quoted`, else `data.metadata.currencyOut`).
+- When the output is the same asset as the quote, it has the quote's asset. For example, Relay names native ETH `0x0000000000000000000000000000000000000000` and the quote names it `native`. An output in another asset keeps Relay's asset, so the server sets `amountMismatch` with `asset_mismatch`.
 
 ## Webhooks
 

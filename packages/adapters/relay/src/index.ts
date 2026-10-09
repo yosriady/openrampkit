@@ -13,14 +13,15 @@
 // log scanning), `wallet.ts` (wallet leg, EVM and Solana checks). This file wires them together.
 
 import { createAdapter, erc20TransferData } from '@openrampkit/adapter'
+import type { AdapterContext } from '@openrampkit/adapter'
 import { OrkException, isSolanaSignature, orkError } from '@openrampkit/core'
-import type { LegStep } from '@openrampkit/core'
+import type { Amount, LegStep } from '@openrampkit/core'
 import { createRuntime } from './client.js'
 import { RECORD_TTL_SEC } from './config.js'
 import type { RelayOptions } from './config.js'
 import { depositAddresses } from './deposit-address.js'
 import { directTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, destAsset, isSolana, recipientOf, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, terminalStep, toOrk } from './helpers.js'
 import { quotes, relayLegs } from './quotes.js'
 import type { DepositRecord, RelayIntentStatus, WalletRecord } from './types.js'
 import { walletLeg } from './wallet.js'
@@ -35,7 +36,7 @@ export { erc20TransferData }
 
 export function relay(opts: RelayOptions = {}) {
   const rt = createRuntime(opts)
-  const { warnNoKey, api } = rt
+  const { warnNoKey, api, listRequests } = rt
   const legs = relayLegs()
   const direct = directTransfer(rt)
   const deposits = depositAddresses(rt, direct)
@@ -43,6 +44,21 @@ export function relay(opts: RelayOptions = {}) {
   const { startWallet, verifyDirectWallet, verifySettlementWallet } = walletLeg(rt)
   const { findDirectDeposit } = direct
   const { openDepositAddress, depositRef, startDeposit, findRelayDeposit } = deposits
+
+  /**
+   * What a completed wallet request delivered, from Relay's request (`GET /requests/v3?id=`). The
+   * intent status has no amount. Best effort: when the lookup fails, the leg completes without an
+   * output, and the session shows the quote (`outputConfirmed: false`).
+   */
+  async function walletOutput(ctx: AdapterContext, requestId: string, expected?: Amount): Promise<Amount | undefined> {
+    try {
+      const list = await listRequests(ctx, `id=${encodeURIComponent(requestId)}`)
+      return deliveredOutput(list.find((r) => typeof r.id === 'string' && r.id.toLowerCase() === requestId.toLowerCase()), expected)
+    } catch (e) {
+      ctx.log.warn('relay: could not read the delivered amount of a completed request', { requestId, error: String((e as Error)?.message ?? e).slice(0, 200) })
+      return undefined
+    }
+  }
 
   return createAdapter({
     id: 'relay',
@@ -123,6 +139,11 @@ export function relay(opts: RelayOptions = {}) {
         const sourceTxHash = rec?.txHash ?? s.inTxHashes?.[0]
         const txHash = s.txHashes?.[0] ?? sourceTxHash
         const extra = { ref: input.ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}) }
+        if (s.status === 'success') {
+          // Relay filled: report what arrived, so the server checks it against the quote.
+          const output = await walletOutput(ctx, input.ref, rec?.output)
+          return terminalStep(s.status, { ...extra, ...(output ? { output } : {}) })!
+        }
         const done = terminalStep(s.status, extra)
         if (done) return done
         if (!rec?.txHash && !s.inTxHashes?.length) {

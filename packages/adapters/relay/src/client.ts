@@ -8,6 +8,7 @@ import { DEFAULT_LOG_BLOCK_RANGE, DEFAULT_RPC_URLS, DEFAULT_TOLERANCE_BPS, EVM_N
 import type { RelayOptions } from './config.js'
 import { isSolana, knownDecimals, relayChainId, relayCurrency, toOrk } from './helpers.js'
 import type { SolTx } from './solana.js'
+import type { RelayRequest } from './types.js'
 
 /** What the parts of one adapter instance share: its options and its API and RPC calls */
 export type RelayRuntime = ReturnType<typeof createRuntime>
@@ -42,6 +43,14 @@ export function createRuntime(opts: RelayOptions) {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       timeoutMs: 8000,
     })
+  }
+
+  /** Relay requests (`GET /requests/v3` with a key, else the deprecated `/requests/v2`) */
+  async function listRequests(ctx: Pick<AdapterContext, 'fetch' | 'log'>, query: string): Promise<RelayRequest[]> {
+    warnNoKey(ctx.log)
+    const path = opts.apiKey ? '/requests/v3' : '/requests/v2'
+    const res = await api<{ requests?: RelayRequest[] }>(ctx, `${path}?${query}`)
+    return res.requests ?? []
   }
 
   async function decimalsOf(ctx: Pick<AdapterContext, 'fetch' | 'shared'>, asset: CryptoAsset): Promise<number> {
@@ -91,5 +100,5 @@ export function createRuntime(opts: RelayOptions) {
     return rpc<SolTx | null>(ctx, chain, 'getTransaction', [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }])
   }
 
-  return { opts, toleranceBps, logBlockRange, warnNoKey, api, decimalsOf, refundTo, baseBody, rpc, solanaTx }
+  return { opts, toleranceBps, logBlockRange, warnNoKey, api, listRequests, decimalsOf, refundTo, baseBody, rpc, solanaTx }
 }

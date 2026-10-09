@@ -130,6 +130,74 @@ describe('relay adapter', () => {
     expect(s).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xdest', sourceTxHash: hash })
   })
 
+  describe('wallet: delivered output on success', () => {
+    const BASE_ETH: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: 'native', symbol: 'ETH', decimals: 18 }
+    const ethLeg: PathwayLeg = { ...walletLeg, to: { asset: BASE_ETH, location: { kind: 'address', address: DEST } } }
+    /** A wallet quote for 0.000491803942453585 ETH on Base (the live testnet run) */
+    const ethQuote = (): LegQuote => ({
+      adapterId: 'relay',
+      legId: 'wallet',
+      input: { amount: '1', asset: { ...ARB_USDC, symbol: 'USDC', decimals: 6 } },
+      output: { amount: '0.000491803942453585', asset: BASE_ETH },
+      fees: [],
+      eta: { min: 2, max: 8 },
+      data: { direct: false, steps: relayQuote().steps, requestId: '0xreq1', quotedAt: Date.now(), user: USER },
+    })
+    const hash = `0x${'cd'.repeat(32)}`
+
+    async function run(requests: () => Response | unknown) {
+      const { fetch, calls } = fakeFetch([
+        { method: 'GET', match: '/intents/status/v3', reply: () => ({ status: 'success', inTxHashes: [hash], txHashes: ['0xfill'] }) },
+        { method: 'GET', match: '/requests/v3', reply: requests },
+      ])
+      const a = relay({ apiKey: 'k' })
+      const ctx = makeCtx({ fetch })
+      const q = ethQuote()
+      const step = await a.start({ leg: ethLeg, quote: q, source: { chain: ARB_USDC.chain, token: ARB_USDC.token, address: USER } }, ctx)
+      await a.transition!({ leg: ethLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: hash } }, ctx)
+      const done = await a.status!({ leg: ethLeg, ref: step.ref! }, ctx)
+      expect(checkLegStep(done)).toEqual([])
+      return { q, done, calls }
+    }
+
+    it('reports the amount from Relay\'s request, in the quoted asset (native ETH is 0x0 at Relay)', async () => {
+      const { q, done, calls } = await run(() => ({
+        requests: [{ id: '0xreq1', status: 'success', createdAt: new Date().toISOString(), data: { outTxs: [{ hash: '0xfill', chainId: 8453 }], metadata: { currencyOut: { currency: eth(8453), amount: '491803942453585' } } } }],
+      }))
+      expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xfill', sourceTxHash: hash })
+      // The same asset object as the quote, so the server's output check passes and outputConfirmed is true.
+      expect(done.output).toEqual(q.output)
+      const lookup = new URL(calls.find((c) => c.url.includes('/requests/v3'))!.url)
+      expect(lookup.searchParams.get('id')).toBe('0xreq1')
+    })
+
+    it('prefers the actual route output and never takes the quoted route', async () => {
+      const out = (amount: string) => ({ currency: eth(8453), amount })
+      let { done } = await run(() => ({
+        requests: [{ id: '0xreq1', status: 'success', createdAt: new Date().toISOString(), data: { route: { actual: { destination: { outputCurrency: out('490000000000000') } } }, metadata: { currencyOut: out('491803942453585') } } }],
+      }))
+      expect(done.output).toEqual({ amount: '0.00049', asset: BASE_ETH })
+      ;({ done } = await run(() => ({ requests: [{ id: '0xreq1', status: 'success', createdAt: new Date().toISOString(), data: { route: { quoted: { destination: { outputCurrency: out('491803942453585') } } } } }] })))
+      expect(done.output).toBeUndefined()
+    })
+
+    it('another asset keeps Relay\'s asset, so the server flags it', async () => {
+      const { done } = await run(() => ({
+        requests: [{ id: '0xreq1', status: 'success', createdAt: new Date().toISOString(), data: { metadata: { currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: '1000000' } } } }],
+      }))
+      expect(done.output).toEqual({ amount: '1', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC.token, symbol: 'USDC', decimals: 6 } })
+    })
+
+    it('completes without an output when the request lookup fails or finds another request', async () => {
+      let { done } = await run(() => new Response('{}', { status: 500 }))
+      expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xfill' })
+      expect(done.output).toBeUndefined()
+      ;({ done } = await run(() => ({ requests: [{ id: '0xother', status: 'success', createdAt: new Date().toISOString(), data: { metadata: { currencyOut: { currency: eth(8453), amount: '1' } } } }] })))
+      expect(done.status).toBe('succeeded')
+      expect(done.output).toBeUndefined()
+    })
+  })
+
   it('wallet: maps failure, refund and pending statuses', async () => {
     let status = 'failure'
     const { fetch } = fakeFetch([{ method: 'GET', match: '/intents/status/v3', reply: () => ({ status, inTxHashes: ['0x1'] }) }])

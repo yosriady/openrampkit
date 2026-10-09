@@ -5,7 +5,7 @@ import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { CHAINS, OrkException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, orkError, sameToken } from '@openrampkit/core'
 import type { Amount, CryptoAsset, Fee, LegStep } from '@openrampkit/core'
 import { EVM_NATIVE, PLACEHOLDER_SOLANA_USER, PLACEHOLDER_USER, RELAY_POLL, RELAY_SOLANA_CHAIN_ID, SOLANA_CAIP2, SOLANA_NATIVE } from './config.js'
-import type { RelayAmount, RelayQuoteResponse } from './types.js'
+import type { RelayAmount, RelayQuoteResponse, RelayRequest } from './types.js'
 
 /** CAIP-2 chain -> Relay numeric chain id */
 export function relayChainId(chain: string): number {
@@ -82,6 +82,32 @@ export function knownSymbol(chain: string, token: string): string | undefined {
 
 export function fmt(r: RelayAmount): string {
   return fromBaseUnits(r.amount, r.currency.decimals)
+}
+
+/**
+ * A Relay amount as our `Amount`. When it is the same asset as `expected` (the quoted output), it takes
+ * the quoted asset, so the server's output check compares like with like (for example Relay names the
+ * native token `0x0000...0000`, the quote names it `native`). Undefined when the amount is not usable.
+ */
+export function relayOutput(out: RelayAmount | undefined, expected?: Amount): Amount | undefined {
+  if (!out?.currency || typeof out.currency.chainId !== 'number' || typeof out.currency.address !== 'string') return undefined
+  if (typeof out.amount !== 'string' || !/^[0-9]+$/.test(out.amount) || typeof out.currency.decimals !== 'number') return undefined
+  const chain = caip2FromRelay(out.currency.chainId)
+  const token = out.currency.address
+  const exp = expected?.asset
+  const asset: CryptoAsset =
+    exp?.kind === 'crypto' && sameAsset(exp.chain, exp.token, chain, token)
+      ? exp
+      : { kind: 'crypto', chain, token, symbol: out.currency.symbol, decimals: out.currency.decimals }
+  return { amount: fmt(out), asset }
+}
+
+/**
+ * What a Relay request delivered: the actual route output (`data.route.actual.destination.outputCurrency`),
+ * else `data.metadata.currencyOut`. Never the quoted route.
+ */
+export function deliveredOutput(r: RelayRequest | undefined, expected?: Amount): Amount | undefined {
+  return relayOutput(r?.data?.route?.actual?.destination?.outputCurrency, expected) ?? relayOutput(r?.data?.metadata?.currencyOut, expected)
 }
 
 export function feesFrom(q: RelayQuoteResponse): Fee[] {
