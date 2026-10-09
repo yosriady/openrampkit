@@ -258,6 +258,7 @@ export async function hmacSha256(secret: string, message: string, encoding: 'hex
 export { timingSafeEqual } from '@openrampkit/core'
 
 export * from './http.js'
+export * from './helpers.js'
 export * from './claim.js'
 export * from './rsa.js'
 export * from './util.js'
