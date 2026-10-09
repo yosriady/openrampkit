@@ -96,9 +96,9 @@ describe('swapped sell legs', () => {
   it('maps sell payout_pending, order_completed and order_cancelled; buy order_completed stays processing', async () => {
     const ctx = makeWebhookCtx()
     const sell = (order_status: string, extra = {}) => a.webhook!.parse(JSON.stringify({ order_type: 'sell', order_status, external_customer_id: 'r', ...extra }), ctx)
-    expect(await sell('payout_pending', { transaction_id: '0xtx' })).toEqual([{ ref: 'r', status: 'processing', txHash: '0xtx' }])
-    expect(await sell('order_completed')).toEqual([{ ref: 'r', status: 'succeeded' }])
-    expect(await sell('order_broadcasted', { transaction_id: '0xt' })).toEqual([{ ref: 'r', status: 'succeeded', txHash: '0xt' }])
+    expect(await sell('payout_pending', { transaction_id: '0xtx' })).toMatchObject([{ ref: 'r', status: 'processing', txHash: '0xtx' }])
+    expect(await sell('order_completed')).toMatchObject([{ ref: 'r', status: 'succeeded' }])
+    expect(await sell('order_broadcasted', { transaction_id: '0xt' })).toMatchObject([{ ref: 'r', status: 'succeeded', txHash: '0xt' }])
     expect((await sell('order_cancelled'))[0]).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
     expect(await sell('something_else')).toEqual([])
     const buy = await a.webhook!.parse(JSON.stringify({ order_type: 'buy', order_status: 'order_completed', external_customer_id: 'r' }), ctx)

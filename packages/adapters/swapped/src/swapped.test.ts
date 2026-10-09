@@ -4,6 +4,8 @@ import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/ada
 import { USDC, isRegionAllowed, planPathways } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { DEFAULT_DELIVER_ASSETS, swapped, swappedMethodId } from './index.js'
+import { webhookBodyKey } from '@openrampkit/adapter'
+import { createOpenRamp } from '@openrampkit/server'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 
 const PK = 'pk_sandbox_rT9bW3sN6mJ8F5hP2cRqLvZ7SaD4XoY9'
@@ -213,7 +215,7 @@ describe('swapped adapter', () => {
     const unset = swapped({ publicKey: PK, secretKey: '' })
     const emptySig = createHmac('sha256', '').update(broadcast).digest('base64')
     expect(await unset.webhook!.verify(req(broadcast, emptySig), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
-    expect(await a.webhook!.parse(broadcast, { log: silentLog, shared: memoryKV(), fetch })).toEqual([
+    expect(await a.webhook!.parse(broadcast, { log: silentLog, shared: memoryKV(), fetch })).toMatchObject([
       { ref: 'u_42.abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const parse = (o: object) => a.webhook!.parse(JSON.stringify(o), { log: silentLog, shared: memoryKV(), fetch })
@@ -368,8 +370,8 @@ describe('swapped errors and edge cases', () => {
     expect(await a.webhook!.parse('not json', ctx)).toEqual([])
     expect(await a.webhook!.parse(JSON.stringify({ order_id: 'o1', order_status: 'order_broadcasted', external_customer_id: null }), ctx)).toEqual([])
     expect(log.warnings).toEqual(['swapped: webhook body is not JSON', 'swapped: notification without external_customer_id'])
-    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_broadcasted', external_customer_id: 'u.1', order_crypto: 'BTC', order_crypto_amount: 1 }), ctx)).toEqual([{ ref: 'u.1', status: 'succeeded' }])
-    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_completed', external_customer_id: 'u.1', order_crypto: 'USDC_BASE' }), ctx)).toEqual([{ ref: 'u.1', status: 'processing' }])
+    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_broadcasted', external_customer_id: 'u.1', order_crypto: 'BTC', order_crypto_amount: 1 }), ctx)).toMatchObject([{ ref: 'u.1', status: 'succeeded' }])
+    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_completed', external_customer_id: 'u.1', order_crypto: 'USDC_BASE' }), ctx)).toMatchObject([{ ref: 'u.1', status: 'processing' }])
     expect(await a.webhook!.parse(JSON.stringify({ order_status: 'something_new', external_customer_id: 'u.1' }), ctx)).toEqual([])
     expect(log.warnings).toHaveLength(2)
     expect(await a.webhook!.verify(hookReq('{}', { signature: ` ${signB64('{}')} ` }), '{}', ctx)).toBe(true)
@@ -448,4 +450,32 @@ describe('swapped live API', () => {
     expect(checkLegQuote(q)).toEqual([])
     expect(Number(q.output.amount)).toBeGreaterThan(80)
   }, 30_000)
+})
+
+describe('swapped webhook replay protection', () => {
+  const sign = (body: string) => createHmac('sha256', SK).update(body).digest('base64')
+  const ramp = () => createOpenRamp({ secret: 's'.repeat(40), baseUrl: 'https://app.test/api', adapters: [swapped({ publicKey: PK, secretKey: SK })], logger: silentLog })
+  const post = (r: ReturnType<typeof ramp>, body: string) =>
+    r.handle(new Request('https://app.test/api/webhooks/swapped', { method: 'POST', headers: { signature: sign(body) }, body }))
+
+  it('gives the body hash as the replay key and as the event id', async () => {
+    const a = swapped({ publicKey: PK, secretKey: SK })
+    const body = JSON.stringify({ order_status: 'order_cancelled', external_customer_id: 'u_42.abc' })
+    const key = await a.webhook!.replayKey!(new Request('https://app.test/w', { method: 'POST' }), body, makeWebhookCtx())
+    expect(key).toBe(await webhookBodyKey(body))
+    expect((await a.webhook!.parse(body, makeWebhookCtx()))[0]!.eventId).toBe(key!.slice(0, 32))
+  })
+
+  it('ignores a replayed signed body (200, nothing applied), and lets a retry of an unapplied body through', async () => {
+    const r = ramp()
+    const body = JSON.stringify({ order_status: 'payment_pending', external_customer_id: 'u_42.abc' })
+    expect(await (await post(r, body)).json()).toEqual({ received: true })
+    const replay = await post(r, body)
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ received: true, duplicate: true })
+
+    const unknown = JSON.stringify({ order_status: 'order_cancelled', external_customer_id: 'u_unknown.1' })
+    expect((await post(r, unknown)).status).toBe(503)
+    expect((await post(r, unknown)).status).toBe(503)
+  })
 })

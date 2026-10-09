@@ -128,7 +128,7 @@ export type AdminConfig = {
 /**
  * A plain metrics callback. The server calls `onMetric` with a metric name, a number and string tags.
  * Send them to your metrics system (StatsD, Prometheus, Datadog, OpenTelemetry). An error in the
- * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`, `event.out_of_order`, `leg.amount_mismatch`, `payment.reversed`,
+ * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`, `event.out_of_order`, `leg.amount_mismatch`, `payment.reversed`, `webhook.replayed`,
  * `webhook.delivery_failed`, `webhook.dead_letter`, `outbox.depth`, `open_sessions.depth`,
  * `sweep.lag_ms`, `sweep.duration_ms`, `sessions.stuck`.
  */

@@ -118,7 +118,8 @@ describe('xendit adapter', () => {
     expect(await a.webhook!.verify(req(), '', wctx)).toBe(false)
     const cap = await a.webhook!.parse(JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED', request_amount: 150000, currency: 'IDR' } }), wctx)
     // no output: Xendit's request_amount is gross; the quote's net output stays the reported result
-    expect(cap).toEqual([{ ref: 'pr-1', status: 'succeeded' }])
+    expect(cap).toMatchObject([{ ref: 'pr-1', status: 'succeeded' }])
+    expect(cap[0]!.eventId).toMatch(/^[0-9a-f]{32}$/)
     const fail = await a.webhook!.parse(JSON.stringify({ event: 'payment.failure', data: { payment_request_id: 'pr-1', status: 'FAILED', failure_code: 'X' } }), wctx)
     expect(fail[0]).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
     expect(await a.webhook!.parse(JSON.stringify({ event: 'other', data: {} }), wctx)).toEqual([])
@@ -138,10 +139,21 @@ describe('xendit adapter', () => {
     const xq = quotes.quotes.find((q: { provider: string }) => q.provider === 'Xendit')
     const sel = await (await call(`/sessions/${s.id}/select`, { quoteId: xq.id })).json()
     expect(sel.step.surface.kind).toBe('QR')
-    const hook = await ramp.handle(new Request('https://app.test/api/webhooks/xendit', { method: 'POST', headers: { 'x-callback-token': 'tok' }, body: JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED', request_amount: 150000, currency: 'IDR' } }) }))
+    const capture = JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED', request_amount: 150000, currency: 'IDR' } })
+    const send = (body: string) => ramp.handle(new Request('https://app.test/api/webhooks/xendit', { method: 'POST', headers: { 'x-callback-token': 'tok' }, body }))
+    const hook = await send(capture)
     expect(hook.status).toBe(200)
+    expect(await hook.json()).toEqual({ received: true })
     const done = await (await call(`/sessions/${s.id}`)).json()
     expect(done.status).toBe('completed')
+    // A captured webhook sent again (the callback token is fixed): 200, ignored as a replay.
+    const replay = await send(capture)
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ received: true, duplicate: true })
+    // An unapplied body (unknown payment request) is not taken for a replay on the provider's retry.
+    const unknown = JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-unknown', status: 'SUCCEEDED' } })
+    expect((await send(unknown)).status).toBe(503)
+    expect((await send(unknown)).status).toBe(503)
   })
 })
 

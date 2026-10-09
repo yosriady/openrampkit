@@ -2,7 +2,7 @@
 // event id that the session already applied is dropped. A refund or a chargeback after success
 // reverses the session.
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { createAdapter } from '@openrampkit/adapter'
+import { createAdapter, webhookBodyKey } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { USDC } from '@openrampkit/core'
 import type { LegSpec, LegStatus, LegStep } from '@openrampkit/core'
@@ -26,7 +26,7 @@ const STATE: Record<string, LegStep['state']> = {
 }
 
 /** A card provider with webhooks and status polling. `statusOf` sets what `status` answers. */
-function hookedAdapter(specExtra: Partial<LegSpec> = {}) {
+function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
   let n = 0
   const statusOf: Record<string, Partial<LegStep> & { status: LegStatus }> = {}
   const spec: LegSpec = {
@@ -57,6 +57,7 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}) {
       async parse(raw) {
         return JSON.parse(raw) as LegEvent[]
       },
+      ...(replay ? { replayKey: async (_req: Request, raw: string) => webhookBodyKey(raw) } : {}),
     },
   })
   return { adapter, statusOf }
@@ -107,8 +108,8 @@ function appBackend() {
   return { sent, fetchFn, of: (type: string) => sent.filter((e) => e.type === type) }
 }
 
-function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> = {}) {
-  const hooked = hookedAdapter(specExtra)
+function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> = {}, opts: { replay?: boolean } = {}) {
+  const hooked = hookedAdapter(specExtra, opts.replay)
   const bridge = bridgeAdapter()
   const app = appBackend()
   const store = memoryStore()
@@ -121,6 +122,7 @@ function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> =
   }
   const post = (path: string, secret: string, body: unknown = {}) => call(path, { method: 'POST', secret, body: JSON.stringify(body) })
   const hook = async (events: LegEvent[], adapter = 'hooked') => (await call(`/webhooks/${adapter}`, { method: 'POST', body: JSON.stringify(events) })).status
+  const hookRes = (events: LegEvent[]) => call('/webhooks/hooked', { method: 'POST', body: JSON.stringify(events) })
   /** Create a session and start a card payment (state PAYMENT, waiting for the user). Returns the session and its order ref. */
   async function toPayment(input: { ttlMinutes?: number; destination?: typeof DEST } = {}) {
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST, ...input })
@@ -136,7 +138,7 @@ function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> =
     return rec.active!.legs[0]!.ref!
   }
   const record = async (id: string) => (await store.get(id))!
-  return { ramp, store, call, post, hook, toPayment, pay, record, app, statusOf: hooked.statusOf, bridgeStarts: bridge.starts }
+  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, bridgeStarts: bridge.starts }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -436,5 +438,31 @@ describe('P1-3: the reported output is checked against the quote', () => {
     const u = await t.toPayment({ destination: ARB })
     await t.hook([{ ref: u.ref, status: 'succeeded', output: usdc('8') }])
     expect(t.bridgeStarts).toHaveLength(1)
+  })
+})
+
+describe('P1-4: replay protection for provider webhooks with a replayKey', () => {
+  it('answers a replayed body with 200 and applies nothing; a new body applies', async () => {
+    const metrics: string[] = []
+    const t = make({ telemetry: { onMetric: (name) => void metrics.push(name) } }, {}, { replay: true })
+    const s = await t.toPayment()
+    const first = await t.hookRes([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
+    expect(await first.json()).toEqual({ received: true })
+    // Someone replays the same signed body later, after the leg moved on with another body.
+    await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xbb' }])
+    const replay = await t.hookRes([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ received: true, duplicate: true })
+    expect((await t.record(s.id)).active!.legs[0]!.step!.txHash).toBe('0xbb')
+    expect(metrics).toContain('webhook.replayed')
+  })
+
+  it('gives the key back when the event could not be applied (503), so the provider retry still applies', async () => {
+    const t = make({}, {}, { replay: true })
+    const body = [{ ref: 'order-unknown', status: 'succeeded' as const }]
+    expect((await t.hookRes(body)).status).toBe(503)
+    const again = await t.hookRes(body)
+    expect(again.status).toBe(503)
+    expect(await again.json()).not.toHaveProperty('duplicate')
   })
 })

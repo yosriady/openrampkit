@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { claimOnce } from './index.js'
+import { claimOnce, claimWebhook, releaseWebhook, webhookBodyKey } from './index.js'
 import type { ScopedKV } from './index.js'
 
 /** Map-backed ScopedKV that records each call. `atomic` adds `putIfAbsent`. */
@@ -84,5 +84,32 @@ describe('claimOnce code paths', () => {
       },
     }
     expect(await claimOnce(racy, 'k', 'a', 60)).toBe(false)
+  })
+})
+
+describe.each([
+  ['with putIfAbsent', true],
+  ['write then read back', false],
+])('claimWebhook (%s)', (_name, atomic) => {
+  it('the first delivery gets a token, a repeat gets none, for 7 days by default', async () => {
+    const { shared, calls } = kv(atomic)
+    const key = await webhookBodyKey('{"a":1}')
+    expect(key).toMatch(/^[0-9a-f]{64}$/)
+    const token = await claimWebhook(shared, key)
+    expect(token).toMatch(/^[0-9a-f]{24}$/)
+    expect(await claimWebhook(shared, key)).toBeUndefined()
+    expect(calls.find((c) => c[0] !== 'get')?.[3]).toBe(7 * 24 * 60 * 60)
+  })
+
+  it('a released key goes to the next delivery, and only the holder can release', async () => {
+    const { shared } = kv(atomic)
+    const token = (await claimWebhook(shared, 'k'))!
+    await releaseWebhook(shared, 'k', 'not-the-token')
+    expect(await claimWebhook(shared, 'k')).toBeUndefined()
+    await releaseWebhook(shared, 'k', token)
+    const next = await claimWebhook(shared, 'k')
+    expect(next).toBeDefined()
+    expect(next).not.toBe(token)
+    expect(await claimWebhook(shared, 'k')).toBeUndefined()
   })
 })

@@ -25,6 +25,7 @@ import {
   legStepFromEvent,
   randomHex,
   timingSafeEqual,
+  webhookBodyKey,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, evmChainId, orkError, roundTo, toBaseUnits } from '@openrampkit/core'
@@ -583,6 +584,8 @@ export function swapped(opts: SwappedOptions) {
         const expected = await hmacSha256(opts.secretKey, rawBody, 'base64')
         return timingSafeEqual(sig.trim(), expected)
       },
+      // Swapped signs the body only (no timestamp). The server keeps the hash for 7 days and drops a repeat.
+      replayKey: async (_req, rawBody) => webhookBodyKey(rawBody),
       async parse(rawBody, ctx) {
         let n: SwappedNotification
         try {
@@ -593,7 +596,7 @@ export function swapped(opts: SwappedOptions) {
         }
         const ev = eventFrom(n)
         if (!ev && !n.external_customer_id) ctx.log.warn('swapped: notification without external_customer_id', { orderId: n.order_id })
-        return ev ? [ev] : []
+        return ev ? [{ ...ev, eventId: (await webhookBodyKey(rawBody)).slice(0, 32) }] : []
       },
     },
 

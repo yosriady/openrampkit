@@ -43,6 +43,7 @@ We fix vulnerabilities in the latest minor version of each `@openrampkit/*` pack
 | One session acts on another session | Each session has its own random secret. The server stores only the hash and compares in constant time. The id in the URL must match the secret. |
 | The user changes the destination | The app sets the destination on the server. The browser cannot change it. |
 | A forged provider webhook completes a payment | Each adapter verifies the signature over the raw body, with a replay window when the provider signs a time. An adapter without its key refuses every webhook. |
+| A captured provider webhook is sent again | When the provider signs no time (Onramper, Swapped, Xendit), the adapter gives a replay key (the SHA-256 of the body). The server keeps it for 7 days with `claimWebhook` and answers a repeat with `200` and no change. Events also move a leg only forward, and a session drops an event id that it already applied. |
 | An old or reused transaction completes a new payment | Relay same-chain payments check the block time and keep a list of used transaction hashes. |
 | A `javascript:` or `data:` URL runs in the app page | The server, the client and the web component accept only `https:` pages (and `http:` in test mode) for redirects and iframes, and refuse script schemes for deep links. |
 | A forged or changed start URL | Start URLs are signed with HMAC and expire after 10 minutes. |
@@ -83,7 +84,7 @@ Limits:
 - Per-session rate limit on the routes that call providers (plan, target, quotes, select, transitions).
 - Surface URL checks on the server, in the client and in the web component.
 - Signed, short-lived start URLs with `no-store` and `no-referrer`.
-- Provider webhook verification with the raw body, constant-time comparison and a replay window.
+- Provider webhook verification with the raw body, constant-time comparison and a replay window. For providers that sign no time, a 7-day replay key per body.
 - Signed outgoing webhooks (HMAC-SHA256 over id, timestamp and body) with a 5-minute window in `verifyWebhook`.
 - Iframe messages: the exact origin and the iframe window must match. A message never sets the outcome: the server status does.
 - Withdrawals: address format checks, `allowedTargets`, `screenAddress` (fail closed), and a single treasury send per step.

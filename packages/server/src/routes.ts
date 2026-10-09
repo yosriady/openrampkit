@@ -1,5 +1,6 @@
 // HTTP routes. Every route takes the runtime and returns a Response; errors are thrown as OrkException.
 
+import { claimWebhook, releaseWebhook } from '@openrampkit/adapter'
 import { OrkException, isTerminal, orkError } from '@openrampkit/core'
 import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
@@ -263,12 +264,27 @@ async function webhookRoute(rt: Runtime, req: Request, adapterId: string): Promi
     rt.metric('webhook.verify_failed', 1, { adapter: a.id })
     return errorResponse(orkError('UNAUTHORIZED'), 401)
   }
+  // Replay protection for providers that sign with no timestamp: one delivery per key in 7 days.
+  const key = a.webhook.replayKey ? await a.webhook.replayKey(req, raw, ctx) : undefined
+  const claim = key ? await claimWebhook(ctx.shared, key) : undefined
+  if (key && !claim) {
+    rt.log.info('provider webhook already received; ignored as a replay', { adapter: a.id })
+    rt.metric('webhook.replayed', 1, { adapter: a.id })
+    return json({ received: true, duplicate: true })
+  }
   let retry = false
-  for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
-    const r = await applyEvent(rt, a.id, ev)
-    if (r === 'unknown' || r === 'conflict') retry = true
+  try {
+    for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
+      const r = await applyEvent(rt, a.id, ev)
+      if (r === 'unknown' || r === 'conflict') retry = true
+    }
+  } catch (e) {
+    if (key && claim) await releaseWebhook(ctx.shared, key, claim)
+    throw e
   }
   if (retry) {
+    // Give the key back, so the provider's retry of this body applies.
+    if (key && claim) await releaseWebhook(ctx.shared, key, claim)
     return json({ error: orkError('PROVIDER_UNAVAILABLE', { message: 'The event could not be applied yet. Send it again later.' }) }, 503, { 'retry-after': '30' })
   }
   return json({ received: true })

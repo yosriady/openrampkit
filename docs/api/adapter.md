@@ -30,6 +30,8 @@ interface Adapter {
   webhook?: {
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
+    // Optional: the same key for every delivery of one provider event. The server ignores a repeat for 7 days.
+    replayKey?(req: Request, rawBody: string, ctx: WebhookContext): Promise<string | undefined>
   }
   health?(ctx: Pick<AdapterContext, 'fetch' | 'log'>): Promise<{ ok: boolean; detail?: string }>
   routes?(req: Request, subpath: string, ctx: RouteContext): Promise<Response | undefined>
@@ -132,6 +134,16 @@ if (!(await claimOnce(ctx.shared, key, `${ctx.session.id}:${ref}`, 90 * 24 * 360
   return fail('This transaction was already used for another payment.')
 }
 ```
+
+### Webhook replay keys
+
+```ts
+webhookBodyKey(rawBody: string): Promise<string>       // SHA-256 of the body, hex
+claimWebhook(shared, key, ttlSec = WEBHOOK_REPLAY_TTL_SEC): Promise<string | undefined>
+releaseWebhook(shared, key, token, ttlSec = WEBHOOK_REPLAY_TTL_SEC): Promise<void>
+```
+
+The server uses these with `webhook.replayKey`. `claimWebhook` returns a token for the first delivery of a key, and `undefined` for a repeat within `WEBHOOK_REPLAY_TTL_SEC` (7 days). It is built on `claimOnce`. `releaseWebhook` gives the key back (only with the token), so the next delivery can take it. The server releases a key when it cannot apply the events yet and answers `503`. An adapter only returns the key from `replayKey`: it does not call these functions.
 
 ## HTTP helpers
 

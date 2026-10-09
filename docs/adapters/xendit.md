@@ -68,7 +68,8 @@ Errors: HTTP 429 is `RATE_LIMITED`. Other 4xx is `PROVIDER_DECLINED` with Xendit
 
 In the Xendit dashboard, set the payment webhook URL to `{baseUrl}/webhooks/xendit`.
 
-- Verification: the `x-callback-token` header must equal `webhookToken`.
+- Verification: the `x-callback-token` header must equal `webhookToken`. The token is fixed, and the body has no signature or timestamp. Keep the token secret.
+- Replay protection: the adapter gives the SHA-256 of the raw body as the replay key (`webhook.replayKey`). The server keeps each key for 7 days in the adapter's shared store (`claimWebhook`, built on `claimOnce`). A repeat of the same body in that time gets `200` with `{ "received": true, "duplicate": true }` and changes nothing. When the server cannot apply the event yet (it answers `503`), it gives the key back, so the provider's retry still applies. The key is also the event id (`eventId`), so a session drops the same event twice.
 - `payment.capture` (or `data.status === 'SUCCEEDED'`) gives `succeeded`. The event has no output amount, because Xendit reports the gross amount and the quote output is net of fees. `payment.failure` (or `FAILED`) gives `failed`. Other events are ignored.
 
 ## Verified vs TO VERIFY

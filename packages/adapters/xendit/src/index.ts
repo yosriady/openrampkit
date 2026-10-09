@@ -3,7 +3,7 @@
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
-import { createAdapter, fetchJson, timingSafeEqual } from '@openrampkit/adapter'
+import { createAdapter, fetchJson, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, add, bps as applyBps, cmp, minorUnits, orkError, roundTo, sub } from '@openrampkit/core'
 import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
@@ -232,6 +232,9 @@ export function xendit(opts: XenditOptions) {
         const token = req.headers.get('x-callback-token') ?? ''
         return token.length > 0 && timingSafeEqual(token, opts.webhookToken)
       },
+      // Xendit sends a fixed callback token and no timestamp or signature. The server keeps the body
+      // hash for 7 days and drops a repeat.
+      replayKey: async (_req, raw) => webhookBodyKey(raw),
       async parse(raw, ctx): Promise<LegEvent[]> {
         let parsed: unknown
         try {
@@ -243,12 +246,13 @@ export function xendit(opts: XenditOptions) {
         const body = parsed as { event?: string; data?: { payment_request_id?: string; status?: string; request_amount?: number; currency?: string; failure_code?: string } }
         const d = body.data
         if (!d?.payment_request_id) return []
+        const eventId = (await webhookBodyKey(raw)).slice(0, 32)
         if (body.event === 'payment.capture' || d.status === 'SUCCEEDED') {
           // No output: Xendit reports the gross request amount, while the quote's output is net of fees.
-          return [{ ref: d.payment_request_id, status: 'succeeded' }]
+          return [{ ref: d.payment_request_id, status: 'succeeded', eventId }]
         }
         if (body.event === 'payment.failure' || d.status === 'FAILED') {
-          return [{ ref: d.payment_request_id, status: 'failed', error: orkError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]
+          return [{ ref: d.payment_request_id, status: 'failed', eventId, error: orkError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]
         }
         return []
       },

@@ -1,6 +1,7 @@
 import { createHash, createHmac, createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
+import { checkAdapterShape, checkLegQuote, checkLegStep, webhookBodyKey } from '@openrampkit/adapter'
+import { createOpenRamp } from '@openrampkit/server'
 import { USDC, isRegionAllowed } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
@@ -256,12 +257,12 @@ describe('onramper adapter', () => {
     // Known vector: HMAC-SHA256(secret, '{}')
     expect(sig('{}')).toBe('1156082a881702dc9edab3dda95d53704f3ee7e9e0a5a899a4646c01fdb7773a')
 
-    expect(await a.webhook!.parse(body, wctx)).toEqual([
+    expect(await a.webhook!.parse(body, wctx)).toMatchObject([
       { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     expect(await shared.get('tx:ork_abc')).toBe('otx_1')
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
-    expect(await parse(HOOK('new'))).toEqual([{ ref: 'ork_abc', status: 'awaiting_user' }])
+    expect(await parse(HOOK('new'))).toMatchObject([{ ref: 'ork_abc', status: 'awaiting_user' }])
     expect(await parse(HOOK('pending'))).toMatchObject([{ status: 'processing' }])
     expect(await parse(HOOK('paid'))).toMatchObject([{ status: 'processing' }])
     expect(await parse(HOOK('failed'))).toMatchObject([{ status: 'failed', error: { code: 'PAYMENT_FAILED' } }])
@@ -314,5 +315,36 @@ describe('onramper adapter', () => {
       ],
     })
     expect(report.problems).toEqual([])
+  })
+})
+
+describe('onramper webhook replay protection', () => {
+  const sig = (b: string) => createHmac('sha256', WH).update(b).digest('hex')
+  const ramp = () => createOpenRamp({ secret: 's'.repeat(40), baseUrl: 'https://app.test/api', adapters: [onramper(opts)], logger: silentLog })
+  const post = (r: ReturnType<typeof ramp>, body: string) =>
+    r.handle(new Request('https://app.test/api/webhooks/onramper', { method: 'POST', headers: { 'x-onramper-webhook-signature': sig(body) }, body }))
+
+  it('gives the body hash as the replay key and as the event id', async () => {
+    const a = onramper(opts)
+    const body = JSON.stringify(HOOK('completed'))
+    const key = await a.webhook!.replayKey!(new Request('https://app.test/w', { method: 'POST' }), body, makeWebhookCtx())
+    expect(key).toBe(await webhookBodyKey(body))
+    expect((await a.webhook!.parse(body, makeWebhookCtx()))[0]!.eventId).toBe(key!.slice(0, 32))
+  })
+
+  it('ignores a replayed signed body (200, nothing applied), and lets a retry of an unapplied body through', async () => {
+    const r = ramp()
+    const body = JSON.stringify(HOOK('test'))
+    const first = await post(r, body)
+    expect(first.status).toBe(200)
+    expect(await first.json()).toEqual({ received: true })
+    const replay = await post(r, body)
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ received: true, duplicate: true })
+
+    // The ref is not known yet: 503, and the provider's retry is not taken for a replay.
+    const unknown = JSON.stringify(HOOK('completed', { partnerContext: 'ork_unknown' }))
+    expect((await post(r, unknown)).status).toBe(503)
+    expect((await post(r, unknown)).status).toBe(503)
   })
 })
