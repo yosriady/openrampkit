@@ -4,7 +4,7 @@ import { OrkException, normalizeToken, orkError } from '@openrampkit/core'
 import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
 import type { OpenRampConfig } from './config.js'
-import { memoryStore, scopedKV, VersionConflictError } from './store.js'
+import { memoryStore, migratingStore, scopedKV, VersionConflictError } from './store.js'
 import type { SessionRecord, SessionStore } from './store.js'
 
 /** Everything the server modules share. Built once per `createOpenRamp` call. */
@@ -49,7 +49,8 @@ export function createRuntime(config: OpenRampConfig): Runtime {
   const adapters = new Map(config.adapters.map((a) => [a.id, a]))
   return {
     config,
-    store: config.store ?? memoryStore(),
+    // Every read brings an older record up to the current schema (see `migrateRecord`).
+    store: migratingStore(config.store ?? memoryStore()),
     log: config.logger ?? consoleLogger,
     fetch: config.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args)),
     base,

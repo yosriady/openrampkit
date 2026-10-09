@@ -210,6 +210,9 @@ import { memoryStore, durableObjectStore, OpenRampStore, cloudflareKvStore, redi
 | `fromNodeRedisV4(client)` | Wraps a node-redis v4+ client for `redisStore` |
 | `scopedKV(store, prefix)` | A prefixed key-value view, as adapters get |
 | `VersionConflictError` | Thrown by `put` on a version mismatch |
+| `SESSION_SCHEMA` | The record schema that this server writes in `SessionRecord.schema` (now `1`) |
+| `migrateRecord(rec)` | Brings a stored record up to `SESSION_SCHEMA`, in place. The server runs it on every store read. See [Record schema](../deploy/stores.md#record-schema). |
+| `migratingStore(store)` | `store`, with `migrateRecord` on every `get`. The server wraps `config.store` with it. |
 
 Types: `SessionStore`, `SessionRecord`, `StoreQueue`, `QueueItem`, `TimelineEntry`, `Resolution`, `ActiveLeg`, `StoredQuote`, `DurableObjectNamespaceLike`, `DurableObjectStateLike`, `KVNamespaceLike`, `RedisLike`, `NodeRedisLike`, `NodeRedisV4Like`, `RedisStoreOptions`. See [Session stores](../deploy/stores.md) for the interface and a custom store.
 

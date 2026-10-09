@@ -10,6 +10,7 @@ import { trackOpenSession } from './queue.js'
 import { indexSession } from './admin.js'
 import { normalizeDestination } from './runtime.js'
 import type { Runtime } from './runtime.js'
+import { SESSION_SCHEMA } from './store.js'
 import type { SessionRecord } from './store.js'
 import { CAIP2, checkAllowed, isValidAddress, isValidToken, normalizeSource, parseTarget, screenTarget, targetDestination } from './withdraw.js'
 
@@ -84,6 +85,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   const rec: SessionRecord = {
     id,
     secretHash: await sha256Hex(secret),
+    schema: SESSION_SCHEMA,
     version: 1,
     userId: input.userId,
     direction,

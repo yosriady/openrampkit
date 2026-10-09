@@ -1,0 +1,1788 @@
+{
+  "note": "Stored records written by @openrampkit/server before SessionRecord.schema existed (commit 0672f15). Do not edit by hand.",
+  "capturedAt": "2026-10-09T12:01:30.000Z",
+  "secret": "ssssssssssssssssssssssssssssssssssssssss",
+  "sessions": {
+    "awaitingPayment": {
+      "clientSecret": "ors_46fb5d1497caeff45aa54c98.62106a76460bfd4fb7fe82c914831c6a1d5aab815200d857",
+      "record": {
+        "id": "ors_46fb5d1497caeff45aa54c98",
+        "secretHash": "a9fa864da60503f261eabcfa1cbec94b3e5ac0b8629cbf10a5a12e487ebc0559",
+        "version": 8,
+        "userId": "user_1",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "VN",
+        "metadata": {
+          "order": "A-1"
+        },
+        "livemode": false,
+        "status": "processing",
+        "createdAt": 1791547200000,
+        "expiresAt": 1791549000000,
+        "quotes": {
+          "q_c65451a364d15d77": {
+            "quote": {
+              "id": "q_c65451a364d15d77",
+              "pathwayId": "vietqr:mock.local",
+              "method": "vietqr",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "input": {
+                    "amount": "500000",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    }
+                  },
+                  "output": {
+                    "amount": "19.552500",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "5000",
+                      "currency": "VND"
+                    }
+                  ],
+                  "eta": {
+                    "min": 10,
+                    "max": 120
+                  },
+                  "expiresAt": "2026-10-09T12:01:00.000Z"
+                }
+              ],
+              "input": {
+                "amount": "500000",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "VND"
+                }
+              },
+              "output": {
+                "amount": "19.552500",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "5000",
+                  "currency": "VND"
+                }
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "expiresAt": "2026-10-09T12:01:00.000Z"
+            },
+            "pathway": {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          },
+          "q_b5f34ec683815876": {
+            "quote": {
+              "id": "q_b5f34ec683815876",
+              "pathwayId": "vietqr:mock.local",
+              "method": "vietqr",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "input": {
+                    "amount": "500000",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    }
+                  },
+                  "output": {
+                    "amount": "19.552500",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "5000",
+                      "currency": "VND"
+                    }
+                  ],
+                  "eta": {
+                    "min": 10,
+                    "max": 120
+                  },
+                  "expiresAt": "2026-10-09T12:01:30.000Z"
+                }
+              ],
+              "input": {
+                "amount": "500000",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "VND"
+                }
+              },
+              "output": {
+                "amount": "19.552500",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "5000",
+                  "currency": "VND"
+                }
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "expiresAt": "2026-10-09T12:01:30.000Z"
+            },
+            "pathway": {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_46fb5d1497caeff45aa54c98",
+          "state": "PAYMENT",
+          "legIndex": 0,
+          "surface": {
+            "kind": "QR",
+            "payload": "MOCKQR|mock_46fb5d1497_local_mv0wyptc|500000|VND",
+            "amount": "500000",
+            "currency": "VND",
+            "reference": "L_MV0WYPTC",
+            "expiresAt": "2026-10-09T12:15:30.000Z"
+          },
+          "transitions": [
+            {
+              "name": "simulate_payment",
+              "kind": "SUBMIT",
+              "label": "Simulate payment (test mode)"
+            },
+            {
+              "name": "poll",
+              "kind": "AWAIT",
+              "poll": {
+                "intervalMs": 1500,
+                "backoff": 1.1,
+                "maxIntervalMs": 5000,
+                "giveUpAfterMs": 900000
+              }
+            }
+          ],
+          "progress": {
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "provider": "Test provider",
+                "status": "awaiting_user"
+              }
+            ]
+          },
+          "expiresAt": "2026-10-09T12:30:00.000Z"
+        },
+        "startUrls": {},
+        "notified": [
+          "session.created:{}"
+        ],
+        "updatedAt": 1791547230000,
+        "timeline": [
+          {
+            "at": 1791547200000,
+            "type": "session.created"
+          },
+          {
+            "at": 1791547200000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 0,
+              "method": "vietqr",
+              "provider": "Test provider"
+            }
+          },
+          {
+            "at": 1791547200000,
+            "type": "leg.awaiting_user",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "ref": "mock_46fb5d1497_local_mv0wy2o0"
+            }
+          },
+          {
+            "at": 1791547230000,
+            "type": "payment.restarted"
+          },
+          {
+            "at": 1791547230000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 1,
+              "method": "vietqr",
+              "provider": "Test provider"
+            }
+          },
+          {
+            "at": 1791547230000,
+            "type": "leg.awaiting_user",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "ref": "mock_46fb5d1497_local_mv0wyptc"
+            }
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "momo:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "momo"
+                }
+              ],
+              "method": "momo",
+              "group": "more",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "bank_transfer:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "bank_transfer"
+                }
+              ],
+              "method": "bank_transfer",
+              "group": "more",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            }
+          ],
+          "methods": [
+            {
+              "method": "vietqr",
+              "name": "VietQR",
+              "kind": "qr",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "vietqr:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "momo",
+              "name": "MoMo",
+              "kind": "ewallet",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "momo:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "bank_transfer",
+              "name": "Bank transfer",
+              "kind": "bank",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "bank_transfer:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "card:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "VND"
+        },
+        "walletConnected": false,
+        "attempts": [
+          {
+            "n": 0,
+            "quoteId": "q_c65451a364d15d77",
+            "pathway": {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "index": 0,
+            "destination": {
+              "type": "crypto",
+              "chain": "eip155:8453",
+              "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+              "address": "0x000000000000000000000000000000000000beef"
+            },
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "quote": {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "input": {
+                    "amount": "500000",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    }
+                  },
+                  "output": {
+                    "amount": "19.552500",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "5000",
+                      "currency": "VND"
+                    }
+                  ],
+                  "eta": {
+                    "min": 10,
+                    "max": 120
+                  },
+                  "expiresAt": "2026-10-09T12:01:00.000Z"
+                },
+                "deliverTo": {
+                  "address": "0x000000000000000000000000000000000000beef"
+                },
+                "started": true,
+                "step": {
+                  "state": "PAYMENT",
+                  "status": "awaiting_user",
+                  "ref": "mock_46fb5d1497_local_mv0wy2o0",
+                  "surface": {
+                    "kind": "QR",
+                    "payload": "MOCKQR|mock_46fb5d1497_local_mv0wy2o0|500000|VND",
+                    "amount": "500000",
+                    "currency": "VND",
+                    "reference": "L_MV0WY2O0",
+                    "expiresAt": "2026-10-09T12:15:00.000Z"
+                  },
+                  "transitions": [
+                    {
+                      "name": "simulate_payment",
+                      "kind": "SUBMIT",
+                      "label": "Simulate payment (test mode)"
+                    },
+                    {
+                      "name": "poll",
+                      "kind": "AWAIT",
+                      "poll": {
+                        "intervalMs": 1500,
+                        "backoff": 1.1,
+                        "maxIntervalMs": 5000,
+                        "giveUpAfterMs": 900000
+                      }
+                    }
+                  ]
+                },
+                "ref": "mock_46fb5d1497_local_mv0wy2o0"
+              }
+            ],
+            "endedAt": 1791547230000
+          }
+        ],
+        "active": {
+          "n": 1,
+          "quoteId": "q_b5f34ec683815876",
+          "pathway": {
+            "id": "vietqr:mock.local",
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "from": {
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "VND"
+                  },
+                  "location": {
+                    "kind": "user_account"
+                  }
+                },
+                "to": {
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                  },
+                  "location": {
+                    "kind": "address",
+                    "address": "0x000000000000000000000000000000000000beef"
+                  }
+                },
+                "method": "vietqr"
+              }
+            ],
+            "method": "vietqr",
+            "group": "recommended",
+            "eta": {
+              "min": 10,
+              "max": 120
+            },
+            "limits": {
+              "min": "5",
+              "max": "3000",
+              "currency": "USD"
+            },
+            "provider": "Test provider"
+          },
+          "index": 0,
+          "destination": {
+            "type": "crypto",
+            "chain": "eip155:8453",
+            "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "address": "0x000000000000000000000000000000000000beef"
+          },
+          "legs": [
+            {
+              "adapterId": "mock",
+              "legId": "local",
+              "quote": {
+                "adapterId": "mock",
+                "legId": "local",
+                "input": {
+                  "amount": "500000",
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "VND"
+                  }
+                },
+                "output": {
+                  "amount": "19.552500",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "fees": [
+                  {
+                    "kind": "provider",
+                    "label": "Test provider fee",
+                    "amount": "5000",
+                    "currency": "VND"
+                  }
+                ],
+                "eta": {
+                  "min": 10,
+                  "max": 120
+                },
+                "expiresAt": "2026-10-09T12:01:30.000Z"
+              },
+              "deliverTo": {
+                "address": "0x000000000000000000000000000000000000beef"
+              },
+              "started": true,
+              "step": {
+                "state": "PAYMENT",
+                "status": "awaiting_user",
+                "ref": "mock_46fb5d1497_local_mv0wyptc",
+                "surface": {
+                  "kind": "QR",
+                  "payload": "MOCKQR|mock_46fb5d1497_local_mv0wyptc|500000|VND",
+                  "amount": "500000",
+                  "currency": "VND",
+                  "reference": "L_MV0WYPTC",
+                  "expiresAt": "2026-10-09T12:15:30.000Z"
+                },
+                "transitions": [
+                  {
+                    "name": "simulate_payment",
+                    "kind": "SUBMIT",
+                    "label": "Simulate payment (test mode)"
+                  },
+                  {
+                    "name": "poll",
+                    "kind": "AWAIT",
+                    "poll": {
+                      "intervalMs": 1500,
+                      "backoff": 1.1,
+                      "maxIntervalMs": 5000,
+                      "giveUpAfterMs": 900000
+                    }
+                  }
+                ]
+              },
+              "ref": "mock_46fb5d1497_local_mv0wyptc"
+            }
+          ]
+        }
+      }
+    },
+    "completed": {
+      "clientSecret": "ors_409456ee3f31de6d7ae50dea.8caabec660f908f1d84c05cbaad615f2c92f0233712ea45d",
+      "record": {
+        "id": "ors_409456ee3f31de6d7ae50dea",
+        "secretHash": "8e4bf0819283721391df86e50bf2758bb99cf4759efe42265abee722d976282a",
+        "version": 8,
+        "userId": "user_2",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "VN",
+        "livemode": false,
+        "status": "completed",
+        "createdAt": 1791547260000,
+        "expiresAt": 1791549060000,
+        "quotes": {
+          "q_4188fd7554c0302e": {
+            "quote": {
+              "id": "q_4188fd7554c0302e",
+              "pathwayId": "vietqr:mock.local",
+              "method": "vietqr",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "input": {
+                    "amount": "500000",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    }
+                  },
+                  "output": {
+                    "amount": "19.552500",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "5000",
+                      "currency": "VND"
+                    }
+                  ],
+                  "eta": {
+                    "min": 10,
+                    "max": 120
+                  },
+                  "expiresAt": "2026-10-09T12:02:00.000Z"
+                }
+              ],
+              "input": {
+                "amount": "500000",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "VND"
+                }
+              },
+              "output": {
+                "amount": "19.552500",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "5000",
+                  "currency": "VND"
+                }
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "expiresAt": "2026-10-09T12:02:00.000Z"
+            },
+            "pathway": {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_409456ee3f31de6d7ae50dea",
+          "state": "COMPLETED",
+          "transitions": [],
+          "progress": {
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "provider": "Test provider",
+                "status": "succeeded",
+                "txHash": "0xc409456ee3fca0c0000000000000000000000000000000000000000000000000"
+              }
+            ]
+          },
+          "legIndex": 0
+        },
+        "startUrls": {},
+        "notified": [
+          "session.created:{}",
+          "leg.succeeded:{\"index\":0,\"adapterId\":\"mock\",\"legId\":\"local\"}",
+          "session.completed:{}"
+        ],
+        "updatedAt": 1791547290000,
+        "timeline": [
+          {
+            "at": 1791547260000,
+            "type": "session.created"
+          },
+          {
+            "at": 1791547260000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 0,
+              "method": "vietqr",
+              "provider": "Test provider"
+            }
+          },
+          {
+            "at": 1791547260000,
+            "type": "leg.awaiting_user",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "ref": "mock_409456ee3f_local_mv0wzcyo"
+            }
+          },
+          {
+            "at": 1791547260000,
+            "type": "leg.processing",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "ref": "mock_409456ee3f_local_mv0wzcyo"
+            }
+          },
+          {
+            "at": 1791547290000,
+            "type": "leg.succeeded",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "ref": "mock_409456ee3f_local_mv0wzcyo",
+              "txHash": "0xc409456ee3fca0c0000000000000000000000000000000000000000000000000"
+            }
+          },
+          {
+            "at": 1791547290000,
+            "type": "leg.succeeded",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "legId": "local"
+            }
+          },
+          {
+            "at": 1791547290000,
+            "type": "session.completed"
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "momo:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "momo"
+                }
+              ],
+              "method": "momo",
+              "group": "more",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "bank_transfer:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "bank_transfer"
+                }
+              ],
+              "method": "bank_transfer",
+              "group": "more",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            }
+          ],
+          "methods": [
+            {
+              "method": "vietqr",
+              "name": "VietQR",
+              "kind": "qr",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "vietqr:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "momo",
+              "name": "MoMo",
+              "kind": "ewallet",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "momo:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "bank_transfer",
+              "name": "Bank transfer",
+              "kind": "bank",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "bank_transfer:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "card:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "VND"
+        },
+        "walletConnected": false,
+        "active": {
+          "n": 0,
+          "quoteId": "q_4188fd7554c0302e",
+          "pathway": {
+            "id": "vietqr:mock.local",
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "from": {
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "VND"
+                  },
+                  "location": {
+                    "kind": "user_account"
+                  }
+                },
+                "to": {
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                  },
+                  "location": {
+                    "kind": "address",
+                    "address": "0x000000000000000000000000000000000000beef"
+                  }
+                },
+                "method": "vietqr"
+              }
+            ],
+            "method": "vietqr",
+            "group": "recommended",
+            "eta": {
+              "min": 10,
+              "max": 120
+            },
+            "limits": {
+              "min": "5",
+              "max": "3000",
+              "currency": "USD"
+            },
+            "provider": "Test provider"
+          },
+          "index": 0,
+          "destination": {
+            "type": "crypto",
+            "chain": "eip155:8453",
+            "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "address": "0x000000000000000000000000000000000000beef"
+          },
+          "legs": [
+            {
+              "adapterId": "mock",
+              "legId": "local",
+              "quote": {
+                "adapterId": "mock",
+                "legId": "local",
+                "input": {
+                  "amount": "500000",
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "VND"
+                  }
+                },
+                "output": {
+                  "amount": "19.552500",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "fees": [
+                  {
+                    "kind": "provider",
+                    "label": "Test provider fee",
+                    "amount": "5000",
+                    "currency": "VND"
+                  }
+                ],
+                "eta": {
+                  "min": 10,
+                  "max": 120
+                },
+                "expiresAt": "2026-10-09T12:02:00.000Z"
+              },
+              "deliverTo": {
+                "address": "0x000000000000000000000000000000000000beef"
+              },
+              "started": true,
+              "step": {
+                "state": "COMPLETED",
+                "status": "succeeded",
+                "transitions": [],
+                "output": {
+                  "amount": "19.552500",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "ref": "mock_409456ee3f_local_mv0wzcyo",
+                "txHash": "0xc409456ee3fca0c0000000000000000000000000000000000000000000000000"
+              },
+              "ref": "mock_409456ee3f_local_mv0wzcyo",
+              "lastCheckedAt": 1791547290000
+            }
+          ]
+        }
+      }
+    }
+  },
+  "kv": {
+    "rl:ors_46fb5d1497caeff45aa54c98:29859120": 6,
+    "a:mock:order:mock_46fb5d1497_local_mv0wy2o0": {
+      "status": "awaiting",
+      "output": {
+        "amount": "19.552500",
+        "asset": {
+          "kind": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "symbol": "USDC",
+          "decimals": 6
+        }
+      },
+      "kind": "local"
+    },
+    "ref:mock:mock_46fb5d1497_local_mv0wy2o0": "ors_46fb5d1497caeff45aa54c98",
+    "a:mock:order:mock_46fb5d1497_local_mv0wyptc": {
+      "status": "awaiting",
+      "output": {
+        "amount": "19.552500",
+        "asset": {
+          "kind": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "symbol": "USDC",
+          "decimals": 6
+        }
+      },
+      "kind": "local"
+    },
+    "ref:mock:mock_46fb5d1497_local_mv0wyptc": "ors_46fb5d1497caeff45aa54c98",
+    "rl:ors_409456ee3f31de6d7ae50dea:29859121": 4,
+    "a:mock:order:mock_409456ee3f_local_mv0wzcyo": {
+      "status": "paid",
+      "output": {
+        "amount": "19.552500",
+        "asset": {
+          "kind": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "symbol": "USDC",
+          "decimals": 6
+        }
+      },
+      "kind": "local",
+      "paidAt": 1791547260000
+    },
+    "ref:mock:mock_409456ee3f_local_mv0wzcyo": "ors_409456ee3f31de6d7ae50dea"
+  }
+}
