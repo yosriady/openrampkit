@@ -510,7 +510,10 @@ export type Transaction = {
   legIndex: number
   /** The amount that the transaction moved, when known */
   amount?: Amount
-  /** A block explorer link, when the adapter gives one */
+  /**
+   * A block explorer link. The server builds it from its trusted chain table (`explorerTxUrl`), never
+   * from adapter data. Absent for a chain with no explorer in the table.
+   */
   explorerUrl?: string
 }
 
@@ -523,9 +526,9 @@ export type Transaction = {
 export type LegTransaction = {
   role: Exclude<TransactionRole, 'hop'>
   chain?: string
+  /** The transaction hash or signature: letters and digits only (an `0x` prefix is allowed), at most 200 */
   hash: string
   amount?: Amount
-  explorerUrl?: string
 }
 
 /** What the user must do in a step: the phase, the UI surface and the moves the UI may make */

@@ -1,7 +1,7 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OpenRampException, bps, cmp, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepDetailCode, isTerminal, isWebUrl, openRampError, stateFor, sub } from '@openrampkit/core'
+import { OpenRampException, bps, cmp, explorerTxUrl, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepDetailCode, isTerminal, isWebUrl, openRampError, stateFor, sub } from '@openrampkit/core'
 import type { Amount, Asset, DeliveryStatus, LegStatus, LegStep, LegTransaction, SessionStatus, StateName, Step, StepDetail, Transaction, TransactionRole } from '@openrampkit/core'
 import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_MAX_ATTEMPTS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS, isTreasuryRefused } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
@@ -57,12 +57,22 @@ const PROVIDER_STATUS = /^[A-Za-z0-9_ .:-]{1,64}$/
 /** Most transactions kept per leg */
 const MAX_LEG_TRANSACTIONS = 20
 
+/** A transaction hash or signature: letters and digits, with an optional `0x` prefix. Nothing else reaches a page. */
+const TX_HASH = /^(0x)?[A-Za-z0-9]{1,200}$/
+/** A CAIP-2 chain id */
+const CAIP2 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/
+
 /**
- * Check an adapter step before the server uses it (a third-party adapter may send anything): a step
- * detail code from the closed list and a short provider status, an action only with
- * `requires_action`, a phase only while pending or processing, and well formed transactions.
+ * The one entry check of adapter data (a start, transition or status step, and a provider event, for
+ * the active payment and for earlier attempts). A third-party adapter may send anything:
+ * - a step detail code from the closed list, and a short provider status of safe characters;
+ * - an action only with `requires_action`, a phase only while pending or processing;
+ * - transactions with a known role, a hash of letters and digits, and a CAIP-2 chain; any link that
+ *   the adapter sends with them is dropped (the server builds explorer links itself);
+ * - the action surface URLs (see `checkSurfaceUrls`): an unsafe URL fails the step.
+ * Nothing that the server stores from an adapter skips this, so a later merge only keeps checked values.
  */
-export function sanitizeLegStep(rt: Runtime, adapterId: string, ls: LegStep): LegStep {
+export function sanitizeLegStep(rt: Runtime, rec: SessionRecord, adapterId: string, ls: LegStep): LegStep {
   const out: LegStep = { ...ls }
   // An adapter written for the version 1 contract: its `state`, `surface`, `transitions` and tx hash
   // fields have no effect now. Say so, so that the operator updates the adapter.
@@ -84,11 +94,19 @@ export function sanitizeLegStep(rt: Runtime, adapterId: string, ls: LegStep): Le
   }
   if (out.phase && out.status !== 'processing' && out.status !== 'pending') delete out.phase
   if (out.transactions !== undefined) {
-    const ok = Array.isArray(out.transactions) ? out.transactions.filter((t) => !!t && LEG_ROLES.has(t.role) && typeof t.hash === 'string' && t.hash.length > 0 && t.hash.length <= 200) : []
-    if (ok.length !== (Array.isArray(out.transactions) ? out.transactions.length : -1)) rt.log.warn('adapter step has transactions that are not well formed; dropped', { adapter: adapterId })
+    const list: unknown[] = Array.isArray(out.transactions) ? out.transactions : []
+    const ok: LegTransaction[] = []
+    for (const raw of list) {
+      const t = raw as Partial<LegTransaction> | null
+      if (!t || !LEG_ROLES.has(t.role as string) || typeof t.hash !== 'string' || !TX_HASH.test(t.hash)) continue
+      if (t.chain !== undefined && (typeof t.chain !== 'string' || !CAIP2.test(t.chain))) continue
+      // Only the known fields: an adapter link (`explorerUrl`, `url`) or any other field is dropped.
+      ok.push({ role: t.role!, hash: t.hash, ...(t.chain ? { chain: t.chain } : {}), ...(t.amount && typeof t.amount === 'object' ? { amount: t.amount } : {}) })
+    }
+    if (ok.length !== list.length || !Array.isArray(out.transactions)) rt.log.warn('adapter step has transactions that are not well formed; dropped', { adapter: adapterId })
     out.transactions = ok
   }
-  return out
+  return checkSurfaceUrls(rt, rec, out)
 }
 
 const txKey = (t: LegTransaction) => `${t.role}:${t.hash.startsWith('0x') ? t.hash.toLowerCase() : t.hash}`
@@ -145,13 +163,15 @@ export function legTransactions(p: ActivePayment, i: number): Transaction[] {
     const delivery = t.role === 'destination' || t.role === 'settlement'
     const chain = t.chain ?? (delivery ? toChain : fromChain ?? toChain)
     if (!chain) continue
+    // The explorer link comes from the trusted chain table only.
+    const explorerUrl = explorerTxUrl(chain, t.hash)
     out.push({
       role: t.role === 'destination' && !last ? 'hop' : t.role,
       chain,
       hash: t.hash,
       legIndex: i,
       ...(t.amount ? { amount: t.amount } : {}),
-      ...(t.explorerUrl ? { explorerUrl: t.explorerUrl } : {}),
+      ...(explorerUrl ? { explorerUrl } : {}),
     })
   }
   return out
@@ -479,7 +499,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   const act = rec.active!
   const leg = act.legs[i]!
   // Keep what a later step leaves out: the refs, the output, the transactions and the action surface.
-  const wrapped = mergeLegStep(leg.step, await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, sanitizeLegStep(rt, leg.adapterId, ls))))
+  const wrapped = mergeLegStep(leg.step, await wrapSurface(rt, rec, sanitizeLegStep(rt, rec, leg.adapterId, ls)))
   const before = leg.step?.status
   const wasExpired = rec.step.state === 'EXPIRED'
   if (before !== wrapped.status) {
@@ -666,7 +686,7 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
     return false
   }
   // Nothing new: the same step after the merge (status, phase, action, detail, refs, output, transactions).
-  if (sameLegStep(rt, rec, mergeLegStep(leg.step, sanitizeLegStep(rt, leg.adapterId, ls)), leg.step)) return false
+  if (sameLegStep(rt, rec, mergeLegStep(leg.step, sanitizeLegStep(rt, rec, leg.adapterId, ls)), leg.step)) return false
   if (!adapterMoveAllowed(leg.step, ls)) {
     rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
     rt.metric('event.out_of_order', 1, { adapter: a.id })
@@ -715,7 +735,7 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   const before = leg.step?.status
   if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId })
   const prev = leg.step
-  leg.step = mergeLegStep(prev, sanitizeLegStep(rt, leg.adapterId, ls))
+  leg.step = mergeLegStep(prev, sanitizeLegStep(rt, rec, leg.adapterId, ls))
   if (isReversal(before, ls.status)) {
     // The session moved on from this attempt, so its state stays. The app may have credited this
     // payment by hand (`session.late_payment`), so it gets `session.reversed` with `attempt`.

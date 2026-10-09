@@ -178,8 +178,8 @@ describe('schema 2 records load and work', () => {
     const done = await (await call(`/sessions/${record.id}/step`, clientSecret)).json()
     expect(done).toMatchObject({ status: 'succeeded', step: { state: 'COMPLETED' }, payment: { legs: [{ providerRef: 'FX-ORDER-1' }] } })
     expect(done.result.transactions).toEqual([
-      { role: 'source', chain: 'eip155:8453', hash: SRC, legIndex: 0 },
-      { role: 'destination', chain: 'eip155:8453', hash: FILL, legIndex: 0 },
+      { role: 'source', chain: 'eip155:8453', hash: SRC, legIndex: 0, explorerUrl: `https://basescan.org/tx/${SRC}` },
+      { role: 'destination', chain: 'eip155:8453', hash: FILL, legIndex: 0, explorerUrl: `https://basescan.org/tx/${FILL}` },
     ])
     expect(sent.map((e) => e.type)).toContain('session.succeeded')
   })

@@ -228,12 +228,12 @@ export const TEMPO_MAINNET = 'eip155:4217'
 export const TEMPO_TESTNET = 'eip155:42431'
 
 export const CHAINS: Record<string, ChainInfo> = {
-  'eip155:1': { id: 'eip155:1', chainId: 1, name: 'Ethereum', nativeSymbol: 'ETH', nativeDecimals: 18 },
-  'eip155:8453': { id: 'eip155:8453', chainId: 8453, name: 'Base', nativeSymbol: 'ETH', nativeDecimals: 18 },
-  'eip155:42161': { id: 'eip155:42161', chainId: 42161, name: 'Arbitrum', nativeSymbol: 'ETH', nativeDecimals: 18 },
-  'eip155:10': { id: 'eip155:10', chainId: 10, name: 'Optimism', nativeSymbol: 'ETH', nativeDecimals: 18 },
-  'eip155:137': { id: 'eip155:137', chainId: 137, name: 'Polygon', nativeSymbol: 'POL', nativeDecimals: 18 },
-  'eip155:56': { id: 'eip155:56', chainId: 56, name: 'BNB Chain', nativeSymbol: 'BNB', nativeDecimals: 18 },
+  'eip155:1': { id: 'eip155:1', chainId: 1, name: 'Ethereum', nativeSymbol: 'ETH', nativeDecimals: 18, explorerUrl: 'https://etherscan.io' },
+  'eip155:8453': { id: 'eip155:8453', chainId: 8453, name: 'Base', nativeSymbol: 'ETH', nativeDecimals: 18, explorerUrl: 'https://basescan.org' },
+  'eip155:42161': { id: 'eip155:42161', chainId: 42161, name: 'Arbitrum', nativeSymbol: 'ETH', nativeDecimals: 18, explorerUrl: 'https://arbiscan.io' },
+  'eip155:10': { id: 'eip155:10', chainId: 10, name: 'Optimism', nativeSymbol: 'ETH', nativeDecimals: 18, explorerUrl: 'https://optimistic.etherscan.io' },
+  'eip155:137': { id: 'eip155:137', chainId: 137, name: 'Polygon', nativeSymbol: 'POL', nativeDecimals: 18, explorerUrl: 'https://polygonscan.com' },
+  'eip155:56': { id: 'eip155:56', chainId: 56, name: 'BNB Chain', nativeSymbol: 'BNB', nativeDecimals: 18, explorerUrl: 'https://bscscan.com' },
   'eip155:143': { id: 'eip155:143', chainId: 143, name: 'Monad', nativeSymbol: 'MON', nativeDecimals: 18 },
   'eip155:999': { id: 'eip155:999', chainId: 999, name: 'HyperEVM', nativeSymbol: 'HYPE', nativeDecimals: 18 },
   [TEMPO_MAINNET]: { id: TEMPO_MAINNET, chainId: 4217, name: 'Tempo', nativeSymbol: 'USD', nativeDecimals: 18, stablecoinFees: true, explorerUrl: 'https://explore.tempo.xyz' },
@@ -245,6 +245,23 @@ export const CHAINS: Record<string, ChainInfo> = {
   // Test networks
   'eip155:421614': { id: 'eip155:421614', chainId: 421614, name: 'Arbitrum Sepolia', nativeSymbol: 'ETH', nativeDecimals: 18, testnet: true },
   'eip155:46630': { id: 'eip155:46630', chainId: 46630, name: 'Robinhood Chain Testnet', nativeSymbol: 'ETH', nativeDecimals: 18, testnet: true },
+}
+
+/**
+ * The block explorer link of a transaction, from the trusted chain table (`CHAINS[chain].explorerUrl`):
+ * `{explorer}/tx/{hash}`, with the explorer's query (for example `?cluster=devnet`). Undefined for a
+ * chain with no explorer in the table, or for a hash that is not an EVM transaction hash (`0x` and 64
+ * hex digits) or a Solana signature. The server builds `Transaction.explorerUrl` with it: it never
+ * takes a link from an adapter.
+ */
+export function explorerTxUrl(chain: string, hash: string): string | undefined {
+  const base = CHAINS[chain]?.explorerUrl
+  if (!base || typeof hash !== 'string') return undefined
+  const ok = chain.startsWith('solana:') ? /^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(hash) : /^0x[0-9a-fA-F]{64}$/.test(hash)
+  if (!ok) return undefined
+  const u = new URL(base)
+  u.pathname = `${u.pathname.replace(/\/+$/, '')}/tx/${hash}`
+  return u.toString()
 }
 
 export function chainName(chain: string): string {

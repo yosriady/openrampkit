@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
-import { USDC, stateFor } from '@openrampkit/core'
+import { USDC, explorerTxUrl, stateFor } from '@openrampkit/core'
 import type { LegStep, PlanResult, PublicSession, Quote, WithdrawSource } from '@openrampkit/core'
 import { TreasuryRefusedError, createOpenRamp, isValidAddress } from './index.js'
 import type { CreateSessionInput, OpenRampConfig, TreasurySendInput } from './index.js'
@@ -389,7 +389,7 @@ describe('provider events that carry a surface', () => {
     expect(now.body.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT' }] })
     const sent = await t.call<PublicSession>(`/sessions/${s.id}/transitions/submit_tx`, s.clientSecret, { inputs: { txHash: TX } })
     expect(sent.body.step.state).toBe('PROCESSING')
-    expect(sent.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }])
+    expect(sent.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0, ...(explorerTxUrl('eip155:8453', TX) ? { explorerUrl: explorerTxUrl('eip155:8453', TX) } : {}) }])
   })
 
   it('with custody app, the treasury sends a WALLET_TX that arrives by webhook, once per step', async () => {
@@ -401,7 +401,7 @@ describe('provider events that carry a surface', () => {
     await post()
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
     expect(now.body.step.state).toBe('PROCESSING')
-    expect(now.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }])
+    expect(now.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0, ...(explorerTxUrl('eip155:8453', TX) ? { explorerUrl: explorerTxUrl('eip155:8453', TX) } : {}) }])
     expect(treasury.send).toHaveBeenCalledTimes(1)
     // A replayed webhook for the same step does not send twice.
     await post()

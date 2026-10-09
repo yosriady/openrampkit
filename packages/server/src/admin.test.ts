@@ -242,8 +242,8 @@ describe('admin get, find and stats', () => {
     await t.hook([{ ref: s.ref, status: 'succeeded', transactions: [{ role: 'source', hash: src }, { role: 'destination', hash: tx }] }])
     const v = (await t.ramp.admin.get(s.id))!
     expect(v.transactions).toEqual([
-      { role: 'source', chain: 'eip155:8453', hash: src, legIndex: 0, attempt: 0 },
-      { role: 'destination', chain: 'eip155:8453', hash: tx, legIndex: 0, attempt: 0 },
+      { role: 'source', chain: 'eip155:8453', hash: src, legIndex: 0, explorerUrl: `https://basescan.org/tx/${src}`, attempt: 0 },
+      { role: 'destination', chain: 'eip155:8453', hash: tx, legIndex: 0, explorerUrl: `https://basescan.org/tx/${tx}`, attempt: 0 },
     ])
     expect(v.payment!.legs[0]!.transactions.map((x) => x.role)).toEqual(['source', 'destination'])
     expect((await t.ramp.admin.findByRef('hooked', s.ref))!.id).toBe(s.id)
