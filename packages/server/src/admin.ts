@@ -8,7 +8,7 @@
 // `StoreQueue.range` reads them, latest first. The sweep removes days older than `admin.indexDays`.
 
 import { add, isTerminal, OpenRampException, openRampError, stateFor } from '@openrampkit/core'
-import type { Amount, AmountMismatch, Direction, Fee, OpenRampError, StateName, StepDetail, Transaction } from '@openrampkit/core'
+import type { Amount, Delivery, Direction, Fee, OpenRampError, StateName, StepDetail, Transaction } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { json, readJson } from './http.js'
 import { legTransactions, sessionStatusFor } from './legs.js'
@@ -187,8 +187,8 @@ export type AdminLeg = {
   input: Amount
   output: Amount
   outputConfirmed: boolean
-  /** The reported output is short of the quote beyond the tolerance, or not comparable with it */
-  amountMismatch?: Omit<AmountMismatch, 'legIndex'>
+  /** The check of the reported output against the quote */
+  delivery?: Omit<Delivery, 'legIndex'>
   fees: Fee[]
   started: boolean
   lastCheckedAt?: string
@@ -306,7 +306,7 @@ function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
         input: l.quote.input,
         output: l.step?.output ?? l.quote.output,
         outputConfirmed: !!l.step?.output,
-        ...(l.amountMismatch ? { amountMismatch: l.amountMismatch } : {}),
+        ...(l.delivery ? { delivery: l.delivery } : {}),
         fees: l.quote.fees,
         started: l.started,
         ...(l.lastCheckedAt ? { lastCheckedAt: iso(l.lastCheckedAt)! } : {}),

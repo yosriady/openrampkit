@@ -56,7 +56,8 @@ export type OpenRampConfig = {
     hopPreference?: CryptoAsset[]
     /**
      * How much less than the quote a provider may report as a leg's output, in basis points, before
-     * the server flags it (`result.amountMismatch`, timeline entry `leg.amount_mismatch`). Default 100 (1%).
+     * the delivery is `short` (`result.delivery`, timeline entry `leg.delivery`). Default 100 (1%). A quote
+     * with a `minOutput` uses that minimum instead.
      */
     outputToleranceBps?: number
     /**
@@ -148,7 +149,7 @@ export type AdminConfig = {
 /**
  * A plain metrics callback. The server calls `onMetric` with a metric name, a number and string tags.
  * Send them to your metrics system (StatsD, Prometheus, Datadog, OpenTelemetry). An error in the
- * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`, `event.out_of_order`, `leg.amount_mismatch`, `payment.reversed`, `webhook.replayed`,
+ * callback is ignored. Names: `quote.latency_ms`, `start.error`, `webhook.verify_failed`, `event.out_of_order`, `leg.delivery_mismatch`, `payment.reversed`, `webhook.replayed`,
  * `webhook.delivery_failed`, `webhook.dead_letter`, `outbox.depth`, `open_sessions.depth`,
  * `sweep.lag_ms`, `sweep.duration_ms`, `sessions.stuck`.
  */

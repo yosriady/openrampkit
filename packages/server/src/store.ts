@@ -1,7 +1,7 @@
 import type { ScopedKV } from '@openrampkit/adapter'
 import type {
   AllowedDestinations,
-  AmountMismatch,
+  Delivery,
   CancelReason,
   Destination,
   Direction,
@@ -32,8 +32,8 @@ export type ActiveLeg = {
   lastCheckedAt?: number
   /** Withdraw with app custody: idempotency keys of WALLET_TX steps already sent by the treasury */
   treasurySent?: string[]
-  /** Set when the reported output is short of the quote beyond the tolerance, or not comparable with it */
-  amountMismatch?: Omit<AmountMismatch, 'legIndex'>
+  /** The check of the reported output against the quote (see `Delivery`). Set once the leg reports an output. */
+  delivery?: Omit<Delivery, 'legIndex'>
   /** Set when a provider event moved the leg from `processing` back to `requires_action` (allowed once) */
   surfaceReopened?: boolean
 }

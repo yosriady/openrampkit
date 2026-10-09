@@ -93,11 +93,11 @@ describe('the output check uses minOutput', () => {
     const s = await paid('96')
     expect(s.status).toBe('succeeded')
     expect(s.result).toMatchObject({ output: usdc('96'), outputConfirmed: true })
-    expect(s.result).not.toHaveProperty('amountMismatch')
+    expect(s.result!.delivery).toMatchObject({ status: 'ok', minimum: usdc('95'), received: usdc('96') })
   })
 
   it('an output below the minimum is short', async () => {
     const s = await paid('94.5')
-    expect(s.result).toMatchObject({ amountMismatch: { reason: 'short', shortfall: '5.5' } })
+    expect(s.result).toMatchObject({ delivery: { status: 'short', minimum: usdc('95'), shortfall: '5.5' } })
   })
 })

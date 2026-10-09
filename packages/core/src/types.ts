@@ -738,29 +738,38 @@ export type SessionResult = {
   /** Every transaction of the payment, in leg order (see `Transaction.role`) */
   transactions: Transaction[]
   /**
-   * Set when a provider reported less output than the quote, by more than the server's tolerance
-   * (`policy.outputToleranceBps`), or an output that is not comparable with the quote (another asset,
-   * or not a number). `received` is the reported output. Check it before you credit.
+   * The check of a leg's reported output against its quote: the last leg whose delivery is not `ok`,
+   * else the last leg whose output is reported. Absent until a leg reports an
+   * output. Check it before you credit: credit the full amount only when `status` is `ok`.
    */
-  amountMismatch?: AmountMismatch
+  delivery?: Delivery
 }
 
 /**
- * A leg's reported output that the server cannot accept as a full delivery:
- * - `short`: less than the quote, by more than the tolerance.
+ * The result of a delivery check:
+ * - `ok`: the reported output is at least the quote's `minOutput`, or, for a quote without one, at
+ *   most `policy.outputToleranceBps` below the quoted output.
+ * - `short`: less than that. `shortfall` says how much less than the quoted output.
  * - `asset_mismatch`: in another asset (another token, chain or currency) than the quote.
- * - `invalid_amount`: the reported or the quoted amount is not a decimal number.
+ * - `invalid`: the reported or the quoted amount is not a decimal number.
+ * The server fails closed: `asset_mismatch` and `invalid` never count as a delivery of the quote
+ * (`outputConfirmed` is false, and a leg before the last does not start the next leg).
  */
-export type AmountMismatch = {
-  reason: 'short' | 'asset_mismatch' | 'invalid_amount'
+export type DeliveryStatus = 'ok' | 'short' | 'asset_mismatch' | 'invalid'
+
+/** A leg's reported output, checked against its quote */
+export type Delivery = {
+  status: DeliveryStatus
   /** Index of the leg in the pathway */
   legIndex: number
   /** The quoted output of the leg */
   expected: Amount
-  /** The output that the provider reported */
+  /** The least output that counts as `ok`: the quote's `minOutput`, or the quoted output less the tolerance */
+  minimum?: Amount
+  /** The output that the provider or the chain reported */
   received: Amount
-  /** `expected - received` for `short`. The full expected amount for the other reasons. */
-  shortfall: string
+  /** `expected - received`, for `short` */
+  shortfall?: string
 }
 
 // ---------- Events ----------

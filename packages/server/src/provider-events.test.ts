@@ -376,14 +376,14 @@ describe('P1-3: the reported output is checked against the quote', () => {
     await t.hook([{ ref: s.ref, status: 'succeeded', output: usdc('8.5') }])
     const rec = await t.record(s.id)
     expect(rec.step.state).toBe('COMPLETED')
-    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ expected: { value: '9' }, received: { value: '8.5' }, shortfall: '0.5' })
-    expect(rec.timeline!.find((e) => e.type === 'leg.amount_mismatch')).toMatchObject({ detail: { index: 0, expected: '9', received: '8.5' } })
+    expect(rec.active!.legs[0]!.delivery).toMatchObject({ status: 'short', expected: { value: '9' }, minimum: { value: '8.91' }, received: { value: '8.5' }, shortfall: '0.5' })
+    expect(rec.timeline!.find((e) => e.type === 'leg.delivery')).toMatchObject({ detail: { index: 0, status: 'short', expected: '9', received: '8.5' } })
     const done = t.app.of('session.succeeded')
     expect(done).toHaveLength(1)
     expect(done[0]!.data.object).toMatchObject({
-      session: { result: { output: { value: '8.5' }, outputConfirmed: true, amountMismatch: { legIndex: 0, expected: { value: '9' }, received: { value: '8.5' }, shortfall: '0.5' } } },
+      session: { result: { output: { value: '8.5' }, outputConfirmed: true, delivery: { status: 'short', legIndex: 0, expected: { value: '9' }, received: { value: '8.5' }, shortfall: '0.5' } } },
     })
-    expect((await t.ramp.admin.get(s.id))!.payment!.legs[0]).toMatchObject({ amountMismatch: { shortfall: '0.5' } })
+    expect((await t.ramp.admin.get(s.id))!.payment!.legs[0]).toMatchObject({ delivery: { status: 'short', shortfall: '0.5' } })
   })
 
   it('does not flag an output within the default 1% tolerance, or above the quote', async () => {
@@ -394,17 +394,17 @@ describe('P1-3: the reported output is checked against the quote', () => {
     await t.hook([{ ref: b.ref, status: 'succeeded', output: usdc('9.4') }])
     for (const id of [a.id, b.id]) {
       const rec = await t.record(id)
-      expect(rec.active!.legs[0]!.amountMismatch).toBeUndefined()
-      expect(rec.timeline!.some((e) => e.type === 'leg.amount_mismatch')).toBe(false)
+      expect(rec.active!.legs[0]!.delivery).toMatchObject({ status: 'ok' })
+      expect(rec.timeline!.some((e) => e.type === 'leg.delivery')).toBe(false)
     }
-    expect(t.app.of('session.succeeded').every((e) => !(e.data.object.session as { result: object }).result.hasOwnProperty('amountMismatch'))).toBe(true)
+    expect(t.app.of('session.succeeded').every((e) => (e.data.object.session as { result: { delivery: { status: string } } }).result.delivery.status === 'ok')).toBe(true)
   })
 
   it('uses policy.outputToleranceBps', async () => {
     const t = make({ policy: { outputToleranceBps: 0 } })
     const a = await t.toPayment()
     await t.hook([{ ref: a.ref, status: 'succeeded', output: usdc('8.99') }])
-    expect((await t.record(a.id)).active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'short', shortfall: '0.01' })
+    expect((await t.record(a.id)).active!.legs[0]!.delivery).toMatchObject({ status: 'short', shortfall: '0.01' })
   })
 
   it('fails closed: an output in another asset, or with an amount that is not a number, is flagged and not confirmed', async () => {
@@ -413,16 +413,17 @@ describe('P1-3: the reported output is checked against the quote', () => {
     // The right amount, but on another chain.
     await t.hook([{ ref: a.ref, status: 'succeeded', output: { value: '9', asset: { kind: 'crypto', chain: 'eip155:1', token: USDC['eip155:1']! } } }])
     const ra = await t.record(a.id)
-    expect(ra.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch', shortfall: '9' })
-    expect(ra.timeline!.find((e) => e.type === 'leg.amount_mismatch')).toMatchObject({ detail: { reason: 'asset_mismatch' } })
+    expect(ra.active!.legs[0]!.delivery).toMatchObject({ status: 'asset_mismatch' })
+    expect(ra.active!.legs[0]!.delivery).not.toHaveProperty('shortfall')
+    expect(ra.timeline!.find((e) => e.type === 'leg.delivery')).toMatchObject({ detail: { status: 'asset_mismatch' } })
     const done = t.app.of('session.succeeded').find((e) => e.sessionId === a.id) ?? t.app.of('session.succeeded')[0]!
-    expect(done.data.object).toMatchObject({ session: { result: { outputConfirmed: false, amountMismatch: { reason: 'asset_mismatch', legIndex: 0 } } } })
+    expect(done.data.object).toMatchObject({ session: { result: { outputConfirmed: false, delivery: { status: 'asset_mismatch', legIndex: 0 } } } })
 
     const b = await t.toPayment()
     await t.hook([{ ref: b.ref, status: 'succeeded', output: { value: '9e9', asset: usdc('9').asset } }])
     const rb = await t.record(b.id)
-    expect(rb.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'invalid_amount' })
-    expect((await t.ramp.admin.get(b.id))!.payment!.legs[0]).toMatchObject({ amountMismatch: { reason: 'invalid_amount' } })
+    expect(rb.active!.legs[0]!.delivery).toMatchObject({ status: 'invalid' })
+    expect((await t.ramp.admin.get(b.id))!.payment!.legs[0]).toMatchObject({ delivery: { status: 'invalid' } })
   })
 
   it('does not start the next leg when a leg before the last delivered another asset', async () => {
@@ -435,7 +436,7 @@ describe('P1-3: the reported output is checked against the quote', () => {
     expect(rec.active!.index).toBe(0)
     expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED', recovery: 'contact_support' } })
     expect(t.app.of('session.failed')).toHaveLength(1)
-    expect(t.app.of('session.failed')[0]!.data.object).toMatchObject({ session: { result: { amountMismatch: { reason: 'asset_mismatch', legIndex: 0 } } } })
+    expect(t.app.of('session.failed')[0]!.data.object).toMatchObject({ session: { result: { delivery: { status: 'asset_mismatch', legIndex: 0 } } } })
 
     // A short (but same asset) delivery still starts the next leg: it bridges what arrived.
     const u = await t.toPayment({ destination: ARB })
@@ -695,7 +696,7 @@ describe('fourth review: output checks and earlier attempts', () => {
     await t.hook([{ ref: s.ref, status: 'processing', output: usdc('9') }])
     await t.hook([{ ref: s.ref, status: 'succeeded', output: other('9') }])
     const rec = await t.record(s.id)
-    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
+    expect(rec.active!.legs[0]!.delivery).toMatchObject({ status: 'asset_mismatch' })
     expect(t.bridgeStarts).toHaveLength(0)
     expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
   })
@@ -709,7 +710,7 @@ describe('fourth review: output checks and earlier attempts', () => {
     await t.hook([{ ref: first, status: 'succeeded', output: other('9') }])
     const rec = await t.record(s.id)
     expect(rec.active!.legs[0]!.ref).toBe(first)
-    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
+    expect(rec.active!.legs[0]!.delivery).toMatchObject({ status: 'asset_mismatch' })
     expect(t.bridgeStarts).toHaveLength(0)
     expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
   })

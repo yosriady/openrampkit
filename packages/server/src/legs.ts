@@ -2,7 +2,7 @@
 
 import type { LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, bps, cmp, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepDetailCode, isTerminal, isWebUrl, openRampError, stateFor, sub } from '@openrampkit/core'
-import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, LegTransaction, SessionStatus, StateName, Step, StepDetail, Transaction, TransactionRole } from '@openrampkit/core'
+import type { Amount, Asset, DeliveryStatus, LegStatus, LegStep, LegTransaction, SessionStatus, StateName, Step, StepDetail, Transaction, TransactionRole } from '@openrampkit/core'
 import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_MAX_ATTEMPTS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS, isTreasuryRefused } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
@@ -412,19 +412,19 @@ function sameAsset(a: Asset, b: Asset): boolean {
 }
 
 /**
- * Compare a leg's reported output with its quote. When the provider reports less than the quote's
- * `minOutput` (or, without one, less than the quote by more than `policy.outputToleranceBps`), the
- * leg keeps its result but gets `amountMismatch`, and the
- * timeline gets `leg.amount_mismatch`. `result.amountMismatch` then shows it in every webhook.
+ * Check a leg's reported output against its quote, and keep the result in `leg.delivery` (see
+ * `Delivery`). A delivery that is not `ok` goes to the timeline (`leg.delivery`), the log and the
+ * metric `leg.delivery_mismatch`. `result.delivery` shows it in every webhook. Fail closed: an output
+ * that cannot be compared with the quote is never `ok`.
  */
 function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): void {
   const leg = rec.active!.legs[i]!
   const expected = leg.quote.output
-  // Fail closed: an output that cannot be compared with the quote never counts as a full delivery.
-  let reason: AmountMismatch['reason'] | undefined
-  let shortfall = expected.value
-  if (!got?.asset || !sameAsset(expected.asset, got.asset)) reason = 'asset_mismatch'
-  else if (typeof got.value !== 'string' || !isDecimal(got.value) || !isDecimal(expected.value)) reason = 'invalid_amount'
+  let status: DeliveryStatus
+  let minimum: Amount | undefined
+  let shortfall: string | undefined
+  if (!got?.asset || !sameAsset(expected.asset, got.asset)) status = 'asset_mismatch'
+  else if (typeof got.value !== 'string' || !isDecimal(got.value) || !isDecimal(expected.value)) status = 'invalid'
   else {
     // A quote with a guaranteed minimum (`minOutput`, in the quote's asset) is short only below that
     // minimum. Else the reported output may be `policy.outputToleranceBps` below the quoted output.
@@ -433,22 +433,23 @@ function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): v
       min && sameAsset(min.asset, expected.asset) && typeof min.value === 'string' && isDecimal(min.value)
         ? min.value
         : sub(expected.value, bps(expected.value, Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)))
-    if (cmp(got.value, floor) >= 0) {
-      delete leg.amountMismatch
-      return
+    minimum = { value: floor, asset: expected.asset }
+    if (cmp(got.value, floor) >= 0) status = 'ok'
+    else {
+      status = 'short'
+      shortfall = sub(expected.value, got.value)
     }
-    reason = 'short'
-    shortfall = sub(expected.value, got.value)
   }
-  leg.amountMismatch = { reason, expected, received: got, shortfall }
-  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, reason, expected: expected.value, received: String(got?.value) })
-  rt.log.warn('provider reported an output that is not the quoted delivery', { sessionId: rec.id, adapterId: leg.adapterId, index: i, reason, expected: expected.value, received: String(got?.value) })
-  rt.metric('leg.amount_mismatch', 1, { adapter: leg.adapterId, reason })
+  leg.delivery = { status, expected, ...(minimum ? { minimum } : {}), received: got, ...(shortfall ? { shortfall } : {}) }
+  if (status === 'ok') return
+  addTimeline(rec, 'leg.delivery', { index: i, adapterId: leg.adapterId, status, expected: expected.value, received: String(got?.value) })
+  rt.log.warn('provider reported an output that is not the quoted delivery', { sessionId: rec.id, adapterId: leg.adapterId, index: i, status, expected: expected.value, received: String(got?.value) })
+  rt.metric('leg.delivery_mismatch', 1, { adapter: leg.adapterId, status })
 }
 
 /** True when leg `l` delivered something that the next leg cannot take: another asset, or no valid amount. */
 function deliveredWrongAsset(l: ActiveLeg): boolean {
-  return !!l.amountMismatch && l.amountMismatch.reason !== 'short'
+  return l.delivery?.status === 'asset_mismatch' || l.delivery?.status === 'invalid'
 }
 
 /** How long after expiry a late payment can still move a session on (`latePayments.graceHours`) */

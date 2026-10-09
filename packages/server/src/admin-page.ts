@@ -205,7 +205,7 @@ function legsTable(p) {
     h('tbody', null, p.legs.map((l, i) => h('tr', null,
       h('td', null, String(i)), h('td', null, l.adapterId),
       h('td', null, chip(l.status, l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
-      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.amountMismatch ? h('div', null, chip(l.amountMismatch.reason === 'short' ? 'short by ' + l.amountMismatch.shortfall : l.amountMismatch.reason.replace('_', ' '), 'failed')) : ''),
+      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.delivery && l.delivery.status !== 'ok' ? h('div', null, chip(l.delivery.status === 'short' ? 'short by ' + l.delivery.shortfall : l.delivery.status.replace('_', ' '), 'failed')) : ''),
       h('td', null, feesText(l.fees)),
       h('td', { class: 'mono' }, (l.ref || '-') + (l.providerRef && l.providerRef !== l.ref ? ' / ' + l.providerRef : '')), h('td', { class: 'mono' }, (l.transactions || []).map((t) => t.role + ': ' + t.hash).join(', ') || '-'),
     ))),

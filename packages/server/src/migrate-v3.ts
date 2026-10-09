@@ -2,7 +2,7 @@
 
 import { isDecimal, isLegTerminal, isStepDetailCode } from '@openrampkit/core'
 import type { Amount, Asset, Fee, LegQuote, LegStatus, LegStep, LegTransaction, OpenRampError, Quote, Step, StepDetail, Surface, Transition } from '@openrampkit/core'
-import type { SessionRecord } from './store.js'
+import type { ActiveLeg, SessionRecord } from './store.js'
 
 /** A schema 2 fee: a free currency string, and `inRate` with amount '0' for "amount not given" */
 type FeeV2 = { kind: Fee['kind']; label: string; amount: string; currency: string; inRate?: boolean }
@@ -111,9 +111,35 @@ export function migrateLegStep(v: LegStepV2 | LegStep): LegStep {
   return out
 }
 
-/** Schema 2 to 3: the leg steps of every payment, and the session step (`detail` from `sub`, no `progress`) */
+/** A schema 2 `amountMismatch` of a leg */
+type AmountMismatchV2 = { reason: 'short' | 'asset_mismatch' | 'invalid_amount'; expected: Amount; received: Amount; shortfall: string }
+
+/**
+ * A schema 2 leg's output check as a `delivery`: `amountMismatch` gives its status (`invalid_amount` is
+ * `invalid`); a leg with a reported output and no mismatch was `ok`.
+ */
+function migrateDelivery(l: ActiveLeg): void {
+  const old = l as ActiveLeg & { amountMismatch?: AmountMismatchV2 }
+  const m = old.amountMismatch
+  if (m) {
+    l.delivery = { status: m.reason === 'invalid_amount' ? 'invalid' : m.reason, expected: m.expected, received: m.received, ...(m.reason === 'short' ? { shortfall: m.shortfall } : {}) }
+    delete old.amountMismatch
+  } else if (!l.delivery && l.step?.output) {
+    l.delivery = { status: 'ok', expected: l.quote.output, received: l.step.output }
+  }
+}
+
+/**
+ * Schema 2 to 3: the leg steps of every payment and their output checks (`delivery` from
+ * `amountMismatch`), and the session step (`detail` from `sub`, no `progress`).
+ */
 export function migrateStepsToV3(rec: SessionRecord): void {
-  for (const p of [rec.active, ...(rec.attempts ?? [])]) for (const l of p?.legs ?? []) if (l.step) l.step = migrateLegStep(l.step)
+  for (const p of [rec.active, ...(rec.attempts ?? [])]) {
+    for (const l of p?.legs ?? []) {
+      if (l.step) l.step = migrateLegStep(l.step)
+      migrateDelivery(l)
+    }
+  }
   const step = rec.step as Step & { sub?: string; progress?: unknown }
   const detail = detailOf(step.sub, undefined)
   delete step.sub

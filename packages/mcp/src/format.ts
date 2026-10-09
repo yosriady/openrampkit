@@ -92,6 +92,8 @@ export function sessionView(s: PublicSession) {
           received: amountText(r.output),
           received_confirmed: r.outputConfirmed,
           ...(r.transactions.length ? { transactions: r.transactions.map((t) => ({ role: t.role, chain: t.chain, hash: t.hash, leg: t.legIndex })) } : {}),
+          // Not `ok`: the received amount is not the quote. Tell the person before they rely on it.
+          ...(r.delivery && r.delivery.status !== 'ok' ? { delivery: r.delivery.status, ...(r.delivery.shortfall ? { short_by: r.delivery.shortfall } : {}) } : {}),
         }
       : {}),
     // The provider's own order ids, for provider support

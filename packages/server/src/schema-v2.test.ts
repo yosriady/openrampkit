@@ -200,6 +200,9 @@ describe('schema 2 records load and work', () => {
     const s = (await ramp.sessions.retrieve(f.sessions.short.record.id))!
     expect(s.status).toBe('succeeded')
     expect(s.result!.transactions.map((t) => t.role)).toEqual(['source', 'destination'])
+    // amountMismatch (schema 2) is now the delivery check
+    expect(s.result!.delivery).toMatchObject({ status: 'short', legIndex: 0, expected: { value: '20' }, received: { value: '18' }, shortfall: '2' })
+    expect(s.result).not.toHaveProperty('amountMismatch')
   })
 
   it('a failed attempt can try again', async () => {
