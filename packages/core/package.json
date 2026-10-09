@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/core",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Types, exact money math, codes, region policy, flow table and pathway planner for OpenRampKit",
   "keywords": [
     "offramp",

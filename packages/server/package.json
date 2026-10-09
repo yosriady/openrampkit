@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/server",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Self-hosted OpenRampKit server: one web-standard handler for Cloudflare Workers, Next.js, Node, Bun and Deno",
   "keywords": [
     "cloudflare-workers",

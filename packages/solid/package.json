@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/solid",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Solid wrapper for OpenRampKit: provider, Deposit and Withdraw buttons, primitives (SSR-safe)",
   "keywords": [
     "offramp",

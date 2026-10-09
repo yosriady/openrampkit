@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-meld",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Meld aggregator adapter",
   "keywords": [
     "adapter",

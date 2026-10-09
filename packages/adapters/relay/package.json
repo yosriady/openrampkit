@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-relay",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Relay adapter: wallet pay, transfer to deposit addresses, cross-chain hop",
   "keywords": [
     "adapter",
