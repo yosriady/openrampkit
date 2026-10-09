@@ -94,6 +94,10 @@ These checks stop one transaction from paying two sessions, and stop a short del
 
 The LI.FI adapter has no webhook handler. Status comes from polling: the browser's step poll, and the [background sweep](../api/server.md#background-sweep) (or `openramp.sessions.refresh(id)`) after the user leaves.
 
+## Sandbox limits
+
+LI.FI has no sandbox host: `staging.li.quest` returns `403`. Test with small quotes on the mainnet host only. Quotes move no money. Never send the transaction in a test. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
+
 ## Verified vs TO VERIFY
 
 Checked against the live API on 2026-10-05 (no money moved):

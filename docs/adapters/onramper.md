@@ -95,6 +95,10 @@ Ask your Onramper contact to send webhooks to `{baseUrl}/webhooks/onramper`.
 - Replay protection: the adapter gives the SHA-256 of the raw body as the replay key (`webhook.replayKey`). The server keeps each key for 7 days in the adapter's shared store (`claimWebhook`, built on `claimOnce`). A repeat of the same body in that time gets `200` with `{ "received": true, "duplicate": true }` and changes nothing. When the server cannot apply the event yet (it answers `503`), it gives the key back, so the provider's retry still applies. The key is also the event id (`eventId`), so a session drops the same event twice.
 - The adapter finds the leg by `partnerContext`.
 
+## Sandbox limits
+
+Onramper staging for the US shows card only. You cannot test other US methods (for example ACH or PayPal) on staging. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
+
 ## Verified vs TO VERIFY
 
 - **Verified** (live API, 2026-10-04): the `pix` and `upi` payment type ids, and the regional ids in the table above.

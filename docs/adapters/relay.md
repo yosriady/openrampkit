@@ -136,6 +136,10 @@ A shared destination (one treasury or vault address for all users) cannot tell t
 
 The Relay adapter has no webhook handler. Status comes from polling: the browser's step poll, and the [background sweep](../api/server.md#background-sweep) (or `openramp.sessions.refresh(id)`) after the user leaves.
 
+## Sandbox limits
+
+The testnets host (`https://api.testnets.relay.link`) knows ETH on Base Sepolia and on Sepolia. It does not know USDC on Base Sepolia. To test on testnets, quote ETH, not USDC. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
+
 ## Verified vs TO VERIFY
 
 The source has no TO VERIFY markers for Relay. The Relay API paths used are `/quote/v2`, `/currencies/v2`, `/intents/status/v3`, `/requests/v3` (with a key) or `/requests/v2` (by `depositAddress`, or by `id`), and `/chains` (health). A live check on 2026-10-05 showed: two `/quote/v2` calls with `useDepositAddress: true` and the same parameters give two different addresses; a request has `depositAddress.depositTxHash` and `metadata.currencyIn.amount` (base units); `inTxs[].data.value` is `0` for an ERC-20 deposit. Same-chain checks use the JSON-RPC methods `eth_getTransactionReceipt`, `eth_getTransactionByHash`, `eth_getBlockByNumber`, `eth_blockNumber`, `eth_getLogs` and `eth_call` (settlement receipts) on EVM chains, and `getSignatureStatuses`, `getTransaction`, `getTokenAccountsByOwner` and `getSignaturesForAddress` on Solana.

@@ -53,6 +53,16 @@ A provider cannot send a webhook to `localhost`. To test webhooks on your comput
 
 Each adapter has its own sandbox switch: an option (`env`, `sandbox` or `apiUrl`), or the key prefix. The sections below give the switch for each adapter. Also set `livemode: true` on `createOpenRamp` in production. Events then carry `livemode`, and adapters such as Coinbase leave sandbox mode.
 
+Sandboxes do not have all the assets and methods of production. Known limits (Checked on 9 Oct 2026.):
+
+| Provider | Sandbox limit |
+|---|---|
+| [MoonPay](#moonpay) | Test mode has USDC only as `usdc` on Ethereum. No `usdc_base`, `usdc_arbitrum`, `usdc_optimism` or `usdc_polygon`. |
+| [Relay](#relay) | The testnets host knows ETH on Base Sepolia and Sepolia, but not USDC on Base Sepolia. |
+| [Transak](#transak) | Staging has 26 fiat currencies and no INR. You cannot test UPI on staging. |
+| [Onramper](#onramper) | Staging for the US shows card only. |
+| [LI.FI](#lifi) | No sandbox host (`staging.li.quest` returns `403`). Test with small quotes on mainnet, and never send. |
+
 ## Keep keys safe
 
 - Keep secret keys on the server only. Never put a secret key in a `NEXT_PUBLIC_` variable or in your client bundle.
@@ -85,6 +95,8 @@ relay({ apiKey: process.env.RELAY_API_KEY })
 The adapter sends the key in the `x-api-key` header.
 
 **Sandbox and production:** the default API is `https://api.relay.link` (mainnets). For testnets, set `baseUrl: 'https://api.testnets.relay.link'`. Make one key for each environment. Check in the dashboard if a testnet key is different from a mainnet key.
+
+**Sandbox limits:** The testnets host (`https://api.testnets.relay.link`) knows ETH on Base Sepolia and on Sepolia. It does not know USDC on Base Sepolia. To test on testnets, quote ETH, not USDC. Checked on 9 Oct 2026.
 
 **Webhooks:** the Relay adapter has no webhook handler. Status comes from polling. You can configure webhooks per key in the Relay dashboard, but the adapter does not use them.
 
@@ -120,6 +132,8 @@ The adapter sends the key in the `x-lifi-api-key` header.
 
 **Sandbox and production:** the adapter has no sandbox switch. The API is `https://li.quest/v1` (`baseUrl`). Quotes move no money. A wallet transaction moves real funds, so test with small amounts.
 
+**Sandbox limits:** LI.FI has no sandbox host: `staging.li.quest` returns `403`. Test with small quotes on the mainnet host only. Quotes move no money. Never send the transaction in a test. Checked on 9 Oct 2026.
+
 **Webhooks:** the LI.FI adapter has no webhook handler. Status comes from polling.
 
 **Gotchas:**
@@ -153,6 +167,8 @@ moonpay({
 ```
 
 **Sandbox and production:** set `env: 'sandbox'` with the `_test_` keys. Set `env: 'production'` with the live keys. `env` is required. To go live, click **Start review** in the dashboard and complete KYB.
+
+**Sandbox limits:** MoonPay test mode has USDC only as `usdc` (USDC on Ethereum). `usdc_base`, `usdc_arbitrum`, `usdc_optimism` and `usdc_polygon` are not in test mode. To test in test mode, quote USDC on Ethereum. A test mode quote for USDC on another chain fails. Base is first in the default `deliverAssets`, so set the destination to USDC on Ethereum for test mode. Checked on 9 Oct 2026.
 
 **Webhooks:** register `{baseUrl}/webhooks/moonpay` in the dashboard (check in the dashboard for the exact page). Copy the Webhook Key to `webhookKey`. Without `webhookKey`, the adapter rejects every webhook.
 
@@ -193,6 +209,8 @@ transak({
 The adapter uses the secret to get an access token: `POST https://api-stg.transak.com/partners/api/v2/refresh-token` with the header `api-secret` and the body `{ apiKey }`. It does this for you.
 
 **Sandbox and production:** set `env: 'staging'` with Staging keys. The default is `'production'`. To go live, click **Complete your business profile** in the dashboard. Then copy the Production keys.
+
+**Sandbox limits:** Transak staging has 26 fiat currencies. INR is not one of them, so you cannot test UPI on staging. Checked on 9 Oct 2026.
 
 **Webhooks:** register `{baseUrl}/webhooks/transak` in the Transak dashboard (check in the dashboard for the exact page). There is no separate webhook secret: Transak signs webhooks with the access token, and the adapter keeps that token.
 
@@ -274,6 +292,8 @@ onramper({
 ```
 
 **Sandbox and production:** set `env: 'sandbox'` with the `pk_test_` key (API `https://api-stg.onramper.com`). Set `env: 'production'` with the `pk_prod_` key. `env` is required.
+
+**Sandbox limits:** Onramper staging for the US shows card only. You cannot test other US methods (for example ACH or PayPal) on staging. Checked on 9 Oct 2026.
 
 **Webhooks:** send `{baseUrl}/webhooks/onramper` to Onramper (in the dashboard or through your Onramper contact; check in the dashboard). Copy the webhook secret to `webhookSecret`.
 

@@ -77,6 +77,10 @@ Set the webhook URL in the MoonPay dashboard to `{baseUrl}/webhooks/moonpay` and
 - Verification: header `Moonpay-Signature-V2: t=<unix>,s=<hex>`, HMAC-SHA256 of `{t}.{body}`, 5 minute tolerance.
 - Events whose `type` starts with `transaction_` are parsed with the same status mapping.
 
+## Sandbox limits
+
+MoonPay test mode has USDC only as `usdc` (USDC on Ethereum). `usdc_base`, `usdc_arbitrum`, `usdc_optimism` and `usdc_polygon` are not in test mode. To test in test mode, quote USDC on Ethereum. A test mode quote for USDC on another chain fails. Base is first in the default `deliverAssets`, so set the destination to USDC on Ethereum for test mode. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
+
 ## Verified vs TO VERIFY
 
 - **TO VERIFY**: the recommended iframe `allow` list.

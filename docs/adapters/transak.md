@@ -73,6 +73,10 @@ Set the webhook URL in the Transak partner dashboard to `{baseUrl}/webhooks/tran
 | `PAYMENT_DONE_MARKED_BY_USER`, `PROCESSING`, `PENDING_DELIVERY_FROM_TRANSAK`, `ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK` | `processing` |
 | `AWAITING_PAYMENT_FROM_USER` | no change |
 
+## Sandbox limits
+
+Transak staging has 26 fiat currencies. INR is not one of them, so you cannot test UPI on staging. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
+
 ## Verified vs TO VERIFY
 
 - **TO VERIFY**: Transak network names for Arbitrum and Optimism (check with `GET /cryptocoins`).
