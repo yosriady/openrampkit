@@ -299,6 +299,7 @@ describe('peer adapter', () => {
         { leg: leg('venmo'), quote: { amountIn: money('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: leg('wise', 'USD'), quote: { amountIn: money('25') } },
       ],
+      errorPaths: [{ leg: leg('venmo'), quote: { amountIn: money('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'x-webhook-signature': sig, 'x-webhook-timestamp': ts } }), events: 1 },
         { name: 'unsigned', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body }), valid: false },

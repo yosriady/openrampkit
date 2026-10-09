@@ -253,6 +253,7 @@ describe('coinbase conformance', () => {
     const report = await runAdapterConformance(coinbase({ apiKeyId: 'k', apiKeySecret: secret, webhookSecret: 'whsec' }), {
       fetch,
       fixtures: [{ leg: cardLeg, quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT', status: 'PAYMENT' } }],
+      errorPaths: [{ leg: cardLeg, quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => hookReq(body, hook0('whsec', body)), events: 1 },
         { name: 'bad signature', rawBody: body, request: () => hookReq(body, hook0('other', body)), valid: false },

@@ -78,6 +78,7 @@ describe('binance adapter: conformance', () => {
     const report = await runAdapterConformance(adapter, {
       ctx: () => makeCtx({ fetch, session: { country: 'DE' } }),
       fixtures: [{ leg, quote: { amountIn: eur('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } }],
+      errorPaths: [{ leg, quote: { amountIn: eur('100') }, ctx: (f) => makeCtx({ fetch: f, session: { country: 'DE' } }) }],
       webhooks: [
         { name: 'signed', request: () => webhookReq(body, { 'x-bn-connect-signature': sig, 'x-bn-connect-timestamp': ts, 'x-bn-connect-for': 'client-1' }), rawBody: body, events: 1 },
         { name: 'bad signature', request: () => webhookReq(body, { 'x-bn-connect-signature': bnbSign(body, '1'), 'x-bn-connect-timestamp': ts, 'x-bn-connect-for': 'client-1' }), rawBody: body, valid: false },

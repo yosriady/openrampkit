@@ -1,7 +1,7 @@
 // Conformance checks any adapter can run in its own tests.
 
-import { isDecimal, isStepDetailCode, stateFor, validateStep } from '@openrampkit/core'
-import type { LegQuote, LegStatus, LegStep } from '@openrampkit/core'
+import { isDecimal, isStepDetailCode, sameToken, stateFor, validateStep } from '@openrampkit/core'
+import type { Asset, LegQuote, LegStatus, LegStep } from '@openrampkit/core'
 import { ADAPTER_API_VERSION } from './index.js'
 import type { Adapter } from './index.js'
 
@@ -27,8 +27,41 @@ export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
         if (v !== undefined && !isDecimal(v)) out.push({ where: `leg ${leg.id}`, problem: `limits.${k} is not a decimal string` })
       }
     }
+    // Declared capabilities and surfaces need the methods that serve them.
+    const caps = (leg.capabilities ?? []) as string[]
+    if (caps.includes('surface_after_processing') && !adapter.webhook) {
+      out.push({ where: `leg ${leg.id}`, problem: 'capability surface_after_processing needs a webhook (only a provider event can reopen the surface)' })
+    }
+    if (caps.includes('settlement') && (leg.to.asset.kind !== 'crypto' || !leg.to.location.includes('address'))) {
+      out.push({ where: `leg ${leg.id}`, problem: 'capability settlement needs a crypto `to` asset delivered to an address' })
+    }
+    const needsTransition = leg.surfaces.filter((k) => k === 'FORM' || k === 'OTP' || k === 'WALLET_TX')
+    if (needsTransition.length && !adapter.transition) {
+      out.push({ where: `leg ${leg.id}`, problem: `surface ${needsTransition.join(', ')} needs transition() (the UI submits the form, the code or the tx hash)` })
+    }
+  }
+  if (adapter.legs.length && !adapter.status && !(adapter.webhook && adapter.webhook.configured !== false)) {
+    out.push({ where: 'adapter', problem: 'no status() and no configured webhook: a leg cannot learn its result' })
   }
   return out
+}
+
+/** True when `a` is a usable asset: an ISO 4217 fiat code, or a CAIP-2 chain with a token */
+function validAsset(a: Asset | undefined): boolean {
+  if (!a || typeof a !== 'object') return false
+  if (a.kind === 'fiat') return typeof a.currency === 'string' && /^[A-Z]{3}$/.test(a.currency)
+  if (a.kind === 'crypto') return typeof a.chain === 'string' && /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/.test(a.chain) && typeof a.token === 'string' && a.token.length > 0
+  return false
+}
+
+/** Same asset: the same fiat currency, or the same chain and token. A wildcard (`*`) matches anything. */
+export function sameQuotedAsset(a: Asset, b: Asset): boolean {
+  if (a.kind === 'fiat' && b.kind === 'fiat') return a.currency === '*' || b.currency === '*' || a.currency.toUpperCase() === b.currency.toUpperCase()
+  if (a.kind === 'crypto' && b.kind === 'crypto') {
+    if (a.chain === '*' || b.chain === '*') return true
+    return a.chain === b.chain && (a.token === '*' || b.token === '*' || sameToken(a.chain, a.token, b.token))
+  }
+  return false
 }
 
 export function checkLegQuote(q: LegQuote): ConformanceProblem[] {
@@ -36,10 +69,20 @@ export function checkLegQuote(q: LegQuote): ConformanceProblem[] {
   if (!isDecimal(q.input.value)) out.push({ where: 'quote.input', problem: 'not a decimal string' })
   if (!isDecimal(q.output.value)) out.push({ where: 'quote.output', problem: 'not a decimal string' })
   for (const f of q.fees) {
+    if (typeof f.included !== 'boolean') out.push({ where: `fee ${f.label}`, problem: 'included is not a boolean' })
     if (f.amount === null) continue
     if (!f.amount || typeof f.amount !== 'object' || typeof f.amount.value !== 'string' || !isDecimal(f.amount.value)) out.push({ where: `fee ${f.label}`, problem: 'amount is not null and not an Amount with a decimal string' })
+    else if (!validAsset(f.amount.asset)) out.push({ where: `fee ${f.label}`, problem: 'amount has no valid asset (an ISO 4217 currency, or a CAIP-2 chain and a token); use null when the provider does not say the fee' })
   }
   if (typeof q.expiresAt !== 'string' || Number.isNaN(Date.parse(q.expiresAt))) out.push({ where: 'quote.expiresAt', problem: 'not an ISO date' })
+  else if (Date.parse(q.expiresAt) <= Date.now()) out.push({ where: 'quote.expiresAt', problem: 'is not in the future' })
+  if (!['firm', 'min_output', 'estimate'].includes(q.guarantee)) out.push({ where: 'quote.guarantee', problem: `unknown guarantee ${String(q.guarantee)}` })
+  if (q.guarantee === 'min_output' && !q.minOutput) out.push({ where: 'quote.minOutput', problem: 'guarantee min_output without minOutput' })
+  if (q.minOutput) {
+    if (!isDecimal(q.minOutput.value)) out.push({ where: 'quote.minOutput', problem: 'not a decimal string' })
+    else if (!sameQuotedAsset(q.minOutput.asset, q.output.asset)) out.push({ where: 'quote.minOutput', problem: 'not in the asset of output' })
+  }
+  if (q.slippageBps !== undefined && (!Number.isInteger(q.slippageBps) || q.slippageBps < 0 || q.slippageBps > 10_000)) out.push({ where: 'quote.slippageBps', problem: 'not an integer from 0 to 10000' })
   return out
 }
 

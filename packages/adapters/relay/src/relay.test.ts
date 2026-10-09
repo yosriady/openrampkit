@@ -519,6 +519,7 @@ describe('relay conformance', () => {
         { leg: transferLeg, quote: { amountIn: { value: '0', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: bridgeLeg, quote: { amountIn: { value: '50', asset: BASE_USDC }, deliverTo: { address: DEST } }, start: { deliverTo: { address: DEST } }, expect: { start: 'PROCESSING', status: 'COMPLETED' } },
       ],
+      errorPaths: [{ leg: walletLeg, quote: { amountIn: { value: '10', asset: ARB_USDC }, source: walletSrc } }],
     })
     expect(report.problems).toEqual([])
     expect(report.quotes).toHaveLength(3)

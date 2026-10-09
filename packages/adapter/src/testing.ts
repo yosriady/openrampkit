@@ -7,10 +7,10 @@
 //
 // Framework-agnostic: nothing here imports a test runner.
 
-import { checkAdapterShape, checkLegQuote, checkLegStep } from './testkit.js'
+import { checkAdapterShape, checkLegQuote, checkLegStep, sameQuotedAsset } from './testkit.js'
 import type { ConformanceProblem } from './testkit.js'
 import type { Adapter, AdapterContext, LegEvent, Logger, QuoteInput, ScopedKV, StartInput, WebhookContext } from './index.js'
-import { stateFor } from '@openrampkit/core'
+import { OpenRampException, stateFor } from '@openrampkit/core'
 import type { Destination, LegQuote, LegStep, PathwayLeg, StateName } from '@openrampkit/core'
 import { LEG_STATUSES } from './testkit.js'
 
@@ -185,8 +185,46 @@ export type ConformanceWebhook = {
   events?: number
 }
 
+/**
+ * A quote to run with a provider that fails: every call answers HTTP 400, 401, 429 or 500, or times
+ * out. `quote()` must throw an `OpenRampException` with the code and `retryable` value of
+ * `httpErrorToOpenRamp` (see `ERROR_PATHS`).
+ */
+export type ConformanceErrorPath = {
+  name?: string
+  leg: PathwayLeg
+  quote: Omit<QuoteInput, 'leg'>
+  /** Builds the context with the failing fetch. Default: makeCtx({ fetch }) */
+  ctx?: (fetch: typeof globalThis.fetch) => AdapterContext
+  /** Cases to skip, with a reason in a comment (for example a provider whose quotes need no call) */
+  skip?: Array<ErrorCase['name']>
+}
+
+type ErrorCase = { name: '400' | '401' | '429' | '500' | 'timeout'; status?: number; codes: string[]; retryable?: boolean }
+
+/** The expected error of each failure (the rules of `httpErrorToOpenRamp`) */
+export const ERROR_PATHS: readonly ErrorCase[] = [
+  // A request that the provider refuses: no quote for this request (or a more exact code). A user can try another amount or method.
+  { name: '400', status: 400, codes: ['NO_QUOTES', 'AMOUNT_TOO_LOW', 'AMOUNT_TOO_HIGH', 'REGION_UNSUPPORTED', 'BAD_REQUEST', 'PROVIDER_ERROR'] },
+  // Our credentials or setup: a retry cannot fix it.
+  { name: '401', status: 401, codes: ['PROVIDER_UNAVAILABLE'], retryable: false },
+  { name: '429', status: 429, codes: ['RATE_LIMITED'], retryable: true },
+  { name: '500', status: 500, codes: ['PROVIDER_UNAVAILABLE'], retryable: true },
+  { name: 'timeout', codes: ['PROVIDER_UNAVAILABLE'], retryable: true },
+]
+
+/** A fetch where every call fails in the way of `c` */
+function failingFetch(c: ErrorCase): typeof globalThis.fetch {
+  return (async () => {
+    if (!c.status) throw Object.assign(new Error('Timeout from the conformance kit'), { name: 'TimeoutError', timeout: true })
+    return new Response(JSON.stringify({ message: `conformance ${c.status}`, error: { message: `conformance ${c.status}` } }), { status: c.status, headers: { 'content-type': 'application/json' } })
+  }) as typeof globalThis.fetch
+}
+
 export type ConformanceOptions = {
   fixtures?: ConformanceFixture[]
+  /** Quotes to run against a failing provider (HTTP 400, 401, 429, 500, timeout) */
+  errorPaths?: ConformanceErrorPath[]
   /** Builds a fresh context per fixture. Default: makeCtx({ fetch: opts.fetch }) */
   ctx?: () => AdapterContext
   /** Used by the default ctx(). Default: a fake fetch with no routes (every call gets a 404). */
@@ -249,6 +287,8 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
     if (quote.adapterId !== adapter.id) problem(`${name} quote`, `adapterId ${quote.adapterId} is not ${adapter.id}`)
     if (quote.legId !== f.leg.legId) problem(`${name} quote`, `legId ${quote.legId} is not ${f.leg.legId}`)
     if (quote.eta.min > quote.eta.max) problem(`${name} quote`, 'eta.min > eta.max')
+    // The quote delivers the leg's `to` asset (a wildcard leg, for example any chain, matches anything).
+    if (!sameQuotedAsset(quote.output.asset, f.leg.to.asset)) problem(`${name} quote.output`, 'the output asset is not the leg `to` asset')
     for (const [label, amount] of [['input', quote.input.value], ['output', quote.output.value], ...quote.fees.map((x) => [`fee ${x.label}`, x.amount?.value ?? ''])] as const) {
       if (typeof amount === 'string' && amount.startsWith('-')) problem(`${name} quote.${label}`, 'negative amount')
     }
@@ -263,6 +303,7 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
     }
     report.steps.push(step)
     report.problems.push(...checkStep(`${name} start`, step, true, true))
+    if (step.action?.transitions.some((t) => t.kind !== 'AWAIT') && !adapter.transition) problem(`${name} start`, 'the action has a SUBMIT or SURFACE_RESULT transition, but the adapter has no transition()')
     if (f.expect?.start && stateFor(step) !== f.expect.start) problem(`${name} start`, `state ${stateFor(step)}, expected ${f.expect.start}`)
     const ref = step.ref
     if (!ref) continue
@@ -292,6 +333,26 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
       }
     } else if (f.status === true) {
       problem(`${name} status`, 'adapter has no status()')
+    }
+  }
+
+  for (const e of opts.errorPaths ?? []) {
+    for (const c of ERROR_PATHS) {
+      if (e.skip?.includes(c.name)) continue
+      const where = `${e.name ?? e.leg.legId} quote with HTTP ${c.name}`
+      const f = failingFetch(c)
+      const ctx = e.ctx ? e.ctx(f) : makeCtx({ fetch: f })
+      try {
+        await adapter.quote({ leg: e.leg, ...e.quote }, ctx)
+        problem(where, 'quote() succeeded although every provider call failed')
+      } catch (err) {
+        if (!(err instanceof OpenRampException)) {
+          problem(where, `threw ${errText(err)}, not an OpenRampException (use httpErrorToOpenRamp)`)
+          continue
+        }
+        if (!c.codes.includes(err.error.code)) problem(where, `code ${err.error.code}, expected ${c.codes.join(' or ')}`)
+        if (c.retryable !== undefined && err.error.retryable !== c.retryable) problem(where, `retryable ${err.error.retryable}, expected ${c.retryable}`)
+      }
     }
   }
 

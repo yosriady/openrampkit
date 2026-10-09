@@ -239,7 +239,7 @@ describe('util', () => {
 })
 
 describe('testkit checks', () => {
-  const base = createAdapter({ id: 't', name: 'T', legs: [spec()], quote: vi.fn(), start: vi.fn() })
+  const base = createAdapter({ id: 't', name: 'T', legs: [spec()], quote: vi.fn(), start: vi.fn(), status: vi.fn() })
 
   it('checkAdapterShape reports every problem', () => {
     expect(checkAdapterShape(base)).toEqual([])
@@ -258,7 +258,7 @@ describe('testkit checks', () => {
     ])
     expect(checkAdapterShape({ ...base, legs: [] })).toEqual([{ where: 'legs', problem: 'Adapter declares no legs' }])
     // Capabilities: only the two that the server reads. 'polling' and 'webhooks' come from status() and webhook.
-    const caps = { ...base, legs: [spec({ capabilities: ['settlement', 'surface_after_processing', 'polling'] as never })] } as Adapter
+    const caps = { ...base, webhook: { verify: vi.fn(), parse: vi.fn() }, legs: [spec({ capabilities: ['settlement', 'surface_after_processing', 'polling'] as never })] } as Adapter
     expect(checkAdapterShape(caps).map((p) => p.problem)).toEqual([expect.stringContaining('Unknown capability polling')])
   })
 
@@ -271,11 +271,44 @@ describe('testkit checks', () => {
       fees: [{ kind: 'provider', label: 'Fee', amount: { value: '0.5', asset: { kind: 'fiat', currency: 'USD' } }, included: true }],
       guarantee: 'estimate',
       eta: { min: 1, max: 2 },
-      expiresAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
     }
     expect(checkLegQuote(q)).toEqual([])
     const bad = { ...q, input: { ...q.input, value: '1e1' }, output: { ...q.output, value: '' }, fees: [{ ...q.fees[0]!, amount: { value: 'x', asset: { kind: 'fiat' as const, currency: 'USD' } } }], expiresAt: 'tomorrow' }
     expect(checkLegQuote(bad).map((p) => p.where)).toEqual(['quote.input', 'quote.output', 'fee Fee', 'quote.expiresAt'])
+  })
+
+  it('checkLegQuote checks the guarantee, the minimum, the slippage, the fee assets and a past expiry', () => {
+    const usd = { kind: 'fiat' as const, currency: 'USD' }
+    const usdc = { kind: 'crypto' as const, chain: 'eip155:8453', token: '0xa' }
+    const q: LegQuote = {
+      adapterId: 't', legId: 'card', input: { value: '10', asset: usd }, output: { value: '9', asset: usdc },
+      fees: [{ kind: 'network', label: 'Gas', amount: { value: '0.1', asset: { ...usdc, token: 'native' } }, included: false }, { kind: 'provider', label: 'In rate', amount: null, included: true }],
+      guarantee: 'min_output', minOutput: { value: '8.9', asset: usdc }, slippageBps: 50, eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    }
+    expect(checkLegQuote(q)).toEqual([])
+    const problems = (over: Record<string, unknown>) => checkLegQuote({ ...q, ...over } as LegQuote).map((p) => `${p.where}: ${p.problem}`)
+    expect(problems({ guarantee: 'sure' })).toEqual(['quote.guarantee: unknown guarantee sure'])
+    expect(problems({ minOutput: undefined })).toEqual(['quote.minOutput: guarantee min_output without minOutput'])
+    expect(problems({ minOutput: { value: '8.9', asset: usd } })).toEqual(['quote.minOutput: not in the asset of output'])
+    expect(problems({ slippageBps: 0.5 })).toEqual(['quote.slippageBps: not an integer from 0 to 10000'])
+    expect(problems({ expiresAt: new Date(Date.now() - 1000).toISOString() })).toEqual(['quote.expiresAt: is not in the future'])
+    expect(problems({ fees: [{ kind: 'provider', label: 'Bad', amount: { value: '1', asset: { kind: 'fiat', currency: 'dollars' } }, included: true }] })).toEqual([
+      'fee Bad: amount has no valid asset (an ISO 4217 currency, or a CAIP-2 chain and a token); use null when the provider does not say the fee',
+    ])
+    expect(problems({ fees: [{ kind: 'provider', label: 'Old', amount: '1', currency: 'USD' }] })).toEqual([
+      'fee Old: included is not a boolean',
+      'fee Old: amount is not null and not an Amount with a decimal string',
+    ])
+  })
+
+  it('checkAdapterShape checks that declared capabilities and surfaces have their methods', () => {
+    const shape = (legs: LegSpec[], extra: Partial<Adapter> = {}) => checkAdapterShape({ ...createAdapter({ id: 'c', name: 'C', legs, quote: vi.fn(), start: vi.fn(), status: vi.fn() }), ...extra }).map((p) => p.problem)
+    expect(shape([spec({ capabilities: ['surface_after_processing'] })])).toEqual(['capability surface_after_processing needs a webhook (only a provider event can reopen the surface)'])
+    expect(shape([spec({ capabilities: ['settlement'], to: { asset: { kind: 'fiat', currencies: '*' }, location: ['user_account'] } })])).toEqual(['capability settlement needs a crypto `to` asset delivered to an address'])
+    expect(shape([spec({ surfaces: ['WALLET_TX', 'FORM'] })])).toEqual(['surface WALLET_TX, FORM needs transition() (the UI submits the form, the code or the tx hash)'])
+    expect(shape([spec()], { status: undefined })).toEqual(['no status() and no configured webhook: a leg cannot learn its result'])
+    expect(shape([spec()], { status: undefined, webhook: { configured: false, verify: vi.fn(), parse: vi.fn() } })).toEqual(['no status() and no configured webhook: a leg cannot learn its result'])
   })
 
   it('checkLegStep checks the v2 rules', () => {
@@ -360,7 +393,7 @@ describe('runAdapterConformance', () => {
     adapterId: 'conf',
     legId: 'card',
     input: { value: '10', asset: { kind: 'fiat', currency: 'USD' } },
-    output: { value: '9', asset: { kind: 'fiat', currency: 'USD' } },
+    output: { value: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0xa' } },
     fees: [{ kind: 'provider', label: 'Fee', amount: { value: '1', asset: { kind: 'fiat', currency: 'USD' } }, included: true }],
     guarantee: 'estimate',
     eta: { min: 1, max: 2 },
@@ -460,6 +493,37 @@ describe('runAdapterConformance', () => {
     for (const e of expected) expect(text).toContain(e)
   })
 
+  it('checks the quote error paths: 400, 401, 429, 500 and timeout', async () => {
+    const mapped = createAdapter({
+      id: 'conf', name: 'Conf', legs: [spec()], status: async () => ({ status: 'succeeded' }),
+      quote: async (_i, ctx) => {
+        try {
+          await fetchJson(ctx.fetch, 'https://provider.test/quote')
+        } catch (e) {
+          throw httpErrorToOpenRamp(e, 'Conf')
+        }
+        return quote()
+      },
+      start: async () => ({ status: 'succeeded', ref: 'r' }),
+    })
+    const r = await runAdapterConformance(mapped, { errorPaths: [{ leg, quote: {} }] })
+    expect(r.problems).toEqual([])
+    // A raw error, a wrong code, a wrong retryable value, and a quote that needs no call
+    const raw = { ...mapped, quote: async () => { throw new Error('boom') } } as Adapter
+    expect((await runAdapterConformance(raw, { errorPaths: [{ leg, quote: {}, skip: ['401', '429', '500', 'timeout'] }] })).problems).toEqual([
+      { where: 'card quote with HTTP 400', problem: 'threw boom, not an OpenRampException (use httpErrorToOpenRamp)' },
+    ])
+    const wrong = { ...mapped, quote: async () => { throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { retryable: true }), 502) } } as Adapter
+    expect((await runAdapterConformance(wrong, { errorPaths: [{ name: 'w', leg, quote: {}, skip: ['429', '500', 'timeout'] }] })).problems).toEqual([
+      { where: 'w quote with HTTP 400', problem: 'code PROVIDER_UNAVAILABLE, expected NO_QUOTES or AMOUNT_TOO_LOW or AMOUNT_TOO_HIGH or REGION_UNSUPPORTED or BAD_REQUEST or PROVIDER_ERROR' },
+      { where: 'w quote with HTTP 401', problem: 'retryable true, expected false' },
+    ])
+    const free = { ...mapped, quote: async () => quote() } as Adapter
+    expect((await runAdapterConformance(free, { errorPaths: [{ leg, quote: {}, skip: ['401', '429', '500', 'timeout'] }] })).problems).toEqual([
+      { where: 'card quote with HTTP 400', problem: 'quote() succeeded although every provider call failed' },
+    ])
+  })
+
   it('reports missing transition(), status() and webhook handlers', async () => {
     const bare = createAdapter({
       id: 'conf',
@@ -473,6 +537,7 @@ describe('runAdapterConformance', () => {
       webhooks: [hook('ok'), hook('ok')],
     })
     expect(r.problems).toEqual([
+      { where: 'adapter', problem: 'no status() and no configured webhook: a leg cannot learn its result' },
       { where: 'card transition a', problem: 'adapter has no transition()' },
       { where: 'card status', problem: 'adapter has no status()' },
       { where: 'webhook 0', problem: 'adapter has no webhook handler' },

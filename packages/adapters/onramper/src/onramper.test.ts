@@ -388,6 +388,7 @@ describe('onramper adapter', () => {
         { leg: leg('card'), quote: { amountIn: money('100') }, expect: { start: 'PAYMENT', status: 'PAYMENT' } },
         { leg: leg('sepa', 'EUR'), quote: { amountIn: money('100', 'EUR') } },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: money('100') }, ctx: (f) => makeCtx({ fetch: f, shared: memoryKV(), session: { ip: '203.0.113.9' } }) }],
       webhookCtx: makeWebhookCtx({ shared }),
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'x-onramper-webhook-signature': createHmac('sha256', WH).update(body).digest('hex') } }), events: 1 },

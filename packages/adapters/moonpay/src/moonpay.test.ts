@@ -318,6 +318,7 @@ describe('moonpay adapter', () => {
         { leg: leg('card'), quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: leg('sepa', BASE_USDC, 'EUR'), quote: { amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx: makeCtx({ fetch, session: { country: 'DE' } }) },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'moonpay-signature-v2': good } }), events: 1 },
         { name: 'unsigned', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body }), valid: false },

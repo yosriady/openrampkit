@@ -474,6 +474,7 @@ describe('lifi conformance', () => {
       fixtures: [
         { leg: walletLeg, quote: { amountIn: { value: '10', asset: ARB_USDC }, source: src }, start: { source: src }, transitions: [{ name: 'submit_tx', inputs: { txHash: HASH } }], expect: { start: 'PAYMENT', status: 'COMPLETED' } },
       ],
+      errorPaths: [{ leg: walletLeg, quote: { amountIn: { value: '10', asset: ARB_USDC }, source: src } }],
     })
     expect(report.problems).toEqual([])
     expect(report.quotes).toHaveLength(1)

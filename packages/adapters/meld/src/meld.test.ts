@@ -320,6 +320,7 @@ describe('meld adapter', () => {
         { leg: leg('card'), quote: { amountIn: money('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: leg('upi', 'INR'), quote: { amountIn: money('5000', 'INR') }, ctx: makeCtx({ fetch, session: { country: 'IN' } }) },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: money('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request(HOOK_URL, { method: 'POST', body, headers: { 'meld-signature': sig, 'meld-signature-timestamp': ts } }), events: 1 },
         { name: 'bad', rawBody: body, request: () => new Request(HOOK_URL, { method: 'POST', body, headers: { 'meld-signature': 'x', 'meld-signature-timestamp': ts } }), valid: false },

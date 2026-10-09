@@ -576,6 +576,8 @@ describe('bridge adapter: conformance', () => {
           expect: { start: 'PAYMENT', status: 'COMPLETED' },
         },
       ],
+      // A USD leg needs no rate, so its quote makes no provider call. The EUR leg reads the exchange rate from Bridge.
+      errorPaths: [{ leg: depositLeg('eur-sepa', 'EUR'), quote: { amountIn: fiat('100', 'EUR') }, ctx: (f) => makeCtx({ fetch: f, shared: memoryKV() }) }],
       webhooks: [
         { name: 'signed transfer', request: () => new Request('https://x.test', { method: 'POST', headers: { 'x-webhook-signature': SIGNED } }), rawBody: body, events: 1 },
         { name: 'bad signature', request: () => new Request('https://x.test', { method: 'POST', headers: { 'x-webhook-signature': 't=1,v0=AAAA' } }), rawBody: body, valid: false },

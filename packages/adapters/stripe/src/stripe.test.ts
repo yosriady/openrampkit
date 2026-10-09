@@ -254,6 +254,7 @@ describe('stripe adapter', () => {
         { leg: leg('card'), quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: leg('ach'), quote: { amountIn: usd('100') } },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'stripe-signature': sig } }), events: 1 },
         { name: 'bad', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'stripe-signature': `t=${t},v1=00` } }), valid: false },

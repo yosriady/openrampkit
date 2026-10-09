@@ -205,6 +205,7 @@ describe('transak conformance', () => {
     const report = await runAdapterConformance(transak(opts), {
       fetch,
       fixtures: [{ leg: cardLeg, quote: { amountIn: eur('100') }, start: { deliverTo: { address: DEST } }, expect: { start: 'PAYMENT' } }],
+      errorPaths: [{ leg: cardLeg, quote: { amountIn: eur('100') } }],
       webhooks: [
         { name: 'signed', rawBody: good, request: req(good), events: 1 },
         { name: 'forged', rawBody: forged, request: req(forged), valid: false },

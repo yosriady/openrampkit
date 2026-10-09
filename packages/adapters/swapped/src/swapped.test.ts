@@ -249,6 +249,7 @@ describe('swapped conformance', () => {
     const report = await runAdapterConformance(swapped({ publicKey: PK, secretKey: SK }), {
       fetch,
       fixtures: [{ leg: cardLeg, quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT' } }],
+      errorPaths: [{ leg: cardLeg, quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => hookReq(body, { signature: signB64(body) }), events: 1 },
         { name: 'bad signature', rawBody: body, request: () => hookReq(body, { signature: signB64(`${body} `) }), valid: false },

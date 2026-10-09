@@ -265,6 +265,16 @@ describe('xendit conformance (shared test kit)', () => {
       fixtures: [
         { leg: leg('id-qris', 'IDR'), quote: { amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
       ],
+      errorPaths: [
+        {
+          leg: leg('id-qris', 'IDR'),
+          quote: { amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } },
+          ctx: (fetch) => makeCtx({ fetch, destination: { type: 'merchant', currency: 'IDR' }, session: { country: 'ID' } }),
+          // Xendit quotes make no provider call: the amount, limits and fees come from the options (a same-currency
+          // pay-in with no rate). The first call is the payment request in start(), so no HTTP error can reach quote().
+          skip: ['400', '401', '429', '500', 'timeout'],
+        },
+      ],
       webhooks: [
         { request: () => new Request('https://app.test/w', { method: 'POST', headers: { 'x-callback-token': 'tok' } }), rawBody: JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED' } }), events: 1 },
         { request: () => new Request('https://app.test/w', { method: 'POST', headers: { 'x-callback-token': 'nope' } }), rawBody: '{}', valid: false },
