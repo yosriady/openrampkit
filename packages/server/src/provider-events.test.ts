@@ -29,6 +29,7 @@ const STATE: Record<string, LegStep['state']> = {
 function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
   let n = 0
   const statusOf: Record<string, Partial<LegStep> & { status: LegStatus }> = {}
+  const transitionOf: Record<string, Partial<LegStep> & { status: LegStatus }> = {}
   const spec: LegSpec = {
     id: 'hook', kind: 'fiat_onramp', methods: ['card'],
     from: { asset: { kind: 'fiat', currencies: '*' }, location: ['user_account'] },
@@ -50,6 +51,10 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
       const s = statusOf[ref] ?? { status: 'awaiting_user' as const }
       return { state: STATE[s.status]!, ref, transitions: s.status === 'awaiting_user' ? poll : [], ...s }
     },
+    async transition({ ref }) {
+      const s = transitionOf[ref] ?? { status: 'processing' as const }
+      return { state: STATE[s.status]!, ref, transitions: [], ...s }
+    },
     webhook: {
       async verify() {
         return true
@@ -60,7 +65,7 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
       ...(replay ? { replayKey: async (_req: Request, raw: string) => webhookBodyKey(raw) } : {}),
     },
   })
-  return { adapter, statusOf }
+  return { adapter, statusOf, transitionOf }
 }
 
 /** A bridge from USDC on Base to USDC on Arbitrum: the second leg of a two-leg pathway. */
@@ -138,7 +143,7 @@ function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> =
     return rec.active!.legs[0]!.ref!
   }
   const record = async (id: string) => (await store.get(id))!
-  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, bridgeStarts: bridge.starts }
+  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -519,7 +524,7 @@ describe('P1-5: grace polling for late payments', () => {
     expect((await t.record(s.id)).step.state).toBe('EXPIRED')
   })
 
-  it('graceHours 0 turns it off; a provider webhook still completes an expired session with session.late_payment', async () => {
+  it('graceHours 0 turns it off: neither a poll nor a webhook completes the expired session', async () => {
     vi.useFakeTimers({ now: Date.now() })
     const t = make({ latePayments: { graceHours: 0 } })
     const s = await t.toPayment({ ttlMinutes: 1 })
@@ -531,8 +536,107 @@ describe('P1-5: grace polling for late payments', () => {
     expect((await t.record(s.id)).step.state).toBe('EXPIRED')
 
     await t.hook([{ ref: s.ref, status: 'succeeded' }])
-    expect((await t.record(s.id)).step.state).toBe('COMPLETED')
-    expect(t.app.of('session.late_payment')).toHaveLength(1)
-    expect(t.app.of('session.late_payment')[0]!.data.object).toMatchObject({ reason: 'after_expiry' })
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('EXPIRED')
+    expect(rec.active!.legs[0]!.step!.status).toBe('succeeded') // the leg data is kept
+    expect(t.app.of('session.completed')).toHaveLength(0)
+    expect(t.app.of('session.late_payment')[0]!.data.object).toMatchObject({ reason: 'after_grace' })
+  })
+})
+
+describe('third review: who can move a session on, and how far', () => {
+  const MIN = 60_000
+
+  it('(a) a webhook inside the grace window completes an expired session; after the window it does not', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const t = make({ latePayments: { graceHours: 1 } })
+    const a = await t.toPayment({ ttlMinutes: 1 })
+    const b = await t.toPayment({ ttlMinutes: 1 })
+    vi.setSystemTime(Date.now() + 2 * MIN)
+    await t.ramp.sweep()
+    await t.hook([{ ref: a.ref, status: 'succeeded' }])
+    expect((await t.record(a.id)).step.state).toBe('COMPLETED')
+
+    vi.setSystemTime(Date.now() + 2 * 60 * MIN)
+    await t.hook([{ ref: b.ref, status: 'succeeded' }])
+    expect((await t.record(b.id)).step.state).toBe('EXPIRED')
+    const late = t.app.of('session.late_payment').map((e) => [e.sessionId, e.data.object.reason])
+    expect(late).toEqual([[a.id, 'after_expiry'], [b.id, 'after_grace']])
+    expect(t.app.of('session.completed').map((e) => e.sessionId)).toEqual([a.id])
+  })
+
+  it('(a) a failure event does not move an expired session to FAILED', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const t = make()
+    const s = await t.toPayment({ ttlMinutes: 1 })
+    vi.setSystemTime(Date.now() + 2 * MIN)
+    await t.ramp.sweep()
+    await t.hook([{ ref: s.ref, status: 'failed' }])
+    expect((await t.record(s.id)).step.state).toBe('EXPIRED')
+    expect(t.app.of('session.failed')).toHaveLength(0)
+  })
+
+  it('(a) an event for an earlier attempt does not revive an expired session; client routes stay closed', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const t = make()
+    const s = await t.toPayment({ ttlMinutes: 1 })
+    const first = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const second = await t.pay(s)
+    vi.setSystemTime(Date.now() + 2 * MIN)
+    await t.ramp.sweep()
+    expect((await t.record(s.id)).step.state).toBe('EXPIRED')
+
+    await t.hook([{ ref: first, status: 'succeeded' }])
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('EXPIRED')
+    expect(rec.active!.legs[0]!.ref).toBe(second)
+    expect(t.app.of('session.late_payment')[0]!.data.object).toMatchObject({ reason: 'earlier_attempt' })
+    for (const path of ['restart', 'simulate']) expect((await t.post(`/sessions/${s.id}/transitions/${path}`, s.clientSecret)).status).toBeGreaterThanOrEqual(400)
+    expect((await t.post(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: 'x' })).status).toBeGreaterThanOrEqual(400)
+  })
+
+  it('(b) a status poll cannot move a leg back; a KYC review can end with a payment step', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
+    t.statusOf[s.ref] = { status: 'awaiting_user' }
+    await t.ramp.sessions.refresh(s.id)
+    expect((await t.record(s.id)).step.state).toBe('PROCESSING')
+
+    const k = await t.toPayment()
+    t.statusOf[k.ref] = { status: 'processing', state: 'KYC', sub: 'KYC_REVIEW' }
+    await t.ramp.sessions.refresh(k.id)
+    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', sub: 'KYC_REVIEW' })
+    t.statusOf[k.ref] = { status: 'awaiting_user' }
+    await t.ramp.sessions.refresh(k.id)
+    expect((await t.record(k.id)).step.state).toBe('PAYMENT')
+  })
+
+  it('(b) a client transition cannot move a leg back', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    t.statusOf[s.ref] = { status: 'processing', state: 'PROCESSING', transitions: [{ name: 'change', kind: 'SUBMIT', label: 'Change' }] }
+    await t.ramp.sessions.refresh(s.id)
+    expect((await t.record(s.id)).step.transitions).toEqual([expect.objectContaining({ name: 'change' })])
+    t.transitionOf[s.ref] = { status: 'awaiting_user', state: 'PAYMENT', surface: { kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x00000000000000000000000000000000000000cc' } }
+    const res = await t.post(`/sessions/${s.id}/transitions/change`, s.clientSecret)
+    expect(res.status).toBe(409)
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('PROCESSING')
+    expect(JSON.stringify(rec.step)).not.toContain('00cc')
+  })
+
+  it('(c) a completed or reversed session refuses plan, quotes, target, select and transitions from the browser', async () => {
+    const t = make()
+    for (const final of ['succeeded', 'reversed'] as const) {
+      const s = await t.toPayment()
+      await t.hook([{ ref: s.ref, status: 'succeeded' }])
+      if (final === 'reversed') await t.hook([{ ref: s.ref, status: 'reversed' }])
+      for (const [path, body] of [['plan', {}], ['quotes', { method: 'card', amount: '10' }], ['target', { type: 'fiat', currency: 'USD' }], ['select', { quoteId: 'x' }], ['transitions/restart', {}]] as const) {
+        expect((await t.post(`/sessions/${s.id}/${path}`, s.clientSecret, body)).status, `${final} ${path}`).toBe(409)
+      }
+      expect((await t.call(`/sessions/${s.id}`, { secret: s.clientSecret })).status).toBe(200)
+    }
   })
 })

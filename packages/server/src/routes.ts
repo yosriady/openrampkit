@@ -6,7 +6,7 @@ import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
 import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
-import { applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
+import { adapterMoveAllowed, applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
 import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
 import { saveSession } from './outbox.js'
@@ -97,6 +97,13 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
   // An operator closed this session (`admin.resolve`): the browser cannot change it.
   if (method === 'POST' && rec.resolution && action !== 'pay-link') {
     return errorResponse(orkError('BAD_REQUEST', { message: 'This session was closed by the operator.' }), 409)
+  }
+
+  // A session with a completed payment (also one reversed after it completed) is final for the
+  // browser: no new plan, quote, target, payment or transition, with the client secret or a pay link.
+  if (method === 'POST' && action !== 'pay-link' && (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED')) {
+    const message = rec.step.state === 'REVERSED' ? 'This payment was reversed. Start a new session.' : rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.'
+    return errorResponse(orkError('BAD_REQUEST', { message }), 409)
   }
 
   if (action === 'step' && method === 'GET') {
@@ -231,6 +238,11 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     { leg: act.pathway.legs[act.index]!, ref: leg.ref ?? '', name, ...(body.inputs ? { inputs: body.inputs } : {}) },
     adapterContext(rt, rec, a, act.pathway, act.index),
   )
+  // A transition moves the leg only forward, like a provider event (see `adapterMoveAllowed`).
+  if (leg.step && !adapterMoveAllowed(leg.step, ls)) {
+    rt.log.warn('transition would move the leg back; refused', { sessionId: rec.id, adapter: a.id, name, from: leg.step.status, to: ls.status })
+    return errorResponse(orkError('BAD_REQUEST', { message: 'This step can no longer change.' }), 409)
+  }
   await setLegStep(rt, rec, act.index, ls)
   await saveSession(rt, rec)
   return json(publicSession(rec))

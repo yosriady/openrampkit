@@ -7,8 +7,8 @@
 // at-least-once (a lease can end during a slow run): the app must dedupe by event id.
 
 import { isLegTerminal, isTerminal, OrkException, orkError } from '@openrampkit/core'
-import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_LATE_POLL_MINUTES } from './config.js'
-import { refreshActive, refreshAttempts } from './legs.js'
+import { DEFAULT_LATE_POLL_MINUTES } from './config.js'
+import { inLateGrace, lateGraceMs, refreshActive, refreshAttempts } from './legs.js'
 import { notify } from './notify.js'
 import { flushOutbox, saveSession } from './outbox.js'
 import { putVersioned } from './runtime.js'
@@ -27,7 +27,6 @@ export type SweepResult = {
   sessions: { checked: number; changed: number; expired: number; open: number; grace: number }
 }
 
-const graceMs = (rt: Runtime) => Math.max(0, rt.config.latePayments?.graceHours ?? DEFAULT_LATE_GRACE_HOURS) * 60 * 60_000
 const gracePollMs = (rt: Runtime) => Math.max(1, rt.config.latePayments?.pollMinutes ?? DEFAULT_LATE_POLL_MINUTES) * 60_000
 
 /** True when an expired session has a payment that can still arrive and that the sweep can poll. */
@@ -126,7 +125,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
         expire(rec)
         await notify(rt, rec, 'session.expired')
         // The payment may still arrive (a bank transfer, a deposit address): poll it at a slower rate.
-        const late = graceMs(rt) > 0 && canArriveLate(rt, rec)
+        const late = lateGraceMs(rt) > 0 && canArriveLate(rt, rec)
         if (late) await q.push(GRACE_QUEUE, id, Date.now() + gracePollMs(rt))
         await saveSession(rt, rec)
         result.sessions.expired++
@@ -149,7 +148,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
   // 3. Grace list: expired sessions whose payment can still arrive (`latePayments`)
   for (const id of await q.claim(GRACE_QUEUE, { now, limit, leaseMs: LEASE_MS, token })) {
     const rec = await rt.store.get(id)
-    const ended = !rec || rec.step.state !== 'EXPIRED' || !!rec.resolution || !!rec.reversal || Date.now() > rec.expiresAt + graceMs(rt) || !canArriveLate(rt, rec)
+    const ended = !rec || rec.step.state !== 'EXPIRED' || !!rec.resolution || !!rec.reversal || !inLateGrace(rt, rec) || !canArriveLate(rt, rec)
     if (ended) {
       await q.ack(GRACE_QUEUE, id, token)
       continue

@@ -162,7 +162,9 @@ One move back can be allowed: from `processing` to `awaiting_user` with a new `s
 
 The timeline gets `leg.surface_after_processing`. No built-in adapter needs this move today.
 
-A status check (`status()`) and a transition (`transition()`) give the provider's current state, so the server does not check the order for them. For example, a KYC review (`processing`) can end with a payment step (`awaiting_user`).
+A status check (`status()`) and a transition (`transition()`) also move a leg only forward. One more move back is allowed for them: a review step (`processing` in a `KYC` or `AUTH` state, for example a KYC review) can end with a step for the user (`awaiting_user`), before the leg has a transaction. A status check that would move a leg back is ignored. A transition that would do it answers `409`.
+
+A session with a completed payment (`COMPLETED`, or `REVERSED` after it) refuses every browser change with `409`: plan, quotes, target, select and transitions, with the client secret or a pay link. An `EXPIRED` session moves on only when money arrives on the leg that waited at expiry, inside the grace window (`latePayments`).
 
 When an event has an `eventId`, the server keeps the id in the session (the last 50 ids). An event with an id that the session already applied is ignored.
 

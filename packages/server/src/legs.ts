@@ -3,7 +3,7 @@
 import type { LegEvent } from '@openrampkit/adapter'
 import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
 import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
-import { DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
+import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
@@ -240,6 +240,28 @@ function deliveredWrongAsset(l: ActiveLeg): boolean {
   return !!l.amountMismatch && l.amountMismatch.reason !== 'short'
 }
 
+/** How long after expiry a late payment can still move a session on (`latePayments.graceHours`) */
+export function lateGraceMs(rt: Runtime): number {
+  return Math.max(0, rt.config.latePayments?.graceHours ?? DEFAULT_LATE_GRACE_HOURS) * 60 * 60_000
+}
+
+/** True when an expired session is still inside its grace window. `graceHours: 0` means never. */
+export function inLateGrace(rt: Runtime, rec: SessionRecord): boolean {
+  const grace = lateGraceMs(rt)
+  return grace > 0 && Date.now() <= rec.expiresAt + grace
+}
+
+/**
+ * True when an adapter step (a status poll or a transition) may replace the leg step `cur`. The leg
+ * moves only forward (`isLegalLegMove`), with one exception: a review step (`processing` in `KYC` or
+ * `AUTH`, for example Bridge's KYC review) can end with a step for the user, before any money moved.
+ */
+export function adapterMoveAllowed(cur: LegStep, next: LegStep): boolean {
+  if (cur.status === next.status) return !isLegTerminal(cur.status)
+  if (isLegalLegMove(cur.status, next.status)) return true
+  return cur.status === 'processing' && next.status === 'awaiting_user' && (cur.state === 'KYC' || cur.state === 'AUTH') && !cur.txHash
+}
+
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
 export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<void> {
   const act = rec.active!
@@ -276,6 +298,16 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   // treasury send, no next leg, no leg events, no other session state.
   if (rec.reversal) {
     rec.step = composeStep(rt, rec)
+    return
+  }
+  // The session EXPIRED. Only money that arrives on the leg that was waiting at expiry, inside the
+  // grace window (`latePayments`), moves it on. Anything else changes the leg data only.
+  if (wasExpired && (i !== act.index || !inLateGrace(rt, rec) || (wrapped.status !== 'processing' && wrapped.status !== 'succeeded'))) {
+    if (wrapped.status === 'succeeded' && before !== 'succeeded') {
+      rt.log.warn('a payment arrived after the grace window of an expired session; the session stays EXPIRED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
+      const scope = act.n ? `a${act.n}` : undefined
+      await notify(rt, rec, 'session.late_payment', { reason: 'after_grace', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+    }
     return
   }
   const sent = await treasuryStep(rt, rec, i, wrapped)
@@ -379,7 +411,7 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
 export async function refreshActive(rt: Runtime, rec: SessionRecord, force = false, opts: { late?: boolean } = {}): Promise<boolean> {
   const act = rec.active
   // `late`: the sweep polls an EXPIRED session in its grace window (`latePayments`).
-  if (!act || (isTerminal(rec.step.state) && !(opts.late && rec.step.state === 'EXPIRED' && !rec.resolution && !rec.reversal))) return false
+  if (!act || (isTerminal(rec.step.state) && !(opts.late && rec.step.state === 'EXPIRED' && !rec.resolution && !rec.reversal && inLateGrace(rt, rec)))) return false
   const leg = act.legs[act.index]!
   if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) return false
   const a = rt.adapter(leg.adapterId)
@@ -389,6 +421,11 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
   try {
     const ls = await a.status({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
     if (ls.status !== leg.step.status || ls.state !== leg.step.state || ls.sub !== leg.step.sub) {
+      if (!adapterMoveAllowed(leg.step, ls)) {
+        rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
+        rt.metric('event.out_of_order', 1, { adapter: a.id })
+        return false
+      }
       await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
       return true
     }
@@ -459,8 +496,8 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   }
   if (!MONEY_MOVED.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
-  // A REVERSED session is final: an earlier attempt never becomes its payment again.
-  if (rec.step.state === 'COMPLETED' || rec.reversal || underway || rec.resolution) {
+  // A REVERSED or EXPIRED session: an earlier attempt never becomes its payment again.
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
       await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
