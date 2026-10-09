@@ -14,7 +14,6 @@
 "@openrampkit/adapter-binance": minor
 "@openrampkit/adapter-bridge": minor
 "@openrampkit/adapter-coinbase": minor
-"@openrampkit/adapter-kotani": minor
 "@openrampkit/adapter-lifi": minor
 "@openrampkit/adapter-meld": minor
 "@openrampkit/adapter-mock": minor

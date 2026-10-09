@@ -37,7 +37,7 @@ Go through this list before real money moves.
 
 ## Provider webhooks
 
-- [ ] Each provider with webhooks points to `{baseUrl}/webhooks/{adapterId}`, and its signing secret is configured on the adapter (`webhookToken` for Xendit, `webhookSecret` for Coinbase, Stripe, Meld, Onramper, Kotani Pay and Peer, `webhookKey` for MoonPay, `webhookPublicKey` for Bridge, `binancePublicKey` for Binance). Swapped sets its callback URL per order. See [Get provider keys](../guide/provider-keys.md).
+- [ ] Each provider with webhooks points to `{baseUrl}/webhooks/{adapterId}`, and its signing secret is configured on the adapter (`webhookToken` for Xendit, `webhookSecret` for Coinbase, Stripe, Meld, Onramper and Peer, `webhookKey` for MoonPay, `webhookPublicKey` for Bridge, `binancePublicKey` for Binance). Swapped sets its callback URL per order. See [Get provider keys](../guide/provider-keys.md).
 - [ ] You tested one webhook per provider in sandbox and saw the session move.
 - [ ] Transak: the adapter verifies webhooks with its cached access token. Make sure at least one quote or start ran on the instance (or the token is in the shared store) before webhooks arrive.
 

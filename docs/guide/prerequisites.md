@@ -31,7 +31,6 @@ Each adapter needs an account with its provider, except the mock adapter. You ca
 | [Mock](../adapters/mock.md) | Nothing | |
 | [Relay](../adapters/relay.md) | API key. Relay requires one for quotes under its announced policy from 2 Oct 2026. Some requests without a key may still work today, but Relay can refuse them at any time. Status lookups use `/requests/v3`, which also needs one. Always set `RELAY_API_KEY`. | [dashboard.relay.link](https://dashboard.relay.link) |
 | [LI.FI](../adapters/lifi.md) | API key and an integration string (`integrator`). Without a key the quote limit is 75 requests per 2 hours. | [portal.li.fi](https://portal.li.fi) |
-| [Kotani Pay](../adapters/kotani.md) | API key and webhook secret (sandbox is self-serve) | [integrator.kotanipay.com](https://integrator.kotanipay.com) |
 | [Bridge](../adapters/bridge.md) | API key and the webhook public key (contact sales) | [apidocs.bridge.xyz](https://apidocs.bridge.xyz) |
 | [Binance](../adapters/binance.md) | Partner approval: base URL, client id, access token, your RSA private key, Binance's webhook public key | See [Binance](../adapters/binance.md) |
 | [Swapped](../adapters/swapped.md) | Merchant public key (`pk_...`) and secret key (`sk_...`) | [docs.swapped.com](https://docs.swapped.com) |

@@ -1,6 +1,0 @@
-{
-  "extends": "../../../tsconfig.base.json",
-  // Resolve @openrampkit/adapter/testing to its source (see packages/adapter/package.json)
-  "compilerOptions": { "customConditions": ["@openrampkit/source"] },
-  "include": ["src"]
-}

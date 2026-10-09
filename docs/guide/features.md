@@ -110,7 +110,7 @@ See the [agent flow](../concepts/flows.md#ai-agent-via-mcp).
 
 | Feature | What it does | Read more |
 |---|---|---|
-| 10 provider adapters and a mock | Relay, Swapped, Xendit, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Peer, Mock | [Adapters](../adapters/) |
+| 13 provider adapters and a mock | Relay, LI.FI, Swapped, Xendit, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Bridge, Binance, Peer, Mock | [Adapters](../adapters/) |
 | `createAdapter()` | Write an adapter for any provider | [Writing an adapter](../adapters/writing-an-adapter.md), [@openrampkit/adapter](../api/adapter.md) |
 | Conformance kit | `runAdapterConformance()` checks an adapter's shape, quotes, steps and webhooks | [@openrampkit/adapter](../api/adapter.md) |
 | Mock adapter and mock wallet | Test every flow with no provider account | [Testing with mocks](./testing.md) |

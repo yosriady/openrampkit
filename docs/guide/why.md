@@ -17,7 +17,7 @@ A new user wants to use your app. First, they must get money onchain. Most users
 One modal shows every way to pay, for the user's country. A planner picks the best route at run time, and the money lands where your app needs it.
 
 1. **The user picks how to pay:** a card, a bank transfer, a local QR rail, a wallet, or a crypto transfer from another chain or exchange.
-2. **The planner builds a pathway** of one or two steps across 10 provider adapters. For example: VietQR to USDC, then a Relay bridge to Arbitrum. The modal shows each step's quote, fee and status.
+2. **The planner builds a pathway** of one or two steps across 13 provider adapters. For example: VietQR to USDC, then a Relay bridge to Arbitrum. The modal shows each step's quote, fee and status.
 3. **The money lands at your destination:** stablecoins on Arbitrum, Base, Solana, Tempo or another chain, a vault position through the `OpenRampSettlement` contract, or your own fiat merchant account.
 4. **Your backend gets signed webhooks** for each change, with retries.
 
@@ -68,7 +68,7 @@ Hosted platforms are a good choice when you want one contract, one bill and no s
 
 - The playground on this site: deposits and withdrawals with mock providers.
 - `OpenRampSettlement` on Arbitrum Sepolia, Robinhood Chain Testnet and Tempo Testnet at `0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5`, with verified source and demo settlements. See [On-chain settlement](../concepts/settlement.md).
-- 10 provider adapters, Solana and EVM wallet adapters, and an MCP server for agents.
+- 13 provider adapters, Solana and EVM wallet adapters, and an MCP server for agents.
 - A security review, with the fixes and a threat model in [Security](./security.md).
 
 ## Limits

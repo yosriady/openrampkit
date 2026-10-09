@@ -26,7 +26,6 @@ The times are estimates for the first sandbox key. Production access can take lo
 | [Xendit](#xendit) | Self-serve test mode | Secret key, webhook verification token | About 10 minutes |
 | [Onramper](#onramper) | Self-serve sandbox after an onboarding form; paid plan and KYB for live | API key, Ed25519 signing key, webhook secret | About 15 minutes |
 | [Coinbase](#coinbase) | Self-serve limited test access; application for full access | CDP Secret API key (id and secret), webhook secret | About 15 minutes |
-| [Kotani Pay](#kotani) | Self-serve sandbox; production on request | API key, webhook signing secret | About 10 minutes |
 | [Stripe](#stripe) | Application and review | Secret key, publishable key, webhook signing secret | Days (Stripe reviews the application) |
 | [Swapped](#swapped) | Application (business onboarding) | Public key, secret key | Days |
 | [Meld](#meld) | Sales (contact form) | API key, webhook secret | Days to weeks |
@@ -343,42 +342,6 @@ coinbase({
 - Guest Apple Pay (`guestCheckout`, the headless flow) needs extra approval from Coinbase. Its `domain` must be on the domain allowlist.
 - The hosted legs need a Coinbase account for each user.
 - Copy the secret when you create the key. If you lose it, make a new key.
-
-## Kotani Pay {#kotani}
-
-**Access type:** self-serve sandbox. Production on request.
-
-**Sign up:** [integrator.kotanipay.com](https://integrator.kotanipay.com/register).
-
-**Get the keys:**
-
-1. Open **API Keys**. Click **Generate New Key**. Use an integrator-level key (it has all permissions). Copy the API key.
-2. Optional: for request signing, click **Generate Secure Key**. It gives a key and a secret.
-3. Open **Settings**. Set the webhook URL. Copy the webhook signing secret.
-4. Ask Kotani Pay to turn on the countries that you need.
-
-| Value | Adapter option | Env var |
-|---|---|---|
-| API key | `apiKey` | `KOTANI_API_KEY` |
-| Webhook signing secret | `webhookSecret` | `KOTANI_WEBHOOK_SECRET` |
-| Secure key secret (only with request signing) | `apiSecret` | `KOTANI_API_SECRET` |
-
-```ts
-kotani({
-  apiKey: process.env.KOTANI_API_KEY!,
-  webhookSecret: process.env.KOTANI_WEBHOOK_SECRET,
-  sandbox: true,
-})
-```
-
-**Sandbox and production:** set `sandbox: true` for `https://sandbox-api.kotanipay.io`. The default is production. For production, ask Kotani Pay for a production account, then make a new key in the **Production** environment. Sandbox keys do not work in production.
-
-**Webhooks:** in **Settings**, set the webhook URL to `{baseUrl}/webhooks/kotani`. Without `webhookSecret`, the adapter rejects every callback and uses polling only.
-
-**Gotchas:**
-
-- For withdrawals, fund your payout balance in each payout currency.
-- `feeBearer` must agree with the billing setting of your Kotani Pay wallet.
 
 ## Stripe {#stripe}
 
