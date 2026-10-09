@@ -1,5 +1,5 @@
 // Xendit adapter: fiat pay-in to the merchant's own Xendit account (Payments API v3).
-// QR rails (QRIS, QR Ph, PromptPay, PayNow) and e-wallets (GCash, DANA, OVO, MoMo, ZaloPay, ...).
+// QR rails (QRIS, QR Ph, PromptPay, PayNow QR as SGQR) and e-wallets (GCash, DANA, OVO, MoMo, ZaloPay, ...).
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
@@ -47,8 +47,9 @@ export const XENDIT_CHANNELS: Channel[] = [
   // Vietnam (VietQR: TO VERIFY; not in Xendit's public channel list as of 2026-09)
   { country: 'VN', currency: 'VND', method: 'momo', code: 'MOMO', min: '1000', max: '50000000', kind: 'ewallet' },
   { country: 'VN', currency: 'VND', method: 'zalopay', code: 'ZALOPAY', min: '1000', max: '50000000', kind: 'ewallet' },
-  // Singapore (PayNow QR channel code: TO VERIFY)
-  { country: 'SG', currency: 'SGD', method: 'paynow', code: 'PAYNOW', min: '1', max: '200000', kind: 'qr' },
+  // Singapore: PayNow QR has channel code SGQR, not PAYNOW (https://docs.xendit.co/docs/paynow-qr, read 2026-10-09).
+  // With PAYNOW, test mode answered 400 API_VALIDATION_ERROR "API endpoint and method is not supported".
+  { country: 'SG', currency: 'SGD', method: 'paynow', code: 'SGQR', min: '0.01', max: '200000', kind: 'qr' },
 ]
 
 const POLL: PollSpec = { intervalMs: 2500, backoff: 1.2, maxIntervalMs: 10_000, giveUpAfterMs: 30 * 60_000 }
@@ -112,7 +113,7 @@ export function xendit(opts: XenditOptions) {
     return [{ kind: 'provider', label: 'Xendit fee', amount: roundTo(total, minorUnits(c.currency)), currency: c.currency }]
   }
 
-  async function call<T>(ctx: Pick<AdapterContext, 'fetch'>, method: 'GET' | 'POST', path: string, body?: unknown, idem?: string): Promise<T> {
+  async function call<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, method: 'GET' | 'POST', path: string, body?: unknown, idem?: string, c?: Channel): Promise<T> {
     try {
       return await fetchJson<T>(ctx.fetch, `${api}${path}`, {
         method,
@@ -125,12 +126,40 @@ export function xendit(opts: XenditOptions) {
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
     } catch (e) {
-      const status = (e as { status?: number }).status
-      const msg = (e as { body?: { message?: string } }).body?.message
-      if (status === 429) throw new OrkException(orkError('RATE_LIMITED'), 429)
-      if (status && status >= 400 && status < 500) throw new OrkException(orkError('PROVIDER_DECLINED', { message: msg ? `Xendit: ${msg}`.slice(0, 200) : 'Xendit declined this payment.' }), 422)
-      throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Xendit is not available right now.' }), 502)
+      throw toOrk(e, ctx, c)
     }
+  }
+
+  /**
+   * Map a failed Xendit call. Two answers mean our setup is wrong, not the payment: a retry or another
+   * amount cannot fix them, so they are not retryable and the operator gets a log line that says what to do.
+   * - 403 INVALID_MERCHANT_SETTINGS ("payment channel has not been activated"): activate the channel in the
+   *   Xendit Dashboard (in test mode for development keys).
+   * - 400 API_VALIDATION_ERROR on a payment request for a channel ("... not supported for 'X' channel code"):
+   *   the channel code or request body does not match the Xendit API for that channel.
+   */
+  function toOrk(e: unknown, ctx: Pick<AdapterContext, 'log'>, c?: Channel): OrkException {
+    const status = (e as { status?: number }).status
+    const errBody = (e as { body?: { error_code?: string; message?: string } }).body
+    const code = errBody?.error_code
+    const msg = errBody?.message
+    if (status === 429) return new OrkException(orkError('RATE_LIMITED'), 429)
+    const name = c ? `${c.method} (${c.code}, ${c.country})` : 'this channel'
+    const setup = (operator: string) => {
+      ctx.log.error(operator, { status, error_code: code, message: msg?.slice(0, 200) })
+      return new OrkException(
+        orkError('PROVIDER_UNAVAILABLE', { message: 'This payment method is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' }),
+        502,
+      )
+    }
+    if (status === 403 && code === 'INVALID_MERCHANT_SETTINGS') {
+      return setup(`xendit: channel ${name} is not activated for this Xendit account. Activate the payment channel in the Xendit Dashboard (in test mode for xnd_development_ keys), then try again.`)
+    }
+    if (status === 400 && code === 'API_VALIDATION_ERROR' && c && /channel/i.test(msg ?? '')) {
+      return setup(`xendit: Xendit refused the payment request for channel ${name}: ${(msg ?? '').slice(0, 200)}. Check the channel code and request body for this channel in the Xendit API reference.`)
+    }
+    if (status && status >= 400 && status < 500) return new OrkException(orkError('PROVIDER_DECLINED', { message: msg ? `Xendit: ${msg}`.slice(0, 200) : 'Xendit declined this payment.' }), 422)
+    return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Xendit is not available right now.' }), 502)
   }
 
   function surfaceFor(pr: XenditPaymentRequest, c: Channel, amount: string): Surface | undefined {
@@ -216,6 +245,7 @@ export function xendit(opts: XenditOptions) {
           metadata: { openramp_session: ctx.session.id, user_id: ctx.session.userId },
         },
         ctx.idempotencyKey(`xendit:${leg.legId}:${String((quote.data as { nonce?: string } | undefined)?.nonce ?? 'start')}`),
+        c,
       )
       await ctx.store.put('pr', { id: pr.payment_request_id, leg: leg.legId, amount })
       return toStep(pr, c, amount)
@@ -223,7 +253,7 @@ export function xendit(opts: XenditOptions) {
 
     async status({ leg, ref }, ctx): Promise<LegStep> {
       const c = channelFor(leg.legId)
-      const pr = await call<XenditPaymentRequest>(ctx, 'GET', `/v3/payment_requests/${encodeURIComponent(ref)}`)
+      const pr = await call<XenditPaymentRequest>(ctx, 'GET', `/v3/payment_requests/${encodeURIComponent(ref)}`, undefined, undefined, c)
       return toStep(pr, c, String(pr.request_amount))
     },
 

@@ -1,6 +1,6 @@
 # Xendit
 
-`@openrampkit/adapter-xendit` takes fiat pay-ins into your own [Xendit](https://docs.xendit.co) account with the Payments API v3. It has QR rails (QRIS, QR Ph, PromptPay, PayNow) and e-wallets. There is no crypto: use it with a merchant destination. See the [merchant guide](../guide/merchant-destination.md).
+`@openrampkit/adapter-xendit` takes fiat pay-ins into your own [Xendit](https://docs.xendit.co) account with the Payments API v3. It has QR rails (QRIS, QR Ph, PromptPay, PayNow QR) and e-wallets. There is no crypto: use it with a merchant destination. See the [merchant guide](../guide/merchant-destination.md).
 
 ```ts
 import { xendit } from '@openrampkit/adapter-xendit'
@@ -45,9 +45,11 @@ One leg per country and channel. The leg id is `{country}-{method}`, for example
 | `my-grabpay` | `GRABPAY` | MYR | 1 | 10,000 | `REDIRECT`, `DEEPLINK` |
 | `vn-momo` | `MOMO` | VND | 1,000 | 50,000,000 | `REDIRECT`, `DEEPLINK` |
 | `vn-zalopay` | `ZALOPAY` | VND | 1,000 | 50,000,000 | `REDIRECT`, `DEEPLINK` |
-| `sg-paynow` | `PAYNOW` | SGD | 1 | 200,000 | `QR` |
+| `sg-paynow` | `SGQR` | SGD | 0.01 | 200,000 | `QR` |
 
 Each leg allows only its country. Limits come from Xendit's channel pages.
+
+PayNow QR uses the channel code `SGQR`, not `PAYNOW`. Source: the Xendit [PayNow QR channel page](https://docs.xendit.co/docs/paynow-qr) (read 2026-10-09). The leg id stays `sg-paynow`. With `PAYNOW`, Xendit test mode returns `400 API_VALIDATION_ERROR` "API endpoint and method is not supported for 'PAYNOW' channel code with country 'SG'".
 
 ## Quotes and start
 
@@ -64,7 +66,20 @@ Each leg allows only its country. Limits come from Xendit's channel pages.
 | `FAILED`, `CANCELED` | `failed` with `PAYMENT_FAILED` |
 | `EXPIRED` | `expired` |
 
-Errors: HTTP 429 is `RATE_LIMITED`. Other 4xx is `PROVIDER_DECLINED` with Xendit's message. 5xx and network errors are `PROVIDER_UNAVAILABLE`.
+Errors:
+
+| Xendit answer | Error | Retryable |
+|---|---|---|
+| `429` | `RATE_LIMITED` | yes |
+| `403 INVALID_MERCHANT_SETTINGS` ("payment channel has not been activated") | `PROVIDER_UNAVAILABLE`, recovery `choose_other` | no |
+| `400 API_VALIDATION_ERROR` that names the channel ("... not supported for 'X' channel code") | `PROVIDER_UNAVAILABLE`, recovery `choose_other` | no |
+| Other 4xx | `PROVIDER_DECLINED` with Xendit's message | no |
+| 5xx, network errors | `PROVIDER_UNAVAILABLE` | yes |
+
+The two setup errors show the user "This payment method is not set up for this app yet. Try another method." The adapter also writes an error log for the operator. The log names the method, the channel code and the country, and tells you what to do:
+
+- `INVALID_MERCHANT_SETTINGS`: the channel is not active on your Xendit account. Activate the payment channel in the Xendit Dashboard. Do this in test mode for `xnd_development_` keys and again in live mode. A test mode check on 2026-10-09 gave this error for QRIS and QR Ph.
+- `API_VALIDATION_ERROR` for a channel: the channel code or the request body does not agree with the Xendit API for that channel. Compare them with the [create payment request reference](https://docs.xendit.co/apidocs/create-payment-request) and the channel page.
 
 ## Webhooks
 
@@ -76,7 +91,9 @@ In the Xendit dashboard, set the payment webhook URL to `{baseUrl}/webhooks/xend
 
 ## Verified vs TO VERIFY
 
-- **TO VERIFY**: the PayNow QR channel code (`PAYNOW`).
+- **Verified (docs)**: PayNow QR uses channel code `SGQR` with `POST /v3/payment_requests`, min 0.01 SGD, max 200,000 SGD ([PayNow QR page](https://docs.xendit.co/docs/paynow-qr), read 2026-10-09).
+- **TO VERIFY**: a live test mode payment request with `SGQR`. The account used on 2026-10-09 did not test it after the change.
+- **TO VERIFY**: PromptPay. The PromptPay channel page gives `PROMPTPAY`, but an example in the create payment request reference uses `QRPROMPTPAY`. The adapter sends `PROMPTPAY`.
 - **TO VERIFY**: DuitNow QR (Malaysia) is not in the list; its channel code must be checked with Xendit.
 - **TO VERIFY**: VietQR is not in the list; it was not in Xendit's public channel list as of 2026-09.
 

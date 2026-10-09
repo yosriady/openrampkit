@@ -215,6 +215,7 @@ The adapter uses the secret to get an access token: `POST https://api-stg.transa
 2. Click **Generate secret key**. In Test mode, the key starts with `xnd_development_`.
 3. Set the permissions. The adapter calls the Payments API v3 (`POST /v3/payment_requests` and `GET /v3/payment_requests/{id}`). Give the key write permission for the money-in (payment request) products. Check in the dashboard for the exact permission names.
 4. Open **Settings**, then **Webhooks**. Copy the **Webhook verification token**.
+5. Activate each payment channel that you offer (for example QRIS, QR Ph, PayNow QR, DANA). Do this in **Test mode** first, and again in live mode. Check in the dashboard for the exact page name. A channel that is not active fails with `403 INVALID_MERCHANT_SETTINGS`.
 
 | Value | Adapter option | Env var |
 |---|---|---|
@@ -234,6 +235,8 @@ xendit({ secretKey: process.env.XENDIT_SECRET_KEY!, webhookToken: process.env.XE
 - A key with no read permission on balance gets `403` on `GET /balance`. The adapter does not call `/balance`, so this is not a problem.
 - The webhook token has no signature or timestamp. Keep it as secret as the API key.
 - Xendit has no crypto. Use the adapter with a [merchant destination](./merchant-destination.md).
+- Activate each payment channel before you use it. Do this in test mode and again in live mode. A channel that is not active gets `403 INVALID_MERCHANT_SETTINGS` "payment channel has not been activated". On 2026-10-09, a new test mode account got this error for QRIS and QR Ph, while DANA worked. The adapter shows the user "This payment method is not set up for this app yet" and writes an error log that names the channel. See [Xendit errors](../adapters/xendit.md#quotes-and-start).
+- PayNow QR uses the channel code `SGQR`. The old code `PAYNOW` gets `400 API_VALIDATION_ERROR` "API endpoint and method is not supported for 'PAYNOW' channel code with country 'SG'".
 
 ## Onramper {#onramper}
 

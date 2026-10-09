@@ -110,6 +110,49 @@ describe('xendit adapter', () => {
     }
   })
 
+  it('PayNow uses channel code SGQR (Xendit PayNow QR page), with a 0.01 SGD minimum', async () => {
+    const { f, calls } = fakeFetch(() => Response.json(pr({ channel_code: 'SGQR', currency: 'SGD', request_amount: 12.5 })))
+    const c = { ...ctx(f), destination: { type: 'merchant' as const, currency: 'SGD' } }
+    const q = await a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { amount: '12.5', asset: { kind: 'fiat', currency: 'SGD' } } }, c)
+    const step = await a.start({ leg: leg('sg-paynow', 'SGD'), quote: q }, c)
+    expect(step.surface).toMatchObject({ kind: 'QR', currency: 'SGD', method: 'paynow' })
+    expect(calls[0]!.url).toBe('https://api.xendit.co/v3/payment_requests')
+    expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ type: 'PAY', country: 'SG', currency: 'SGD', request_amount: 12.5, channel_code: 'SGQR' })
+    expect(a.legs.find((l) => l.id === 'sg-paynow')!.limits).toEqual({ min: '0.01', max: '200000', currency: 'SGD' })
+    await expect(a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { amount: '0.01', asset: { kind: 'fiat', currency: 'SGD' } } }, c)).resolves.toMatchObject({ input: { amount: '0.01' } })
+  })
+
+  it('setup errors are not retryable and tell the operator what to do', async () => {
+    const errors: string[] = []
+    const log = { ...quiet, error: (m: string) => void errors.push(m) }
+    const start = async (legId: string, currency: string, status: number, body: unknown) => {
+      const { f } = fakeFetch(() => new Response(JSON.stringify(body), { status }))
+      const quote = { adapterId: 'xendit', legId, input: { amount: '100', asset: { kind: 'fiat' as const, currency } }, output: { amount: '100', asset: { kind: 'fiat' as const, currency } }, fees: [], eta: { min: 1, max: 2 } }
+      return a.start({ leg: leg(legId, currency), quote }, { ...ctx(f), log })
+    }
+    // Live test mode answer for QRIS and QRPH on an account without the channel (2026-10-09)
+    const notActive = { error_code: 'INVALID_MERCHANT_SETTINGS', message: 'payment channel has not been activated' }
+    for (const [legId, cur, code] of [['id-qris', 'IDR', 'QRIS'], ['ph-qrph', 'PHP', 'QRPH']] as const) {
+      errors.length = 0
+      const e = await start(legId, cur, 403, notActive).catch((x) => x)
+      expect(e.error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: false, recovery: 'choose_other' })
+      expect(e.error.message).toBe('This payment method is not set up for this app yet. Try another method.')
+      expect(errors).toHaveLength(1)
+      expect(errors[0]).toContain(code)
+      expect(errors[0]).toMatch(/Activate the payment channel in the Xendit Dashboard/)
+    }
+    // Live test mode answer for the old PAYNOW channel code (2026-10-09)
+    errors.length = 0
+    const unsupported = { error_code: 'API_VALIDATION_ERROR', message: "API endpoint and method is not supported for 'PAYNOW' channel code with country 'SG'" }
+    const e = await start('sg-paynow', 'SGD', 400, unsupported).catch((x) => x)
+    expect(e.error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: false, recovery: 'choose_other' })
+    expect(errors[0]).toContain('paynow (SGQR, SG)')
+    expect(errors[0]).toContain("not supported for 'PAYNOW' channel code")
+    // Other 400s stay a decline with Xendit's message
+    const other = await start('id-qris', 'IDR', 400, { error_code: 'INVALID_VALUE_ERROR', message: 'request_amount is too small' }).catch((x) => x)
+    expect(other.error).toMatchObject({ code: 'PROVIDER_DECLINED', retryable: false, message: 'Xendit: request_amount is too small' })
+  })
+
   it('verifies the callback token and parses capture and failure webhooks', async () => {
     const wctx = { log: quiet, shared: kv(), fetch }
     const req = (tok?: string) => new Request('https://app.test/webhooks/xendit', { method: 'POST', headers: tok ? { 'x-callback-token': tok } : {} })
