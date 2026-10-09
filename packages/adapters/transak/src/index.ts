@@ -231,7 +231,6 @@ export function transak(opts: TransakOptions) {
     eta: { min: 120, max: 1800 },
     surfaces: [surfaceKind],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks'],
     ...extra,
   })
 

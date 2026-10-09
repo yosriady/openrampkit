@@ -50,12 +50,13 @@ const legs: LegSpec[] = [
     eta: { min: 60, max: 900 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
   },
 ]
 ```
 
 Tips:
+
+- `capabilities` has two values only, and the server checks both: `settlement` (the leg can pay into a settlement contract) and `surface_after_processing` (see [webhook](#webhook)). Leave it out for a normal leg. How the server learns a leg result is not a capability: it comes from `status()` (polling) and `webhook`. `checkAdapterShape` reports any other value.
 
 - Use method ids from the built-in vocabulary (`METHODS` in `@openrampkit/core`) so the modal shows the right name and icon. Unknown ids work too; they are title-cased.
 - List concrete delivery assets (chain and lowercase token). The planner can only build a hop from concrete assets, not from `'*'`.
@@ -122,10 +123,13 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 - `status({ leg, ref })` asks the provider for the current state. The server calls it when the browser polls (at most every 2 seconds per leg), from the background `sweep()`, and from `sessions.refresh()`.
 - `transition({ leg, ref, name, inputs })` handles SUBMIT and SURFACE_RESULT transitions that your steps offer, for example an OTP form or `submit_tx` with `{ txHash }`.
 
+The server learns a leg result from `status()` (polling), from the `webhook`, or from both. `resultChannels(adapter)` in `@openrampkit/adapter` tells which: `{ polling: !!status, webhooks: webhook configured }`. When an adapter with legs has neither, the server writes a warning at start: its payments cannot complete. An adapter without `status()` (for example Transak) relies on its webhook only.
+
 ## webhook
 
 ```ts
 webhook: {
+  configured?: boolean       // false when the options have no webhook secret, so nothing can verify
   verify(req: Request, rawBody: string, ctx): Promise<boolean>
   parse(rawBody: string, ctx): Promise<LegEvent[]>
   replayKey?(req: Request, rawBody: string, ctx): Promise<string | undefined>
@@ -224,7 +228,6 @@ export function acme(opts: AcmeOptions) {
       regions: { allow: ['US'], deny: [] },
       eta: { min: 60, max: 900 },
       surfaces: ['REDIRECT'],
-      capabilities: ['webhooks', 'polling'],
     },
   ]
 

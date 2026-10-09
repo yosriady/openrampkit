@@ -202,7 +202,7 @@ describe('P1-1: the leg moves only forward', () => {
   })
 
   it('with surface_after_processing: allows it once, with a declared surface kind, before the leg has a transaction', async () => {
-    const t = make({}, { capabilities: ['webhooks', 'surface_after_processing'], surfaces: ['REDIRECT', 'DEPOSIT_ADDRESS'] })
+    const t = make({}, { capabilities: ['surface_after_processing'], surfaces: ['REDIRECT', 'DEPOSIT_ADDRESS'] })
     // A surface kind the leg does not declare is refused.
     const a = await t.toPayment()
     await t.hook([{ ref: a.ref, status: 'processing' }])

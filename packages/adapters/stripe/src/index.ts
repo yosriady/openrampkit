@@ -171,7 +171,6 @@ export function stripe(opts: StripeOptions) {
     eta: d.eta,
     surfaces: [surfaceKind],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling', 'exact_output'],
   }))
   const byId = new Map(defs.map((d) => [d.id, d]))
 

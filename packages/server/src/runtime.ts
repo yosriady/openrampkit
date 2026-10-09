@@ -1,4 +1,4 @@
-import { ADAPTER_API_VERSION } from '@openrampkit/adapter'
+import { ADAPTER_API_VERSION, resultChannels } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
 import { OrkException, normalizeToken, orkError } from '@openrampkit/core'
 import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
@@ -45,6 +45,7 @@ export function createRuntime(config: OpenRampConfig): Runtime {
   if (config.treasury && !config.treasury.address) {
     ;(config.logger ?? consoleLogger).warn('treasury has no `address`: quotes for app-custody withdrawals use a placeholder sender. Set treasury.address.')
   }
+  warnNoResultChannel(config.adapters, config.logger ?? consoleLogger)
   const base = config.baseUrl.replace(/\/$/, '')
   const adapters = new Map(config.adapters.map((a) => [a.id, a]))
   return {
@@ -71,6 +72,24 @@ export function createRuntime(config: OpenRampConfig): Runtime {
         // A metrics failure must never break a payment.
       }
     },
+  }
+}
+
+/**
+ * Warn once at start for each adapter with legs that has no way to learn a leg's result: no `status()`
+ * to poll and no webhook that can verify (for example Transak with no `status()`, or an adapter whose
+ * webhook secret is not set). Its payments would wait in PAYMENT or PROCESSING until they expire.
+ */
+function warnNoResultChannel(adapters: Adapter[], log: Logger): void {
+  for (const a of adapters) {
+    if (!a.legs.length) continue
+    const { polling, webhooks } = resultChannels(a)
+    if (polling || webhooks) continue
+    const why = a.webhook ? 'its webhook is not configured (set the webhook secret in its options)' : 'it has no webhook'
+    log.warn(
+      `OpenRamp: adapter ${a.id} cannot learn the result of its legs (${a.legs.map((l) => l.id).join(', ')}): it has no status() polling, and ${why}. Its payments will not complete.`,
+      { adapter: a.id },
+    )
   }
 }
 

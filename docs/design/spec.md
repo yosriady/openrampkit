@@ -156,7 +156,7 @@ interface LegSpec {
   eta: { min: number; max: number }     // seconds
   surfaces: SurfaceKind[]               // what the client must be able to show
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods'>
+  capabilities?: Array<'settlement' | 'surface_after_processing'>  // results come from status() and webhook, not from a capability
 }
 ```
 

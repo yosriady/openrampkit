@@ -249,7 +249,6 @@ export function coinbase(opts: CoinbaseOptions) {
     eta: { min: 60, max: 900 },
     surfaces: ['REDIRECT'],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const legs: LegSpec[] = [
@@ -278,7 +277,6 @@ export function coinbase(opts: CoinbaseOptions) {
       limits: GUEST_LIMITS,
       eta: { min: 30, max: 900 },
       surfaces: ['IFRAME'],
-      capabilities: ['webhooks', 'polling'],
     })
   }
 
@@ -645,6 +643,8 @@ export function coinbase(opts: CoinbaseOptions) {
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('coinbase: webhookSecret is not set; rejecting webhook')

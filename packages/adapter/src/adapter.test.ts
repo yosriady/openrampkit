@@ -249,6 +249,9 @@ describe('testkit checks', () => {
       'limits.max is not a decimal string',
     ])
     expect(checkAdapterShape({ ...base, legs: [] })).toEqual([{ where: 'legs', problem: 'Adapter declares no legs' }])
+    // Capabilities: only the two that the server reads. 'polling' and 'webhooks' come from status() and webhook.
+    const caps = { ...base, legs: [spec({ capabilities: ['settlement', 'surface_after_processing', 'polling'] as never })] } as Adapter
+    expect(checkAdapterShape(caps).map((p) => p.problem)).toEqual([expect.stringContaining('Unknown capability polling')])
   })
 
   it('checkLegQuote checks money strings and expiry', () => {

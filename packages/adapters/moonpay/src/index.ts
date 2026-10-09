@@ -208,7 +208,6 @@ export function moonpay(opts: MoonPayOptions) {
     eta: d.eta,
     surfaces: [opts.surface === 'iframe' ? 'IFRAME' : 'REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling', 'exact_output'],
   })
   const legs = defs.map((d) => legFor(d))
 
@@ -374,6 +373,8 @@ export function moonpay(opts: MoonPayOptions) {
     },
 
     webhook: {
+      // Without the webhookKey, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookKey,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookKey) {
           ctx.log.warn('moonpay: webhookKey is not set; rejecting webhook')

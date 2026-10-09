@@ -95,7 +95,6 @@ export function xendit(opts: XenditOptions) {
     limits: { min: c.min, max: c.max, currency: c.currency },
     eta: c.kind === 'qr' ? { min: 5, max: 60 } : { min: 10, max: 120 },
     surfaces: c.kind === 'qr' ? ['QR'] : ['REDIRECT', 'DEEPLINK'],
-    capabilities: ['webhooks', 'polling', 'refunds'],
   }))
 
   function channelFor(id: string): Channel {

@@ -363,7 +363,6 @@ export function lifi(opts: LifiOptions = {}) {
       surfaces: ['WALLET_TX'],
       requires: ['wallet'],
       // TO VERIFY: withdraw sessions (the same leg shape as Relay `wallet`) are not tested with LI.FI.
-      capabilities: ['polling'],
     },
   ]
 

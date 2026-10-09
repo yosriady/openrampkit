@@ -313,7 +313,6 @@ export function bridge(opts: BridgeOptions) {
       eta: r.eta,
       surfaces: r.currency === 'BRL' ? ['QR', 'REDIRECT', 'FORM'] : ['BANK_FIELDS', 'REDIRECT', 'FORM'],
       requires: ['provider_kyc'],
-      capabilities: ['webhooks', 'polling', 'exact_output'],
     })),
     ...payoutRails.map<LegSpec>((r) => ({
       id: r.id,
@@ -326,7 +325,6 @@ export function bridge(opts: BridgeOptions) {
       eta: r.eta,
       surfaces: ['FORM', 'WALLET_TX', 'REDIRECT'],
       requires: ['provider_kyc'],
-      capabilities: ['webhooks', 'polling'],
     })),
   ]
   const depositById = new Map(depositRails.map((r) => [r.id, r]))
@@ -1016,6 +1014,8 @@ export function bridge(opts: BridgeOptions) {
     },
 
     webhook: {
+      // Without the webhookPublicKey, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookPublicKey,
       async verify(req, rawBody, ctx) {
         // An empty key would accept nothing useful; refuse clearly (for example an unset environment variable).
         if (!opts.webhookPublicKey) {

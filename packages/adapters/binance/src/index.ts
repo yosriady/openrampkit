@@ -180,7 +180,6 @@ export function binance(opts: BinanceOptions) {
       eta: { min: 60, max: 1800 },
       surfaces: ['REDIRECT'],
       requires: ['provider_account', 'provider_kyc'],
-      capabilities: ['webhooks', 'polling'],
     },
   ]
 
@@ -376,6 +375,8 @@ export function binance(opts: BinanceOptions) {
     },
 
     webhook: {
+      // Without the binancePublicKey, no webhook can verify (see `resultChannels`).
+      configured: !!opts.binancePublicKey,
       async verify(req, rawBody, ctx) {
         // An empty key would make every webhook fail to verify anyway; log the cause.
         if (!opts.binancePublicKey) {

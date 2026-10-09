@@ -4,7 +4,7 @@ import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/ada
 import { USDC, isRegionAllowed, planPathways } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { DEFAULT_DELIVER_ASSETS, swapped, swappedMethodId } from './index.js'
-import { webhookBodyKey } from '@openrampkit/adapter'
+import { resultChannels, webhookBodyKey } from '@openrampkit/adapter'
 import { createOpenRamp } from '@openrampkit/server'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 
@@ -394,11 +394,12 @@ describe('swapped errors and edge cases', () => {
 describe('swapped status polling (statusPolling: true)', () => {
   const orders = (list: unknown[]) => ({ data: { orders: list } })
 
-  it('is off by default; when on, legs declare polling', () => {
-    expect(swapped({ publicKey: PK, secretKey: SK }).status).toBeUndefined()
+  it('is off by default; when on, the adapter has status() (polling comes from it, not from a capability)', () => {
+    expect(resultChannels(swapped({ publicKey: PK, secretKey: SK }))).toEqual({ polling: false, webhooks: true })
     const a = swapped({ publicKey: PK, secretKey: SK, statusPolling: true })
     expect(a.status).toBeTypeOf('function')
-    expect(a.legs[0]!.capabilities).toEqual(['webhooks', 'polling'])
+    expect(resultChannels(a)).toEqual({ polling: true, webhooks: true })
+    expect(a.legs[0]!.capabilities).toBeUndefined()
   })
 
   it('signs get_transactions and maps every order status', async () => {

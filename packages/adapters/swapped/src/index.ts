@@ -203,7 +203,6 @@ export function swapped(opts: SwappedOptions) {
     eta: { min: 120, max: 1800 },
     surfaces: ['IFRAME'],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks', ...(opts.statusPolling ? (['polling'] as const) : [])],
     ...extra,
   })
 
@@ -219,7 +218,6 @@ export function swapped(opts: SwappedOptions) {
     eta: { min: 600, max: 3 * 24 * 3600 },
     surfaces: ['IFRAME', 'WALLET_TX'],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks'],
     ...extra,
   })
 

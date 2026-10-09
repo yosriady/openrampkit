@@ -179,7 +179,6 @@ export function peer(opts: PeerOptions) {
     // One payment window is 1 hour; settlement follows the attestation.
     eta: { min: 120, max: 3600 },
     surfaces: [surfaceKind],
-    capabilities: ['webhooks', 'polling'],
   })
   const legs = defs.map((d) => legFor(d))
 

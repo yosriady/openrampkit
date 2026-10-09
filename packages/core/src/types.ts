@@ -141,14 +141,21 @@ export type LegSpec = {
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
   /**
-   * `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
-   * `surface_after_processing`: a provider event may move the leg from `processing` back to
-   * `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
-   * learns where the user must pay after it started (for example an offramp that gets its deposit
-   * address in a webhook). The surface kind must be one of `surfaces`.
+   * What the server must allow for this leg. Only these two values have a meaning, and the server checks both:
+   * - `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
+   *   The planner offers a settlement destination only through a pathway whose last leg has it.
+   * - `surface_after_processing`: a provider event may move the leg from `processing` back to
+   *   `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
+   *   learns where the user must pay after it started (for example an offramp that gets its deposit
+   *   address in a webhook). The surface kind must be one of `surfaces`.
+   * How the server learns a leg's result is not a capability: it comes from the adapter's `status()`
+   * (polling) and `webhook` (see `resultChannels` in `@openrampkit/adapter`).
    */
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement' | 'surface_after_processing'>
+  capabilities?: LegCapability[]
 }
+
+/** A leg capability (see `LegSpec.capabilities`) */
+export type LegCapability = 'settlement' | 'surface_after_processing'
 
 export type Fee = {
   kind: 'provider' | 'network' | 'app' | 'swap' | 'other'

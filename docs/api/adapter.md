@@ -28,6 +28,8 @@ interface Adapter {
   transition?(input: TransitionInput, ctx: AdapterContext): Promise<LegStep>
   status?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<LegStep>
   webhook?: {
+    // Optional: false when the options have no webhook secret, so no event can verify. Default true.
+    configured?: boolean
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
     // Optional: the same key for every delivery of one provider event. The server ignores a repeat for 7 days.
@@ -50,6 +52,8 @@ interface Adapter {
 | `webhook` | `POST /webhooks/:adapterId` |
 | `health` | `GET /health?deep=1` with the tasks token (plain `GET /health` does not call adapters) |
 | `routes` | Any request to `/adapters/:adapterId/*` |
+
+`resultChannels(adapter)` returns `{ polling, webhooks }`: `polling` is true when the adapter has `status()`, and `webhooks` is true when it has a `webhook` whose `configured` is not `false`. The server uses it at start. It writes one warning for each adapter with legs that has neither, because the payments of that adapter cannot complete. Leg capabilities do not say how results arrive: `LegSpec.capabilities` has only `settlement` and `surface_after_processing`.
 
 ## Inputs
 
@@ -241,7 +245,7 @@ Types: `SettlementCall`, `SettlementIntent`, `SettlementParams`, `SettlementInte
 
 | Export | Description |
 |---|---|
-| `checkAdapterShape(adapter)` | API version, legs, ETAs, surfaces, region policy, decimal limits |
+| `checkAdapterShape(adapter)` | API version, legs, ETAs, surfaces, region policy, decimal limits, known capabilities |
 | `checkLegQuote(quote)` | Decimal strings and an ISO `expiresAt` |
 | `checkLegStep(step)` | A legal step, and a terminal state only with a terminal leg status (except `PROCESSING`) |
 

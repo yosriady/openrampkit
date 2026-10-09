@@ -216,7 +216,6 @@ export function meld(opts: MeldOptions) {
     eta: { min: 60, max: 1800 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const staticLegs = STATIC.map((s) => leg(s.id, { from: { asset: { kind: 'fiat', currencies: s.currencies }, location: ['user_account'] }, regions: { allow: s.countries ?? ['*'], deny: [] }, eta: s.eta }))
@@ -403,6 +402,8 @@ export function meld(opts: MeldOptions) {
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('meld: webhookSecret is not set; rejecting webhook')

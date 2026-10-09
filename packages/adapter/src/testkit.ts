@@ -6,6 +6,9 @@ import type { Adapter } from './index.js'
 
 export type ConformanceProblem = { where: string; problem: string }
 
+/** The leg capabilities that the server reads (see `LegSpec.capabilities`) */
+const KNOWN_CAPABILITIES: string[] = ['settlement', 'surface_after_processing']
+
 export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
   const out: ConformanceProblem[] = []
   if (adapter.apiVersion !== 1) out.push({ where: 'apiVersion', problem: `Unsupported apiVersion ${adapter.apiVersion}` })
@@ -14,6 +17,9 @@ export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
     if (leg.eta.min > leg.eta.max) out.push({ where: `leg ${leg.id}`, problem: 'eta.min > eta.max' })
     if (!leg.surfaces.length) out.push({ where: `leg ${leg.id}`, problem: 'No surfaces declared' })
     if (!leg.regions.allow.length) out.push({ where: `leg ${leg.id}`, problem: 'Region policy allows nothing' })
+    for (const c of (leg.capabilities ?? []) as string[]) {
+      if (!KNOWN_CAPABILITIES.includes(c)) out.push({ where: `leg ${leg.id}`, problem: `Unknown capability ${c} (only settlement and surface_after_processing; results come from status() and webhook)` })
+    }
     if (leg.limits) {
       for (const k of ['min', 'max'] as const) {
         const v = leg.limits[k]

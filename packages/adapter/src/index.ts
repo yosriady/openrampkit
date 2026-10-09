@@ -135,6 +135,12 @@ export interface Adapter {
   transition?(input: TransitionInput, ctx: AdapterContext): Promise<LegStep>
   status?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<LegStep>
   webhook?: {
+    /**
+     * False when the adapter cannot verify webhooks with its options (for example no webhook secret),
+     * so no provider event can arrive. Default true. The server warns at start when an adapter with
+     * legs has neither `status()` nor a configured webhook (see `resultChannels`).
+     */
+    configured?: boolean
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
     /**
@@ -156,6 +162,16 @@ export interface Adapter {
 }
 
 export type WebhookContext = Pick<AdapterContext, 'log' | 'shared' | 'fetch'>
+
+/**
+ * How the server learns the result of this adapter's legs:
+ * - `polling`: the adapter has `status()`, so the server and the client can check a leg.
+ * - `webhooks`: the adapter has a `webhook` that can verify events (`configured` is not false).
+ * An adapter with neither cannot move a leg past the provider step by itself.
+ */
+export function resultChannels(a: Pick<Adapter, 'status' | 'webhook'>): { polling: boolean; webhooks: boolean } {
+  return { polling: typeof a.status === 'function', webhooks: !!a.webhook && a.webhook.configured !== false }
+}
 
 export type RouteContext = Pick<AdapterContext, 'fetch' | 'log' | 'shared'> & {
   baseUrl: string

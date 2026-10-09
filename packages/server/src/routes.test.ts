@@ -36,6 +36,34 @@ describe('config validation', () => {
     expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [bad] })).toThrow(/API v99/)
     expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), mockAdapter()] })).toThrow(/twice/)
   })
+
+  it('warns at start for an adapter with legs but no status() and no configured webhook', () => {
+    const warnings: string[] = []
+    const logger = { ...quiet, warn: (m: string) => void warnings.push(m) }
+    const base = mockAdapter()
+    const { status: _status, ...noStatus } = base
+    const verify = async () => true
+    const parse = async () => []
+    const start = (adapters: Adapter[]) => {
+      warnings.length = 0
+      createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger })
+      return warnings.filter((w) => w.includes('cannot learn the result'))
+    }
+    // status() polling: fine
+    expect(start([base])).toEqual([])
+    // A webhook that can verify, no status() (like Transak): fine
+    expect(start([createAdapter({ ...noStatus, id: 'hooks', webhook: { verify, parse } })])).toEqual([])
+    // A webhook without its secret, and no status(): warn, and name the adapter and its legs
+    const off = start([createAdapter({ ...noStatus, id: 'nosecret', webhook: { configured: false, verify, parse } })])
+    expect(off).toHaveLength(1)
+    expect(off[0]).toContain('adapter nosecret')
+    expect(off[0]).toContain(base.legs[0]!.id)
+    expect(off[0]).toContain('webhook is not configured')
+    // Neither: warn
+    expect(start([createAdapter({ ...noStatus, id: 'blind' })])[0]).toContain('it has no webhook')
+    // No legs: nothing to warn about
+    expect(start([createAdapter({ ...noStatus, id: 'empty', legs: [] })])).toEqual([])
+  })
 })
 
 describe('routing and HTTP', () => {

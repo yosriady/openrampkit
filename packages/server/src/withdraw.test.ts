@@ -316,7 +316,7 @@ function eventOfframp() {
         eta: { min: 60, max: 600 },
         surfaces: ['WALLET_TX'],
         // It learns the deposit address from a webhook after the leg started.
-        capabilities: ['webhooks', 'surface_after_processing'],
+        capabilities: ['surface_after_processing'],
       },
     ],
     async quote({ leg, amountIn }) {
