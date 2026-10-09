@@ -38,7 +38,7 @@ import { OpenRampProvider, lightTheme } from '@openrampkit/vue'
 | `locale` | `string` | BCP 47. Pushed live to an open modal. |
 | `messages` | `Partial<Messages>` | Applied when the modal opens |
 | `providerRenderers` | `Record<string, ProviderRenderer>` | Renderers for `PROVIDER_SDK` surfaces |
-| `onEvent` (`@event`) | `(e: OpenRampEvent) => void` | Every browser event |
+| `onEvent` (`@event`) | `(e: ClientEvent) => void` | Every browser event |
 
 Only one modal is open at a time. When you open a new modal, the previous modal closes. When the provider unmounts, the modal closes.
 
@@ -93,7 +93,7 @@ A ready-made button that calls `beginDeposit`. It is disabled while the modal is
 | `disabled` | `boolean` | |
 | `onComplete` (`@complete`) | `(session: PublicSession) => void` | The deposit completed |
 | `onError` (`@error`) | `(error: OpenRampError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
-| `onEvent` (`@event`) | `(e: OpenRampEvent) => void` | Browser events for this deposit (in addition to the provider's) |
+| `onEvent` (`@event`) | `(e: ClientEvent) => void` | Browser events for this deposit (in addition to the provider's) |
 
 ### DepositButton.Custom
 
@@ -167,4 +167,4 @@ You need this only when you write `<openramp-modal>` in a template yourself. `Op
 
 ## Re-exports
 
-Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `OpenRampEvent`, `WalletAdapter`, `OpenRampConfig`, `OpenRampApi`, `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonSlotProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonSlotProps`, `OpenRampEmbeddedProps`.
+Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `ClientEvent`, `WalletAdapter`, `OpenRampConfig`, `OpenRampApi`, `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonSlotProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonSlotProps`, `OpenRampEmbeddedProps`.

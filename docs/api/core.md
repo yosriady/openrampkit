@@ -14,7 +14,8 @@ The full definitions are in `packages/core/src/types.ts`. The concept pages expl
 | `Step`, `StateName`, `StepSub` (with `STEP_SUBS` and `isStepSub`), `Transition`, `PollSpec`, `LegStep`, `LegStatus`, `FieldSpec`, `TxRequest` | [Flow state machine](../concepts/flow.md) |
 | `Surface`, `SurfaceKind`, `IframeMessages` | [Surfaces](../concepts/surfaces.md) |
 | `OpenRampError`, `OpenRampErrorCode` | [Flow: errors as fields](../concepts/flow.md#errors-as-fields) |
-| `OpenRampEvent`, `OpenRampEventType` | [Events](../concepts/events.md) |
+| `WebhookEvent`, `WebhookEventOf`, `WebhookEventType`, `WebhookEventFields` (with `WEBHOOK_EVENT_TYPES` and `API_VERSION`), `ClientEvent`, `ClientEventType`, `ClientEventFields` | [Events](../concepts/events.md) |
+| `Session` (the backend view), `PublicSession`, `SessionStatus` (with `isFinalStatus`) | [Sessions](#publicsession) |
 | `WalletAdapter`, `WalletBalance` | [Wallets (wagmi)](../adapters/wagmi.md) |
 | `WithdrawSource`, `Custody`, `AllowedTargets`, `WithdrawTarget` | [Withdrawals](../guide/withdraw.md) |
 
@@ -40,6 +41,17 @@ type PublicSession = {
   lastError?: OpenRampError       // the last failed attempt, or the final failure
   expiresAt: string
   livemode: boolean
+}
+```
+
+### Session
+
+The backend view of a session: `PublicSession` plus the app's data. Webhooks (`data.object.session`) and `openramp.sessions.retrieve()` return it. Never send it to the browser.
+
+```ts
+type Session = PublicSession & {
+  userId: string
+  metadata: Record<string, string>
 }
 ```
 
@@ -269,5 +281,6 @@ type PlannerInput = {
 
 | Export | Description |
 |---|---|
-| `createEvent(type, object, { sessionId?, livemode? })` | An `OpenRampEvent` with a random `evt_` id |
+| `createClientEvent(type, object, { sessionId?, livemode? })` | A `ClientEvent` with a random `evt_` id and an ISO `createdAt` |
+| `createWebhookEvent(type, object, { id, sessionId, livemode })` | A `WebhookEvent` envelope (`object: 'event'`, `apiVersion: 1`, ISO `createdAt`) |
 | `randomId(prefix, bytes = 12)` | `{prefix}_{hex}` |

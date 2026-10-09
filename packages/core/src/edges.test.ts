@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  OpenRampException, add, cmp, combinePolicies, createEvent, currencyForCountry, evmChainId, fromScaled, isDecimal, isLegalMove,
+  OpenRampException, add, cmp, combinePolicies, createClientEvent, createWebhookEvent, currencyForCountry, evmChainId, fromScaled, isDecimal, isLegalMove,
   isOpenRampError, isRegionAllowed, methodAvailableIn, methodName, minorUnits, mulRatio, openRampError, planPathways, roundTo, sub,
   toScaled, validateStep, chainName, USDC,
 } from './index.js'
@@ -72,20 +72,25 @@ describe('table and errors', () => {
     const e = openRampError('QUOTE_EXPIRED')
     expect(e).toMatchObject({ retryable: true })
     expect(openRampError('KYC_REJECTED').retryable).toBe(false)
-    expect(openRampError('CUSTOM_CODE').message).toBe('Something went wrong.')
+    expect(openRampError('CUSTOM_CODE' as never).message).toBe('Something went wrong.')
     expect(openRampError('NO_QUOTES', { message: 'm', retryable: false, recovery: 'choose_other', legId: 'l' })).toEqual({ code: 'NO_QUOTES', message: 'm', retryable: false, recovery: 'choose_other', legId: 'l' })
     const x = new OpenRampException(e)
     expect(x.status).toBe(400)
     expect(isOpenRampError(x.error)).toBe(true)
     expect(isOpenRampError(null)).toBe(false)
   })
-  it('creates events', () => {
-    const ev = createEvent('session.created', { a: 1 }, { sessionId: 's', livemode: true })
-    expect(ev).toMatchObject({ type: 'session.created', livemode: true, sessionId: 's', data: { object: { a: 1 } } })
+  it('creates client events: random id, ISO createdAt', () => {
+    const ev = createClientEvent('method.selected', { method: 'card' }, { sessionId: 's', livemode: true })
+    expect(ev).toMatchObject({ type: 'method.selected', livemode: true, sessionId: 's', data: { object: { method: 'card' } } })
     expect(ev.id).toMatch(/^evt_[0-9a-f]{24}$/)
-    expect(createEvent('x', {}).livemode).toBe(false)
-    // a given id is kept (the server gives deterministic ids)
-    expect(createEvent('x', {}, { id: 'evt_fixed' }).id).toBe('evt_fixed')
+    expect(new Date(ev.createdAt).toISOString()).toBe(ev.createdAt)
+    expect(createClientEvent('modal.opened', {}).livemode).toBe(false)
+  })
+  it('creates webhook events: the given id, object event, apiVersion 1, ISO createdAt', () => {
+    const session = { id: 's' } as never
+    const ev = createWebhookEvent('session.created', { session }, { id: 'evt_fixed', sessionId: 's', livemode: false })
+    expect(ev).toMatchObject({ id: 'evt_fixed', object: 'event', apiVersion: 1, type: 'session.created', sessionId: 's', livemode: false, data: { object: { session } } })
+    expect(new Date(ev.createdAt).toISOString()).toBe(ev.createdAt)
   })
 })
 

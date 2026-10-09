@@ -6,7 +6,7 @@ import { defineComponent, h, nextTick, ref, shallowRef } from 'vue'
 import type { Component } from 'vue'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DepositController } from '@openrampkit/client'
-import type { OpenRampEvent } from '@openrampkit/core'
+import type { ClientEvent } from '@openrampkit/core'
 import type { OpenRampModal } from '@openrampkit/web'
 import { BASE, BASE_SOURCE, fakeClient, session, setupServer, sleep } from '../../client/src/testctx.js'
 import {
@@ -77,7 +77,7 @@ describe('OpenRampProvider and useOpenRamp', () => {
     let api!: OpenRampApi
     const events: string[] = []
     const perCall: string[] = []
-    const r = render(withProvider({ baseUrl: BASE, theme: lightTheme(), onEvent: (e: OpenRampEvent) => events.push(e.type) }, () => h(Capture, { onApi: (a: OpenRampApi) => (api = a) })))
+    const r = render(withProvider({ baseUrl: BASE, theme: lightTheme(), onEvent: (e: ClientEvent) => events.push(e.type) }, () => h(Capture, { onApi: (a: OpenRampApi) => (api = a) })))
     expect(r.container.textContent).toBe('closed')
     const p = api.beginDeposit({ clientSecret: await newSecret(), onEvent: (e) => perCall.push(e.type) })
     p.catch(() => {})

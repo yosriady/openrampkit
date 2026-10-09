@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { USDC, combineWallets, openRampError } from '@openrampkit/core'
-import type { OpenRampEvent, PublicSession, StepSub, WalletAdapter } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, StepSub, WalletAdapter } from '@openrampkit/core'
 import { DepositController, OpenRampClientError, createMockWallet } from './index.js'
 import type { ControllerOptions } from './index.js'
 import { BEEF, POLL, fakeClient, method, plan, quote, session, step } from './testctx.js'
@@ -11,7 +11,7 @@ afterEach(() => {
 })
 
 function make(over: Partial<ControllerOptions> = {}, client = fakeClient()) {
-  const events: OpenRampEvent[] = []
+  const events: ClientEvent[] = []
   const c = new DepositController({ client, clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e), ...over })
   const types = () => events.map((e) => e.type)
   return { c, client, events, types }
@@ -835,13 +835,13 @@ describe('terminal states and done', () => {
   })
 
   it('events carry id, created and livemode; no sessionId before the session loads', () => {
-    const events: OpenRampEvent[] = []
+    const events: ClientEvent[] = []
     const c = new DepositController({ client: fakeClient(), clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e) })
     void c.start()
     expect(events[0]).toMatchObject({ type: 'modal.opened', livemode: false, data: { object: {} } })
     expect(events[0]!.id).toMatch(/^evt_/)
     expect(events[0]!.sessionId).toBeUndefined()
-    expect(typeof events[0]!.created).toBe('number')
+    expect(Number.isNaN(Date.parse(events[0]!.createdAt))).toBe(false)
   })
 
   it('works without onEvent', async () => {

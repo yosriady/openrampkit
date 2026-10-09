@@ -1,5 +1,5 @@
 // Svelte actions (`use:`). They run only in the browser, so server rendering never loads Lit.
-import type { OpenRampError, OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { OpenRampError, ClientEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal } from '@openrampkit/web'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
@@ -21,7 +21,7 @@ export type ButtonActionParams = {
   onComplete?: (session: PublicSession) => void
   /** Called when the modal closes before the session completes */
   onError?: (error: OpenRampError) => void
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   /** Keep the element disabled. The action also disables it while the modal is open. */
   disabled?: boolean
 }
@@ -84,7 +84,7 @@ export type EmbeddedActionParams = {
   /** BCP 47 locale */
   locale?: string
   /** Called after the ramp's `onEvent` */
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   onComplete?: (session: PublicSession) => void
   /** Called when the user presses Close on a result or error screen */
   onClose?: (session: PublicSession | undefined) => void

@@ -460,12 +460,12 @@ sequenceDiagram
   A-->>S: LegStep PROCESSING
   Note over A: A fiat payout completes when the provider pays the user's bank or e-wallet
   S->>A: status() or provider webhook
-  S->>App: session.succeeded and withdrawal.succeeded
+  S->>App: session.succeeded (direction withdraw)
 ```
 
 For a fiat payout at an offramp (for example Swapped), the provider first shows its own page in an `IFRAME` for the payout details. Then a provider event carries a new `WALLET_TX` surface that pays the provider's deposit address.
 
-A failed withdrawal sends `session.failed` and `withdrawal.failed`. When the treasury hook throws, the leg fails with `PAYMENT_FAILED` and the server does not send again for that step.
+A failed withdrawal attempt sends `session.payment_failed`, and the user can try again. A final failure sends `session.failed`. When the treasury hook throws, the leg fails with `PAYMENT_FAILED` and the server does not send again for that step.
 
 ## Webhooks to your backend
 
@@ -490,8 +490,8 @@ sequenceDiagram
   alt 409 conflict
     S->>S: nothing is sent; a retry makes the same event ids
   else saved
-    S->>App: POST webhooks.url with headers openramp-id, openramp-timestamp, openramp-signature
-    Note over S,App: openramp-signature = "v1=" + HMAC-SHA256(secret, id.timestamp.body), timeout 4 s
+    S->>App: POST webhooks.url with headers webhook-id, webhook-timestamp, webhook-signature
+    Note over S,App: webhook-signature = "v1," + base64 HMAC-SHA256(secret, id.timestamp.body), timeout 4 s
     App->>App: openramp.webhooks.verify(req, rawBody), 300 s tolerance
     App->>App: dedupe by event id or session id, then credit
     S->>St: put(rec, version): remove the sent events, or attempts + 1

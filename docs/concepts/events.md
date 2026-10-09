@@ -1,20 +1,31 @@
 # Events
 
-OpenRampKit has two kinds of events with the same envelope:
+OpenRampKit has two kinds of events, with two types:
 
-- **Browser events**: what the user does in the modal. For analytics and UI. Not trusted.
-- **Webhook events**: what happened to the session, signed by your server and sent to your backend. Trusted after you verify the signature.
+- **Browser events** (`ClientEvent`): what the user does in the modal. For analytics and UI. Not trusted.
+- **Webhook events** (`WebhookEvent`): what happened to the session, signed by your server and sent to your backend. Trusted after you verify the signature.
 
-## Envelope
+Both are unions on `type`: when you check `e.type`, TypeScript knows the fields of `e.data.object`. Both have `id`, `type`, an ISO 8601 `createdAt`, `livemode`, `sessionId` and `data.object`. Nothing else is shared.
 
 ```ts
-type OpenRampEvent<T = unknown> = {
-  id: string            // 'evt_...'
-  type: OpenRampEventType
-  created: number       // Unix seconds
+type ClientEvent = {
+  id: string            // 'evt_...' (made in the browser)
+  type: ClientEventType // 'modal.opened' | 'method.selected' | ...
+  createdAt: string     // ISO 8601
   livemode: boolean
   sessionId?: string
-  data: { object: T }
+  data: { object: ClientEventFields[type] }
+}
+
+type WebhookEvent = {
+  id: string            // 'evt_...' (deterministic)
+  object: 'event'
+  apiVersion: 1
+  type: WebhookEventType // 'session.created' | 'session.succeeded' | ...
+  createdAt: string     // ISO 8601
+  livemode: boolean
+  sessionId: string
+  data: { object: { session: Session } & WebhookEventFields[type] }
 }
 ```
 
@@ -39,7 +50,7 @@ Receive them with `onEvent` on `OpenRampProvider`, `DepositButton`, `WithdrawBut
 ```tsx
 <OpenRampProvider
   baseUrl="/api/openramp"
-  onEvent={(e) => analytics.track(`deposit ${e.type}`, { sessionId: e.sessionId, ...(e.data.object as object) })}
+  onEvent={(e) => analytics.track(`deposit ${e.type}`, { sessionId: e.sessionId, ...e.data.object })}
 >
   <DepositButton getClientSecret={getClientSecret} />
 </OpenRampProvider>
@@ -49,42 +60,44 @@ Browser events are made in the browser. Their ids are not cryptographically rand
 
 ## Webhook events
 
-The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [Webhooks to your backend](../guide/webhooks.md) for verification and crediting.
+The server sends these to `webhooks.url`, signed with `webhooks.secret` (Standard Webhooks). See [Webhooks to your backend](../guide/webhooks.md) for the headers, the verification and the crediting rules. There is one catalog for deposits and withdrawals: `data.object.session.direction` tells which one it is.
 
 | Type | When |
 |---|---|
 | `session.created` | A session was created |
-| `leg.succeeded` | One leg finished |
-| `leg.failed` | One leg failed |
-| `session.succeeded` | Every leg succeeded |
-| `session.failed` | Final failure: no attempts are left, money already arrived on a leg, or an operator resolved the session as `FAILED`. No event follows it. |
-| `session.payment_failed` | A payment attempt failed, and the user can try again. The status is back to `requires_payment_method`, with `lastError`. |
 | `session.requires_action` | A leg waits for the user. Once per leg and attempt. |
 | `session.processing` | The user paid or acted, and a provider or the chain works. Once per leg and attempt. |
-| `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed |
-| `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). The step became `REVERSED`. Take back or freeze the credit. |
-| `session.expired` | The session passed its expiry with no payment started, or with a leg that still waits for the user (found by the sweep, or by a request). Also sent when a leg ends as `expired`. |
-| `session.late_payment` | A payment arrived late. `reason: 'after_expiry'`: the session had expired, and the payment arrived after all (a webhook, or the sweep's grace poll); the session goes on and you also get `session.succeeded`. `reason: 'after_grace'`: the payment arrived after the grace window (`latePayments.graceHours`, default 72); the session stays `EXPIRED`, so refund or credit it by hand. `reason: 'earlier_attempt'`: a payment that the user left with `restart` succeeded, but the session already completed (or was reversed), or another payment is in progress; refund or credit it by hand. |
-| `withdrawal.succeeded` | Withdraw sessions: sent after `session.succeeded` |
-| `withdrawal.failed` | Withdraw sessions: sent after `session.failed` |
-| `withdrawal.reversed` | Withdraw sessions: sent after `session.reversed` (for example, the bank returned the payout) |
+| `session.payment_failed` | A payment attempt failed, and the user can try again. The status is `requires_payment_method` again, with `lastError`. |
+| `session.succeeded` | Every leg succeeded |
+| `session.failed` | Final failure: no attempts are left, money already arrived on a leg, or an operator resolved the session as `FAILED`. No event follows it. |
+| `session.canceled` | The app or the user canceled the session |
+| `session.expired` | The deadline passed with no payment in progress, or the provider order expired (found by the sweep, or by a request) |
+| `session.refunded` | The provider returned the payment before it succeeded |
+| `session.reversed` | The payment succeeded, then the provider refunded it or took it back (a chargeback). Take back or freeze the credit. |
+| `session.late_payment` | A payment arrived late. `reason: 'after_expiry'`: the session had expired, and the payment arrived after all; the session goes on and you also get `session.succeeded`. `reason: 'after_grace'`: the payment arrived after the grace window (`latePayments.graceHours`, default 72); the session stays expired, so refund or credit it by hand. `reason: 'earlier_attempt'`: a payment that the user left with `restart` succeeded, but the session already has a final status, or another payment is in progress; refund or credit it by hand. |
+| `leg.succeeded` | One leg finished |
+| `leg.failed` | One leg failed |
 
 `data.object` for every webhook:
 
 ```ts
 {
-  session: PublicSession            // the session after the change
-  userId: string                    // from sessions.create()
-  metadata: Record<string, string>  // from sessions.create(), or {}
+  session: Session // the backend view after the change: PublicSession plus userId and metadata
+  // session.requires_action, session.processing: attempt, index, adapterId, legId
+  // session.payment_failed: attempt, index, adapterId, legId, error
   // leg.succeeded: index, adapterId, legId
-  // leg.failed:    index, adapterId, error
+  // leg.failed: index, adapterId, legId, error
+  // session.failed: error, and resolution when an operator resolved it
+  // session.canceled: reason ('requested_by_app', 'requested_by_user' or 'abandoned')
   // session.late_payment: reason ('after_expiry', 'after_grace' or 'earlier_attempt'), index, adapterId, legId,
   //   txHash (when known), attempt (earlier_attempt only)
-  // session.reversed, withdrawal.reversed: index, adapterId, legId,
+  // session.reversed: index, adapterId, legId,
   //   legStatus ('refunded' or 'reversed'), previous (the step state before, e.g. 'COMPLETED'),
-  //   attempt (only for an earlier attempt; the session state does not change)
+  //   attempt (only for an earlier attempt; the session status does not change)
 }
 ```
+
+`WebhookEventFields` in `@openrampkit/core` has these fields per type. `WEBHOOK_EVENT_TYPES` lists the types.
 
 `data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started. `result.txHashes` has the main transaction of each leg (for a bridge or swap, the fill on the destination chain). `result.sourceTxHashes` has the transaction that paid into each leg, for example the origin chain transaction that the user's wallet sent. It is absent when no leg reports one.
 
@@ -95,7 +108,7 @@ A provider can take back a payment after it completed: a refund, or a card charg
 - keeps the leg with its new status (and the session's `result`),
 - adds `leg.refunded` (or `leg.reversed`) and `session.reversed` to the timeline,
 - sets the step to `REVERSED` (with the error `PAYMENT_REVERSED`) and the session status to `reversed`,
-- sends `session.reversed` once (and `withdrawal.reversed` for a withdrawal), with a deterministic event id.
+- sends `session.reversed` one time, with a deterministic event id.
 
 `REVERSED` is final. After it, the server moves no more funds for the session: it does not start a next leg, it does not call the treasury, and later provider events change only the leg data (no `leg.*` events, no other session state). An earlier attempt that the provider pays later does not become the session's payment: the server sends `session.late_payment`. The session refuses `restart` and a new payment. An operator can still set another final state with `admin.resolve` and an audit note.
 
@@ -113,4 +126,4 @@ The event id is deterministic: it is a hash of the session id and the event (typ
 
 ## Build your own events
 
-`createEvent(type, object, { id, sessionId, livemode })` from `@openrampkit/core` builds an envelope. Without `id`, the id is a random `evt_` id. `randomId(prefix)` makes ids of the same shape.
+`createWebhookEvent(type, object, { id, sessionId, livemode })` and `createClientEvent(type, object, { sessionId, livemode })` from `@openrampkit/core` build the envelopes. `randomId(prefix)` makes ids of the same shape.

@@ -29,7 +29,7 @@ function make(extra: Partial<OpenRampConfig> = {}, adapters = [mockAdapter({ set
     if (String(input) === HOOK) hooks.push(JSON.parse(String(init?.body)) as Hook)
     return new Response('{}')
   }
-  const ramp = createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger: quiet, webhooks: { url: HOOK, secret: 'whsec_test_0123456789' }, fetch: fetchHooks, ...extra })
+  const ramp = createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger: quiet, webhooks: { url: HOOK, secret: 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw' }, fetch: fetchHooks, ...extra })
   const call = async <T = unknown>(path: string, secret: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
     const headers = new Headers({ authorization: `Bearer ${secret}` })
     if (body !== undefined) headers.set('content-type', 'application/json')
@@ -198,7 +198,7 @@ describe('withdraw to a wallet (custody: user_wallet)', () => {
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
     expect(done.body.status).toBe('succeeded')
-    expect(t.hooks.map((h) => h.type)).toEqual(['session.created', 'session.requires_action', 'session.processing', 'leg.succeeded', 'session.succeeded', 'withdrawal.succeeded'])
+    expect(t.hooks.map((h) => h.type)).toEqual(['session.created', 'session.requires_action', 'session.processing', 'leg.succeeded', 'session.succeeded'])
     expect(t.hooks.at(-1)!.data.object.session).toMatchObject({ direction: 'withdraw', destination: { address: ARB_ADDR } })
     // The finished withdrawal can no longer restart.
     const again = await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})
@@ -230,7 +230,7 @@ describe('withdraw to cash with the mock offramp', () => {
     expect((await tr('submit_tx', { txHash: TX })).body.step.state).toBe('PROCESSING')
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
-    expect(t.hooks.map((h) => h.type)).toContain('withdrawal.succeeded')
+    expect(t.hooks.map((h) => h.type)).toContain('session.succeeded')
   })
 
   it('bank transfer asks for bank fields; VND payout via MoMo is offered in VN only', async () => {
@@ -390,7 +390,7 @@ describe('provider events that carry a surface', () => {
     expect(treasury.send).toHaveBeenCalledTimes(1)
   })
 
-  it('a payout returned after success sends session.reversed and withdrawal.reversed', async () => {
+  it('a payout returned after success sends session.reversed once', async () => {
     const t = make({}, [eventOfframp()])
     const s = await t.create()
     await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10')
@@ -399,8 +399,9 @@ describe('provider events that carry a surface', () => {
     await post({ ref: 'order_1', status: 'reversed' })
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
     expect(now.body).toMatchObject({ status: 'reversed', step: { state: 'REVERSED' } })
-    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['withdrawal.succeeded', 'session.reversed', 'withdrawal.reversed']))
-    expect(t.hooks.filter((h) => h.type === 'withdrawal.reversed')).toHaveLength(1)
+    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['session.succeeded', 'session.reversed']))
+    expect(t.hooks.filter((h) => h.type === 'session.reversed')).toHaveLength(1)
+    expect(t.hooks.filter((h) => h.type.startsWith('withdrawal.'))).toEqual([])
   })
 
   it('the treasury sends at most once per session when the provider fails after the send, then sends the webhook again', async () => {

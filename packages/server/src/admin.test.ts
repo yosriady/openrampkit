@@ -307,7 +307,7 @@ describe('admin resolve and replay', () => {
     expect(after.payment!.legs[0]!.status).toBe('failed')
   })
 
-  it('resolve needs a valid state and a note, and a withdrawal also gets withdrawal.failed', async () => {
+  it('resolve needs a valid state and a note; a withdrawal gets session.failed (no withdrawal.* events)', async () => {
     const t = make()
     const w = await t.withdraw()
     await expect(t.ramp.admin.resolve(w.id, 'FAILED', '  ')).rejects.toMatchObject({ status: 400 })
@@ -315,7 +315,9 @@ describe('admin resolve and replay', () => {
     await expect(t.ramp.admin.resolve('ors_missing', 'FAILED', 'x')).rejects.toMatchObject({ status: 404 })
     const v = await t.ramp.admin.resolve(w.id, 'FAILED', 'Sanctions hit')
     expect(v).toMatchObject({ status: 'failed', state: 'FAILED' })
-    expect(t.sent.map((x) => x.type)).toEqual(expect.arrayContaining(['session.failed', 'withdrawal.failed']))
+    expect(t.sent.map((x) => x.type)).toContain('session.failed')
+    expect(t.sent.map((x) => x.type).filter((x) => x.startsWith('withdrawal.'))).toEqual([])
+    expect(t.sent.find((x) => x.type === 'session.failed')!.body).toMatchObject({ data: { object: { session: { direction: 'withdraw' }, resolution: { by: 'admin', state: 'FAILED' } } } })
     const s = await t.deposit()
     await t.ramp.admin.resolve(s.id, 'EXPIRED', 'Old test session')
     expect((await t.post(`/sessions/${s.id}/plan`, s.clientSecret)).status).toBe(409)

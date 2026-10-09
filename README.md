@@ -86,7 +86,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 **Server**
 - One web-standard `Request -> Response` handler. It runs on Cloudflare Workers, Next.js, Node 20+, Bun and Deno.
 - Holds provider secrets. Fixes the user, the destination and the amount limits when your backend creates the session.
-- Receives provider webhooks. Sends signed webhooks (HMAC-SHA256) to your backend, with retries.
+- Receives provider webhooks. Sends signed webhooks ([Standard Webhooks](https://www.standardwebhooks.com), HMAC-SHA256) to your backend, with retries.
 - A background `sweep()` retries webhooks, checks open payments after the user leaves, and expires idle sessions.
 - Session stores: memory (dev), Cloudflare Durable Objects, Cloudflare KV, Redis, or your own.
 - Signed, expiring pay links (`sessions.payLink()`) to a hosted page.
@@ -212,18 +212,20 @@ await done // resolves on COMPLETED
 
 ### 5. Credit the user from the webhook
 
-Credit balances from the signed `session.succeeded` webhook, not from the browser.
+Credit balances from the signed `session.succeeded` webhook, not from the browser. The webhook secret is a Standard Webhooks secret (`whsec_...`, from `generateWebhookSecret()`).
 
 ```ts
 // app/api/hooks/route.ts
+import type { WebhookEvent } from '@openrampkit/server'
 import { openramp } from '@/lib/openramp'
 
 export async function POST(req: Request) {
   const body = await req.text() // the raw body
   if (!(await openramp.webhooks.verify(req, body))) return new Response('bad signature', { status: 401 })
-  const event = JSON.parse(body)
+  const event = JSON.parse(body) as WebhookEvent
   if (event.type === 'session.succeeded') {
-    // credit the user once per session
+    const { session } = event.data.object // the backend view: session.userId, session.result
+    // credit the user one time per session
   }
   return new Response('ok')
 }

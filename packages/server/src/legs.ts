@@ -191,11 +191,10 @@ async function settleStatus(rt: Runtime, rec: SessionRecord) {
   }
   if (status === before || status === 'requires_payment_method') return
   const extra = status === 'reversed' ? reversalDetail(rec) : status === 'failed' ? { error: rec.lastError } : undefined
-  await notify(rt, rec, `session.${status}`, extra)
-  if (rec.direction === 'withdraw' && (status === 'succeeded' || status === 'failed' || status === 'reversed')) await notify(rt, rec, `withdrawal.${status}`, extra)
+  await notify(rt, rec, `session.${status as 'succeeded' | 'failed' | 'canceled' | 'expired' | 'refunded' | 'reversed'}`, extra)
 }
 
-/** The extra fields of `session.reversed` and `withdrawal.reversed`. No time: the event id must not change. */
+/** The extra fields of `session.reversed`. No time: the event id must not change. */
 function reversalDetail(rec: SessionRecord): Record<string, unknown> | undefined {
   const r = rec.reversal
   return r ? { index: r.index, adapterId: r.adapterId, legId: r.legId, legStatus: r.status, previous: r.previous } : undefined
@@ -203,7 +202,7 @@ function reversalDetail(rec: SessionRecord): Record<string, unknown> | undefined
 
 /**
  * The provider took back the money of leg `i` of the active payment. The session becomes REVERSED (a
- * final state), and the server sends `session.reversed` (and `withdrawal.reversed`) once. The caller
+ * final state), and the server sends `session.reversed` once. The caller
  * saves the session with `saveSession`, so the events go out with the change.
  */
 async function reverse(rt: Runtime, rec: SessionRecord, i: number, status: 'refunded' | 'reversed'): Promise<void> {
@@ -215,7 +214,6 @@ async function reverse(rt: Runtime, rec: SessionRecord, i: number, status: 'refu
   rec.status = 'reversed'
   const extra = reversalDetail(rec)
   await notify(rt, rec, 'session.reversed', extra)
-  if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
 }
 
 /** True when a leg's new status takes back money: a chargeback, or a refund after the leg succeeded. */
@@ -411,7 +409,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
     rt.log.warn('a payment arrived after the session expired; the session goes on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
     await notify(rt, rec, 'session.late_payment', { reason: 'after_expiry', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
   }
-  if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error }, scope)
+  if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.error ? { error: wrapped.error } : {}) }, scope)
   if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1 && !deliveredWrongAsset(leg)) {
     act.index = i + 1
     await startLeg(rt, rec, act.index)
@@ -597,7 +595,6 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
     rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status: ls.status })
     const extra = { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, legStatus: ls.status, previous: rec.step.state }
     await notify(rt, rec, 'session.reversed', extra)
-    if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
     return
   }
   if (!REVIVES.includes(ls.status)) return

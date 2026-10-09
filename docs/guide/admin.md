@@ -129,7 +129,7 @@ The server:
 
 1. Sets the step state and the session status.
 2. Stores `resolution: { state, note, at, previous }` in the record and adds `admin.resolved` to the timeline.
-3. Sends the matching webhook: `session.succeeded`, `session.failed`, `session.refunded` or `session.expired`, and for a withdrawal also `withdrawal.succeeded` or `withdrawal.failed`. The event data has `resolution: { by: 'admin', state, note, at }`.
+3. Sends the matching webhook: `session.succeeded`, `session.failed`, `session.refunded` or `session.expired`. The event data has `resolution: { by: 'admin', state, note, at }`.
 
 After a resolve:
 

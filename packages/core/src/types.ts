@@ -255,7 +255,13 @@ export type OpenRampErrorCode =
   | 'BAD_REQUEST'
   | 'NOT_FOUND'
   | 'INTERNAL'
-  | (string & {})
+  /** A provider error that maps to no other code. The provider's own code stays in the server logs. */
+  | 'PROVIDER_ERROR'
+  /** The session was canceled */
+  | 'CANCELED'
+  | 'IDEMPOTENCY_MISMATCH'
+  /** The user closed the UI before the session finished (`openDeposit()`, `openWithdraw()` and the UI packages) */
+  | 'CLOSED'
 
 export type OpenRampError = {
   code: OpenRampErrorCode
@@ -603,37 +609,127 @@ export type AmountMismatch = {
 
 // ---------- Events ----------
 
-export type OpenRampEventType =
-  | 'session.created'
-  | 'session.requires_action'
-  | 'session.processing'
-  | 'session.succeeded'
-  | 'session.payment_failed'
-  | 'session.failed'
-  | 'session.canceled'
-  | 'session.expired'
-  | 'session.refunded'
-  | 'session.reversed'
-  | 'session.late_payment'
-  | 'leg.succeeded'
-  | 'leg.failed'
-  | 'withdrawal.succeeded'
-  | 'withdrawal.failed'
-  | 'withdrawal.reversed'
-  | 'step.changed'
-  | 'modal.opened'
-  | 'modal.closed'
-  | 'method.selected'
-  | 'quotes.shown'
-  | 'quote.selected'
-  | 'surface.opened'
-  | (string & {})
+/** The version of the webhook payload format. It changes only on a breaking change of the wire format. */
+export const API_VERSION = 1
 
-export type OpenRampEvent<T = unknown> = {
+/**
+ * The backend view of a session: the browser view (`PublicSession`) plus the app's own data. Webhooks
+ * and `openramp.sessions.retrieve()` return it. Never send it to the browser.
+ */
+export type Session = PublicSession & {
+  userId: string
+  metadata: Record<string, string>
+}
+
+/** The leg of a payment that an event is about */
+export type EventLeg = {
+  /** The payment attempt: 0 for the first payment, then 1, 2 ... after `restart` */
+  attempt?: number
+  /** Index of the leg in the pathway */
+  index: number
+  adapterId: string
+  legId: string
+}
+
+/** An operator decision (`admin.resolve`), on the event it sent */
+export type EventResolution = { by: 'admin'; state: 'COMPLETED' | 'FAILED' | 'REFUNDED' | 'EXPIRED'; note: string; at: string }
+
+/** Why a session was canceled */
+export type CancelReason = 'requested_by_app' | 'requested_by_user' | 'abandoned'
+
+/** Why a payment counts as late (`session.late_payment`) */
+export type LatePaymentReason = 'after_expiry' | 'after_grace' | 'earlier_attempt'
+
+/** The fields that each webhook event type adds to `data.object` (next to `session`) */
+export type WebhookEventFields = {
+  'session.created': {}
+  'session.requires_action': EventLeg
+  'session.processing': EventLeg
+  'session.succeeded': { resolution?: EventResolution }
+  /** An attempt failed. The user can try again: the status is `requires_payment_method`. */
+  'session.payment_failed': EventLeg & { error: OpenRampError }
+  /** Final failure. No event follows it. */
+  'session.failed': { error?: OpenRampError; resolution?: EventResolution }
+  'session.canceled': { reason: CancelReason }
+  'session.expired': { resolution?: EventResolution }
+  'session.refunded': { resolution?: EventResolution }
+  /** The provider took back a payment after it succeeded. `attempt` is set for an earlier attempt. */
+  'session.reversed': EventLeg & { legStatus: 'refunded' | 'reversed'; previous: StateName }
+  'session.late_payment': EventLeg & { reason: LatePaymentReason; txHash?: string }
+  'leg.succeeded': EventLeg
+  'leg.failed': EventLeg & { error?: OpenRampError }
+}
+
+/** A webhook event type */
+export type WebhookEventType = keyof WebhookEventFields
+
+/** All webhook event types */
+export const WEBHOOK_EVENT_TYPES: readonly WebhookEventType[] = [
+  'session.created',
+  'session.requires_action',
+  'session.processing',
+  'session.succeeded',
+  'session.payment_failed',
+  'session.failed',
+  'session.canceled',
+  'session.expired',
+  'session.refunded',
+  'session.reversed',
+  'session.late_payment',
+  'leg.succeeded',
+  'leg.failed',
+]
+
+/** The webhook event of one type */
+export type WebhookEventOf<T extends WebhookEventType> = {
+  /** Deterministic (`evt_...`): the same change always has the same id, also on a retry */
   id: string
-  type: OpenRampEventType
-  created: number
+  object: 'event'
+  /** The payload format version (`API_VERSION`) */
+  apiVersion: typeof API_VERSION
+  type: T
+  /** ISO 8601 time when the server made the event */
+  createdAt: string
+  livemode: boolean
+  sessionId: string
+  data: { object: { session: Session } & WebhookEventFields[T] }
+}
+
+/**
+ * A signed event that the server sends to the app backend. Narrow it on `type`, for example
+ * `if (event.type === 'session.succeeded') event.data.object.session.result`.
+ */
+export type WebhookEvent = { [T in WebhookEventType]: WebhookEventOf<T> }[WebhookEventType]
+
+/** The data that each browser event type carries */
+export type ClientEventFields = {
+  'modal.opened': {}
+  'target.selected': { type: 'crypto'; chain: string; token: string } | { type: 'fiat'; currency: string }
+  'method.selected': { method: string }
+  'quotes.shown': { method: string; count: number }
+  'quote.selected': { quoteId: string }
+  'step.changed': { state: StateName; sub?: StepSub }
+  'surface.opened': { kind: SurfaceKind }
+  'surface.message': { kind: 'completed' | 'failed' | 'closed'; detail?: unknown }
+  'modal.closed': { screen: string; state?: StateName }
+}
+
+/** A browser UI event type (`onEvent` of the client and the UI packages) */
+export type ClientEventType = keyof ClientEventFields
+
+/** The browser UI event of one type */
+export type ClientEventOf<T extends ClientEventType> = {
+  id: string
+  type: T
+  /** ISO 8601 */
+  createdAt: string
   livemode: boolean
   sessionId?: string
-  data: { object: T }
+  data: { object: ClientEventFields[T] }
 }
+
+/**
+ * An event from the browser UI, for analytics. It is not signed and is not a source of truth: credit
+ * only from a `WebhookEvent`.
+ */
+export type ClientEvent = { [T in ClientEventType]: ClientEventOf<T> }[ClientEventType]

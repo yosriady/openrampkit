@@ -23,6 +23,10 @@ const DEFAULT_MESSAGES: Partial<Record<OpenRampErrorCode, string>> = {
   BAD_REQUEST: 'The request is not valid.',
   NOT_FOUND: 'Not found.',
   INTERNAL: 'Something went wrong on our side.',
+  PROVIDER_ERROR: 'The provider could not complete this request. Try again or choose another method.',
+  CANCELED: 'This session was canceled.',
+  IDEMPOTENCY_MISMATCH: 'This Idempotency-Key was used with another request.',
+  CLOSED: 'The window was closed before the payment finished.',
 }
 
 const RETRYABLE: Partial<Record<OpenRampErrorCode, boolean>> = {

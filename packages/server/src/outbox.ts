@@ -30,9 +30,10 @@ export async function deliver(rt: Runtime, id: string, body: string): Promise<bo
         method: 'POST',
         headers: {
           'content-type': 'application/json',
-          'openramp-id': id,
-          'openramp-timestamp': String(ts),
-          'openramp-signature': await signWebhook(hook.secret, id, ts, body),
+          // Standard Webhooks headers (https://www.standardwebhooks.com)
+          'webhook-id': id,
+          'webhook-timestamp': String(ts),
+          'webhook-signature': await signWebhook(hook.secret, id, ts, body),
         },
         body,
       }),

@@ -1,6 +1,6 @@
 import { defineComponent, h } from 'vue'
 import type { DefineComponent, PropType, Ref } from 'vue'
-import type { OpenRampError, OpenRampEvent, PublicSession } from '@openrampkit/core'
+import type { OpenRampError, ClientEvent, PublicSession } from '@openrampkit/core'
 import { useOpenRamp } from './provider.js'
 
 export type DepositButtonSlotProps = {
@@ -18,7 +18,7 @@ const customProps = {
   onComplete: Function as PropType<(session: PublicSession) => void>,
   /** Called when the modal closes before the session completes */
   onError: Function as PropType<(error: OpenRampError) => void>,
-  onEvent: Function as PropType<(e: OpenRampEvent) => void>,
+  onEvent: Function as PropType<(e: ClientEvent) => void>,
 }
 
 export type DepositButtonCustomProps = {
@@ -27,7 +27,7 @@ export type DepositButtonCustomProps = {
   onComplete?: ((session: PublicSession) => void) | undefined
   /** Called when the modal closes before the session completes */
   onError?: ((error: OpenRampError) => void) | undefined
-  onEvent?: ((e: OpenRampEvent) => void) | undefined
+  onEvent?: ((e: ClientEvent) => void) | undefined
 }
 export type DepositButtonProps = DepositButtonCustomProps & {
   /** Button text. The default slot takes precedence. */

@@ -100,7 +100,7 @@ Actions for your own button. On click, the action opens the modal. The action di
 | `getClientSecret` | `string \| () => Promise<string>` | Required. A secret, or a function that fetches one on click. |
 | `onComplete` | `(session: PublicSession) => void` | The deposit or withdrawal completed |
 | `onError` | `(error: OpenRampError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
-| `onEvent` | `(e: OpenRampEvent) => void` | Browser events for this session (in addition to the ramp's) |
+| `onEvent` | `(e: ClientEvent) => void` | Browser events for this session (in addition to the ramp's) |
 | `disabled` | `boolean` | Keep the element disabled |
 
 For fully custom markup, call the ramp yourself:
@@ -155,4 +155,4 @@ The value is `undefined` when `controller` is `undefined` or `null`.
 
 ## Re-exports
 
-Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `OpenRampEvent`, `WalletAdapter`, `OpenRamp`, `OpenRampConfig`, `BeginDepositOptions`, `BeginWithdrawOptions`, `ButtonActionParams`, `EmbeddedActionParams`, `ActionReturn`, `Readable`.
+Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `ClientEvent`, `WalletAdapter`, `OpenRamp`, `OpenRampConfig`, `BeginDepositOptions`, `BeginWithdrawOptions`, `ButtonActionParams`, `EmbeddedActionParams`, `ActionReturn`, `Readable`.

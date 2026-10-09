@@ -2,14 +2,15 @@
 // Node 20+, Bun and Deno. It holds provider secrets, fixes the destination per session,
 // plans pathways, runs legs, takes provider webhooks and sends signed webhooks to the app.
 
-import { OpenRampException, openRampError } from '@openrampkit/core'
+import { API_VERSION, OpenRampException, openRampError } from '@openrampkit/core'
+import type { Session } from '@openrampkit/core'
 import type { OpenRampConfig } from './config.js'
 import { verifyWebhook } from './crypto.js'
 import { corsHeaders, errorResponse, withCors } from './http.js'
 import { refreshActive } from './legs.js'
 import { route } from './routes.js'
 import { replayDeadLetters, saveSession } from './outbox.js'
-import { createRuntime, publicSession } from './runtime.js'
+import { backendSession, createRuntime } from './runtime.js'
 import { createSession } from './sessions.js'
 import { createPayLink, revokePayLink } from './pay.js'
 import { sweep } from './tasks.js'
@@ -19,7 +20,8 @@ import type { AdminListOptions } from './admin.js'
 
 export * from './store.js'
 export * from './durable-object-store.js'
-export { verifyWebhook } from './crypto.js'
+export { generateWebhookSecret, signWebhook, verifyWebhook } from './crypto.js'
+export type { ClientEvent, Session, WebhookEvent, WebhookEventOf, WebhookEventType } from '@openrampkit/core'
 export type { AdminConfig, CreateSessionInput, OpenRampConfig, Telemetry, TreasuryHook, TreasurySendInput } from './config.js'
 export type { AdminLeg, AdminListOptions, AdminListResult, AdminOutboxEvent, AdminPayment, AdminSession, AdminSessionSummary, AdminStats } from './admin.js'
 export { isValidAddress } from './withdraw.js'
@@ -49,7 +51,10 @@ export function createOpenRamp(config: OpenRampConfig) {
         res = errorResponse(openRampError('INTERNAL'), 500)
       }
     }
-    return withCors(res, cors)
+    // The wire format version (the same as `apiVersion` in webhook events)
+    const h = new Headers(res.headers)
+    h.set('openramp-version', String(API_VERSION))
+    return withCors(new Response(res.body, { status: res.status, statusText: res.statusText, headers: h }), cors)
   }
 
   return {
@@ -62,16 +67,17 @@ export function createOpenRamp(config: OpenRampConfig) {
     sessions: {
       /** Create a session from your backend. Give `clientSecret` to the browser. */
       create: (input: CreateSessionInput) => createSession(rt, input),
-      async retrieve(id: string) {
+      /** The backend view of a session (`Session`: the browser view plus `userId` and `metadata`), or null */
+      async retrieve(id: string): Promise<Session | null> {
         const rec = await rt.store.get(id)
-        return rec ? publicSession(rec) : null
+        return rec ? backendSession(rec) : null
       },
-      /** Server-side status refresh, e.g. from a cron job */
-      async refresh(id: string) {
+      /** Server-side status refresh, e.g. from a cron job. Returns the backend view. */
+      async refresh(id: string): Promise<Session | null> {
         const rec = await rt.store.get(id)
         if (!rec) return null
         if (await refreshActive(rt, rec, true)) await saveSession(rt, rec)
-        return publicSession(rec)
+        return backendSession(rec)
       },
       /**
        * A signed, expiring link to a hosted page where a person completes this session
@@ -93,7 +99,7 @@ export function createOpenRamp(config: OpenRampConfig) {
      */
     sweep: (opts?: { limit?: number }) => sweep(rt, opts),
     webhooks: {
-      /** Verify an OpenRampKit webhook your backend received */
+      /** Verify a webhook your backend received (Standard Webhooks headers; use the raw body text) */
       verify: (req: Request, body: string) => (config.webhooks ? verifyWebhook(config.webhooks.secret, req.headers, body) : Promise.resolve(false)),
       /**
        * Send the dead letters of one session again (events whose retries stopped). They keep their

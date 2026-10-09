@@ -25,7 +25,7 @@ pnpm dev:example   # http://localhost:3000
 | `PUBLIC_URL` | `http://localhost:3000` | Used for `baseUrl` and the webhook URL |
 | `OPENRAMP_MOCK` | `1` | `1`: mock providers only, works offline. `0`: real Relay for wallet and transfer, mock fiat. |
 | `NEXT_PUBLIC_WALLETCONNECT_PROJECT_ID` | empty | Only browser wallets work without it |
-| `OPENRAMP_WEBHOOK_SECRET` | a dev value | Signs the webhooks to `/api/hooks`. 16+ characters. Not in `.env.example`: add it for a real deployment. |
+| `OPENRAMP_WEBHOOK_SECRET` | a dev value | Signs the webhooks to `/api/hooks`. A Standard Webhooks secret (`whsec_...`, from `generateWebhookSecret()`). Not in `.env.example`: add it for a real deployment. |
 | `XENDIT_SECRET_KEY`, `XENDIT_WEBHOOK_TOKEN` | empty | Adds real Xendit merchant pay-in when both are set |
 | `CRON_SECRET` | empty | Protects `/api/cron`. In production, the route refuses all calls when it is not set. |
 | `RELAY_API_KEY` | empty | Relay API key, for `OPENRAMP_MOCK=0`. Relay requires it for quotes under its announced policy from 2 Oct 2026; some requests without a key may still work today, but Relay can refuse them at any time. Also needed for deposit address status (`/requests/v2` retires on 2026-11-24). |

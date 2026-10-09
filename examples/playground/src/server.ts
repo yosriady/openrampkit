@@ -5,8 +5,8 @@
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import type { Adapter } from '@openrampkit/adapter'
-import { createOpenRamp, memoryStore } from '@openrampkit/server'
-import type { CreateSessionInput, OpenRamp } from '@openrampkit/server'
+import { createOpenRamp, generateWebhookSecret, memoryStore } from '@openrampkit/server'
+import type { CreateSessionInput, OpenRamp, WebhookEvent } from '@openrampkit/server'
 
 /** Any absolute URL works: no request to it leaves the page. */
 const ORIGIN = 'https://playground.openrampkit.invalid'
@@ -26,7 +26,8 @@ function randomSecret(): string {
   return [...crypto.getRandomValues(new Uint8Array(24))].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-const webhookSecret = `whsec_${randomSecret()}`
+/** A Standard Webhooks secret (`whsec_` and base64), new for each page load */
+const webhookSecret = generateWebhookSecret()
 
 /**
  * DEMO ONLY: a fixed admin token, so that the playground can open the ops dashboard for the sessions in
@@ -89,9 +90,10 @@ export function createPlaygroundServer(opts: { adapters: Adapter[]; passthrough?
       const req = new Request(input, init)
       if (req.url === HOOKS_URL) {
         const body = await req.text()
+        // Standard Webhooks headers: webhook-id, webhook-timestamp and webhook-signature
         const verified = await openramp.webhooks.verify(req, body)
-        const event = JSON.parse(body) as { type: string; sessionId?: string }
-        const w: ReceivedWebhook = { type: event.type, verified, at: new Date().toISOString(), ...(event.sessionId ? { sessionId: event.sessionId } : {}) }
+        const event = JSON.parse(body) as WebhookEvent
+        const w: ReceivedWebhook = { type: event.type, verified, at: event.createdAt, sessionId: event.sessionId }
         for (const fn of listeners) fn(w)
         return new Response('ok')
       }

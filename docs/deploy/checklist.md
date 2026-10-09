@@ -60,7 +60,7 @@ Go through this list before real money moves.
 
 ## Your backend
 
-- [ ] Webhooks to your backend are verified with `openramp.webhooks.verify()` or `verifyWebhook()`, using the raw body.
+- [ ] Webhooks to your backend are verified with `openramp.webhooks.verify()`, `verifyWebhook()` or a Standard Webhooks library, using the raw body. The secret is a `whsec_` secret from your secret store.
 - [ ] Your handler is idempotent: it drops an event id it already handled (webhooks are at-least-once), and credits once per session id (a unique constraint), only on `session.succeeded`, after checking the session. See [Webhooks to your backend](../guide/webhooks.md).
 - [ ] You credit `session.result.output` only when `outputConfirmed` is `true`. Otherwise you check the amount on chain (`result.txHashes`), at the provider, or on your order.
 - [ ] You store transaction hashes with a unique constraint, so one transaction cannot complete two sessions (same-chain Relay moves check the receipt, not who sent it).
@@ -77,8 +77,8 @@ Go through this list before real money moves.
 - [ ] `allowedTargets` lists only the chains and currencies you support.
 - [ ] With `custody: 'app'`: `treasury.send()` checks and debits the user's balance once per `idempotencyKey`, checks the recipient and amount of each transaction, and throws to refuse. The server does not know the user's balance.
 - [ ] With `custody: 'app'` and Relay: `treasury.address` is set.
-- [ ] You handle `withdrawal.failed`: check `result.txHashes` and the provider before you return funds to the user.
-- [ ] You handle `withdrawal.reversed`: the payout did not reach the user. Check the provider, then return the funds to the user.
+- [ ] For withdrawals, you handle `session.failed`: check `result.txHashes` and the provider before you return funds to the user. `session.payment_failed` is not final: the user can try again.
+- [ ] For withdrawals, you handle `session.reversed`: the payout did not reach the user. Check the provider, then return the funds to the user.
 
 ## Adapters
 

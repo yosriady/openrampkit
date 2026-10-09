@@ -29,7 +29,7 @@ Mounts `<openramp-modal>`, starts a session and returns a handle. Browser only.
 | `messages` | `Partial<Messages>` | none | Overrides the locale catalog key by key |
 | `container` | `HTMLElement` | `document.body` | Where to mount the element |
 | `embedded` | `boolean` | `false` | Render inline, without the overlay |
-| `onEvent` | `(e: OpenRampEvent) => void` | none | [Browser events](../concepts/events.md#browser-events) |
+| `onEvent` | `(e: ClientEvent) => void` | none | [Browser events](../concepts/events.md#browser-events) |
 | `onClose` | `(session?: PublicSession) => void` | none | Called once when the modal closes, with the last session |
 | `fetch` | `typeof fetch` | global | Custom fetch, for tests and demos |
 | `providerRenderers` | `Record<string, ProviderRenderer>` | none | Renderers for `PROVIDER_SDK` surfaces, keyed by the surface `provider`. When set, `PROVIDER_SDK` is added to the surfaces the client can draw. See [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk). |
@@ -171,4 +171,4 @@ Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 | `defineOpenRampModal()` | Registers the element if it is not registered |
 | `DepositController`, `WithdrawController`, `RampController` | Re-exported from `@openrampkit/client` (one class) |
 
-Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `Surface`, `OpenRampError`, `OpenRampEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.
+Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `Surface`, `OpenRampError`, `ClientEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.

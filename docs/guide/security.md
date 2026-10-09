@@ -68,7 +68,7 @@ An adapter without its webhook key refuses every webhook. All comparisons are co
 
 ### Webhooks out
 
-The server signs each webhook with HMAC-SHA256 over `{id}.{timestamp}.{body}`. `verifyWebhook` refuses a timestamp more than 5 minutes old. Webhooks are at least once: credit by event id or session id, one time only. See [Webhooks to your backend](./webhooks.md).
+The server signs each webhook with HMAC-SHA256 over `{id}.{timestamp}.{body}` ([Standard Webhooks](https://www.standardwebhooks.com): the headers `webhook-id`, `webhook-timestamp` and `webhook-signature`). `verifyWebhook` refuses a timestamp more than 5 minutes old. Webhooks are at least once: credit one time per session, and deduplicate by event id.
 
 ### Withdrawals
 

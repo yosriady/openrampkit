@@ -1,4 +1,5 @@
-import type { OpenRampEvent, OpenRampEventType } from './types.js'
+import { API_VERSION } from './types.js'
+import type { ClientEventFields, ClientEventOf, ClientEventType, WebhookEventOf, WebhookEventType } from './types.js'
 
 export function randomId(prefix: string, bytes = 12): string {
   const buf = new Uint8Array(bytes)
@@ -8,14 +9,32 @@ export function randomId(prefix: string, bytes = 12): string {
   return `${prefix}_${s}`
 }
 
-/** Build an event envelope. The id is random unless `opts.id` is given (the server gives a deterministic one). */
-export function createEvent<T>(type: OpenRampEventType, object: T, opts: { id?: string; sessionId?: string; livemode?: boolean } = {}): OpenRampEvent<T> {
+/** Build a browser UI event. The id is random. */
+export function createClientEvent<T extends ClientEventType>(type: T, object: ClientEventFields[T], opts: { sessionId?: string; livemode?: boolean } = {}): ClientEventOf<T> {
   return {
-    id: opts.id ?? randomId('evt'),
+    id: randomId('evt'),
     type,
-    created: Math.floor(Date.now() / 1000),
+    createdAt: new Date().toISOString(),
     livemode: opts.livemode ?? false,
     ...(opts.sessionId ? { sessionId: opts.sessionId } : {}),
+    data: { object },
+  }
+}
+
+/** Build a webhook event envelope. The server gives a deterministic `id`. */
+export function createWebhookEvent<T extends WebhookEventType>(
+  type: T,
+  object: WebhookEventOf<T>['data']['object'],
+  opts: { id: string; sessionId: string; livemode: boolean; createdAt?: string },
+): WebhookEventOf<T> {
+  return {
+    id: opts.id,
+    object: 'event',
+    apiVersion: API_VERSION,
+    type,
+    createdAt: opts.createdAt ?? new Date().toISOString(),
+    livemode: opts.livemode,
+    sessionId: opts.sessionId,
     data: { object },
   }
 }

@@ -2,12 +2,14 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError } from '@openrampkit/core'
+import { CHAINS, USDC, accountFor, chainNamespace, cmp, createClientEvent, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError } from '@openrampkit/core'
 import type {
   Direction,
   MethodOption,
   OpenRampError,
-  OpenRampEvent,
+  ClientEvent,
+  ClientEventFields,
+  ClientEventType,
   PlanResult,
   PublicSession,
   PublicQuote,
@@ -65,7 +67,7 @@ export type ControllerOptions = {
   wallet?: WalletAdapter
   /** Surfaces this UI can render. Defaults to all built-in ones. */
   surfaces?: string[]
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   /** Refuse a session of the other direction (e.g. `openWithdraw()` with a deposit secret) */
   expect?: Direction
 }
@@ -135,15 +137,10 @@ export class RampController {
     for (const l of this.listeners) l()
   }
 
-  private emit(type: string, object: unknown) {
-    this.opts.onEvent?.({
-      id: `evt_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      type,
-      created: Math.floor(Date.now() / 1000),
-      livemode: this.snap.session?.livemode ?? false,
-      ...(this.snap.session ? { sessionId: this.snap.session.id } : {}),
-      data: { object },
-    })
+  private emit<T extends ClientEventType>(type: T, object: ClientEventFields[T]) {
+    if (!this.opts.onEvent) return
+    const session = this.snap.session
+    this.opts.onEvent(createClientEvent(type, object, { livemode: session?.livemode ?? false, ...(session ? { sessionId: session.id } : {}) }) as ClientEvent)
   }
 
   private fail(e: unknown) {

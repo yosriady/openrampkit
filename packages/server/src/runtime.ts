@@ -1,8 +1,9 @@
 import { ADAPTER_API_VERSION, resultChannels } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
 import { OpenRampException, normalizeToken, openRampError } from '@openrampkit/core'
-import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
+import type { Destination, Pathway, PublicSession, Session, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
+import { webhookKey } from './crypto.js'
 import type { OpenRampConfig } from './config.js'
 import { memoryStore, migratingStore, scopedKV, VersionConflictError } from './store.js'
 import type { SessionRecord, SessionStore } from './store.js'
@@ -27,9 +28,7 @@ export type Runtime = {
 export function createRuntime(config: OpenRampConfig): Runtime {
   if (!config.secret || config.secret.length < 32) throw new Error('OpenRamp: `secret` must be at least 32 characters')
   // An empty or short key makes a signature or a bearer token easy to guess.
-  if (config.webhooks && (typeof config.webhooks.secret !== 'string' || config.webhooks.secret.length < 16)) {
-    throw new Error('OpenRamp: `webhooks.secret` must be at least 16 characters')
-  }
+  if (config.webhooks) checkWebhookSecret(config.webhooks.secret)
   if (config.tasksToken !== undefined && (typeof config.tasksToken !== 'string' || config.tasksToken.length < 16)) {
     throw new Error('OpenRamp: `tasksToken` must be at least 16 characters')
   }
@@ -74,6 +73,20 @@ export function createRuntime(config: OpenRampConfig): Runtime {
       }
     },
   }
+}
+
+/**
+ * A webhook secret is a Standard Webhooks secret (`whsec_` and base64 of 24 to 64 bytes; see
+ * `generateWebhookSecret()`), or a raw string of at least 16 characters.
+ */
+function checkWebhookSecret(secret: unknown): void {
+  if (typeof secret !== 'string') throw new Error('OpenRamp: `webhooks.secret` must be a string')
+  if (secret.startsWith('whsec_')) {
+    const n = webhookKey(secret).length
+    if (n < 24 || n > 64) throw new Error('OpenRamp: a `whsec_` webhook secret must hold 24 to 64 bytes (base64)')
+    return
+  }
+  if (secret.length < 16) throw new Error('OpenRamp: `webhooks.secret` must be at least 16 characters')
 }
 
 /**
@@ -175,6 +188,11 @@ export function publicSession(rec: SessionRecord): PublicSession {
     expiresAt: new Date(rec.expiresAt).toISOString(),
     livemode: rec.livemode,
   }
+}
+
+/** The backend view of a session: the browser view plus `userId` and `metadata`. Webhooks and `sessions.retrieve()` use it. */
+export function backendSession(rec: SessionRecord): Session {
+  return { ...publicSession(rec), userId: rec.userId, metadata: rec.metadata ?? {} }
 }
 
 /** What was paid and delivered so far, from the active pathway's quotes and leg steps. */

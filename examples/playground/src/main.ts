@@ -1,6 +1,6 @@
 import { createMockWallet } from '@openrampkit/client'
 import { METHODS } from '@openrampkit/core'
-import type { OpenRampEvent } from '@openrampkit/core'
+import type { ClientEvent } from '@openrampkit/core'
 import { autoTheme, darkTheme, lightTheme, openDeposit, openWithdraw } from '@openrampkit/web'
 import type { DepositHandle, RadiusScale, Theme, ThemeOptions } from '@openrampkit/web'
 import { BASE_URL, createSession, DEMO_ADMIN_TOKEN, fakeFetch, onWebhook } from './server.js'
@@ -173,7 +173,7 @@ function push(listId: string, item: HTMLLIElement) {
   while (list.children.length > 40) list.lastElementChild?.remove()
 }
 
-const logEvent = (e: OpenRampEvent) => {
+const logEvent = (e: ClientEvent) => {
   const state = (e.data.object as { state?: unknown } | undefined)?.state
   push('events', li(typeof state === 'string' ? [[e.type, 'code'], [state, 'small']] : [[e.type, 'code']]))
 }

@@ -1,6 +1,6 @@
 import { createElement, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import { toOpenRampError } from '@openrampkit/client'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal } from '@openrampkit/web'
@@ -18,7 +18,7 @@ export type OpenRampEmbeddedProps = {
   messages?: Partial<Messages>
   /** BCP 47 locale. Defaults to the provider's `locale` */
   locale?: string
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   onComplete?: (session: PublicSession) => void
   /** Called when the user presses Close on a result or error screen */
   onClose?: (session: PublicSession | undefined) => void

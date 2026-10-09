@@ -28,7 +28,7 @@ This page lists every feature of OpenRampKit, with a link to its documentation. 
 | App custody | Your treasury hook sends the transaction (`custody: 'app'`), once per step | [custody: 'app'](./withdraw.md#custody-app) |
 | Allowed targets | Limit the chains or currencies that a user can pick | [Allowed targets](./withdraw.md#allowed-targets) |
 | Address screening | Your `screenAddress` hook refuses an address. An error also refuses it. | [Screen addresses](./withdraw.md#screen-addresses) |
-| Withdraw events | `withdrawal.succeeded`, `withdrawal.failed` and `withdrawal.reversed` next to the session events | [Events](./withdraw.md#events) |
+| Withdraw events | The same `session.*` events as a deposit. `data.object.session.direction` is `withdraw`. | [Events](./withdraw.md#events) |
 
 See the [withdraw flow](../concepts/flows.md#withdraw).
 

@@ -32,7 +32,7 @@ Holds the shared config and opens the modal.
 | `locale` | `string` | BCP 47. Pushed live to an open modal. |
 | `messages` | `Partial<Messages>` | Applied when the modal opens |
 | `providerRenderers` | `Record<string, ProviderRenderer>` | Renderers for `PROVIDER_SDK` surfaces |
-| `onEvent` | `(e: OpenRampEvent) => void` | Every browser event |
+| `onEvent` | `(e: ClientEvent) => void` | Every browser event |
 | `children` | `JSX.Element` | |
 
 Only one modal is open at a time. When you open a new modal, the previous modal closes. When the provider unmounts, the modal closes.
@@ -70,7 +70,7 @@ A ready-made button that calls `beginDeposit`. It is disabled while the modal is
 | `disabled` | `boolean` | |
 | `onComplete` | `(session: PublicSession) => void` | The deposit completed |
 | `onError` | `(error: OpenRampError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
-| `onEvent` | `(e: OpenRampEvent) => void` | Browser events for this deposit (in addition to the provider's) |
+| `onEvent` | `(e: ClientEvent) => void` | Browser events for this deposit (in addition to the provider's) |
 
 ### DepositButton.Custom
 
@@ -132,4 +132,4 @@ The value is `undefined` when `controller` is `undefined` or `null`. It does not
 
 ## Re-exports
 
-Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `OpenRampEvent`, `WalletAdapter`, `OpenRampConfig`, `OpenRampApi`, `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonRenderProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonRenderProps`, `OpenRampEmbeddedProps`.
+Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `ClientEvent`, `WalletAdapter`, `OpenRampConfig`, `OpenRampApi`, `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonRenderProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonRenderProps`, `OpenRampEmbeddedProps`.

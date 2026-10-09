@@ -3,7 +3,7 @@
 import { ConnectButton } from '@rainbow-me/rainbowkit'
 import { createMockWallet } from '@openrampkit/client'
 import { SOLANA_MAINNET, SOLANA_USDC_MINT, TEMPO_MAINNET, TEMPO_USDC, combineWallets } from '@openrampkit/core'
-import type { Destination, OpenRampEvent, WalletAdapter } from '@openrampkit/core'
+import type { Destination, ClientEvent, WalletAdapter } from '@openrampkit/core'
 import { solanaWallet } from '@openrampkit/solana'
 import { DepositButton, OpenRampEmbedded, OpenRampProvider, WithdrawButton, autoTheme, darkTheme, lightTheme } from '@openrampkit/react'
 import { wagmiWallet } from '@openrampkit/wagmi'
@@ -45,7 +45,7 @@ export function Playground({ mock }: { mock: boolean }) {
   const [walletMode, setWalletMode] = useState<WalletMode>('mock')
   const [embedded, setEmbedded] = useState(true)
   const [embedSecret, setEmbedSecret] = useState<string>()
-  const [events, setEvents] = useState<OpenRampEvent[]>([])
+  const [events, setEvents] = useState<ClientEvent[]>([])
   const [hooks, setHooks] = useState<Array<{ type: string; sessionId?: string; at: string }>>([])
   const { isConnected } = useAccount()
 
@@ -93,7 +93,7 @@ export function Playground({ mock }: { mock: boolean }) {
     return () => clearInterval(t)
   }, [])
 
-  const onEvent = (e: OpenRampEvent) => setEvents((xs) => [e, ...xs].slice(0, 30))
+  const onEvent = (e: ClientEvent) => setEvents((xs) => [e, ...xs].slice(0, 30))
 
   const code =
     direction === 'withdraw'

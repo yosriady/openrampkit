@@ -78,7 +78,7 @@ The [Flows](../concepts/flows.md) page shows each step as a sequence diagram.
 2. The user picks a target: a network, a token and an address ("To wallet"), or a payout method ("To cash").
 3. The user enters an amount and confirms a quote. The server starts the leg.
 4. The funds leave with a wallet transaction. The user's wallet signs it, or your treasury hook sends it.
-5. The server sends `session.succeeded` and `withdrawal.succeeded` to your backend.
+5. The server sends `session.succeeded` to your backend.
 
 A background sweep keeps each session moving after the user closes the tab. See [Background sweep](../api/server.md#background-sweep).
 

@@ -1,7 +1,7 @@
 // Withdraw flow of the controller, against the real server handler with the mock adapter (offramp on).
 import { describe, expect, it, vi } from 'vitest'
 import { USDC } from '@openrampkit/core'
-import type { OpenRampEvent, WithdrawSource } from '@openrampkit/core'
+import type { ClientEvent, WithdrawSource } from '@openrampkit/core'
 import type { CreateSessionInput } from '@openrampkit/server'
 import { RampController, WithdrawController, createMockWallet, isValidTargetAddress, withdrawTokens } from './index.js'
 import type { ControllerOptions } from './index.js'
@@ -18,7 +18,7 @@ async function make(opts: {
 } = {}) {
   const srv = setupServer(undefined, opts.config)
   const s = await srv.ramp.sessions.create({ userId: 'u1', direction: 'withdraw', source: BASE_SOURCE, country: 'PH', ...opts.session } as CreateSessionInput)
-  const events: OpenRampEvent[] = []
+  const events: ClientEvent[] = []
   const wallet = opts.wallet === false ? undefined : createMockWallet({ address: USER, delayMs: 0 })
   const c = new WithdrawController({ client: srv.client, clientSecret: s.clientSecret, ...(wallet ? { wallet } : {}), onEvent: (e) => events.push(e), ...opts.ctl })
   return { ...srv, s, c, events, wallet }

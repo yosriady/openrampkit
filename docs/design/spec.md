@@ -419,8 +419,8 @@ v1 ships `memoryStore` (dev only), `redisStore`, and `postgresStore` (Drizzle, o
 ### 7.7 Outbound webhooks to the app
 
 - Envelope: `{ id, type, created, livemode, data: { object } }`.
-- Signature: HMAC-SHA256 over `id.timestamp.body`, with headers `openramp-id`, `openramp-timestamp`, `openramp-signature`. Timestamps older than 300 s are rejected. `openramp.webhooks.verify(req)` is provided.
-- Types: `session.created`, `session.succeeded`, `session.failed`, `session.expired`, `leg.succeeded`, `leg.failed`, `deposit.received` (merchant destination), `withdrawal.succeeded`.
+- Signature: HMAC-SHA256 over `id.timestamp.body`, with the Standard Webhooks headers `webhook-id`, `webhook-timestamp`, `webhook-signature` (`v1,<base64>`). Timestamps older than 300 s are rejected. See [the 0.1 data model](./data-model-0.1.md).
+- Types: see [Events](../concepts/events.md#webhook-events). One `session.*` catalog for both directions.
 - Retries with exponential backoff for 24 hours. The app MUST treat them as at-least-once and credit balances idempotently by `session.id`.
 
 ## 8. Client and UI

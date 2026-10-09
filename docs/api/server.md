@@ -59,8 +59,8 @@ openramp.fetch(req)           // Same as handle, for `export default openramp` o
 openramp.nextHandlers()       // { GET, POST, OPTIONS } for a Next.js App Router catch-all route
 
 await openramp.sessions.create(input)  // Promise<CreatedSession>
-await openramp.sessions.retrieve(id)   // Promise<PublicSession | null>
-await openramp.sessions.refresh(id)    // Promise<PublicSession | null>: ask the active leg's adapter for status now
+await openramp.sessions.retrieve(id)   // Promise<Session | null>: the backend view (PublicSession plus userId and metadata)
+await openramp.sessions.refresh(id)    // Promise<Session | null>: ask the active leg's adapter for status now
 await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { id, url, expiresAt }, a signed link to the pay page
 await openramp.sessions.revokePayLink(id, linkId)    // Promise<boolean>: make one pay link stop working; false when the session does not exist
 
@@ -189,9 +189,15 @@ Give `clientSecret` to the browser. Keep `id` if you want to look the session up
 import { verifyWebhook } from '@openrampkit/server'
 
 await verifyWebhook(secret, headers, rawBody, toleranceSec = 300) // Promise<boolean>
+generateWebhookSecret()                                            // 'whsec_...': a new Standard Webhooks secret (32 random bytes)
+await signWebhook(secret, id, timestamp, body)                     // 'v1,<base64>': the signature the server sends
 ```
 
-Use it in a service that does not have the `openramp` instance. See [Webhooks to your backend](../guide/webhooks.md).
+The webhooks follow [Standard Webhooks](https://www.standardwebhooks.com). `verifyWebhook` reads the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers. Use it in a service that does not have the `openramp` instance. See [Webhooks to your backend](../guide/webhooks.md).
+
+`WebhookEvent`, `WebhookEventOf`, `WebhookEventType`, `Session` and `ClientEvent` are also exported from `@openrampkit/server` (they come from `@openrampkit/core`).
+
+Every response of the handler has the header `openramp-version: 1` (the same as `apiVersion` in webhook events).
 
 ## Stores
 

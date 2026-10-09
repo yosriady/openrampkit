@@ -1,6 +1,6 @@
 import { createElement, Fragment, useCallback, useRef } from 'react'
 import type { ReactNode } from 'react'
-import type { OpenRampError, OpenRampEvent, PublicSession } from '@openrampkit/core'
+import type { OpenRampError, ClientEvent, PublicSession } from '@openrampkit/core'
 import { useOpenRamp } from './provider.js'
 
 export type DepositButtonRenderProps = {
@@ -15,7 +15,7 @@ export type DepositButtonCustomProps = {
   onComplete?: (session: PublicSession) => void
   /** Called when the modal closes before the session completes */
   onError?: (error: OpenRampError) => void
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   children: (props: DepositButtonRenderProps) => ReactNode
 }
 

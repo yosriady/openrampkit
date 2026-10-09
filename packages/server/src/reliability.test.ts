@@ -71,7 +71,7 @@ function appBackend() {
   const fetchFn: typeof fetch = async (_u, init) => {
     const body = JSON.parse(String(init?.body))
     const status = await answer(body)
-    sent.push({ type: body.type, id: body.id, header: new Headers(init?.headers).get('openramp-id')!, sessionId: body.sessionId, ok: status < 300 })
+    sent.push({ type: body.type, id: body.id, header: new Headers(init?.headers).get('webhook-id')!, sessionId: body.sessionId, ok: status < 300 })
     return new Response('x', { status })
   }
   return { sent, fetchFn, setAnswer: (f: typeof answer) => void (answer = f), delivered: (type: string) => sent.filter((s) => s.ok && s.type === type) }

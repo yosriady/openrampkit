@@ -1,7 +1,7 @@
 import type { ProviderRenderer } from './provider-sdk.js'
 import { createOpenRampClient, DepositController, toOpenRampError } from '@openrampkit/client'
 import { openRampError } from '@openrampkit/core'
-import type { Direction, OpenRampError, OpenRampEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
+import type { Direction, OpenRampError, ClientEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
 import { defineOpenRampModal, OpenRampModal } from './element.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -10,7 +10,7 @@ import type { Appearance, Theme } from './theme.js'
 export const SUPPORTED_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'OTP', 'FORM']
 
 /** Error code used when the user closes the modal before the deposit or withdrawal completes. */
-export const CLOSED_CODE = 'CLOSED'
+export const CLOSED_CODE = 'CLOSED' as const
 
 export type ClientSecretSource = string | (() => Promise<string>)
 
@@ -18,7 +18,7 @@ export type CreateControllerOptions = {
   baseUrl: string
   clientSecret: string
   wallet?: WalletAdapter
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   /** Custom fetch, for tests and demos */
   fetch?: typeof fetch
   surfaces?: string[]
@@ -70,7 +70,7 @@ export type OpenDepositOptions = {
   embedded?: boolean
   /** Renderers for PROVIDER_SDK surfaces, e.g. `{ stripe: stripeOnrampRenderer() }` */
   providerRenderers?: Record<string, ProviderRenderer>
-  onEvent?: (e: OpenRampEvent) => void
+  onEvent?: (e: ClientEvent) => void
   /** Called once when the modal closes, with the last session state */
   onClose?: (session: PublicSession | undefined) => void
   fetch?: typeof fetch

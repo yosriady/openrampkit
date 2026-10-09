@@ -1,5 +1,5 @@
 // Framework-agnostic embedded mode: create one controller for one `<openramp-modal embedded>` element.
-import type { OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import { toOpenRampError } from '@openrampkit/client'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal, ProviderRenderer } from '@openrampkit/web'
@@ -11,7 +11,7 @@ export type EmbedSession = {
   clientSecret: string | (() => Promise<string>)
   wallet?: WalletAdapter
   providerRenderers?: Record<string, ProviderRenderer>
-  onEvent: (e: OpenRampEvent) => void
+  onEvent: (e: ClientEvent) => void
   onComplete: (session: PublicSession) => void
   onController: (controller: DepositController) => void
 }

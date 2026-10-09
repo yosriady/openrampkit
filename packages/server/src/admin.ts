@@ -515,7 +515,7 @@ function finalState(v: unknown): FinalState {
 
 /**
  * Force a final state, with an audit note in the record (`resolution` and the timeline), and send the
- * matching webhook (`session.succeeded`, `session.failed`, ... and `withdrawal.*` for a withdrawal).
+ * matching webhook (`session.succeeded`, `session.failed`, `session.refunded` or `session.expired`).
  * The webhook data has `resolution: { by: 'admin', state, note, at }`. Later provider events still
  * update the legs, but not the session state.
  */
@@ -542,9 +542,8 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
     rec.status = sessionStatusFor(target, !!rec.active)
     if (rec.status === 'failed' && rec.step.error) rec.lastError = rec.step.error
     addTimeline(rec, 'admin.resolved', { state: target, previous, note: text })
-    const extra = { resolution: { by: 'admin', state: target, note: text, at: iso(now) } }
-    await notify(rt, rec, `session.${rec.status}`, extra)
-    if (rec.direction === 'withdraw' && (rec.status === 'succeeded' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
+    const extra = { resolution: { by: 'admin', state: target, note: text, at: iso(now) }, ...(rec.status === 'failed' && rec.lastError ? { error: rec.lastError } : {}) }
+    await notify(rt, rec, `session.${rec.status as 'succeeded' | 'failed' | 'refunded' | 'expired'}`, extra)
     try {
       await saveSession(rt, rec)
       rt.log.info('admin resolved a session', { sessionId: rec.id, state: target, previous })

@@ -1,6 +1,6 @@
 import { defineComponent, getCurrentScope, inject, onScopeDispose, provide, readonly, ref, toValue, watch } from 'vue'
 import type { DefineComponent, InjectionKey, MaybeRefOrGetter, PropType, Ref } from 'vue'
-import type { OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
 import type { Messages, ProviderRenderer } from '@openrampkit/web'
 import { createRampCore } from './ramp.js'
@@ -75,7 +75,7 @@ export const OpenRampProvider: DefineComponent<OpenRampProviderProps> = defineCo
     messages: Object as PropType<Partial<Messages>>,
     locale: String,
     providerRenderers: Object as PropType<Record<string, ProviderRenderer>>,
-    onEvent: Function as PropType<(e: OpenRampEvent) => void>,
+    onEvent: Function as PropType<(e: ClientEvent) => void>,
   },
   setup(props, { slots }) {
     provideOpenRamp(() => {
