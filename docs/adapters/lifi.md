@@ -46,8 +46,9 @@ LI.FI refuses a quote with `fee` when the `integrator` has no fee wallet (error 
 
 - The adapter calls `GET /v1/quote` with `fromAmount` (exact input). When the amount is on the destination side, it calls `GET /v1/quote/toAmount` with `toAmount` (exact output).
 - LI.FI needs a `fromAddress`. Before the wallet is known, the quote uses a placeholder address. The start quotes again with the real address.
-- The quote output is `estimate.toAmount`. The quote data has `minOutput`: LI.FI `estimate.toAmountMin`, the smallest delivery after slippage.
-- Fees: each `estimate.feeCosts` entry is a provider fee. The integrator part (`feeSplit.integratorFee`) is the app fee. `estimate.gasCosts` is the network fee, added per gas token.
+- The quote output is `estimate.toAmount`. The guarantee is `min_output`. `LegQuote.minOutput` is LI.FI `estimate.toAmountMin`, the smallest delivery after slippage: the route reverts below it. `slippageBps` is LI.FI `action.slippage` in basis points, when LI.FI says it.
+- The quote expires after 1 minute (`quoteExpiresAt`), because its transaction goes stale.
+- Fees, each in its own token: each `estimate.feeCosts` entry is a `provider` fee. The integrator part (`feeSplit.integratorFee`) is the `app` fee. These fees have `included: true` (LI.FI takes them from the routed amount), unless LI.FI says `included: false`. `estimate.gasCosts` is the `network` fee, added per gas token, with `included: false`: the wallet pays it on top of `input`.
 - Unknown token decimals come from `GET /v1/token`, cached for 7 days in the shared store.
 - The adapter checks that the route is for the chains, the tokens and the receiver it asked for. Else it fails with `PROVIDER_UNAVAILABLE`.
 - No quote (`NO_QUOTES`) for: the same token on the same chain (Relay does a plain transfer), a destination with a settlement contract, or a source chain that is not EVM or Solana mainnet.
@@ -60,7 +61,8 @@ LI.FI refuses a quote with `fee` when the `integrator` has no fee wallet (error 
 - Solana: LI.FI returns a serialized transaction (base64) in `transactionRequest.data`. The adapter puts it in the `WALLET_TX` surface as a `SolanaTxRequest` (`type: 'transaction'`).
 - The leg ref is `lifi:<sessionId>:<random>`. The session store keeps the payment record for 7 days.
 - After the wallet sends, the client fires `submit_tx` with `{ txHash }` (EVM hash or Solana signature).
-- Transaction hashes: the leg's `sourceTxHash` is the source transaction that the wallet sent. The leg's `txHash` is the delivery (`receiving.txHash`) when the transfer completes. The session shows them in `result.sourceTxHashes` and `result.txHashes`.
+- Transactions: the leg reports the source transaction that the wallet sent with the role `source`. It reports the delivery (`receiving.txHash`) with the role `destination` when the transfer completes. A token approval is not reported. The session shows them in `result.transactions`.
+- `providerRef` is the LI.FI `transactionId` from the status, else the source transaction hash.
 
 ## Status mapping
 
@@ -68,19 +70,21 @@ Status calls `GET /v1/status?txHash=...&fromChain=...&toChain=...`.
 
 | LI.FI status | Substatus | Leg |
 |---|---|---|
-| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, sub-state `confirming` (LI.FI has not indexed the transaction yet) |
-| `PENDING` | `WAIT_SOURCE_CONFIRMATIONS` | `processing`, sub-state `confirming` |
-| `PENDING` | `WAIT_DESTINATION_TRANSACTION`, or none | `processing`, sub-state `bridging` |
-| `PENDING` | `BRIDGE_NOT_AVAILABLE`, `CHAIN_NOT_AVAILABLE`, `NOT_PROCESSABLE_REFUND_NEEDED` | `processing`, sub-state `delayed` |
-| `PENDING` | `REFUND_IN_PROGRESS` | `processing`, sub-state `refunding` |
-| `PENDING` | other | `processing`, sub-state `processing` |
+| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, detail code `confirming` (LI.FI has not indexed the transaction yet) |
+| `PENDING` | `WAIT_SOURCE_CONFIRMATIONS` | `processing`, detail code `confirming` |
+| `PENDING` | `WAIT_DESTINATION_TRANSACTION`, or none | `processing`, detail code `bridging` |
+| `PENDING` | `BRIDGE_NOT_AVAILABLE`, `CHAIN_NOT_AVAILABLE`, `UNKNOWN_ERROR` | `processing`, detail code `delayed` |
+| `PENDING` | `REFUND_IN_PROGRESS` | `processing`, detail code `refunding` |
+| `PENDING` | other | `processing`, detail code `processing` (the adapter logs the unknown substatus once) |
 | `DONE` | `COMPLETED` | `succeeded`, after the delivery checks below |
 | `DONE` | `PARTIAL` | `failed` with `DELIVERY_FAILED`: LI.FI delivered another token |
 | `DONE` or `FAILED` | `REFUNDED` | `refunded` |
 | `FAILED` | other | `failed` with `DELIVERY_FAILED` |
 
-The raw LI.FI status or substatus goes to `providerStatus`, which the session timeline keeps. The browser does not get it.
 | `INVALID` | | `failed` with `DELIVERY_FAILED` |
+| other | | `processing` with no detail code: the adapter logs the unknown status once. The leg never completes or fails on a status that it does not know. |
+
+The adapter maps the statuses with `statusMap` from `@openrampkit/adapter`. The raw LI.FI status or substatus goes to `detail.providerStatus`. The session timeline keeps each new value.
 
 ## One payment, one session
 
@@ -93,7 +97,7 @@ These checks stop one transaction from paying two sessions, and stop a short del
 
 ::: warning What the check does not cover
 - Native tokens and Solana destinations have no on-chain check. The leg uses the LI.FI status, and the source tx record.
-- The used records are in the LI.FI adapter's shared store. Another adapter (for example a Relay `transfer` leg on the same address) does not see them. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
+- The used records are in the LI.FI adapter's shared store. Another adapter (for example a Relay `transfer` leg on the same address) does not see them. Store the hashes of `result.transactions` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
 - The shared store has no atomic "set if absent". The adapter writes the record, then reads it back. Two checks at the same moment on an eventually consistent store can still race.
 :::
 

@@ -42,7 +42,7 @@ Receive them with `onEvent` on `OpenRampProvider`, `DepositButton`, `WithdrawBut
 | `method.selected` | The user picks a method | `{ method }` |
 | `quotes.shown` | Quotes arrived | `{ method, count }` |
 | `quote.selected` | The user confirms a quote | `{ quoteId }` |
-| `step.changed` | The step's state or sub-state changed | `{ state, sub }` |
+| `step.changed` | The step's state or detail code changed | `{ state, detail? }` (`detail` is the `Step.detail.code`) |
 | `surface.opened` | The user opened a surface (for example the redirect button) | `{ kind }` |
 | `surface.message` | A provider iframe sent a recognized message | `{ kind, detail }` |
 | `modal.closed` | The modal closed | `{ screen, state }` |
@@ -90,7 +90,7 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret` (Standar
   // session.failed: error, and resolution when an operator resolved it
   // session.canceled: reason ('requested_by_app', 'requested_by_user' or 'abandoned')
   // session.late_payment: reason ('after_expiry', 'after_grace' or 'earlier_attempt'), index, adapterId, legId,
-  //   txHash (when known), attempt (earlier_attempt only)
+  //   transactions (the leg's transactions, when known), attempt (earlier_attempt only)
   // session.reversed: index, adapterId, legId,
   //   legStatus ('refunded' or 'reversed'), previous (the step state before, e.g. 'COMPLETED'),
   //   attempt (only for an earlier attempt; the session status does not change)
@@ -99,7 +99,7 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret` (Standar
 
 `WebhookEventFields` in `@openrampkit/core` has these fields per type. `WEBHOOK_EVENT_TYPES` lists the types.
 
-`data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started. `result.txHashes` has the main transaction of each leg (for a bridge or swap, the fill on the destination chain). `result.sourceTxHashes` has the transaction that paid into each leg, for example the origin chain transaction that the user's wallet sent. It is absent when no leg reports one.
+`data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started. `result.transactions` has every transaction of the payment, each with a role: `source` (what paid into a leg, for example the user's wallet transaction), `hop` and `destination` (the deliveries), and more (see [Transactions](../api/core.md#transactions)). `result.delivery` tells if the reported output matches the quote. Credit the full amount only when `result.delivery.status` is `ok`. `session.payment` has the legs and the provider order ids (`providerRef`).
 
 ### Refunds and chargebacks after success
 

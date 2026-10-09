@@ -136,16 +136,25 @@ The webhook has three headers:
 
 The adapter verifies the signature with `binancePublicKey`. A missing header, a changed body, a changed timestamp or a signature from another key gives 401. Events are idempotent: the same body gives the same events.
 
+## Quotes, fees and references
+
+- **Guarantee**: `estimate`. Binance sets the final price on its page. The quote expires after 5 minutes (`quoteExpiresAt(5)`).
+- **Fees**: `feeAmount` is a `provider` fee, in the fiat currency or in the delivered coin. Its `amount` is `null` when Binance names another currency. `networkFee` is a `network` fee in the delivered coin. Both fees have `included: true`.
+- **`providerRef`**: the leg ref. Binance knows the order by our `externalOrderId`, so the two values are the same.
+- **Transactions**: `withdrawTxHash` is the `destination` transaction, on the chain of the delivered coin.
+
 ## Status mapping
 
 | Binance status | Leg status |
 |---|---|
 | 0 `INIT` | No change (the user has not paid) |
-| 1, 2, 3, 4, 6, 10, 11, 15 (buying, converting, withdrawing) | `processing` |
+| 1, 2, 3, 4, 6, 15 (buying, converting) | `processing`, detail code `processing` |
+| 10, 11 (withdrawing) | `processing`, detail code `settling` |
 | 20 `COMPLETED` | `succeeded`, with `withdrawTxHash` and `cryptoAmount` |
 | 93 `SWAP_ABANDONED`, 96 `WITHDRAW_ABANDONED` | `failed`, `PAYMENT_FAILED`. The crypto stays in the Binance account. |
 | 98 `WITHDRAW_FAILED` | `failed`, `DELIVERY_FAILED`. The crypto stays in the Binance account. |
 | 94, 95, 97, 99 | `failed`, `PAYMENT_FAILED` |
+| other | No change. The adapter logs the unknown code once (`statusMap`), and the leg keeps its step. |
 
 ## What is not verified
 

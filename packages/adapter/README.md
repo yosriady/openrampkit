@@ -1,6 +1,6 @@
 # @openrampkit/adapter
 
-Adapter API (createAdapter) and conformance test kit for OpenRampKit providers.
+Adapter API (createAdapter, version 2), shared helpers (quoteExpiresAt, statusMap, verifyTimestampedHmac, cachedJson) and conformance test kit for OpenRampKit providers.
 
 Part of [OpenRampKit](https://github.com/yosriady/openrampkit): an open-source deposit and withdraw kit with a self-hosted server and pluggable adapters.
 

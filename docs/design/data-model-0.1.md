@@ -1,6 +1,6 @@
 # Data model for 0.1.0
 
-Status: phase 1 done. Phase 2 (the adapter contract v2) is next. Date: 2026-10-09.
+Status: phases 1 and 2 done. Date: 2026-10-09.
 
 This record keeps the decisions about the public data model of OpenRampKit before the first npm release (0.1.0). It covers the public types of `@openrampkit/core`, the HTTP API and the webhooks of `@openrampkit/server`, and the adapter contract of `@openrampkit/adapter`.
 
@@ -32,14 +32,14 @@ The owner approved these decisions.
 | 8 | Cancel | `POST /sessions/:id/cancel` and `openramp.sessions.cancel(id)`, with an optional `Adapter.cancel()` |
 | 9 | Withdraw input | `destination`, `lockDestination`, `allowedDestinations` (were `target`, `lockTarget`, `allowedTargets`). The browser route `POST /sessions/:id/target` keeps its name. |
 | 10 | `session.requires_action` webhook | On by default |
-| 11 | Provider reference in the browser | Allowed (phase 2 adds it) |
+| 11 | Provider reference in the browser | Allowed (phase 2 added it: `PaymentLeg.providerRef`) |
 
 ## 3. State machine
 
 | Status | When | Final |
 |---|---|---|
 | `requires_payment_method` | No payment is in progress: nothing started, or the last attempt failed (`lastError` is set) | no |
-| `requires_action` | The active leg waits for the user. `step.surface` tells how. | no |
+| `requires_action` | The active leg waits for the user. `step.surface` tells how (from the leg step's `action`). | no |
 | `processing` | The provider or the chain works | no |
 | `succeeded` | Every leg succeeded | yes (it can become `reversed`) |
 | `failed` | Final failure, with `lastError` | yes |
@@ -87,6 +87,7 @@ type PublicSession = {
   destinationLocked?: boolean
   status: SessionStatus
   step: Step                 // state: StateName, with CANCELED
+  payment?: Payment          // phase 2: the legs, provider refs and transactions
   result?: SessionResult
   lastError?: OpenRampError  // the last failed attempt, or the final failure
   canceled?: { at: string; reason: 'requested_by_app' | 'requested_by_user' | 'abandoned' }
@@ -127,7 +128,7 @@ type ExistingSession = { id: string; expiresAt: string; existing: true } // a re
 
 Cancel never strands funds:
 
-- Allowed in `requires_payment_method`, and in `requires_action` only before money moved: no transaction hash, no source transaction hash, no treasury send, no leg past `requires_action`, no later leg started. The `restart` transition has the same rule.
+- Allowed in `requires_payment_method`, and in `requires_action` only before money moved: no transaction that moves funds (any role but `approval`), no treasury send, no leg past `requires_action`, no later leg started. The `restart` transition has the same rule.
 - When the adapter has `cancel()`, the server asks the provider to void the order first. A provider error refuses the cancel (`409`).
 - The leg refs stay indexed, and the sweep polls an open leg of an adapter with `status()`. A payment that still arrives is recorded, and the server sends `session.late_payment` with `reason: 'after_cancel'`.
 
@@ -159,7 +160,7 @@ type WebhookEventFields = {
   'session.expired': { resolution?: EventResolution }
   'session.refunded': { resolution?: EventResolution }
   'session.reversed': EventLeg & { legStatus: 'refunded' | 'reversed'; previous: StateName }
-  'session.late_payment': EventLeg & { reason: 'after_expiry' | 'after_grace' | 'earlier_attempt' | 'after_cancel'; txHash?: string }
+  'session.late_payment': EventLeg & { reason: 'after_expiry' | 'after_grace' | 'earlier_attempt' | 'after_cancel'; transactions?: Transaction[] }
   'leg.succeeded': EventLeg
   'leg.failed': EventLeg & { error?: OpenRampError }
 }
@@ -172,22 +173,100 @@ Every HTTP response has the header `openramp-version: 1`.
 
 ### 4.5 Stored records
 
-`SESSION_SCHEMA` is 2. `migrateRecord()` runs on every read and brings a schema 1 record up to date: the status names, the leg status `requires_action`, `Amount.value`, the `notified` event names, and the withdraw names `allowedDestinations` and `destinationLocked`. Events already in an outbox keep the body that they were made with. The fixture `packages/server/src/fixtures/records-v1.json` was written by the server before this change, and the tests load it and finish its payments.
+`SESSION_SCHEMA` is 3 (phase 2, see section 4.6). `migrateRecord()` runs on every read. From schema 1 to 2, it brings the status names, the leg status `requires_action`, `Amount.value`, the `notified` event names, and the withdraw names `allowedDestinations` and `destinationLocked` up to date. Events already in an outbox keep the body that they were made with. The fixture `packages/server/src/fixtures/records-v1.json` was written by the server before this change, and the tests load it and finish its payments.
 
 Known limit: adapter data in the KV space (for example a Bridge or mock order) keeps the old `amount` field. Only payments that are in flight during the upgrade have such data.
 
-## 5. Phase 2: the adapter contract v2
+### 4.6 Adapter contract v2 as implemented
 
-Phase 2 changes the adapter contract once, with one `ADAPTER_API_VERSION` bump:
+`ADAPTER_API_VERSION` is 2. `createAdapter` throws for another `apiVersion`, with a message that names the changes. The server refuses such an adapter at startup.
 
-- `LegStep` loses `state`. `status` is the only state field, and a typed `action { kind, surface, transitions }` replaces the loose surface fields. The server derives `Step.state`.
-- `Step.sub` becomes `Step.detail { code, providerStatus }`, a closed code union.
-- Transactions become records with a role (`Transaction { role, chain, hash, legIndex }`), in place of `txHash`, `sourceTxHash`, `txHashes` and `sourceTxHashes`.
-- `Session.payment.legs` with the provider, the provider reference (also in the browser view) and the amounts, in place of `Step.progress`.
+```ts
+// @openrampkit/core
+type LegStep = {
+  status: LegStatus
+  action?: LegAction            // only with requires_action
+  phase?: 'auth' | 'kyc'        // only with pending or processing (for example a KYC review)
+  poll?: PollSpec
+  detail?: StepDetail
+  error?: OpenRampError
+  ref?: string                  // our reference: routes webhooks and status checks
+  providerRef?: string          // the provider's own order id, for support
+  output?: Amount
+  transactions?: LegTransaction[]
+}
+type LegAction = { kind: 'auth' | 'kyc' | 'payment'; surface?: Surface; transitions: Transition[] }
+type StepDetail = { code: StepDetailCode; providerStatus?: string } // STEP_DETAIL_CODES, isStepDetailCode
+stateFor(step): StateName       // the one rule from a leg step to Step.state
+
+type TransactionRole = 'approval' | 'source' | 'hop' | 'destination' | 'settlement' | 'refund'
+type Transaction = { role: TransactionRole; chain: string; hash: string; legIndex: number; amount?: Amount; explorerUrl?: string }
+type LegTransaction = { role: Exclude<TransactionRole, 'hop'>; chain?: string; hash: string; amount?: Amount }
+
+type Step = { sessionId; state; detail?: StepDetail; legIndex?; surface?; transitions; error?; expiresAt? } // no sub, no progress
+type Payment = { attempt: number; quoteId: string; method: string; provider: string; activeLeg: number; legs: PaymentLeg[] }
+type PaymentLeg = {
+  index: number; adapterId: string; legId: string; provider: string; ref?: string; providerRef?: string
+  status: LegStatus; input: Amount; output: Amount; outputConfirmed: boolean; transactions: Transaction[]
+}
+
+type QuoteGuarantee = 'firm' | 'min_output' | 'estimate'
+type LegQuote = { /* ... */ guarantee: QuoteGuarantee; minOutput?: Amount; slippageBps?: number; expiresAt: string }
+type Quote = { /* ... */ guarantee: QuoteGuarantee; minOutput?: Amount; slippageBps?: number; expiresAt: string }
+type Fee = { kind: 'provider' | 'network' | 'app' | 'swap' | 'bridge' | 'other'; label: string; amount: Amount | null; included: boolean }
+
+type SessionResult = { /* method, provider, input, output, outputConfirmed, fees */ transactions: Transaction[]; delivery?: Delivery }
+type Delivery = { status: 'ok' | 'short' | 'asset_mismatch' | 'invalid'; legIndex: number; expected: Amount; minimum?: Amount; received: Amount; shortfall?: string }
+
+// @openrampkit/adapter
+type LegEvent = LegStep & { ref: string; eventId?: string }
+legStepFromEvent(ev, ref, poll): LegStep
+awaitingPayment(ref, poll): LegStep
+quoteExpiresAt(minutes?, providerExpiry?): string
+statusMap(provider, table): (raw, log?) => T | undefined
+verifyTimestampedHmac(input): Promise<boolean>; parseSignatureHeader(header)
+cachedJson(kv, key, ttlSec, load, { valid? })
+```
+
+Rules as implemented:
+
+- One entry check, `sanitizeLegStep`, runs on every adapter step and event, also for earlier attempts. It drops a detail code that is not in the list, a provider status with unsafe characters, an action without `requires_action`, a phase without `pending` or `processing`, and transactions with an unknown role, a bad hash or a bad CAIP-2 chain. It drops any link from an adapter, and checks the surface URLs. It logs v1 fields.
+- `mergeLegStep` keeps the refs, the output, every transaction (by role and hash, at most 20 per leg) and, while the user must act, the action surface.
+- The server builds `Transaction.explorerUrl` from its chain table (`explorerTxUrl`). It sets `hop` for the delivery of a leg that is not the last one, and the chain from the leg when the adapter leaves it out.
+- Any transaction that moves funds (any role but `approval`) makes a failure final, and blocks cancel and restart.
+- The pathway quote has the weakest leg guarantee, the last leg's `minOutput` and `slippageBps`, and the earliest expiry. A leg quote without a valid expiry lives 5 minutes. `PublicQuote` keeps these fields, and still hides the leg `data`.
+- The output check uses `minOutput` when it is set, else `policy.outputToleranceBps`. It fails closed, as before.
+- Timeline entries: `leg.transaction`, `leg.provider_status`, `leg.delivery`. Metric: `leg.delivery_mismatch`.
+- `SESSION_SCHEMA` is 3. `migrateRecord` moves schema 2 records: typed fees, `guarantee: 'estimate'`, `expiresAt` from the session deadline, leg steps to the v2 shape, `txHash` and `sourceTxHash` to transactions, `sub` to `detail`, no `progress`, and `amountMismatch` to `delivery`. The fixture `packages/server/src/fixtures/records-v2.json` has records from before the change.
+- The conformance kit checks the v2 step rules, the quote rules (output asset, expiry, guarantee, fees), the declared capabilities and surfaces against the methods, and the error paths (`errorPaths`: HTTP 400, 401, 429, 500, timeout).
+
+Guarantees of the built-in adapters: Relay wallet legs and LI.FI are `min_output` (Relay deposit-address legs are `estimate`, same-chain direct legs `firm`). Binance, Swapped, MoonPay, Stripe, Transak, Coinbase, Onramper, Meld, Bridge and Peer are `estimate`. Xendit and the mock fiat legs are `firm`. The mock bridge and cross-chain legs are `min_output` with 50 bps.
+
+## 5. Phase 2: the adapter contract v2 (done)
+
+Phase 2 changed the adapter contract once, with one `ADAPTER_API_VERSION` bump (to 2). Section 4.6 has the types.
+
+Built:
+
+- `LegStep` lost `state`. `status` is the only state field, and a typed `action { kind, surface, transitions }` replaces the loose surface fields. A `phase` keeps a leg in AUTH or KYC while it waits. The server derives `Step.state` with `stateFor()`.
+- `Step.sub` is now `Step.detail { code, providerStatus }`, with the closed list `STEP_DETAIL_CODES`. The web i18n key is `stepDetail`, and the client event `step.changed` has `detail`.
+- Transactions are records with a role (`Transaction { role, chain, hash, legIndex, amount?, explorerUrl? }`), in place of `txHash`, `sourceTxHash`, `txHashes` and `sourceTxHashes`. Admin `findByTx` finds any role in any attempt.
+- `PublicSession.payment.legs` has the provider, the provider reference (also in the browser view), the amounts and the transactions, in place of `Step.progress`.
 - Quotes say how firm they are: `guarantee`, `minOutput`, `slippageBps`, and a required `expiresAt`.
-- Typed fees: `Fee { type, label, amount: Amount | null, included }`.
-- `Adapter.cancel()` in each provider adapter that can void an order.
-- Optional: `delivery` in place of `amountMismatch`, `AmountRule`, `refundAddress`, CAIP-19 helpers, `OpenRampError.legIndex`, and required `symbol` and `decimals` in server outputs.
+- Typed fees: `Fee { kind, label, amount: Amount | null, included }`, with the new kind `bridge`.
+- `result.delivery` in place of `amountMismatch`, with `minimum` from the quote's `minOutput`.
+- Shared adapter helpers: `quoteExpiresAt`, `statusMap`, `verifyTimestampedHmac`, `parseSignatureHeader`, `cachedJson`. The first-party adapters use them where they fit.
+- One entry check for adapter data (`sanitizeLegStep`), explorer links from the trusted chain table, and the conformance kit for v2.
+- Session schema 3, with a migration of schema 2 records.
+
+Left for later:
+
+- `Adapter.cancel()` in each provider adapter that can void an order. The server already calls an adapter's `cancel()` when it has one.
+- `AmountRule`.
+- `refundAddress`.
+- CAIP-19 helpers.
+- `OpenRampError.legIndex`.
+- Required `symbol` and `decimals` in server outputs.
 
 ## 6. Sources
 

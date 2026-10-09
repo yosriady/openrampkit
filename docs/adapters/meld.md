@@ -60,23 +60,29 @@ The catalog also maps `SOFORT`, `ASTROPAY`, `PAYPAL`, `VENMO`, `CASH_APP`, `ZELL
 
 ## Quotes and start
 
-- Quote: `POST /payments/crypto/quote` returns one quote per provider. The one with the most crypto out is the leg quote. The full list is in `quote.data.providers`. Quotes expire after 5 minutes.
+- Quote: `POST /payments/crypto/quote` returns one quote per provider. The one with the most crypto out is the leg quote. The full list is in `quote.data.providers`. The guarantee is `estimate`: the chosen provider sets the final price. Quotes expire after 5 minutes (`quoteExpiresAt(5)`).
+- Fees, in the fiat currency, all with `included: true`: the provider's `transactionFee` (`provider`), `networkFee` (`network`) and `partnerFee` (`app`).
 - Start: `POST /crypto/session/widget` (`sessionType: 'BUY'`) with the chosen provider, the wallet, the amount, `redirectUrl`, the user's IP when known, `externalCustomerId` (the user id) and `externalSessionId` (the leg ref, `ork_{random}`).
 - Status: `GET /payments/transactions?externalSessionIds={ref}`.
+- `providerRef`: the Meld transaction id. Meld gives it once the user starts to pay, so the start step has none.
+- Transactions: a settled transaction's hash is the `destination` transaction.
 
 | Meld status | Leg |
 |---|---|
 | `SETTLED` | `succeeded` |
 | `PENDING_CREATED`, `TWO_FA_REQUIRED` | `requires_action` |
-| `PENDING`, `SETTLING`, `TWO_FA_PROVIDED`, `ERROR`, `ACCEPTED`, `AUTHORIZED`, `PARTIALLY_SETTLED` | `processing` (`ERROR` is temporary at Meld) |
+| `PENDING`, `TWO_FA_PROVIDED`, `ACCEPTED`, `AUTHORIZED` | `processing`, detail code `processing` |
+| `SETTLING`, `PARTIALLY_SETTLED` | `processing`, detail code `settling` |
+| `ERROR` | `processing`, detail code `delayed` (`ERROR` is temporary at Meld) |
 | `FAILED`, `DECLINED`, `CANCELLED`, `AUTHORIZATION_EXPIRED` | `failed` |
 | `REFUNDED` | `refunded` |
+| other | no event: the adapter logs the unknown status once (`statusMap`), and the leg keeps its current step |
 
 ## Webhooks
 
 Create a Meld webhook profile with the URL `{baseUrl}/webhooks/meld` and pass its secret as `webhookSecret`.
 
-- Verification: `Meld-Signature` is the base64url (with padding) HMAC-SHA256 of `{Meld-Signature-Timestamp}.{webhookUrl}.{body}`.
+- Verification: `Meld-Signature` is the base64url (with padding) HMAC-SHA256 of `{Meld-Signature-Timestamp}.{webhookUrl}.{body}`. The adapter checks it with `verifyTimestampedHmac` from `@openrampkit/adapter`.
 - Only `TRANSACTION_CRYPTO_*` events are read. On a settled event, the adapter reads the transaction for the amount and the transaction hash.
 
 ## Verified vs TO VERIFY

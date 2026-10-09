@@ -140,6 +140,8 @@ classDiagram
     input: Amount
     output: Amount
     fees: Fee[]
+    guarantee
+    minOutput
     legs: LegQuote[]
     expiresAt
     badges
@@ -157,16 +159,26 @@ classDiagram
     deliverTo
     ref
     step: LegStep
+    delivery: Delivery
     lastCheckedAt
+  }
+  class LegStep {
+    status: LegStatus
+    action
+    phase
+    detail
+    ref
+    providerRef
+    output: Amount
+    transactions: LegTransaction[]
   }
   class Step {
     state: StateName
-    sub
+    detail: StepDetail
     legIndex
     surface: Surface
     transitions: Transition[]
     error: OpenRampError
-    progress
   }
   SessionRecord --> PlanResult
   PlanResult --> Pathway
@@ -183,9 +195,9 @@ classDiagram
 - **Plan** (`PlanResult`). The methods and the pathways that the planner found for this session. The planner is pure. See [Pathways and legs](./pathways.md).
 - **Pathway**. One or two legs, for example an onramp to USDC on Base, then a Relay bridge.
 - **Quote**. The price of one pathway for one amount. It has one `LegQuote` per leg. The server keeps at most 20 quotes per session.
-- **Active payment** (`active`). The pathway the user confirmed, the index of the current leg, and one `ActiveLeg` per leg. Each leg has a provider `ref` and the latest `LegStep` from its adapter.
+- **Active payment** (`active`). The pathway the user confirmed, the index of the current leg, and one `ActiveLeg` per leg. Each leg has a `ref`, the latest `LegStep` from its adapter (merged with the earlier steps, so it keeps its refs, output and transactions), and the `delivery` check of its output. The browser and your backend see it as `PublicSession.payment`.
 - **Step**. What the browser shows now. The server builds it from the current leg. See [Flow state machine](./flow.md).
-- **Result** (`PublicSession.result`). What the user paid and what arrived, with fees and transaction hashes.
+- **Result** (`PublicSession.result`). What the user paid and what arrived, with fees, `transactions` (each with a role) and the `delivery` check.
 
 Key-value records next to the sessions:
 

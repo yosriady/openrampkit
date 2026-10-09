@@ -10,7 +10,7 @@ import { createAdapter, ADAPTER_API_VERSION } from '@openrampkit/adapter'
 const adapter = createAdapter({ id: 'acme', name: 'Acme Pay', legs, quote, start })
 ```
 
-Throws when `id` is not lowercase letters, digits or dashes, or when two legs share an id. Sets `apiVersion` to `ADAPTER_API_VERSION` (`1`) unless the definition gives one.
+Throws when `id` is not lowercase letters, digits or dashes, or when two legs share an id. Sets `apiVersion` to `ADAPTER_API_VERSION` (`2`). A definition with another `apiVersion` throws, with a message that tells you what to update. See [Upgrade from version 1](../adapters/writing-an-adapter.md#upgrade-from-version-1).
 
 ## Adapter
 
@@ -79,14 +79,17 @@ type StartInput = {
 
 type TransitionInput = { leg: PathwayLeg; ref: string; name: string; inputs?: Record<string, unknown> }
 
-type LegEvent = {
-  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OpenRampError
-  sourceTxHash?: string      // the transaction that paid into the leg (see LegStep.sourceTxHash)
+type LegEvent = LegStep & {
+  ref: string
   eventId?: string           // provider event id: the server drops an id that the session already applied
-  surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
-  transitions?: Transition[] // goes with surface; default: an AWAIT poll
 }
 ```
+
+A `LegEvent` is a `LegStep` with the leg's `ref` (see [Legs and the session step](../concepts/flow.md#legs-and-the-session-step)). The server applies it with the same rules as a step from `status()`. Examples:
+
+- A payment: `{ ref, status: 'succeeded', output, transactions: [{ role: 'destination', hash }] }`.
+- A KYC review: `{ ref, status: 'processing', phase: 'kyc' }`. The leg stays in `KYC`.
+- An offramp that learns its deposit address: `{ ref, status: 'requires_action', action: { kind: 'payment', surface: { kind: 'WALLET_TX', ... }, transitions } }`.
 
 ## Context
 
@@ -175,7 +178,8 @@ A 401 or 403 from a provider means that the provider refused our credentials or 
 |---|---|
 | `POLL` | `onchain` (2.5 s start, 10 s max, 30 min), `checkout` (4 s, 15 s, 60 min), `dev` (1.5 s, 5 s, 15 min) |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
-| `legStepFromEvent(event, ref, poll)` | No event, `pending` or `requires_action`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`, `reversed`: those states. `processing`: `PROCESSING`. |
+| `awaitingPayment(ref, poll)` | A `requires_action` step while the user pays in a provider page: `{ status: 'requires_action', action: { kind: 'payment', transitions: [awaitPoll(poll)] }, ref }`. It has no surface, so the UI keeps the current one. |
+| `legStepFromEvent(event, ref, poll)` | The `status()` answer for a provider order that you mapped to a `LegEvent` (the same mapping as the webhook parser). No event: `awaitingPayment(ref, poll)`. Else the event without `eventId`, with `poll` on a step that waits, and with an AWAIT poll action on a `requires_action` event without an action. It sets no state: the server uses `stateFor()`. |
 | `decimalFrom(n, digits = 8)` | Provider number to an exact decimal string; missing or non-finite gives `'0'` |
 | `minWithToleranceBps(expectedBase, bps)` | The smallest amount (integer base units, as a string) that still counts as `expectedBase` when it can be up to `bps` basis points lower: `expected - floor(expected * bps / 10000)`, with bigint math. `minWithToleranceBps('999', 50)` is `'995'`. |
 | `randomHex(bytes = 8)` | Random hex string |
@@ -183,6 +187,29 @@ A 401 or 403 from a provider means that the provider refused our credentials or 
 | `base64ToBytes(b64)`, `bytesToBase64(bytes)` | Standard base64 (not base64url). `base64ToBytes` ignores whitespace and throws on other characters. |
 | `hmacSha256(secret, message, 'hex' \| 'base64')` | WebCrypto HMAC |
 | `timingSafeEqual(a, b)` | Constant-time string compare (the same function as in `@openrampkit/core`) |
+
+## Shared adapter helpers
+
+| Export | Description |
+|---|---|
+| `quoteExpiresAt(minutes = 5, providerExpiry?)` | The `expiresAt` of a quote (ISO 8601). Every `LegQuote` must have one. It uses the provider's expiry (an ISO string or milliseconds) when it is a valid time in the future and not later than `minutes` from now. Else `minutes` from now. `DEFAULT_QUOTE_TTL_MINUTES` is 5. |
+| `statusMap(provider, table, { ignoreCase? })` | A typed table from provider statuses to your values (for example a `LegStatus` and a detail code). Use it in place of a `switch` with a `default` branch. An unknown status gives `undefined` and one warning log per value. It never falls back to another entry: you decide what an unknown status means (usually: keep the current step). `.known` lists the statuses. |
+| `verifyTimestampedHmac({ secret, rawBody, header, timestamp?, timestampKey?, signatureKey?, toleranceSec?, message?, encoding? })` | Checks an HMAC-SHA256 webhook signature over a timestamp and the body, with a time window (default 300 s). Defaults: header `t=...,v1=...`, message `{t}.{body}`, hex. False for a missing secret, header or timestamp, a timestamp outside the window, or a wrong signature. Constant-time compare. Stripe, MoonPay, Coinbase, Peer and Meld use it. |
+| `parseSignatureHeader(header)` | Parses `key=value` pairs separated by commas (`t=1700000000,v1=...`). A key can repeat, so each key maps to a list. |
+| `cachedJson(kv, key, ttlSec, load, { valid? })` | Reads `key` from `kv`, or runs `load` and keeps its result for `ttlSec` seconds. A value that `valid` refuses (for example an empty list) is not kept. Use it for provider catalogs, rates and token data. |
+
+```ts
+import { statusMap, quoteExpiresAt } from '@openrampkit/adapter'
+
+const STATUS = statusMap('Acme', {
+  waitingPayment: { status: 'requires_action' },
+  pending: { status: 'processing', detail: 'settling' },
+  completed: { status: 'succeeded' },
+  failed: { status: 'failed' },
+})
+const m = STATUS(order.status, ctx.log) // undefined for an unknown status
+const expiresAt = quoteExpiresAt(5, order.quoteExpiresAt)
+```
 
 ## RSA signatures
 
@@ -248,9 +275,11 @@ Types: `SettlementCall`, `SettlementIntent`, `SettlementParams`, `SettlementInte
 
 | Export | Description |
 |---|---|
-| `checkAdapterShape(adapter)` | API version, legs, ETAs, surfaces, region policy, decimal limits, known capabilities |
-| `checkLegQuote(quote)` | Decimal strings and an ISO `expiresAt` |
-| `checkLegStep(step)` | A legal step, and a terminal state only with a terminal leg status (except `PROCESSING`) |
+| `checkAdapterShape(adapter)` | API version 2, legs, ETAs, surfaces, region policy, decimal limits, known capabilities. Declared capabilities and surfaces need their methods: `surface_after_processing` needs a webhook; `settlement` needs a crypto `to` asset at an address; a `FORM`, `OTP` or `WALLET_TX` surface needs `transition()`. An adapter with legs needs a result channel (`status()` or a configured webhook). |
+| `checkLegQuote(quote)` | Decimal strings; an ISO `expiresAt` in the future; a known `guarantee`; `minOutput` with `min_output`, in the asset of `output`; `slippageBps` an integer from 0 to 10000; each fee with a boolean `included` and an `amount` that is `null` or an `Amount` with a valid asset |
+| `checkLegStep(step)` | The v2 step rules: a known status; an `action` (known kind, transitions) with `requires_action` and with no other status; `phase` only with `pending` or `processing`; `detail.code` in `STEP_DETAIL_CODES`; transaction roles (not `hop`) and hashes; legal transitions. It flags the v1 fields `state`, `sub`, `txHash`, `sourceTxHash`, `surface` and `transitions`. |
+| `LEG_STATUSES` | Every `LegStatus` |
+| `sameQuotedAsset(a, b)` | Same fiat currency, or same chain and token. A wildcard (`*`) matches anything. |
 
 Each returns `ConformanceProblem[]` (`{ where, problem }`).
 
@@ -280,12 +309,23 @@ import {
 | Field | Description |
 |---|---|
 | `fixtures` | `ConformanceFixture[]`: `{ name?, leg, quote, start?, transitions?, status?, expect?, ctx? }` |
+| `errorPaths` | `ConformanceErrorPath[]`: `{ name?, leg, quote, ctx?, skip? }`. Each runs `quote()` against a provider that answers HTTP 400, 401, 429 or 500, or times out. `quote()` must throw an `OpenRampException` with the code and `retryable` of `httpErrorToOpenRamp` (see `ERROR_PATHS`). `skip` lists cases to leave out. |
 | `ctx` | `() => AdapterContext`, a fresh context per fixture. Default `makeCtx({ fetch })`. |
 | `fetch` | Used by the default context. Default: a fake fetch with no routes. |
 | `webhooks` | `ConformanceWebhook[]`: `{ name?, request: () => Request, rawBody, valid? (default true), events? }` |
 | `webhookCtx` | Default `makeWebhookCtx({ fetch })` |
 
-Per fixture, `quote` is the `QuoteInput` without `leg`; `start` is `true` (default), `false`, or extra `StartInput` fields; `transitions` is a list of `{ name, inputs? }`; `status` defaults to true when the adapter has `status()`; `expect` is `{ start?: StateName; status?: StateName }`.
+Per fixture, `quote` is the `QuoteInput` without `leg`; `start` is `true` (default), `false`, or extra `StartInput` fields; `transitions` is a list of `{ name, inputs? }`; `status` defaults to true when the adapter has `status()`; `expect` is `{ start?: StateName; status?: StateName }`, compared with `stateFor(step)`.
+
+Per fixture, the kit also checks that the quote output asset is the leg's `to` asset, and that the first `requires_action` step has a surface. An action with a SUBMIT or SURFACE_RESULT transition needs `transition()`. Webhook events get the same step rules.
+
+| Error case | Expected code | `retryable` |
+|---|---|---|
+| HTTP 400 | `NO_QUOTES`, or a more exact code (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`, `REGION_UNSUPPORTED`, `BAD_REQUEST`, `PROVIDER_ERROR`) | any |
+| HTTP 401 | `PROVIDER_UNAVAILABLE` | `false` |
+| HTTP 429 | `RATE_LIMITED` | `true` |
+| HTTP 500 | `PROVIDER_UNAVAILABLE` | `true` |
+| Timeout | `PROVIDER_UNAVAILABLE` | `true` |
 
 ## Environment helpers
 

@@ -59,20 +59,23 @@ The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) bui
 
 ## Quotes and start
 
-- Quote: `GET /quotes/{fiat}/{crypto}` returns one item per onramp. The best payout is the leg quote; the list is in `quote.data.providers`. Quotes expire after 5 minutes.
+- Quote: `GET /quotes/{fiat}/{crypto}` returns one item per onramp. The best payout is the leg quote; the list is in `quote.data.providers`. The guarantee is `estimate`: the chosen onramp sets the final price. Quotes expire after 5 minutes (`quoteExpiresAt(5)`).
 - Start: `POST /checkout/v2/intent`, signed with Ed25519 (headers `x-onramper-signature`, `-timestamp`, `-nonce`). The checkout is single-use, expires after 10 minutes, and is bound to the end user's IP (`endUserIpHash`). Without `ctx.session.ip`, start fails with `PROVIDER_UNAVAILABLE`.
-- Fees: the best onramp's `transactionFee` and `networkFee`, in the fiat currency. Some onramps (for example guardarian) send no fee fields: their fees are in the rate. The response has no mid or reference rate. Then the adapter adds one fee line `{onramp} fee (included in rate)` with `inRate: true`:
-  - USD to a USD stablecoin (USDC, USDT): the amount is the input minus the payout. Example: USD 100 in, 95.2 USDC out, fee 4.80 USD.
-  - Other pairs: the amount is `0`, because the cost is not known. The web UI then does not show "No fees".
+- Fees: the best onramp's `transactionFee` (`provider`) and `networkFee` (`network`), in the fiat currency, with `included: true`. Some onramps (for example guardarian) send no fee fields: their fees are in the rate. The response has no mid or reference rate. Then the adapter adds one `provider` fee line `{onramp} fee (included in rate)`, with `included: true`:
+  - USD to a USD stablecoin (USDC, USDT, USDG, PYUSD): the amount is the input minus the payout. Example: USD 100 in, 95.2 USDC out, fee 4.80 USD.
+  - Other pairs: the amount is `null`, because the cost is not known. The web UI then does not show "No fees".
 - Reference: `partnerContext`, `ork_{random}`.
 - Status: `GET /transactions/{transactionId}`. The transaction id is learnt from the first webhook, so until a webhook arrives (or without `webhookSecret`), status reports "still paying".
+- `providerRef`: the Onramper `transactionId`, from the first webhook. The checkout returns no transaction id, so the start step has none.
+- Transactions: `transactionHash` is the `destination` transaction.
 
 | Onramper status | Leg |
 |---|---|
 | `completed` | `succeeded` |
-| `paid`, `pending` | `processing` |
+| `paid`, `pending` | `processing`, detail code `processing` |
 | `new` | `requires_action` |
 | `failed`, `canceled`, `cancelled` | `failed` |
+| other | no event: the adapter logs the unknown status once (`statusMap`, without case), and the leg keeps its current step |
 
 ### Setup errors
 

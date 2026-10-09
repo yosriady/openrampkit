@@ -14,7 +14,7 @@ const openramp = createOpenRamp({
 
 ## createOpenRamp(config)
 
-`createOpenRamp` throws at startup when `secret` or `admin.token` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version, or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
+`createOpenRamp` throws at startup when `secret` or `admin.token` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version (the adapter API is version 2), or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -28,7 +28,7 @@ const openramp = createOpenRamp({
 | `policy.methodPriority` | `Record<country, string[]>` | built-in | Method order per country |
 | `policy.disabledMethods` | `string[]` | none | Methods never offered |
 | `policy.maxAttempts` | `number` | `10` | The most payment attempts of one session. A failed attempt that leaves no attempt makes the session `failed` (final). |
-| `policy.outputToleranceBps` | `number` | `100` (1%) | How much less than the quote a provider may report as a leg's output before the server sets `result.amountMismatch`. See [SessionResult](./core.md#sessionresult). |
+| `policy.outputToleranceBps` | `number` | `100` (1%) | How much less than the quote a provider may report as a leg's output before the delivery is `short` (`result.delivery`). A quote with a `minOutput` uses that minimum instead. See [SessionResult](./core.md#sessionresult). |
 | `policy.hopPreference` | `CryptoAsset[]` | USDC on Base, Arbitrum, Polygon, Optimism, Ethereum | Hop assets for two-leg pathways, most preferred first. See [Hops](../concepts/pathways.md#hops). |
 | `webhooks` | `{ url: string; secret: string; retryHours?: number; maxAttempts?: number }` | none | Signed webhooks to your backend. `secret` must have at least 16 characters (use 32 random bytes). `sweep()` retries failed deliveries for `retryHours` (default `24`), or until `maxAttempts` attempts in all when you set it. Then the event is a dead letter. See [Delivery](../guide/webhooks.md#delivery). |
 | `tasksToken` | `string` | none | Bearer token for `POST /tasks/sweep` and `GET /health?deep=1`. At least 16 characters. Without it, those two are off. |
@@ -74,7 +74,7 @@ await openramp.webhooks.replay(sessionId)    // Promise<number>: send the dead l
 await openramp.admin.list({ direction?, state?, olderThan?, stuck?, limit?, cursor? }) // Promise<AdminListResult>
 await openramp.admin.get(id)                  // Promise<AdminSession | null>: legs, attempts, outbox, refs, timeline
 await openramp.admin.findByRef(provider, ref) // Promise<AdminSession | null>
-await openramp.admin.findByTx(chain, txHash)  // Promise<AdminSessionSummary[]>
+await openramp.admin.findByTx(chain, txHash)  // Promise<AdminSessionSummary[]>: a transaction of any role, in any attempt
 await openramp.admin.stats({ since? })        // Promise<AdminStats>
 await openramp.admin.resolve(id, state, note) // Promise<AdminSession>: force a final state, with an audit note and a webhook
 await openramp.admin.replayWebhooks(id)       // Promise<{ queued: number }>
@@ -234,7 +234,7 @@ import { memoryStore, durableObjectStore, OpenRampStore, cloudflareKvStore, redi
 | `fromNodeRedisV4(client)` | Wraps a node-redis v4+ client for `redisStore` |
 | `scopedKV(store, prefix)` | A prefixed key-value view, as adapters get |
 | `VersionConflictError` | Thrown by `put` on a version mismatch |
-| `SESSION_SCHEMA` | The record schema that this server writes in `SessionRecord.schema` (now `1`) |
+| `SESSION_SCHEMA` | The record schema that this server writes in `SessionRecord.schema` (now `3`) |
 | `migrateRecord(rec)` | Brings a stored record up to `SESSION_SCHEMA`, in place. The server runs it on every store read. See [Record schema](../deploy/stores.md#record-schema). |
 | `migratingStore(store)` | `store`, with `migrateRecord` on every `get`. The server wraps `config.store` with it. |
 

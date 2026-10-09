@@ -77,13 +77,14 @@ Regions: all countries, except the countries that Bridge does not serve (`BRIDGE
 - EUR, MXN, BRL and GBP: `GET /v0/exchange_rates?from={currency}&to=usd`. The adapter uses `buy_rate`, which includes the Bridge FX fee. The rate is kept for 30 seconds.
 - Payouts in EUR: `GET /v0/exchange_rates?from=usd&to=eur`.
 - Exact output works: the adapter rounds the fiat input up to the minor unit.
-- Bridge has no rate lock. The bank transfer converts at the rate of the day it arrives. Quotes are estimates and expire after 10 minutes.
+- Bridge has no rate lock. The bank transfer converts at the rate of the day it arrives. So the guarantee is `estimate`, and quotes expire after 10 minutes (`quoteExpiresAt(10)`).
+- Fees: the Bridge fee from `bridgeFeeBps` (`provider`) and your `developerFeePercent` (`app`) have an amount in the quote currency. For EUR, MXN, BRL and GBP, a third `provider` fee ("FX fee in the rate") has `amount: null`, because `buy_rate` contains it and Bridge does not say how much it is. All fees have `included: true`.
 
 ## Deposit flow
 
 1. **Customer.** The adapter looks for the customer: the `customer` hook, then the customer or KYC link of an earlier session of the same user.
 2. **KYC details.** When there is no customer and no KYC link, and the name or the email is not known, the step is `KYC` with a `FORM` (full legal name, email). The `submit_kyc` transition takes the answers.
-3. **KYC link.** `POST /v0/kyc_links` with `type: 'individual'`, the rail endorsement and `redirect_uri` (the session return URL). The step is `KYC` with a `REDIRECT` to `tos_link` until the ToS is accepted, then to `kyc_link`. While Bridge reviews, the step is `KYC` with status `processing`. A rejected or offboarded user fails with `KYC_REJECTED`.
+3. **KYC link.** `POST /v0/kyc_links` with `type: 'individual'`, the rail endorsement and `redirect_uri` (the session return URL). The step is `KYC` with a `REDIRECT` to `tos_link` until the ToS is accepted, then to `kyc_link`. While Bridge reviews, the leg step is `{ status: 'processing', phase: 'kyc', detail: { code: 'kyc_review' } }`, so the session shows `KYC`. When the review ends with a step for the user, the leg can go back to `requires_action`. A rejected or offboarded user fails with `KYC_REJECTED`.
 4. **Customer check.** `GET /v0/customers/{id}`. The customer must be `active` with the rail endorsement `approved`. A `paused` or `deposits_restricted` customer fails with `PROVIDER_DECLINED`.
 5. **Virtual account.** `POST /v0/customers/{id}/virtual_accounts` with `source.currency`, `destination: { currency: 'usdc', payment_rail, address }` and the developer fee. The adapter keeps one virtual account for each customer, currency, chain and address, and uses it again in later sessions.
 6. **Bank details.** The step is `PAYMENT` with `BANK_FIELDS`: amount, bank name, routing and account number, IBAN and BIC, CLABE, or sort code, beneficiary and bank address. For BRL, it is a `QR` of the Pix BR Code.
@@ -91,11 +92,16 @@ Regions: all countries, except the countries that Bridge does not serve (`BRIDGE
 
 | Virtual account event | Leg |
 |---|---|
-| `funds_scheduled`, `funds_received`, `in_review`, `payment_submitted`, `refund_in_flight` | `processing` |
-| `payment_processed` | `succeeded`, with the USDC amount and the destination transaction hash |
+| `funds_scheduled`, `funds_received`, `payment_submitted` | `processing`, detail code `settling` |
+| `in_review` | `processing`, detail code `delayed` |
+| `refund_in_flight` | `processing`, detail code `refunding` |
+| `payment_processed` | `succeeded`, with the USDC amount and the `destination` transaction |
 | `refund`, `refunded` | `refunded` |
 | `refund_failed` | `failed` with `DELIVERY_FAILED` |
 | `microdeposit`, `account_update`, `activation`, `deactivation` | ignored |
+| other | no event: the adapter logs the unknown type once, and the deposit keeps its last known stage |
+
+The `providerRef` of a deposit leg is the Bridge `deposit_id`, once the deposit arrives.
 
 ::: warning One open deposit at a time
 A virtual account is persistent. When a user has two open deposit sessions to the same address, the first deposit goes to the session that sees it first. Webhooks go to the newest session that showed the account.
@@ -112,12 +118,17 @@ A virtual account is persistent. When a user has two open deposit sessions to th
 | Transfer state | Leg |
 |---|---|
 | `awaiting_funds` | the `WALLET_TX` step (or `processing` after `submit_tx`) |
-| `in_review`, `funds_received`, `payment_submitted`, `refund_in_flight` | `processing` |
+| `in_review` | `processing`, detail code `delayed` |
+| `funds_received`, `payment_submitted` | `processing`, detail code `settling` |
+| `refund_in_flight` | `processing`, detail code `refunding` |
 | `payment_processed` | `succeeded`, with `receipt.final_amount` in the payout currency |
 | `refunded` | `refunded` |
 | `canceled`, `error`, `undeliverable`, `returned`, `refund_failed`, `missing_return_policy` | `failed` with `DELIVERY_FAILED` |
+| other | no event: the adapter logs the unknown state once, and `status()` keeps the last known step |
 
-The adapter uses transfers, not liquidation addresses. A transfer is one per session, so the leg ref and the webhook match one to one.
+The `providerRef` of a payout leg is the Bridge transfer id. The USDC transaction that the wallet (or the treasury) sent is the `source` transaction.
+
+The adapter maps every Bridge status with `statusMap` from `@openrampkit/adapter`. The adapter uses transfers, not liquidation addresses. A transfer is one per session, so the leg ref and the webhook match one to one.
 
 ## Idempotency
 

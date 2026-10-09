@@ -25,6 +25,8 @@ Go through this list before real money moves.
 
 - [ ] You use a shared store with an atomic version check (`durableObjectStore` on Cloudflare, `redisStore`, or your own). Not the memory store. Not Workers KV for real traffic. See [Session stores](./stores.md).
 - [ ] Sessions are kept for days (the built-in stores keep them 7 days), so late provider webhooks still find them.
+- [ ] After an upgrade to session schema 3 (the adapter contract v2), you do not roll back to an older server while sessions are open. The new server migrates each record when it reads it, but an older server does not understand a schema 3 record. See [Record schema](./stores.md#record-schema).
+- [ ] Third-party adapters use the adapter API version 2. The server refuses an adapter for version 1 at startup. See [Upgrade from version 1](../adapters/writing-an-adapter.md#upgrade-from-version-1).
 
 ## CORS and hosting
 
@@ -62,7 +64,7 @@ Go through this list before real money moves.
 
 - [ ] Webhooks to your backend are verified with `openramp.webhooks.verify()`, `verifyWebhook()` or a Standard Webhooks library, using the raw body. The secret is a `whsec_` secret from your secret store.
 - [ ] Your handler is idempotent: it drops an event id it already handled (webhooks are at-least-once), and credits once per session id (a unique constraint), only on `session.succeeded`, after checking the session. See [Webhooks to your backend](../guide/webhooks.md).
-- [ ] You credit `session.result.output` only when `outputConfirmed` is `true`. Otherwise you check the amount on chain (`result.txHashes`), at the provider, or on your order.
+- [ ] You credit the full `session.result.output` only when `outputConfirmed` is `true` and `result.delivery.status` is `ok`. Otherwise you check the amount on chain (the `destination` transaction in `result.transactions`), at the provider, or on your order.
 - [ ] You store transaction hashes with a unique constraint, so one transaction cannot complete two sessions (same-chain Relay moves check the receipt, not who sent it).
 
 ## Geo and methods
@@ -77,7 +79,7 @@ Go through this list before real money moves.
 - [ ] `allowedDestinations` lists only the chains and currencies you support.
 - [ ] With `custody: 'app'`: `treasury.send()` checks and debits the user's balance once per `idempotencyKey`, checks the recipient and amount of each transaction, and throws `TreasuryRefusedError` to refuse (any other error makes the failure final). The server does not know the user's balance.
 - [ ] With `custody: 'app'` and Relay: `treasury.address` is set.
-- [ ] For withdrawals, you handle `session.failed`: check `result.txHashes` and the provider before you return funds to the user. `session.payment_failed` is not final: the user can try again.
+- [ ] For withdrawals, you handle `session.failed`: check `result.transactions` and the provider before you return funds to the user. `session.payment_failed` is not final: the user can try again.
 - [ ] For withdrawals, you handle `session.reversed`: the payout did not reach the user. Check the provider, then return the funds to the user.
 
 ## Adapters

@@ -28,7 +28,7 @@ export function acme(opts: AcmeOptions) {
 }
 ```
 
-`createAdapter` checks the id format and that leg ids are unique, and sets `apiVersion` to `ADAPTER_API_VERSION` (1). The server refuses an adapter with another API version.
+`createAdapter` checks the id format and that leg ids are unique, and sets `apiVersion` to `ADAPTER_API_VERSION` (2). It throws for a definition with another `apiVersion`, and the message tells you what to change. The server refuses an adapter with another API version. To move an adapter from version 1, see [Upgrade from version 1](#upgrade-from-version-1).
 
 ## Legs
 
@@ -108,11 +108,41 @@ type QuoteInput = {
 }
 ```
 
-Return a `LegQuote` with decimal strings, every fee you know, an `eta`, and `expiresAt` when the price is time-limited. Put anything `start()` needs in `data`.
+Return a `LegQuote` with decimal strings, every fee you know, an `eta`, a `guarantee` and an `expiresAt`. Put anything `start()` needs in `data`.
+
+- `output` must be in the leg's `to` asset.
+- `guarantee` tells how firm `output` is: `firm` (the provider delivers `output` exactly before `expiresAt`), `min_output` (the provider delivers at least `minOutput`, for example a bridge with slippage) or `estimate` (the rate is set when the provider executes, as for most fiat onramps and offramps). With `min_output`, set `minOutput` in the asset of `output`. Set `slippageBps` when the provider says it.
+- `expiresAt` is required. Use `quoteExpiresAt(minutes, providerExpiry?)`: it takes the provider's expiry when it is valid and not later than `minutes` from now. The server gives 5 minutes to a quote without a valid expiry, and the conformance kit reports it.
+- Each fee is `{ kind, label, amount, included }`. `kind` is `provider`, `network`, `app`, `swap`, `bridge` or `other`. `amount` is an `Amount` in the fee's own asset (a fiat currency, or a token on a chain), or `null` when the provider takes a fee but does not say how much (for example a fee in the rate). `included` is `true` when the quote already counts the fee (in `input`, in the rate, or from `output`), and `false` when the user pays it on top (for example gas that the wallet pays).
+
+The server checks the reported output against `minOutput` when it is set, else against the quoted output less `policy.outputToleranceBps`. See [SessionResult](../api/core.md#sessionresult).
 
 ## start()
 
-Create the order and return the first `LegStep`: a state, a surface, the transitions, the leg status, and a `ref`. The `ref` is how webhooks and status checks find the leg later. Always return one.
+Create the order and return the first `LegStep`: the leg status, an `action` when the user must act, and a `ref`. The `ref` is how webhooks and status checks find the leg later. Always return one. Set `providerRef` to the provider's own order id when it has one (for example a MoonPay transaction id). Apps show it to the user for provider support. When the provider's order id is your `ref`, set both.
+
+```ts
+type LegStep = {
+  status: LegStatus
+  action?: { kind: 'auth' | 'kyc' | 'payment'; surface?: Surface; transitions: Transition[] } // only with requires_action
+  phase?: 'auth' | 'kyc'   // only with pending or processing
+  poll?: PollSpec          // how often the UI checks a step with no action
+  detail?: { code: StepDetailCode; providerStatus?: string }
+  error?: OpenRampError
+  ref?: string
+  providerRef?: string
+  output?: Amount
+  transactions?: LegTransaction[] // { role, chain?, hash, amount? }
+}
+```
+
+The rules (the conformance kit checks them):
+
+- `status: 'requires_action'` has an `action`. Other statuses have none. The action kind gives the screen: `auth` (sign in to the provider), `kyc` (identity checks) or `payment` (pay or send). The first `requires_action` step has a `surface`.
+- An action without a `surface` keeps the surface of the current action. For example, a status poll while the user pays in a provider page returns `awaitingPayment(ref, poll)`.
+- `phase` is only for `pending` and `processing`: the leg waits in a phase before the payment, for example a KYC review (`{ status: 'processing', phase: 'kyc' }`). The UI then shows `KYC`.
+- A step that waits and has no action gets an AWAIT poll from the server. Set `poll` to change the schedule.
+- Do not set a state. The server gets `Step.state` from the step with `stateFor(step)` in `@openrampkit/core`.
 
 Surface URLs must be safe for the browser. `REDIRECT`, `IFRAME` (`url` and `origin`) and a `PROVIDER_SDK` `redirectUrl` must use `https:` (`http:` is accepted in test mode only). A `DEEPLINK` can use an app scheme such as `gcash://`. The server fails the leg with `PROVIDER_UNAVAILABLE` when a URL uses `javascript:`, `data:` or another unsafe scheme.
 
@@ -122,11 +152,45 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 
 - `status({ leg, ref })` asks the provider for the current state. The server calls it when the browser polls (at most every 2 seconds per leg), from the background `sweep()`, and from `sessions.refresh()`.
 - `transition({ leg, ref, name, inputs })` handles SUBMIT and SURFACE_RESULT transitions that your steps offer, for example an OTP form or `submit_tx` with `{ txHash }`.
-- Transaction hashes: set `txHash` to the leg's main transaction. For a bridge or swap, this is the delivery (fill) on the destination chain when the provider reports it. Set `sourceTxHash` to the transaction that paid into the leg, for example the hash from `submit_tx`. The server keeps the last `sourceTxHash` when a later step leaves it out. The session shows them in `result.txHashes` and `result.sourceTxHashes`.
 
-A `LegStep` can carry `sub`, a finer label from the closed list `STEP_SUBS` (see [Sub-states](../concepts/flow.md#sub-states)). Map your provider's statuses to it. Put the raw provider status in `providerStatus`: the server keeps it in the timeline for operators, and the browser never gets it. The server drops a `sub` that is not in the list.
+### Transactions
+
+Report each onchain transaction that you know in `transactions`, with a role:
+
+| Role | When |
+|---|---|
+| `approval` | A token approval before the payment. It moves no funds. |
+| `source` | The transaction that paid into the leg: the user's wallet transaction (for example the hash from `submit_tx`), or the transfer into a deposit address. |
+| `destination` | The delivery of the leg (for a bridge or swap: the fill on the destination chain). The server reports it as `hop` when the leg is not the last one. |
+| `settlement` | The delivery through an OpenRampSettlement contract. |
+| `refund` | A refund to the user. |
+
+Do not set `hop`: the server sets it. `chain` is optional: the server takes the leg's `to` chain for a delivery, else the `from` chain. Do not send a link: the server builds `explorerUrl` from its chain table. A hash has letters and digits only (an `0x` prefix is allowed). One transaction can have two roles (a same-chain transfer is both `source` and `destination`).
+
+The server keeps every transaction that a leg reported, also when a later step leaves it out. It also keeps `ref`, `providerRef` and `output`. Any transaction that moves funds (any role but `approval`) makes a failure final, and blocks cancel and restart.
+
+### Step detail
+
+A `LegStep` can carry `detail`, a finer label. `detail.code` comes from the closed list `STEP_DETAIL_CODES` (see [Step detail](../concepts/flow.md#step-detail)). Map your provider's statuses to it. Put the raw provider status in `detail.providerStatus`: the server keeps each new value in the timeline. The server drops a `detail` whose code is not in the list.
+
+Map provider statuses with `statusMap(provider, table)`, not with a `switch` that has a `default` branch. An unknown status then gives `undefined` and one warning log. Keep the current step for it: a new provider status must never become `processing` (or anything else) by accident.
 
 The server learns a leg result from `status()` (polling), from the `webhook`, or from both. `resultChannels(adapter)` in `@openrampkit/adapter` tells which: `{ polling: !!status, webhooks: webhook configured }`. When an adapter with legs has neither, the server writes a warning at start: its payments cannot complete. An adapter without `status()` (for example Transak) relies on its webhook only.
+
+## webhook
+
+```ts
+webhook: {
+  configured?: boolean       // false when the options have no webhook secret, so nothing can verify
+  verify(req: Request, rawBody: string, ctx): Promise<boolean>
+  parse(rawBody: string, ctx): Promise<LegEvent[]>
+  replayKey?(req: Request, rawBody: string, ctx): Promise<string | undefined>
+}
+type LegEvent = LegStep & {
+  ref: string
+  eventId?: string           // the provider event id, when the provider has one
+}
+```
 
 ## webhook
 
@@ -147,7 +211,9 @@ type LegEvent = {
 
 The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. When the provider signs the body with no timestamp, a captured webhook could be sent again later. Add `replayKey` and return the provider event id, or `webhookBodyKey(rawBody)` (the SHA-256 of the body). The server keeps the key for 7 days and ignores a repeat (`200`, no change). It gives the key back when it answers `503`, so a provider retry still applies.
 
-Events move a leg only forward. When your leg learns where the user must pay after it started (for example a deposit address in a webhook, while the leg is `processing`), add `'surface_after_processing'` to the leg's `capabilities` and the surface kind to its `surfaces`. The server then allows one move from `processing` back to `requires_action` with that surface, before the leg has a transaction. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
+A `LegEvent` is a `LegStep` with a `ref`, so an event follows the same rules as a step. A KYC review event is `{ ref, status: 'processing', phase: 'kyc' }`: the leg stays in `KYC`. When a provider has a timestamped HMAC signature (`t=...,v1=...` or separate headers), use `verifyTimestampedHmac` in `verify`.
+
+Events move a leg only forward. When your leg learns where the user must pay after it started (for example a deposit address in a webhook, while the leg is `processing`), add `'surface_after_processing'` to the leg's `capabilities` and the surface kind to its `surfaces`. The server then allows one move from `processing` back to `requires_action` with that `action.surface`, before the leg has a transaction that moves funds. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
 
 ## Withdraw legs
 
@@ -160,7 +226,7 @@ A leg can serve [withdrawals](../guide/withdraw.md) when:
 
 `catalog()` gets `direction`, so an adapter can return sell legs for withdrawals only. In `quote()` and `start()`, `source` is the session's source asset, with the sender address when it is known (the user's wallet, or the app's treasury).
 
-The `WALLET_TX` step needs a `SURFACE_RESULT` transition that expects `tx_hash`. The client fires it after the user's wallet sends. For `custody: 'app'`, the server sends the transactions through the app's treasury and fires the same transition itself. When a provider learns its deposit address later (for example in a webhook), return a `LegEvent` with `status: 'requires_action'`, the `WALLET_TX` `surface` and its `transitions`.
+The `WALLET_TX` step needs a `SURFACE_RESULT` transition that expects `tx_hash`. The client fires it after the user's wallet sends. For `custody: 'app'`, the server sends the transactions through the app's treasury and fires the same transition itself. When a provider learns its deposit address later (for example in a webhook), return a `LegEvent` with `status: 'requires_action'` and `action: { kind: 'payment', surface: { kind: 'WALLET_TX', ... }, transitions }`.
 
 ## prepareDeposit()
 
@@ -177,7 +243,8 @@ From the project's design notes:
 - Adapters are pure server code. Do not read global environment variables; take all config from the factory options.
 - Use web-standard APIs only (`fetch`, WebCrypto), so the adapter runs on Cloudflare Workers.
 - Verify webhook signatures. Be idempotent on repeated webhooks.
-- Return money as decimal strings, never floats. Fill every fee you know in `LegQuote.fees`.
+- Return money as decimal strings, never floats. Fill every fee you know in `LegQuote.fees`. Use `amount: null` for a fee that the provider does not state. Do not invent an amount.
+- Give every quote a `guarantee` and an `expiresAt`. Do not say `firm` when the provider sets the rate later.
 - Do not store KYC data. Provider references (order id, customer id) are fine.
 - Throw `OpenRampException` with a safe message for expected failures. Use `httpErrorToOpenRamp()` for failed provider calls.
 - Naming: first-party packages are `@openrampkit/adapter-<id>`. Community packages should be `openrampkit-adapter-<id>`.
@@ -194,7 +261,12 @@ From the project's design notes:
 | `findDeliverAsset(list, asset)`, `requireDeliverAsset(list, asset, provider)` | Find the token you deliver for the requested destination. No match gives `undefined` (or `NO_QUOTES`). Never quote another token in its place. |
 | `POLL.onchain`, `POLL.checkout`, `POLL.dev` | Poll schedules for AWAIT transitions |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
-| `legStepFromEvent(event, ref, poll)` | The `LegStep` for a mapped provider status (no event means `PAYMENT`, `requires_action`) |
+| `awaitingPayment(ref, poll)` | A `requires_action` step with an AWAIT poll and no surface, while the user pays in a provider page |
+| `legStepFromEvent(event, ref, poll)` | The `status()` answer for a mapped provider status: the event as a step (no event gives `awaitingPayment`) |
+| `quoteExpiresAt(minutes, providerExpiry?)` | The required `LegQuote.expiresAt` |
+| `statusMap(provider, table)` | A typed table of provider statuses. An unknown status gives `undefined` and one log, never a default. |
+| `verifyTimestampedHmac(input)`, `parseSignatureHeader(header)` | Timestamped HMAC webhook signatures (Stripe, MoonPay, Coinbase, Peer and Meld use them) |
+| `cachedJson(kv, key, ttlSec, load)` | Cache a provider catalog, a rate or token data |
 | `decimalFrom(n, digits = 8)` | A JSON number from a provider to an exact decimal string |
 | `hmacSha256(secret, message, 'hex' \| 'base64')`, `timingSafeEqual(a, b)`, `randomHex(bytes)` | Crypto helpers |
 | `evmRpc`, `erc20TransferData`, `erc20PaidTo`, `ERC20_TRANSFER_TOPIC`, `topicAddress` | EVM JSON-RPC helpers for on-chain checks. See [EVM helpers](../api/adapter.md#evm-helpers). |
@@ -205,17 +277,25 @@ From the project's design notes:
 ```ts
 // packages/adapter-acme/src/index.ts
 import {
-  POLL, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOpenRamp, legStepFromEvent, randomHex, timingSafeEqual,
+  POLL, createAdapter, fetchJson, httpErrorToOpenRamp, legStepFromEvent, quoteExpiresAt, randomHex, statusMap, verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { USDC, openRampError } from '@openrampkit/core'
-import type { CryptoAsset, LegSpec } from '@openrampkit/core'
+import type { CryptoAsset, LegSpec, LegStatus, StepDetailCode } from '@openrampkit/core'
 
 export type AcmeOptions = { apiKey: string; webhookSecret: string; apiUrl?: string }
 
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 }
 
-type AcmeOrder = { id: string; status: 'open' | 'paid' | 'delivered' | 'failed'; tx_hash?: string; usdc?: string; reference: string }
+type AcmeOrder = { id: string; status: string; tx_hash?: string; usdc?: string; reference: string }
+
+// Every Acme status that we know. An unknown status gives undefined and one log.
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('Acme Pay', {
+  open: { status: 'requires_action' },
+  paid: { status: 'processing', detail: 'settling' },
+  delivered: { status: 'succeeded' },
+  failed: { status: 'failed' },
+})
 
 export function acme(opts: AcmeOptions) {
   const api = opts.apiUrl ?? 'https://api.acme.test'
@@ -234,17 +314,18 @@ export function acme(opts: AcmeOptions) {
     },
   ]
 
-  function eventFrom(o: AcmeOrder): LegEvent | undefined {
-    const ref = o.reference
-    switch (o.status) {
-      case 'delivered':
-        return { ref, status: 'succeeded', ...(o.tx_hash ? { txHash: o.tx_hash } : {}), ...(o.usdc ? { output: { value: o.usdc, asset: BASE_USDC } } : {}) }
-      case 'paid':
-        return { ref, status: 'processing' }
-      case 'failed':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED') }
-      default:
-        return undefined // still paying
+  function eventFrom(o: AcmeOrder, log?: { warn(msg: string, data?: Record<string, unknown>): void }): LegEvent | undefined {
+    const m = STATUS(o.status, log)
+    // Unknown status, or still paying: no event, so the leg keeps its step.
+    if (!m || m.status === 'requires_action') return undefined
+    return {
+      ref: o.reference,
+      providerRef: o.id,
+      status: m.status,
+      ...(m.detail ? { detail: { code: m.detail, providerStatus: o.status } } : {}),
+      ...(o.usdc ? { output: { value: o.usdc, asset: BASE_USDC } } : {}),
+      ...(o.tx_hash ? { transactions: [{ role: 'destination' as const, hash: o.tx_hash }] } : {}),
+      ...(m.status === 'failed' ? { error: openRampError('PAYMENT_FAILED') } : {}),
     }
   }
 
@@ -255,7 +336,7 @@ export function acme(opts: AcmeOptions) {
 
     async quote({ leg, amountIn }, ctx) {
       if (amountIn?.asset.kind !== 'fiat') throw new Error('Acme quotes need a fiat amount')
-      let q: { usdc: string; fee: string }
+      let q: { usdc: string; fee: string; expires_at?: string }
       try {
         q = await fetchJson(ctx.fetch, `${api}/quotes?usd=${amountIn.value}`, { headers })
       } catch (e) {
@@ -266,9 +347,11 @@ export function acme(opts: AcmeOptions) {
         legId: leg.legId,
         input: amountIn,
         output: { value: q.usdc, asset: BASE_USDC },
-        fees: [{ kind: 'provider', label: 'Acme fee', amount: q.fee, currency: 'USD' }],
+        // Acme sets the rate when the card payment clears.
+        guarantee: 'estimate',
+        fees: [{ kind: 'provider', label: 'Acme fee', amount: { value: q.fee, asset: amountIn.asset }, included: true }],
         eta: { min: 60, max: 900 },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5, q.expires_at),
       }
     },
 
@@ -276,7 +359,7 @@ export function acme(opts: AcmeOptions) {
       const address = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
       if (!address) throw new Error('Acme needs a wallet address')
       const reference = `ork_${randomHex(10)}`
-      let order: { checkout_url: string }
+      let order: { id: string; checkout_url: string }
       try {
         order = await fetchJson(ctx.fetch, `${api}/orders`, {
           method: 'POST',
@@ -287,26 +370,31 @@ export function acme(opts: AcmeOptions) {
         throw httpErrorToOpenRamp(e, 'Acme Pay', { what: 'start the payment', log: ctx.log })
       }
       return {
-        state: 'PAYMENT',
         status: 'requires_action',
         ref: reference,
-        surface: { kind: 'REDIRECT', url: order.checkout_url, popup: true, provider: 'Acme Pay' },
-        transitions: [awaitPoll(POLL.checkout)],
+        providerRef: order.id,
+        action: {
+          kind: 'payment',
+          surface: { kind: 'REDIRECT', url: order.checkout_url, popup: true, provider: 'Acme Pay' },
+          transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL.checkout }],
+        },
       }
     },
 
     async status({ ref }, ctx) {
       const o = await fetchJson<AcmeOrder>(ctx.fetch, `${api}/orders/by-reference/${ref}`, { headers })
-      return legStepFromEvent(eventFrom(o), ref, POLL.checkout)
+      // No event: the user is still paying, and the UI keeps the checkout surface.
+      return legStepFromEvent(eventFrom(o, ctx.log), ref, POLL.checkout)
     },
 
     webhook: {
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody) {
-        const sig = req.headers.get('acme-signature') ?? ''
-        return timingSafeEqual(sig, await hmacSha256(opts.webhookSecret, rawBody, 'hex'))
+        // Acme signs `{t}.{body}` and sends `t=...,v1=...`
+        return verifyTimestampedHmac({ secret: opts.webhookSecret, rawBody, header: req.headers.get('acme-signature') })
       },
-      async parse(rawBody) {
-        const ev = eventFrom(JSON.parse(rawBody) as AcmeOrder)
+      async parse(rawBody, ctx) {
+        const ev = eventFrom(JSON.parse(rawBody) as AcmeOrder, ctx.log)
         return ev ? [ev] : []
       },
     },
@@ -330,9 +418,11 @@ export function acme(opts: AcmeOptions) {
 
 `runAdapterConformance` checks:
 
-- the adapter shape: API version, at least one leg, `eta.min <= eta.max`, surfaces declared, a region policy that allows something, decimal limits;
-- per fixture: the quote (decimal strings, ids, non-negative money, ISO `expiresAt`), `start()` and every transition and `status()` step (legal states from the flow table, a known leg status, a `ref`, terminal states only with terminal leg statuses), and expected states;
-- per webhook: `verify()` gives the expected result, and `parse()` gives the same events twice (idempotent), each with a `ref` and a known status.
+- the adapter shape: API version 2, at least one leg, `eta.min <= eta.max`, surfaces declared, a region policy that allows something, decimal limits. Declared capabilities and surfaces need their methods: `surface_after_processing` needs a webhook; a `FORM`, `OTP` or `WALLET_TX` surface needs `transition()`; an adapter needs a result channel (`status()` or a configured webhook);
+- per fixture: the quote (decimal strings, ids, non-negative money, the output in the leg's `to` asset, an `expiresAt` in the future, a known `guarantee`, `minOutput` with `min_output`, `slippageBps` from 0 to 10000, fee amounts that are `null` or have a valid asset);
+- per fixture: `start()` and every transition and `status()` step. The v2 step rules: a known status, an `action` only with `requires_action`, a `phase` only with `pending` or `processing`, a `detail.code` from the list, transaction roles and hashes, legal transitions, and a `ref`. The first `requires_action` step needs a surface. The kit flags v1 fields (`state`, `sub`, `txHash`, `sourceTxHash`, a top-level `surface` or `transitions`). `expect` is compared with `stateFor(step)`;
+- per webhook: `verify()` gives the expected result, and `parse()` gives the same events twice (idempotent), each with a `ref`, a known status and the step rules;
+- per error path (`errorPaths`): `quote()` against a provider that answers HTTP 400, 401, 429 or 500, or times out, throws the `httpErrorToOpenRamp` code with the right `retryable` value.
 
 Errors thrown by the adapter are reported as problems. The report also returns every quote, step and event.
 
@@ -341,6 +431,7 @@ Errors thrown by the adapter are reported as problems. The report also returns e
 import { describe, expect, it } from 'vitest'
 import { fakeFetch, makeCtx, runAdapterConformance } from '@openrampkit/adapter/testing'
 import { hmacSha256 } from '@openrampkit/adapter'
+import { stateFor } from '@openrampkit/core'
 import { acme } from './index.js'
 
 const leg = {
@@ -362,7 +453,8 @@ describe('acme adapter', () => {
     ])
     const adapter = acme({ apiKey: 'k', webhookSecret: 'whsec' })
     const body = JSON.stringify({ id: 'o1', status: 'delivered', usdc: '97.5', reference: 'ork_1' })
-    const sig = await hmacSha256('whsec', body, 'hex')
+    const t = Math.floor(Date.now() / 1000)
+    const sig = `t=${t},v1=${await hmacSha256('whsec', `${t}.${body}`, 'hex')}`
 
     const report = await runAdapterConformance(adapter, {
       ctx: () => makeCtx({ fetch }),
@@ -373,6 +465,7 @@ describe('acme adapter', () => {
           expect: { start: 'PAYMENT', status: 'COMPLETED' },
         },
       ],
+      errorPaths: [{ leg, quote: { amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } } }],
       webhooks: [
         { name: 'signed', request: () => new Request('https://x.test', { method: 'POST', headers: { 'acme-signature': sig } }), rawBody: body, events: 1 },
         { name: 'bad signature', request: () => new Request('https://x.test', { method: 'POST', headers: { 'acme-signature': 'nope' } }), rawBody: body, valid: false },
@@ -380,13 +473,36 @@ describe('acme adapter', () => {
     })
 
     expect(report.problems).toEqual([])
-    expect(report.steps[0]?.surface?.kind).toBe('REDIRECT')
+    expect(report.steps[0]?.action?.surface?.kind).toBe('REDIRECT')
+    expect(stateFor(report.steps[0]!)).toBe('PAYMENT')
     expect(calls.find((c) => c.method === 'POST')?.body).toMatchObject({ wallet: '0x000000000000000000000000000000000000beef' })
   })
 })
 ```
 
 The lower-level checks are also exported from the main entry: `checkAdapterShape(adapter)`, `checkLegQuote(quote)` and `checkLegStep(step)`.
+
+## Upgrade from version 1
+
+Version 2 of the adapter contract changes the step, the event, the quote and the fee. `createAdapter` throws for `apiVersion: 1`. The server ignores v1 step fields and logs a warning. The conformance kit flags them.
+
+| Version 1 | Version 2 |
+|---|---|
+| `LegStep.state` | Removed. The server uses `stateFor(step)`. For a review step, set `phase: 'kyc'` or `phase: 'auth'` with `processing`. |
+| `surface` and `transitions` on the step | `action: { kind: 'auth' \| 'kyc' \| 'payment', surface?, transitions }`, only with `requires_action` |
+| An AWAIT transition on a step that waits | Leave it out, or set `poll` |
+| `sub` (`STEP_SUBS`, `StepSub`, `isStepSub`) | `detail: { code, providerStatus? }` (`STEP_DETAIL_CODES`, `StepDetailCode`, `isStepDetailCode`) |
+| `providerStatus` on the step | `detail.providerStatus` |
+| `txHash` | `transactions: [{ role: 'destination', hash }]` |
+| `sourceTxHash` | `transactions: [{ role: 'source', hash }]` |
+| No provider order id | `providerRef` |
+| `LegEvent` with its own fields (`surface`, `transitions`, `txHash`) | `LegEvent = LegStep & { ref, eventId? }` |
+| `legStepFromEvent` sets a state | `legStepFromEvent` returns the event as a step; `awaitingPayment(ref, poll)` for a user who still pays |
+| `LegQuote.expiresAt?` | `expiresAt` is required: `quoteExpiresAt()` |
+| No guarantee | `guarantee: 'firm' \| 'min_output' \| 'estimate'`, with `minOutput?` and `slippageBps?` |
+| `Fee { amount: string; currency: string; inRate? }` | `Fee { kind, label, amount: Amount \| null, included }`. `inRate` with amount `'0'` is now `amount: null`. |
+| A `switch` with a `default` status | `statusMap(provider, table)`: an unknown status gives `undefined` |
+| Hand-written `t=,v1=` HMAC checks | `verifyTimestampedHmac` |
 
 ## Publish
 

@@ -99,13 +99,14 @@ type PublicSession = {
   locale?: string               // only when the app set one
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
+  payment?: Payment             // once a payment started: the legs, provider refs and transactions
   result?: SessionResult        // once a payment started
   expiresAt: string
   livemode: boolean
 }
 ```
 
-See [`SessionResult`](./core.md#sessionresult).
+See [`Payment`](./core.md#payment) and [`SessionResult`](./core.md#sessionresult).
 
 ## GET /sessions/:id/step
 
@@ -198,6 +199,8 @@ For a withdraw session, the source is the session's `source`, and `body.source` 
 
 Response `200`: `{ "quotes": PublicQuote[], "errors": OpenRampError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`, or when a field is not valid; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
 
+Each `PublicQuote` has `guarantee` (`firm`, `min_output` or `estimate`), `minOutput` and `slippageBps` when they apply, typed `fees` (`amount` is an `Amount` or `null`, with `included`), and a required `expiresAt`. See [Fee and Quote](./core.md#fee-and-quote).
+
 ## POST /sessions/:id/select
 
 Headers: `Idempotency-Key: <random>` (recommended).
@@ -244,7 +247,7 @@ After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` tr
 Cancels the session when no money of a payment can be on its way. The client secret only: a pay link gets `403`.
 
 - `requires_payment_method` (nothing started, or the last attempt failed): allowed.
-- `requires_action`: allowed only before any money moved. The server refuses (`409`) when a leg submitted a transaction (a tx hash or a source tx hash), the treasury sent, a leg is past `requires_action`, or a leg after the first started.
+- `requires_action`: allowed only before any money moved. The server refuses (`409`) when a leg reported a transaction that moves funds (any role but `approval`), the treasury sent, a leg is past `requires_action`, or a leg after the first started.
 - When the waiting leg's adapter has `cancel()`, the server asks the provider to void the order first. A provider error refuses the cancel: `409 PROVIDER_UNAVAILABLE`, and the session does not change.
 - Then the step becomes `CANCELED` (with the error `CANCELED`), the status `canceled`, and `canceled: { at, reason: 'requested_by_user' }` is set. The server sends `session.canceled`.
 - Response `200`: the `PublicSession`. A session that is already canceled is returned as it is.
@@ -359,7 +362,7 @@ The routes for operators. See [Admin and observability](../guide/admin.md).
 | `POST` | `/admin/sessions/:id/resolve` | Body `{ "state": "COMPLETED" \| "FAILED" \| "REFUNDED" \| "EXPIRED", "note": "..." }`. Answer: the `AdminSession` view. `400` without a note, `404` for an unknown session, `409` when the session already has that state. |
 | `POST` | `/admin/sessions/:id/replay` | `{ "queued": 1 }`: the dead letters sent again. `404` for an unknown session. |
 | `GET` | `/admin/stats` | `AdminStats`. Query: `since` (ISO 8601 or ms; default 24 hours ago). |
-| `GET` | `/admin/find` | `{ sessions: [...] }`. Query: `provider` and `ref`, or `tx` and an optional `chain`. |
+| `GET` | `/admin/find` | `{ sessions: [...] }`. Query: `provider` and `ref`, or `tx` and an optional `chain`. `tx` finds a transaction of any role (approval, source, hop, destination, settlement, refund) in any payment attempt; with `chain`, the transaction must be on that chain. |
 
 The list, stats and tx search answer `501` when the store queue has no `range` (a custom store). See [The time index](../guide/admin.md#the-time-index-and-its-limits).
 

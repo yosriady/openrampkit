@@ -148,7 +148,9 @@ Types: `Theme`, `ThemeOptions`, `ThemeColors`, `ThemeMode`, `RadiusScale`, `Appe
 
 Types: `Messages`, `CatalogLocale`, `LocaleSources`.
 
-`messages.stepSub` has one label for each value of `Step.sub` (`STEP_SUBS` in `@openrampkit/core`), in every catalog. The processing screen shows it. Without a known `sub`, the screen shows the state title (`messages.stepTitle`). It never shows a raw provider status. To change a label, override the whole `stepSub` object.
+`messages.stepDetail` has one label for each value of `Step.detail.code` (`STEP_DETAIL_CODES` in `@openrampkit/core`), in every catalog. The processing screen shows it. Without a known code, the screen shows the state title (`messages.stepTitle`). It never shows a raw provider status. To change a label, override the whole `stepDetail` object.
+
+The quote row never says "No fees" when a fee has no stated amount (`amount: null`). It shows `messages.feesInRate` ("Fees included in the rate"), or the known fees followed by `messages.feeInRate` ("+ a fee in the rate"). The step screen shows the legs of `session.payment` with the main transaction of each leg (the delivery, else the `source`).
 
 ## Provider renderers
 

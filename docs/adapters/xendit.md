@@ -54,10 +54,11 @@ PayNow QR uses the channel code `SGQR`, not `PAYNOW`. Source: the Xendit [PayNow
 
 ## Quotes and start
 
-- Quote: local. The amount is rounded to the currency's minor units and checked against the channel limits (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`). Fees come from the `fees` option. Quotes expire after 10 minutes.
+- Quote: local. The amount is rounded to the currency's minor units and checked against the channel limits (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`). Fees come from the `fees` option: one `provider` fee ("Xendit fee") in the local currency, with `included: true`. The guarantee is `firm`: the user pays the quoted amount in the local currency, and the merchant gets it. Quotes expire after 10 minutes (`quoteExpiresAt(10)`).
 - Start: `POST /v3/payment_requests` with `type: 'PAY'`, `capture_method: 'AUTOMATIC'`, the channel code, return URLs, and `metadata: { openramp_session, user_id }`. Header `api-version: 2024-11-11`. Idempotency key: `{sessionId}:xendit:{legId}:{nonce}`, with a new nonce per quote.
 - Surface from the payment request's actions: `QR_STRING` gives a `QR`, `WEB_URL` gives a `REDIRECT`, `DEEPLINK_URL` gives a `DEEPLINK`.
 - Status: `GET /v3/payment_requests/{id}`.
+- Reference: the payment request id. It is both the leg `ref` and the `providerRef`.
 
 | Xendit status | Leg |
 |---|---|
@@ -66,6 +67,7 @@ PayNow QR uses the channel code `SGQR`, not `PAYNOW`. Source: the Xendit [PayNow
 | `SUCCEEDED` | `succeeded` |
 | `FAILED`, `CANCELED` | `failed` with `PAYMENT_FAILED` |
 | `EXPIRED` | `expired` |
+| other | no new step: the adapter logs the unknown status once (`statusMap`). The leg keeps its last known status (`requires_action` with the current surface, or `processing`). |
 
 Errors:
 

@@ -129,11 +129,11 @@ export const transak = (opts: { apiKey: string; apiSecret: string; env?: 'sandbo
   createAdapter({
     id: 'transak',
     name: 'Transak',
-    apiVersion: 1,                      // adapter API version this adapter targets
+    apiVersion: 2,                      // adapter API version this adapter targets (contract v2)
     legs: [ /* LegSpec[] (static) */ ],
     async catalog(ctx) { /* optional: live methods, limits, supported assets */ },
     async quote(leg, input, ctx) { /* LegQuote */ },
-    async start(leg, quote, ctx) { /* first LegStep */ },
+    async start(leg, quote, ctx) { /* first LegStep: { status, action?, phase?, detail?, ref, providerRef?, transactions? } */ },
     async transition(leg, ref, name, input, ctx) { /* next LegStep */ },
     async status(leg, ref, ctx) { /* LegStep */ },
     webhook: { verify(req, ctx) {}, parse(req, ctx) { /* LegEvent[] */ } },
@@ -180,17 +180,22 @@ interface AdapterContext {
 
 - Adapters MUST be pure server code. They MUST NOT read global env vars; all config comes from the factory options.
 - Adapters MUST verify webhook signatures and MUST be idempotent on repeated webhooks.
-- Adapters MUST return money as decimal strings and MUST fill every fee they know in `LegQuote.fees`.
+- Adapters MUST return money as decimal strings and MUST fill every fee they know in `LegQuote.fees`. A fee amount is an `Amount` in its own asset, or `null` when the provider does not state it. Each fee says if the quote already counts it (`included`).
+- Each `LegQuote` MUST have a `guarantee` (`firm`, `min_output` or `estimate`) and an `expiresAt`. A `min_output` quote MUST have `minOutput`.
+- A `LegStep` has a `status`. It has an `action` (`auth`, `kyc` or `payment`, with the surface and the transitions) only with `requires_action`, and a `phase` only while `pending` or `processing`. The server derives the state with `stateFor()`. Transactions are records with a role.
+- Adapters SHOULD map provider statuses with a typed table (`statusMap`). An unknown status MUST NOT become another status by default.
 - Adapters MUST NOT store KYC data. They MAY store provider references (order id, customer id).
 - Naming: first-party packages are `@openrampkit/adapter-<id>`. Community packages SHOULD be `openrampkit-adapter-<id>`.
-- Versioning: `apiVersion` is checked at startup. The server refuses an adapter whose `apiVersion` it does not support, with a clear error.
+- Versioning: `apiVersion` is checked at startup. The server refuses an adapter whose `apiVersion` it does not support, with a clear error. The current version is 2. See [the data model record](./data-model-0.1.md).
 
 ### 4.5 Test kit (`@openrampkit/adapter/testing`)
 
 Any adapter can run `runAdapterConformance(adapter, fixtures)` in its own test suite. It checks:
 - Leg specs are valid and do not overlap in id.
 - `quote()` output matches the schema, money strings are exact, fees add up to the stated total.
-- Every `LegStep` the adapter returns is a legal state from the flow table (§6), and terminal states are marked from the table.
+- Every `LegStep` the adapter returns follows the v2 step rules (action only with `requires_action`, phase only while pending or processing, detail codes from the closed list, transaction roles), and its derived state is legal in the flow table (§6).
+- Each quote has a valid guarantee, an `expiresAt` in the future, and an output in the leg's `to` asset.
+- Declared capabilities and surfaces have the methods that serve them, and failed provider calls (HTTP 400, 401, 429, 500, timeout) give the expected error codes.
 - Webhook replay gives the same result (idempotency).
 - A fixture run with `fakeFetch` passes from start to a terminal state (`runAdapterConformance`).
 
@@ -268,14 +273,14 @@ The server sends one `Step` at a time. The client draws the state and offers the
 type Step = {
   sessionId: string
   state: StateName
-  sub?: StepSub                                 // closed list STEP_SUBS, e.g. KYC 'kyc_review'
+  detail?: StepDetail                           // { code, providerStatus? }; code from the closed list STEP_DETAIL_CODES, e.g. KYC 'kyc_review'
   legIndex?: number                             // which leg this step belongs to
   surface?: Surface                             // what to show
   transitions: Transition[]                     // what the user or client can do now
   error?: OpenRampError                              // errors are fields, never states
-  progress?: { legs: Array<{ id: string; status: LegStatus }> }
   expiresAt?: string
 }
+// The legs, provider refs and transactions are in PublicSession.payment, not in the step.
 
 type StateName =
   | 'SELECT_METHOD' | 'AMOUNT' | 'QUOTE' | 'AUTH' | 'KYC' | 'PAYMENT'
@@ -305,7 +310,7 @@ type Transition =
 
 ### 6.3 Legs inside a session
 
-A session runs its pathway's legs in order. Each leg has a `LegStatus`: `pending`, `requires_action`, `processing`, `succeeded`, `failed`, `refunded`, `expired`. The session's `PROCESSING` step shows progress for all legs. A later leg starts automatically when the earlier leg's output arrives. With Relay open deposit addresses, leg 2 needs no action from us: the provider pays into the Relay address, and Relay fills.
+A session runs its pathway's legs in order. Each leg has a `LegStatus`: `pending`, `requires_action`, `processing`, `succeeded`, `failed`, `refunded`, `expired`. The session's `PROCESSING` step shows progress for all legs (from `PublicSession.payment`). A later leg starts automatically when the earlier leg's output arrives. With Relay open deposit addresses, leg 2 needs no action from us: the provider pays into the Relay address, and Relay fills.
 
 ### 6.4 Sequence (card to an unlisted chain)
 
@@ -412,7 +417,7 @@ v1 ships `memoryStore` (dev only), `redisStore`, and `postgresStore` (Drizzle, o
 
 ### 7.6 Status updates
 
-- Webhooks first. Each adapter maps provider events to `LegEvent { legRef, status, amounts?, txHash?, error? }`.
+- Webhooks first. Each adapter maps provider events to `LegEvent` (a `LegStep` with the leg's `ref` and an optional `eventId`).
 - Polling second. For adapters without webhooks (or as a safety net), the server re-checks open legs when the browser polls `GET /step`, and on a cron route `POST /tasks/sweep` that the app schedules (Vercel Cron, Cloudflare Cron, or a worker).
 - Every state change writes one event and, when the session reaches a terminal state or a leg succeeds, sends one signed outbound webhook to the app.
 

@@ -244,10 +244,13 @@ For a withdraw session, the server sends the usual [session webhooks](./webhooks
   "input": { "value": "20", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
   "output": { "value": "1131.43", "asset": { "kind": "fiat", "currency": "PHP" } },
   "outputConfirmed": true,
-  "fees": [{ "kind": "provider", "label": "Test provider fee", "amount": "0.2", "currency": "USDC" }],
-  "txHashes": ["0x..."]
+  "fees": [{ "kind": "provider", "label": "Test provider fee", "amount": { "value": "0.2", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } }, "included": true }],
+  "transactions": [{ "role": "source", "chain": "eip155:8453", "hash": "0x...", "legIndex": 0, "explorerUrl": "https://basescan.org/tx/0x..." }],
+  "delivery": { "status": "ok", "legIndex": 0, "expected": { "...": "..." }, "minimum": { "...": "..." }, "received": { "...": "..." } }
 }
 ```
+
+The `source` transaction is the one that sent the funds from the user's wallet or from your treasury. With `custody: 'app'`, the server adds the treasury's hash as a `source` transaction, also when the adapter does not report it.
 
 `outputConfirmed` is `false` when `output` is the quote, not a value that the provider or the chain reported. For example, Swapped sell legs do not report the payout amount, so `output` stays the estimate from the quote.
 

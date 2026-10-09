@@ -252,7 +252,8 @@ When the user enters an amount, the server quotes up to 5 available pathways for
 - For a withdrawal, the first leg's source is the session `source`, with the sender address: the user's wallet address, or `treasury.address` for `custody: 'app'`.
 - A quote whose input is outside the session's `amountBounds` is dropped with `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH` (see [Amount bounds](../api/server.md#amount-bounds)).
 - A failed pathway becomes an entry in `errors`, not an exception.
-- The combined quote sums fees and ETAs, and expires at the earliest leg expiry.
+- The combined quote sums fees and ETAs, and expires at the earliest leg expiry. Every leg quote has an `expiresAt`; the server gives 5 minutes to a leg quote without a valid one.
+- The combined `guarantee` is the weakest of the legs (`estimate` is weaker than `min_output`, which is weaker than `firm`). `minOutput` and `slippageBps` come from the last leg. See [Fee and Quote](../api/core.md#fee-and-quote).
 
 `rankQuotes` sorts by the most delivered first, then by the fastest. It marks the first quote `best_price`, and the fastest one `fastest` when there is more than one quote.
 

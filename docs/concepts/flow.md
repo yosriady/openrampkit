@@ -8,23 +8,31 @@ The server drives the flow. Every response carries the session's current `Step`.
 type Step = {
   sessionId: string
   state: StateName
-  sub?: StepSub               // a finer label from a closed list, e.g. 'settling' or 'waiting_for_deposit'
+  detail?: StepDetail         // a finer label: { code, providerStatus? }, e.g. { code: 'settling' }
   legIndex?: number           // which leg of the pathway is active
   surface?: Surface           // what to show: QR, redirect, deposit address, ...
   transitions: Transition[]   // what the user or the client may do next
   error?: OpenRampError
-  // txHash: the leg's main transaction (for a bridge or swap, the fill on the destination chain).
-  // sourceTxHash: the transaction that paid into the leg (for example the one the user's wallet sent).
-  progress?: { legs: Array<{ adapterId: string; legId: string; provider?: string; status: LegStatus; txHash?: string; sourceTxHash?: string }> }
   expiresAt?: string
 }
 ```
 
-## Sub-states
+The legs, the provider order ids and the transactions of the payment are in `PublicSession.payment` (see [Payment](../api/core.md#payment)), not in the step.
 
-`Step.sub` is a finer label inside `state`. It comes from a closed list of lowercase values, `STEP_SUBS` in `@openrampkit/core` (type `StepSub`):
+## Step detail
 
-| `sub` | Used in | Meaning |
+`Step.detail` is a finer label inside `state`:
+
+```ts
+type StepDetail = {
+  code: StepDetailCode     // from the closed list STEP_DETAIL_CODES
+  providerStatus?: string  // the provider's own status, for example Relay 'pending'
+}
+```
+
+`code` comes from a closed list of lowercase values, `STEP_DETAIL_CODES` in `@openrampkit/core` (type `StepDetailCode`, check with `isStepDetailCode`):
+
+| `code` | Used in | Meaning |
 |---|---|---|
 | `kyc_details` | `KYC` | The user gives details in a form |
 | `kyc_terms` | `KYC` | The user accepts the provider terms |
@@ -45,9 +53,10 @@ type Step = {
 
 Rules:
 
-- An adapter maps its provider statuses to this list. It puts the raw provider status in `LegStep.providerStatus`. The server writes each new raw status to the session timeline (`leg.provider_status`). The raw status never reaches the browser.
-- The server drops a `sub` that is not in the list, and logs a warning.
-- The web UI shows the label of `messages.stepSub[sub]` in the user's language. Without a known `sub`, it shows the state title.
+- An adapter maps its provider statuses to this list. It puts the raw provider status in `detail.providerStatus`. The server writes each new raw status to the session timeline (`leg.provider_status`).
+- `providerStatus` is free text for display and support. The server keeps it only when it has at most 64 characters of letters, digits, spaces and `_ - . :`. It drops other values.
+- The server drops a `detail` whose `code` is not in the list, and logs a warning.
+- The web UI shows the label of `messages.stepDetail[code]` in the user's language. Without a known code, it shows the state title.
 
 ## States
 
@@ -147,7 +156,7 @@ In practice, the server moves `SELECT_METHOD` straight to the first leg's state 
 
 ### Leg status
 
-Each leg has its own `LegStatus`. The server maps it to a state when a provider event arrives:
+Each leg has its own `LegStatus`. The server gets the session state from the leg step with one rule, `stateFor(step)` in `@openrampkit/core`:
 
 ```mermaid
 stateDiagram-v2
@@ -175,9 +184,9 @@ stateDiagram-v2
 
 | Leg status | Session state | Final |
 |---|---|---|
-| `pending` | `PROCESSING` | No |
-| `requires_action` | `PAYMENT` | No |
-| `processing` | `PROCESSING` | No |
+| `pending` | `AUTH` or `KYC` with a `phase`, else `PROCESSING` | No |
+| `requires_action` | The `action.kind`: `AUTH`, `KYC` or `PAYMENT` | No |
+| `processing` | `AUTH` or `KYC` with a `phase`, else `PROCESSING` | No |
 | `succeeded` | `COMPLETED` for the last leg, else `PROCESSING` while the next leg starts | Yes |
 | `failed` | `FAILED` | Yes |
 | `refunded` | `REFUNDED`, or `REVERSED` when the leg had succeeded | Yes |
@@ -186,16 +195,16 @@ stateDiagram-v2
 
 The server enforces the order of leg statuses for provider events (webhooks and adapter routes). Each status has a rank (`LEG_STATUS_RANK`): `pending` 0, `requires_action` 1, `processing` 2, `succeeded`, `failed` and `expired` 3, `refunded` and `reversed` 4. An event can move a leg to the same status or to a status of a higher rank (`isLegalLegMove`). A final leg does not move, with one exception: a `succeeded` leg can become `refunded` or `reversed`. So a late `pending` event cannot move a `processing` leg back. The server logs the event, adds 1 to the `event.out_of_order` metric, and answers the provider with `200` (the event is ignored, not an error).
 
-One move back can be allowed: from `processing` to `requires_action` with a new `surface`. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`. A new surface can send the user's funds to a new place, so the server allows this move only when all of these are true:
+One move back can be allowed: from `processing` to `requires_action` with a new `action.surface`. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`. A new surface can send the user's funds to a new place, so the server allows this move only when all of these are true:
 
 - the leg's spec has the capability `surface_after_processing`,
 - the surface kind is in the spec's `surfaces`,
-- the leg has no transaction yet,
+- the leg has no transaction that moves funds yet (an `approval` does not count),
 - the leg did not move back before (once per leg).
 
 The timeline gets `leg.surface_after_processing`. No built-in adapter needs this move today.
 
-A status check (`status()`) and a transition (`transition()`) also move a leg only forward. One more move back is allowed for them: a review step (`processing` in a `KYC` or `AUTH` state, for example a KYC review) can end with a step for the user (`requires_action`), before the leg has a transaction. A status check that would move a leg back is ignored. A transition that would do it answers `409`.
+A status check (`status()`), a transition (`transition()`) and a provider event also move a leg only forward. One more move back is allowed for them: a review step (`processing` with `phase: 'kyc'` or `phase: 'auth'`, for example a KYC review) can end with a step for the user (`requires_action`), before the leg has a transaction that moves funds. A status check or an event that would move a leg back is ignored. A transition that would do it answers `409`.
 
 A session with a completed payment (`COMPLETED`, or `REVERSED` after it) refuses every browser change with `409`: plan, quotes, target, select and transitions, with the client secret or a pay link. An `EXPIRED` session moves on only when money arrives on the leg that waited at expiry, inside the grace window (`latePayments`).
 
@@ -222,12 +231,32 @@ One name is special: `restart`. It leaves the current payment and goes back to `
 
 ## Legs and the session step
 
-Adapters return a `LegStep` for their leg. The server wraps it into the session's `Step`:
+Adapters return a `LegStep` for their leg (adapter API version 2). A provider event (`LegEvent`) is a `LegStep` with the leg's `ref`:
 
-- A leg's `status` (`pending`, `requires_action`, `processing`, `succeeded`, `failed`, `refunded`, `expired`, `reversed`) is tracked per leg in `progress`.
+```ts
+type LegStep = {
+  status: LegStatus
+  action?: { kind: 'auth' | 'kyc' | 'payment'; surface?: Surface; transitions: Transition[] } // only with requires_action
+  phase?: 'auth' | 'kyc'   // only with pending or processing: for example a KYC review
+  poll?: PollSpec          // how often the UI checks a step that waits
+  detail?: StepDetail
+  error?: OpenRampError
+  ref?: string             // our reference for the leg
+  providerRef?: string     // the provider's own order id
+  output?: Amount
+  transactions?: LegTransaction[]
+}
+```
+
+The server wraps it into the session's `Step`:
+
+- The state comes from `stateFor(step)`. `requires_action` gives the action kind (`AUTH`, `KYC` or `PAYMENT`). `pending` and `processing` give the `phase` (`AUTH` or `KYC`), else `PROCESSING`. A final status gives the state of the same name.
+- The step's `surface` and `transitions` come from `action`. A step without an action gets an AWAIT poll (`poll`, else the server default). A final step has no transitions.
+- A leg's `status` is tracked per leg in `PublicSession.payment.legs`.
 - When a leg succeeds and it is not the last one, the server starts the next leg at once. The session shows `PROCESSING` meanwhile.
 - When every leg succeeded, the step is `COMPLETED`.
-- A provider event (webhook) maps a leg status to a state: `requires_action` to `PAYMENT`, `pending` and `processing` to `PROCESSING`, `succeeded` to `COMPLETED`, and so on. The current surface stays until the leg ends.
+- The server merges each new leg step into the current one (`mergeLegStep`). The leg keeps what a later step leaves out: `ref`, `providerRef`, `output` and every transaction. While the user must act, a `requires_action` step without an action surface keeps the current surface. For example, a status poll while the user pays in a provider page keeps the provider page.
+- Every adapter step and event goes through one entry check first (`sanitizeLegStep`), also for earlier attempts. See [Security: adapter data](../guide/security.md#adapter-data).
 
 The session's `status` follows the step: `requires_payment_method` (no active payment, or the last attempt failed and the user can try again), `requires_action` (the active leg waits for the user, for example to pay), `processing` (the user paid or acted, and the provider or the chain works), `succeeded`, `failed` (final), `canceled`, `expired`, `refunded` or `reversed`. A `FAILED` step gives `requires_payment_method` with `lastError` while the session has attempts left, and `failed` when it does not (see [Session status](../api/core.md#session-status)).
 

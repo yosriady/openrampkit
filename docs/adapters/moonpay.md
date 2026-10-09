@@ -59,22 +59,27 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#moonpay).
 
 ## Quotes and start
 
-- Quote: `GET /v3/currencies/{code}/buy_quote` with `areFeesIncluded=true`, so the user pays exactly the amount they typed. Fees: MoonPay fee, network fee, and your extra fee.
+- Quote: `GET /v3/currencies/{code}/buy_quote` with `areFeesIncluded=true`, so the user pays exactly the amount they typed. Fees, in the fiat currency, all with `included: true`: the MoonPay fee (`provider`), the network fee (`network`) and your extra fee (`app`).
+- The guarantee is `estimate`: MoonPay sets the final rate when it executes. The quote expires at MoonPay's `expiresAt`, but at most 5 minutes from now (`quoteExpiresAt(5, res.expiresAt)`).
 - Start: a signed widget URL (base64 HMAC-SHA256 of the query string with the leading `?`, appended as `&signature=`). It locks the amount, sets the wallet address, the method, `externalTransactionId` (the leg ref, `ork_{random}`), `externalCustomerId` (the user id), and `redirectURL`.
 - Status: `GET /v1/transactions/ext/{externalTransactionId}`. A 404 means the user has not paid yet.
+- `providerRef`: the MoonPay transaction id, from the first status or webhook that has it.
 
 | MoonPay status | Leg |
 |---|---|
-| `completed` | `succeeded` with `cryptoTransactionId` |
-| `pending` | `processing` |
+| `completed` | `succeeded`, with `cryptoTransactionId` as the `destination` transaction |
+| `pending` | `processing`, detail code `processing` |
 | `waitingPayment`, `waitingAuthorization` | `requires_action` |
 | `failed` | `failed` |
+| other | no event: the adapter logs the unknown status once (`statusMap`), and the leg keeps its current step |
+
+The raw MoonPay status goes to `detail.providerStatus`.
 
 ## Webhooks
 
 Set the webhook URL in the MoonPay dashboard to `{baseUrl}/webhooks/moonpay` and pass the webhook API key as `webhookKey`.
 
-- Verification: header `Moonpay-Signature-V2: t=<unix>,s=<hex>`, HMAC-SHA256 of `{t}.{body}`, 5 minute tolerance.
+- Verification: header `Moonpay-Signature-V2: t=<unix>,s=<hex>`, HMAC-SHA256 of `{t}.{body}`, 5 minute tolerance. The adapter checks it with `verifyTimestampedHmac` from `@openrampkit/adapter`.
 - Events whose `type` starts with `transaction_` are parsed with the same status mapping.
 
 ## Sandbox limits

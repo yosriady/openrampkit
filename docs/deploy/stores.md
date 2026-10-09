@@ -150,7 +150,7 @@ Each session record has two numbers. Do not mix them up:
 | Field | What it is |
 |---|---|
 | `version` | The optimistic-lock counter. Each write adds 1. `put(rec, expectedVersion)` compares it. |
-| `schema` | The shape of the record. The server writes `SESSION_SCHEMA` (now `1`) in each new record. A record from a version before this field has no `schema`: it is schema 0. |
+| `schema` | The shape of the record. The server writes `SESSION_SCHEMA` (now `3`) in each new record. A record from a version before this field has no `schema`: it is schema 0. |
 
 The server runs `migrateRecord()` on each record that it reads from the store. The function brings an older record up to the current schema, in memory. The next write saves the result. You do not run a migration script, and old sessions keep working after an upgrade.
 
@@ -159,7 +159,16 @@ Schema 0 to 1 sets:
 - `updatedAt` to `createdAt` when it is missing.
 - `ActivePayment.n` (the attempt number) to the number of earlier attempts, and `n` of each earlier attempt to its place in `attempts`.
 - `quotes`, `startUrls`, `notified` and `outbox` to empty values when they are missing.
-- Each step `sub` (the session step, and the step of each leg) to its lower-case form when that is in `STEP_SUBS`. Another value is removed. See [Sub-states](../concepts/flow.md#sub-states).
+- Each step `sub` (the session step, and the step of each leg) to its lower-case form when that is in the closed list. Another value is removed.
+
+Schema 1 to 2 sets the new status names (`requires_payment_method`, `requires_action`, `succeeded`), `Amount.value`, and the withdraw names `allowedDestinations` and `destinationLocked`.
+
+Schema 2 to 3 moves the records to the adapter contract v2 (see [Step detail](../concepts/flow.md#step-detail) and [SessionResult](../api/core.md#sessionresult)):
+
+- Quotes (stored quotes and the quotes of each payment): each fee gets `amount` as an `Amount` (from its currency) or `null` (a fee in the rate with amount `'0'`, or a currency that is not an asset of the quote and not a fiat code), and `included: true`. Each quote gets `guarantee: 'estimate'` and, when it has none, `expiresAt` from the session deadline.
+- Leg steps: `state` and the loose `surface` and `transitions` become `action` (with `requires_action`), or `phase` and `poll` (while pending or processing). `sub` and `providerStatus` become `detail`. `sourceTxHash` becomes a `source` transaction, and `txHash` a `destination` transaction (or a `source`, when it was the transaction that the user sent).
+- Each leg's `amountMismatch` becomes `delivery` (`invalid_amount` is `invalid`). A leg with a reported output and no mismatch gets `delivery.status: 'ok'`.
+- The session step: `sub` becomes `detail`, and `progress` is removed (see `PublicSession.payment`).
 
 Rules:
 
@@ -167,7 +176,7 @@ Rules:
 - A record with a newer `schema` than the server (written by a newer server, before a rollback) is returned as it is. Do not roll back across a schema change while sessions are open.
 - A custom store does not need to know about `schema`. Store the whole record as JSON, as before.
 
-The server tests load records written before `schema` existed (`packages/server/src/fixtures/records-v0.json`) and finish their payments.
+The server tests load records of each older schema (`packages/server/src/fixtures/records-v0.json`, `records-v1.json` and `records-v2.json`) and finish their payments.
 
 ## A custom store
 

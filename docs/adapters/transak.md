@@ -48,9 +48,10 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#transak).
 ## Quotes and start
 
 - Access token: `POST /partners/api/v2/refresh-token`. It is valid for 7 days, and a new call invalidates the old token, so the adapter caches it (in memory and in the store) and refreshes one at a time.
-- Quote: `GET /api/v1/pricing/public/quotes` with the fiat currency and amount, USDC, the network, the payment method and the country. Fees come from `feeBreakdown`. Quotes expire after 10 minutes.
+- Quote: `GET /api/v1/pricing/public/quotes` with the fiat currency and amount, USDC, the network, the payment method and the country. Fees come from `feeBreakdown`, in the fiat currency: a network fee is `network`, a partner fee is `app`, and the rest are `provider`. Transak takes them from the fiat amount before it converts, so each fee has `included: true`. The guarantee is `estimate`: Transak sets the final rate. Quotes expire after 10 minutes (`quoteExpiresAt(10)`).
 - Start: `POST {gateway}/api/v2/auth/session` with `widgetParams` (wallet address locked, amount, payment method, `partnerOrderId`, `partnerCustomerId`, `redirectURL`, email and country when known). The widget URL is single-use and valid for 5 minutes, so it is made in `start()`.
 - Reference: `partnerOrderId`, `ork_{random}`.
+- `providerRef`: the Transak order id, from the first webhook. No Transak order exists before the user pays in the widget, so the start step has none.
 - There is no `status()`. Progress comes from webhooks only.
 
 ::: warning REDIRECT and the Referer header
@@ -66,12 +67,17 @@ Set the webhook URL in the Transak partner dashboard to `{baseUrl}/webhooks/tran
 
 | Status | Leg |
 |---|---|
-| `COMPLETED` | `succeeded` with `transactionHash` |
+| `COMPLETED` | `succeeded`, with `transactionHash` as the `destination` transaction |
 | `FAILED`, `CANCELLED` | `failed` |
 | `EXPIRED` | `expired` |
 | `REFUNDED` | `refunded` |
-| `PAYMENT_DONE_MARKED_BY_USER`, `PROCESSING`, `PENDING_DELIVERY_FROM_TRANSAK`, `ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK` | `processing` |
+| `PAYMENT_DONE_MARKED_BY_USER`, `PROCESSING` | `processing`, detail code `processing` |
+| `PENDING_DELIVERY_FROM_TRANSAK` | `processing`, detail code `settling` |
+| `ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK` | `processing`, detail code `delayed` |
 | `AWAITING_PAYMENT_FROM_USER` | no change |
+| other | no change: the adapter logs the unknown status once (`statusMap`), and the leg keeps its current step |
+
+The raw Transak status goes to `detail.providerStatus`.
 
 ## Sandbox limits
 

@@ -48,6 +48,19 @@ The client and the web component do the same checks again. They never open or em
 
 A `REDIRECT` goes through a start URL on your server: `{baseUrl}/start/{session}.{token}.{signature}`. The signature is an HMAC with `secret`. The link expires after 10 minutes. The redirect has `cache-control: no-store` and `referrer-policy: no-referrer`. When the surface sets `keepReferrer: true` (Transak), it uses `referrer-policy: strict-origin`.
 
+### Adapter data
+
+A third-party adapter can send anything. Every adapter step (`start`, `transition`, `status`) and every provider event goes through one entry check, `sanitizeLegStep`, before the server keeps it. This applies to the active payment and to earlier attempts:
+
+- Surface URLs: the checks of [Surface URLs](#surface-urls). An unsafe URL fails the step.
+- `detail.code` must be in `STEP_DETAIL_CODES`. `detail.providerStatus` must have at most 64 characters of letters, digits, spaces and `_ - . :`. The server drops other values.
+- `action` stays only with `requires_action`. `phase` stays only with `pending` and `processing`.
+- Transactions: a known role (not `hop`), a hash of letters and digits (an `0x` prefix is allowed, at most 200 characters), and a CAIP-2 chain. The server drops other transactions. It keeps only `role`, `chain`, `hash` and `amount`: a link or another field from the adapter is dropped.
+- Explorer links: the server builds `Transaction.explorerUrl` from its own chain table (`explorerTxUrl`). It never takes a link from an adapter.
+- An adapter step with fields of the adapter API version 1 (`state`, `sub`, `surface`, `transitions`, `txHash`, `sourceTxHash`) gets a warning in the log. The server ignores these fields.
+
+The server merges a later step into the current one, so it only keeps checked values.
+
 ### Provider webhooks in
 
 Each adapter verifies its provider's webhook with the raw body, before the server parses it:
@@ -64,7 +77,7 @@ Each adapter verifies its provider's webhook with the raw body, before the serve
 | Transak | HS256 JWT signed with the access token | JWT `exp` |
 | Xendit | Static callback token | none (the provider signs nothing) |
 
-An adapter without its webhook key refuses every webhook. All comparisons are constant time. A replayed event cannot change a leg that is already final.
+The adapters with a timestamped HMAC (Coinbase, Meld, MoonPay, Stripe, Peer) use the shared helper `verifyTimestampedHmac` from `@openrampkit/adapter`. An adapter without its webhook key refuses every webhook. All comparisons are constant time. A replayed event cannot change a leg that is already final.
 
 ### Webhooks out
 
@@ -97,7 +110,7 @@ Without `cors`, the server sends no CORS headers. With a list of origins, the se
 ## What you must do
 
 1. Credit users only from a verified webhook, or from `openramp.sessions.retrieve()` on your server. Never trust the browser.
-2. Credit each session or event one time only. Store `result.txHashes` with a unique constraint.
+2. Credit each session or event one time only. Store the session id (or the `destination` hash of `result.transactions`) with a unique constraint. Credit the full amount only when `result.delivery.status` is `ok`.
 3. Keep `secret`, `webhooks.secret`, `tasksToken` and the provider keys in a secret store. Use 32 random bytes for each.
 4. Use a shared store with an atomic version check in production: `durableObjectStore` or `redisStore`.
 5. In `authorize`, decide `userId` and `destination` on the server. Do not copy them from the request body.

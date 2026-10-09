@@ -125,16 +125,20 @@ Every event has the same envelope. `WebhookEvent` in `@openrampkit/server` (and 
         "userId": "user_123",
         "metadata": { "orderId": "o_42" },
         "destination": { "...": "..." },
-        "step": { "state": "COMPLETED", "progress": { "legs": [] } },
+        "step": { "state": "COMPLETED", "transitions": [] },
+        "payment": {
+          "attempt": 0, "quoteId": "q_...", "method": "vietqr", "provider": "Swapped", "activeLeg": 0,
+          "legs": [{ "index": 0, "adapterId": "swapped", "legId": "...", "provider": "Swapped", "ref": "...", "providerRef": "ord_...", "status": "succeeded", "...": "..." }]
+        },
         "result": {
           "method": "vietqr",
           "provider": "Swapped",
           "input": { "value": "500000", "asset": { "kind": "fiat", "currency": "VND" } },
           "output": { "value": "18.92", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
           "outputConfirmed": true,
-          "fees": [{ "kind": "provider", "label": "Swapped fee", "amount": "9000", "currency": "VND" }],
-          "txHashes": ["0x..."],
-          "sourceTxHashes": ["0x..."]
+          "fees": [{ "kind": "provider", "label": "Swapped fee", "amount": { "value": "9000", "asset": { "kind": "fiat", "currency": "VND" } }, "included": true }],
+          "transactions": [{ "role": "destination", "chain": "eip155:8453", "hash": "0x...", "legIndex": 0, "explorerUrl": "https://basescan.org/tx/0x..." }],
+          "delivery": { "status": "ok", "legIndex": 0, "expected": { "...": "..." }, "minimum": { "...": "..." }, "received": { "...": "..." } }
         },
         "expiresAt": "2026-10-09T13:30:00.000Z",
         "livemode": false
@@ -156,7 +160,7 @@ Every event has the same envelope. `WebhookEvent` in `@openrampkit/server` (and 
 | `data.object.session` | The backend view of the session after the change: a [`Session`](../api/core.md#session) (the [`PublicSession`](../api/core.md#publicsession) plus `userId` and `metadata`). It is the same object that `openramp.sessions.retrieve(id)` returns. |
 | `data.object.*` | The other fields of the event type (see below) |
 
-Once a payment started, `session.result` (a [`SessionResult`](../api/core.md#sessionresult)) has the method, the provider, what the user paid (`input`), what arrived (`output`), if `output` is confirmed, the fees and the transaction hashes. `txHashes` has the main transaction of each leg (for a bridge or swap, the fill on the destination chain). `sourceTxHashes` has the transaction that paid into each leg (for example the origin chain transaction that the user's wallet sent).
+Once a payment started, `session.result` (a [`SessionResult`](../api/core.md#sessionresult)) has the method, the provider, what the user paid (`input`), what arrived (`output`), if `output` is confirmed, the fees, the transactions and the delivery check. `transactions` has every transaction of the payment, each with a `role`: `source` (what paid into a leg, for example the user's wallet transaction), `hop` and `destination` (the deliveries), `settlement`, `refund` or `approval`. `delivery` compares the reported output with the quote. `session.payment` has the legs, with the provider's own order id (`providerRef`) for support.
 
 ## Event types
 
@@ -174,7 +178,7 @@ There is one catalog for deposits and withdrawals. `data.object.session.directio
 | `session.expired` | The deadline passed with no payment in progress (nothing started, the last attempt failed, or the leg still waits for the user), or the provider order expired. A late payment can still complete it (see `session.late_payment`). | `resolution` (operator only) |
 | `session.refunded` | The provider returned the payment before it succeeded | `resolution` (operator only) |
 | `session.reversed` | The payment succeeded, then the provider refunded it or took it back (a chargeback). **Take back or freeze the credit.** | `index`, `adapterId`, `legId`, `legStatus`, `previous`, and `attempt` for an earlier attempt |
-| `session.late_payment` | A payment arrived late: after the session expired, on an earlier attempt, or after a final status | `reason`, `index`, `adapterId`, `legId`, `txHash`, `attempt` |
+| `session.late_payment` | A payment arrived late: after the session expired, on an earlier attempt, or after a final status | `reason`, `index`, `adapterId`, `legId`, `transactions` (the leg's transactions, when known), `attempt` |
 | `leg.succeeded` | One leg finished | `index`, `adapterId`, `legId` |
 | `leg.failed` | One leg failed | `index`, `adapterId`, `legId`, `error` |
 
@@ -210,8 +214,8 @@ Webhooks are delivered **at least once**. A retry after a timeout can send the s
    - `after_grace`: the payment arrived after the grace window. The session stays expired and you get no `session.succeeded`. Refund or credit it by hand.
    - `earlier_attempt`: the user left a payment (the `restart` transition) after they paid it. When the provider reports that payment later, the session completes with it (you get `session.succeeded`). When the session already has a final status (for example `failed`, `canceled` or `succeeded`), or another payment is in progress, you get `session.late_payment` instead. You also get it for a withdrawal when the user picked another destination after the restart: the session does not complete with a destination that the payment did not pay to. Refund or credit it by hand.
 4. **Check the session status.** For more safety, call `openramp.sessions.retrieve(event.sessionId)` and make sure that `status === 'succeeded'` before you credit.
-5. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with `result.txHashes`, or at the provider), or credit the amount that you expected on your order. For merchant destinations, the report of the provider is the source of truth.
-6. **Check `result.amountMismatch`.** When it is set, a provider reported less than the quote by more than `policy.outputToleranceBps` (default 1%) (`reason: 'short'`), or an output in another asset (`asset_mismatch`) or with no valid amount (`invalid_amount`). `received` is what the provider reported, and `shortfall` is the difference. Credit what arrived, not the quote, or hold the credit for a review.
+5. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with the `destination` transaction of `result.transactions`, or at the provider), or credit the amount that you expected on your order. For merchant destinations, the report of the provider is the source of truth.
+6. **Check `result.delivery.status`.** Credit the full amount only when it is `ok`: the output is at least the quote's `minOutput` or, for a quote without one, at most `policy.outputToleranceBps` (default 1%) below the quote. `short` means that less arrived (`shortfall` is the difference). `asset_mismatch` means another asset arrived, and `invalid` means the amount is not valid. `received` is what the provider reported. For anything but `ok`, credit what arrived, not the quote, or hold the credit for a review. `delivery` is absent when no leg reported an output: then use rule 5.
 
 ```ts
 async function credit(eventId: string, session: Session) {
@@ -220,7 +224,9 @@ async function credit(eventId: string, session: Session) {
     // unique index on credits.session_id: a second insert fails and nothing is credited two times
     const inserted = await tx.credits.insertIfAbsent({ sessionId: session.id, userId: session.userId, eventId })
     if (!inserted) return
-    const amount = result.outputConfirmed ? result.output.value : await verifiedAmount(session.id, result)
+    // Full credit only for a confirmed output that matches the quote. Else check it, or hold it for a review.
+    const ok = result.outputConfirmed && result.delivery?.status === 'ok'
+    const amount = ok ? result.output.value : await verifiedAmount(session.id, result)
     await tx.balances.increment(session.userId, amount)
   })
 }
@@ -251,7 +257,7 @@ async function takeBack(eventId: string, session: Session, legStatus: 'refunded'
 - The modal shows "Payment reversed" when the user still has it open.
 
 ::: warning Same-chain wallet transfers
-When the source token is the same as the destination token on the same chain, the Relay adapter sends a plain transfer without Relay. It checks the transaction receipt on chain: the transaction succeeded and paid the recipient at least the quoted amount. It does not check that the transaction is new or that the user sent it. Keep `result.txHashes` with a unique constraint, so one transaction cannot complete two sessions.
+When the source token is the same as the destination token on the same chain, the Relay adapter sends a plain transfer without Relay. It checks the transaction receipt on chain: the transaction succeeded and paid the recipient at least the quoted amount. It does not check that the transaction is new or that the user sent it. Keep the hash of the `destination` transaction in `result.transactions` with a unique constraint, so one transaction cannot complete two sessions.
 :::
 
 ## Delivery

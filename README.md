@@ -225,7 +225,7 @@ export async function POST(req: Request) {
   const event = JSON.parse(body) as WebhookEvent
   if (event.type === 'session.succeeded') {
     const { session } = event.data.object // the backend view: session.userId, session.result
-    // credit the user one time per session
+    // credit the user one time per session; credit the full amount only when session.result.delivery?.status is 'ok'
   }
   return new Response('ok')
 }
@@ -482,7 +482,7 @@ Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [marke
 Contributions are welcome, especially new adapters. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the setup and the conventions, and pick a [good first issue](https://github.com/yosriady/openrampkit/labels/good%20first%20issue).
 
 1. Read [Writing an adapter](https://openrampkit-getformo.vercel.app/adapters/writing-an-adapter).
-2. Run the conformance kit from `@openrampkit/adapter/testing` against your adapter.
+2. Run the conformance kit from `@openrampkit/adapter/testing` against your adapter. Adapters use the adapter API version 2.
 3. Run `pnpm build && pnpm typecheck && pnpm test` before you open a pull request.
 4. Add a changeset with `pnpm changeset` when you change a published package.
 

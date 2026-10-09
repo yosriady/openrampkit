@@ -86,7 +86,7 @@ if (event.type === 'session.succeeded') {
 }
 ```
 
-`session.result` has the amounts. `result.input` is the amount the user paid. The Xendit webhook does not report an output amount, so `result.output` is the quoted net amount (after the fee model of the adapter) and `result.outputConfirmed` is `false`. Compare `result.input` with the expected amount on your order. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
+`session.result` has the amounts. `result.input` is the amount the user paid. The Xendit webhook does not report an output amount, so `result.output` is the quoted net amount (after the fee model of the adapter) and `result.outputConfirmed` is `false`. No output is reported, so `result.delivery` is absent. Compare `result.input` with the expected amount on your order. `session.payment.legs[0].providerRef` is the Xendit payment request id, for Xendit support. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
 
 ## Fees in quotes
 
@@ -99,7 +99,7 @@ xendit({
 })
 ```
 
-`bps` is basis points of the amount. `fixed` is a decimal string in the payment currency. The quote's output is the amount minus these fees.
+`bps` is basis points of the amount. `fixed` is a decimal string in the payment currency. The quote's output is the amount minus these fees. The fee is a `provider` fee in the payment currency, with `included: true`. Xendit quotes are `firm`: the amount does not change after the quote.
 
 ## Test without Xendit
 
