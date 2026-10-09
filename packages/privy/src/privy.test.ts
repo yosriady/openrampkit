@@ -9,7 +9,7 @@ const BAD_ADDRESS = '0x00000000000000000000000000000000000000ff'
 const BAD_TOKEN = '0x00000000000000000000000000000000000000bd'
 
 const log: string[] = []
-const state = { chainId: 1, receipt: true as boolean, disconnected: false }
+const state = { chainId: 1, receipt: true as boolean, reverted: false, disconnected: false }
 /** A chain the provider does not know, so wallet_switchEthereumChain fails. */
 const UNKNOWN_CHAIN_ID = 99999
 
@@ -46,7 +46,7 @@ function fakeProvider(): Eip1193Provider {
         }
         case 'eth_getTransactionReceipt':
           log.push('receipt')
-          return state.receipt ? { status: '0x1' } : null
+          return state.receipt ? { status: state.reverted ? '0x0' : '0x1' } : null
         default:
           throw new Error(`unexpected method ${method}`)
       }
@@ -68,6 +68,7 @@ describe('privyWallet', () => {
     log.length = 0
     state.chainId = 1
     state.receipt = true
+    state.reverted = false
     state.disconnected = false
     // The unit tests run with the node environment, so the browser path needs a window.
     vi.stubGlobal('window', {})
@@ -153,6 +154,18 @@ describe('privyWallet', () => {
     ])
     expect(log).toEqual(['switch:8453', 'send:8453:0xaaaa:', 'receipt', 'send:8453:0xbbbb:0x64'])
     expect(res.hash).toBe(`0x${'4'.padStart(64, '0')}`)
+  })
+
+  it('stops the batch when a receipt reverted: the next transaction is not sent', async () => {
+    state.reverted = true
+    const w = privyWallet({ wallet: fakeWallet, chains: ['eip155:8453'] })
+    await expect(
+      w.sendTransactions('eip155:8453', [
+        { to: '0xaaaa', data: '0x095ea7b3', chainId: 8453 },
+        { to: '0xbbbb', chainId: 8453 },
+      ]),
+    ).rejects.toThrow(/reverted/)
+    expect(log.filter((l) => l.startsWith('send:'))).toEqual(['send:8453:0xaaaa:'])
   })
 
   it('does not switch when already on the chain, and surfaces a rejected switch', async () => {

@@ -55,7 +55,7 @@ export function Deposit() {
 | `getAccounts()` | The one EVM address on every chain in `chains`, or `[]` when there is no wallet. Returns `[]` on the server, so it is safe during SSR. |
 | `getBalances()` | Native balance plus USDC (and your `tokens`) per configured chain. One failing RPC does not hide the other balances. USDC also fills `usd`. |
 | `switchChain(chain)` | Calls `wallet_switchEthereumChain` when the wallet is on another chain. |
-| `sendTransactions(chain, txs)` | For each tx: switch to `tx.chainId`, send, and wait for the receipt between txs. Returns the last hash. |
+| `sendTransactions(chain, txs)` | For each tx: switch to `tx.chainId`, send, and wait for the receipt between txs. A reverted receipt stops the batch with an error, and no later tx is sent. Returns the last hash. |
 
 Only EVM chains are supported. `privyWallet` refuses Solana transactions, and it reports no accounts for a Solana embedded wallet (`chainType: 'solana'`). Use `@openrampkit/solana` for those.
 

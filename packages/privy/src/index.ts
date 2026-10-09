@@ -109,8 +109,12 @@ export function privyWallet(opts: PrivyWalletOptions = {}): WalletAdapter {
   async function waitForReceipt(provider: Eip1193Provider, hash: string): Promise<void> {
     const deadline = Date.now() + timeoutMs
     for (;;) {
-      const receipt = await provider.request({ method: 'eth_getTransactionReceipt', params: [hash] })
-      if (receipt !== null && receipt !== undefined) return
+      const receipt = (await provider.request({ method: 'eth_getTransactionReceipt', params: [hash] })) as { status?: string } | null | undefined
+      if (receipt !== null && receipt !== undefined) {
+        // A reverted approve must stop the batch: the next transaction (the deposit) would fail or misbehave.
+        if (receipt.status === '0x0') throw new Error(`Privy wallet: transaction ${hash} reverted. Nothing else was sent.`)
+        return
+      }
       if (Date.now() >= deadline) throw new Error(`Privy wallet: no receipt for ${hash} after ${timeoutMs} ms`)
       await new Promise((resolve) => setTimeout(resolve, intervalMs))
     }

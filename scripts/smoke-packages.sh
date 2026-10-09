@@ -58,6 +58,15 @@ console.log('Solana ok')
 JS
 node solana.mjs
 node -e "const s=require('@openrampkit/solana');if(typeof s.solanaWallet!=='function')process.exit(1);console.log('CJS Solana ok')"
+cat > privy.mjs <<'JS'
+import { privyWallet, DEFAULT_PRIVY_CHAINS } from '@openrampkit/privy'
+const w = privyWallet({ wallet: () => ({ address: '0x0000000000000000000000000000000000000001', chainType: 'ethereum', getEthereumProvider: async () => { throw new Error('no provider call on the server') } }) })
+if (w.id !== 'privy' || w.namespaces[0] !== 'eip155' || (await w.getAccounts()).length !== 0) throw new Error('privyWallet on the server must have no accounts')
+if (!Array.isArray(DEFAULT_PRIVY_CHAINS) || !DEFAULT_PRIVY_CHAINS.length) throw new Error('DEFAULT_PRIVY_CHAINS is empty')
+console.log('Privy ok')
+JS
+node privy.mjs
+node -e "const p=require('@openrampkit/privy');if(typeof p.privyWallet!=='function')process.exit(1);console.log('CJS Privy ok')"
 node -e "const v=require('@openrampkit/vue');const sv=require('@openrampkit/svelte');const so=require('@openrampkit/solid');if(typeof v.provideOpenRamp!=='function'||typeof sv.createOpenRamp!=='function'||typeof so.OpenRampProvider!=='function')process.exit(1);console.log('CJS framework wrappers ok')"
 cat > ssr.mjs <<'JS'
 import { createElement } from 'react'
