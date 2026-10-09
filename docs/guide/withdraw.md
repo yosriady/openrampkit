@@ -148,7 +148,8 @@ What the server does:
 - It marks the step as sent and saves the session (with the version check) before it calls the hook. When two requests start the same step at the same time, one save fails with `409 CONFLICT`, so only one request calls the hook. It calls the hook at most once per step, and the key lets you drop a retry on your side.
 - The saved session shows the leg as `processing` before the hook runs. When the server stops, or a provider call fails after the hook sent the funds, the session stays `PROCESSING`: it does not show the `WALLET_TX`, and it refuses `restart` and a new `select`. Thus a second payment cannot make the treasury send again. The sweep polls the provider. When the provider never sees the transfer, the session shows as stuck in the admin tools, and an operator closes it (`admin.resolve`).
 - It reports the hash to the adapter (the leg's `tx_hash` transition), or it waits for the provider to see the transfer.
-- When the hook throws, the leg fails with `PAYMENT_FAILED` ("The withdrawal could not be sent. Contact support.").
+- When the hook throws, the leg fails with `PAYMENT_FAILED` ("The withdrawal could not be sent. Contact support."). The server reads a throw as "refused, nothing sent", so the user can try again. Throw only when your hook sent nothing. When the hook sent funds and then has a problem, return the hash and report the problem out of band.
+- When the treasury sent funds and the provider then fails the order, the failure is final (status `failed`). The session refuses a new attempt, so the treasury cannot send a second time. An operator resolves the session (`admin.resolve`) and refunds the user if the provider returned the funds.
 - Without a `treasury` hook, every method of an `app` session is in "Not available" with "Withdrawals are not set up for this app yet."
 
 ::: danger The server does not know the user's balance

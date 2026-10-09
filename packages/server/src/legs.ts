@@ -141,6 +141,8 @@ export function maxAttempts(rt: Runtime): number {
  * start a new attempt:
  * - a leg of the payment succeeded: the funds are at a hop (or arrived in another asset than the
  *   quote), and a new attempt cannot use them;
+ * - money left on this attempt (a later leg started, the treasury sent, or a transaction was
+ *   submitted): a new attempt could pay out or pay in a second time;
  * - the session has no attempts left (`policy.maxAttempts`).
  * Else the failure ends only this attempt: the session goes back to `requires_payment_method`.
  */
@@ -151,6 +153,11 @@ export function isFinalFailure(rt: Runtime, rec: SessionRecord): boolean {
   if (!act) return true
   // Money arrived on a leg (a hop, or another asset than the quote): a new attempt cannot use it.
   if (act.legs.some((l) => l.step?.status === 'succeeded')) return true
+  // Money left on this attempt: a later leg started, the treasury sent, or a transaction was submitted.
+  // A new attempt could send a second payout (or a second deposit) for the same session, so the
+  // failure is final and an operator resolves it. A failure before any money moved (for example a
+  // declined card) stays retryable.
+  if (act.index > 0 || act.legs.some((l) => !!l.treasurySent?.length || !!l.step?.txHash || !!l.step?.sourceTxHash)) return true
   return (act.n ?? 0) + 1 >= maxAttempts(rt)
 }
 
@@ -264,6 +271,10 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   try {
     hash = (await treasury.send({ sessionId: rec.id, userId: rec.userId, chain, txs, idempotencyKey: key })).hash
   } catch (e) {
+    // The treasury contract: `send` throws only when it refused and sent nothing. Clear the mark, so
+    // this failure counts as "no money moved" and the user may try again. A hook that can fail after
+    // it sent must return (and report the problem out of band), never throw.
+    leg.treasurySent = (leg.treasurySent ?? []).filter((k) => k !== key)
     rt.log.error('treasury send failed', { sessionId: rec.id, error: e instanceof Error ? e.message : String(e) })
     return failed('The withdrawal could not be sent. Contact support.')
   }

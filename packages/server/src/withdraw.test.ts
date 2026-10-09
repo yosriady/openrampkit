@@ -442,6 +442,25 @@ describe('provider events that carry a surface', () => {
     expect(sent).toHaveLength(1)
   })
 
+  it('a provider failure after the treasury sent is final: no new attempt, no second payout', async () => {
+    const sent: string[] = []
+    const treasury = { send: vi.fn(async (i: TreasurySendInput) => (sent.push(i.idempotencyKey), { hash: TX })) }
+    const t = make({ treasury }, [eventOfframp()])
+    const s = await t.create({ source: SRC_APP })
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10', false)
+    const post = (ev: LegEvent) => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(ev) }))
+    expect((await post(PENDING)).status).toBe(200)
+    expect(sent).toHaveLength(1)
+    // The provider then fails the order. The treasury funds already left: this is not a retryable attempt.
+    expect((await post({ ref: 'order_1', status: 'failed' })).status).toBe(200)
+    const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
+    expect(now.body.status).toBe('failed')
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'bank_transfer', amount: '10' })
+    expect(q.status).not.toBe(200)
+    expect(sent).toHaveLength(1)
+  })
+
   it('a failure after the treasury sent, inside select, leaves no state that starts a second payment', async () => {
     const sent: string[] = []
     let refuse = true
