@@ -12,6 +12,8 @@ swapped({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#swapped).
+
 ## Options
 
 | Option | Type | Default | Description |

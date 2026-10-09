@@ -18,6 +18,8 @@ coinbase({
 Coinbase ended guest checkout in the hosted widget on 2026-06-30. The hosted legs (`card`, `apple_pay`, `google_pay`, `ach`, `coinbase_account`) need a Coinbase account. For guest Apple Pay, set `guestCheckout`. It uses the [Headless Onramp API](https://docs.cdp.coinbase.com/onramp/headless-onramp/overview).
 :::
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#coinbase).
+
 ## Options
 
 | Option | Type | Default | Description |

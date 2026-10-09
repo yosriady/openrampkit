@@ -17,6 +17,8 @@ moonpay({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#moonpay).
+
 ## Options
 
 | Option | Type | Default | Description |

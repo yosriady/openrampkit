@@ -58,6 +58,8 @@ openssl rsa -in binance.pem -pubout -out binance-public.pem               # send
 
 The Binance docs show 1024-bit keys. The adapter accepts 1024-bit and 2048-bit keys. Ask Binance which size they accept.
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#binance).
+
 ## Options
 
 | Option | Type | Default | Description |

@@ -34,6 +34,8 @@ Production access is not self-serve for Kotani Pay either. You ask the Kotani Pa
 5. For withdrawals, fund your **payout balance** in each payout currency. Kotani Pay pays users from this balance.
 6. For production, ask Kotani Pay for a production account. Make a new key in the **Production** environment. Sandbox keys do not work in production.
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#kotani).
+
 ## Options
 
 | Option | Type | Default | Description |

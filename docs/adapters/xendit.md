@@ -11,6 +11,8 @@ xendit({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#xendit).
+
 ## Options
 
 | Option | Type | Default | Description |

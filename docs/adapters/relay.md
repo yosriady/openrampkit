@@ -13,6 +13,8 @@ relay({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
+
 ## Options
 
 | Option | Type | Default | Description |

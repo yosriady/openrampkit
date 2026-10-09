@@ -23,6 +23,8 @@ peer({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#peer).
+
 ## Options
 
 | Option | Type | Default | Description |

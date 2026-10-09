@@ -28,6 +28,8 @@ bridge({
 - In the sandbox, KYC links do not work and no money moves. Make the customer with `POST /v0/customers`, approve it with `POST /v0/customers/{id}/simulate_kyc_approval`, and give its id with the `customer` hook. The sandbox sends no payment webhooks.
 - Production: Bridge does KYB of your company. The steps are not in the public docs.
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#bridge).
+
 ## Options
 
 | Option | Type | Default | Description |

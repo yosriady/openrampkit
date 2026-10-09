@@ -25,6 +25,8 @@ By default the adapter returns a `PROVIDER_SDK` surface for Stripe's embedded on
 Without a renderer and with the default surface, the planner shows Stripe's methods as "Not available" (`CLIENT_UPGRADE_REQUIRED`).
 :::
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#stripe).
+
 ## Options
 
 | Option | Type | Default | Description |

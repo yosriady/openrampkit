@@ -19,6 +19,8 @@ createOpenRamp({
 })
 ```
 
+To get the keys and webhook secrets for each provider, see [Get provider keys](../guide/provider-keys.md).
+
 Each adapter is its own package, for example `@openrampkit/adapter-relay`. The packages are not on npm yet. See [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
 
 Each adapter id may appear once. The server refuses an adapter built for another API version.

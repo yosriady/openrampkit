@@ -8,6 +8,7 @@ Go through this list before real money moves.
 - [ ] `webhooks.secret` is a different random value, shared only with your backend.
 - [ ] `tasksToken` (if you use `POST /tasks/sweep` or `GET /health?deep=1`) is another random value. `CRON_SECRET` on Vercel too.
 - [ ] `admin.token` (if you use the [admin tools](../guide/admin.md)) is another random value of at least 32 characters, kept on the server only.
+- [ ] You got each provider key from the correct environment (sandbox or live). See [Get provider keys](../guide/provider-keys.md).
 - [ ] Provider keys are server-side only. No adapter or server import reaches your client bundle.
 - [ ] You use live provider keys in production and sandbox keys elsewhere. Set `livemode: true` in production, so events carry `livemode` and adapters such as Coinbase leave sandbox mode.
 - [ ] You know how to rotate each secret. Rotating `secret` breaks start URLs made in the last 10 minutes and every open pay link; rotating `webhooks.secret` needs your backend updated at the same time.
@@ -36,7 +37,7 @@ Go through this list before real money moves.
 
 ## Provider webhooks
 
-- [ ] Each provider with webhooks points to `{baseUrl}/webhooks/{adapterId}`, and its signing secret is configured on the adapter (`webhookToken` for Xendit, `webhookSecret` for Coinbase, Stripe, Meld, Onramper and Peer, `webhookKey` for MoonPay). Swapped sets its callback URL per order.
+- [ ] Each provider with webhooks points to `{baseUrl}/webhooks/{adapterId}`, and its signing secret is configured on the adapter (`webhookToken` for Xendit, `webhookSecret` for Coinbase, Stripe, Meld, Onramper, Kotani Pay and Peer, `webhookKey` for MoonPay, `webhookPublicKey` for Bridge, `binancePublicKey` for Binance). Swapped sets its callback URL per order. See [Get provider keys](../guide/provider-keys.md).
 - [ ] You tested one webhook per provider in sandbox and saw the session move.
 - [ ] Transak: the adapter verifies webhooks with its cached access token. Make sure at least one quote or start ran on the instance (or the token is in the shared store) before webhooks arrive.
 
