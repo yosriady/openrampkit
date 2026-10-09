@@ -267,7 +267,7 @@ sequenceDiagram
   B->>S: GET /sessions/:id/step (poll)
   S->>A: status() (at most every 2 s per leg)
   S-->>B: Step COMPLETED
-  S->>App: session.completed (signed)
+  S->>App: session.succeeded (signed)
 ```
 
 ## Design choices

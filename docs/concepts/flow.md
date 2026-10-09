@@ -123,7 +123,6 @@ stateDiagram-v2
   PROCESSING --> REVERSED
   PROCESSING --> EXPIRED
   FAILED --> SELECT_METHOD: restart
-  BLOCKED --> SELECT_METHOD: restart
   COMPLETED --> REVERSED: refund or chargeback
   EXPIRED --> PROCESSING: late payment
   EXPIRED --> COMPLETED: late payment
@@ -133,7 +132,7 @@ stateDiagram-v2
   REVERSED --> [*]
 ```
 
-`FAILED` and `BLOCKED` are terminal, but the table lets them go back to `SELECT_METHOD`. The `restart` transition does this. In the table, `REFUNDED` and `REVERSED` have no way out. `EXPIRED` can go to `PROCESSING` or `COMPLETED` only when a payment arrives after the expiry (a webhook, or the sweep's [grace poll](../api/server.md#background-sweep)). `COMPLETED` can go to `REVERSED` only: the provider refunded or took back the payment after it completed (see [Refunds and chargebacks after success](./events.md#refunds-and-chargebacks-after-success)). The server's `restart` route is wider than the table: it accepts a restart after any final state other than `COMPLETED`, until the session deadline.
+`FAILED` is terminal, but the table lets it go back to `SELECT_METHOD`: the `restart` transition does this after a failed attempt (session status `requires_payment_method`). After a final failure (session status `failed`), the server refuses `restart`. `BLOCKED`, `REFUNDED`, `REVERSED` and `CANCELED` have no way out. `EXPIRED` can go to `PROCESSING` or `COMPLETED` (a late payment).
 
 Who uses the table:
 
@@ -151,16 +150,16 @@ Each leg has its own `LegStatus`. The server maps it to a state when a provider 
 stateDiagram-v2
   direction LR
   [*] --> pending
-  pending --> awaiting_user
+  pending --> requires_action
   pending --> processing
-  awaiting_user --> processing
-  processing --> awaiting_user
-  awaiting_user --> succeeded
+  requires_action --> processing
+  processing --> requires_action
+  requires_action --> succeeded
   processing --> succeeded
-  awaiting_user --> failed
+  requires_action --> failed
   processing --> failed
   processing --> refunded
-  awaiting_user --> expired
+  requires_action --> expired
   processing --> expired
   succeeded --> refunded: after success
   succeeded --> reversed: chargeback
@@ -174,7 +173,7 @@ stateDiagram-v2
 | Leg status | Session state | Final |
 |---|---|---|
 | `pending` | `PROCESSING` | No |
-| `awaiting_user` | `PAYMENT` | No |
+| `requires_action` | `PAYMENT` | No |
 | `processing` | `PROCESSING` | No |
 | `succeeded` | `COMPLETED` for the last leg, else `PROCESSING` while the next leg starts | Yes |
 | `failed` | `FAILED` | Yes |
@@ -182,9 +181,9 @@ stateDiagram-v2
 | `reversed` | `REVERSED` | Yes |
 | `expired` | `EXPIRED` | Yes |
 
-The server enforces the order of leg statuses for provider events (webhooks and adapter routes). Each status has a rank (`LEG_STATUS_RANK`): `pending` 0, `awaiting_user` 1, `processing` 2, `succeeded`, `failed` and `expired` 3, `refunded` and `reversed` 4. An event can move a leg to the same status or to a status of a higher rank (`isLegalLegMove`). A final leg does not move, with one exception: a `succeeded` leg can become `refunded` or `reversed`. So a late `pending` event cannot move a `processing` leg back. The server logs the event, adds 1 to the `event.out_of_order` metric, and answers the provider with `200` (the event is ignored, not an error).
+The server enforces the order of leg statuses for provider events (webhooks and adapter routes). Each status has a rank (`LEG_STATUS_RANK`): `pending` 0, `requires_action` 1, `processing` 2, `succeeded`, `failed` and `expired` 3, `refunded` and `reversed` 4. An event can move a leg to the same status or to a status of a higher rank (`isLegalLegMove`). A final leg does not move, with one exception: a `succeeded` leg can become `refunded` or `reversed`. So a late `pending` event cannot move a `processing` leg back. The server logs the event, adds 1 to the `event.out_of_order` metric, and answers the provider with `200` (the event is ignored, not an error).
 
-One move back can be allowed: from `processing` to `awaiting_user` with a new `surface`. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`. A new surface can send the user's funds to a new place, so the server allows this move only when all of these are true:
+One move back can be allowed: from `processing` to `requires_action` with a new `surface`. For example, an offramp learns its deposit address from a webhook and now needs a `WALLET_TX`. A new surface can send the user's funds to a new place, so the server allows this move only when all of these are true:
 
 - the leg's spec has the capability `surface_after_processing`,
 - the surface kind is in the spec's `surfaces`,
@@ -193,7 +192,7 @@ One move back can be allowed: from `processing` to `awaiting_user` with a new `s
 
 The timeline gets `leg.surface_after_processing`. No built-in adapter needs this move today.
 
-A status check (`status()`) and a transition (`transition()`) also move a leg only forward. One more move back is allowed for them: a review step (`processing` in a `KYC` or `AUTH` state, for example a KYC review) can end with a step for the user (`awaiting_user`), before the leg has a transaction. A status check that would move a leg back is ignored. A transition that would do it answers `409`.
+A status check (`status()`) and a transition (`transition()`) also move a leg only forward. One more move back is allowed for them: a review step (`processing` in a `KYC` or `AUTH` state, for example a KYC review) can end with a step for the user (`requires_action`), before the leg has a transaction. A status check that would move a leg back is ignored. A transition that would do it answers `409`.
 
 A session with a completed payment (`COMPLETED`, or `REVERSED` after it) refuses every browser change with `409`: plan, quotes, target, select and transitions, with the client secret or a pay link. An `EXPIRED` session moves on only when money arrives on the leg that waited at expiry, inside the grace window (`latePayments`).
 
@@ -216,18 +215,18 @@ type Transition =
 
 The client fires SUBMIT and SURFACE_RESULT with `POST /sessions/:id/transitions/:name`. The server refuses a name that is not in the current step, and refuses AWAIT names.
 
-One name is special: `restart`. It leaves the current payment and goes back to `SELECT_METHOD`. It is allowed before payment starts, while the step is `PAYMENT`, and after a terminal state other than `COMPLETED`. The modal's "Choose another method" button on a `PAYMENT` step fires it, and so does `DepositController.back()` on a `PAYMENT` step. The server keeps the left payment as an earlier attempt, because the user may have paid it already. A late provider event for it still applies: the session completes with that payment, or the server sends `session.late_payment` when another payment is in progress or complete. Only a payment that is under way or arrived (`processing` or `succeeded`) makes an earlier attempt the payment again. A refund of an earlier attempt that never succeeded changes only that attempt. The server checks the output of that payment against its quote, as for any other leg.
+One name is special: `restart`. It leaves the current payment and goes back to `SELECT_METHOD`. It is allowed while the session status is `requires_payment_method` (before payment starts, or after a failed attempt) and while the step is `PAYMENT`. A session with a final status refuses it (`409`). The server keeps the left payment as an earlier attempt: a late provider event for it still applies.
 
 ## Legs and the session step
 
 Adapters return a `LegStep` for their leg. The server wraps it into the session's `Step`:
 
-- A leg's `status` (`pending`, `awaiting_user`, `processing`, `succeeded`, `failed`, `refunded`, `expired`, `reversed`) is tracked per leg in `progress`.
+- A leg's `status` (`pending`, `requires_action`, `processing`, `succeeded`, `failed`, `refunded`, `expired`, `reversed`) is tracked per leg in `progress`.
 - When a leg succeeds and it is not the last one, the server starts the next leg at once. The session shows `PROCESSING` meanwhile.
 - When every leg succeeded, the step is `COMPLETED`.
-- A provider event (webhook) maps a leg status to a state: `awaiting_user` to `PAYMENT`, `pending` and `processing` to `PROCESSING`, `succeeded` to `COMPLETED`, and so on. The current surface stays until the leg ends.
+- A provider event (webhook) maps a leg status to a state: `requires_action` to `PAYMENT`, `pending` and `processing` to `PROCESSING`, `succeeded` to `COMPLETED`, and so on. The current surface stays until the leg ends.
 
-The session's `status` follows the step: `open` (no active payment), `awaiting_user` (the active leg waits for the user, for example to pay), `processing` (the user paid or acted, and the provider or the chain is working), `completed`, `failed` (`FAILED` or `BLOCKED`), `expired`, `refunded`, `reversed`. See [Session status](../api/core.md#session-status).
+The session's `status` follows the step: `requires_payment_method` (no active payment, or the last attempt failed and the user can try again), `requires_action` (the active leg waits for the user, for example to pay), `processing` (the user paid or acted, and the provider or the chain works), `succeeded`, `failed` (final), `canceled`, `expired`, `refunded` or `reversed`. A `FAILED` step gives `requires_payment_method` with `lastError` while the session has attempts left, and `failed` when it does not (see [Session status](../api/core.md#session-status)).
 
 ## Errors as fields
 

@@ -60,7 +60,7 @@ async function pay(delivered: string) {
 describe('Relay wallet payment through the server', () => {
   it('completes with the origin transaction, the fill, and a confirmed output', async () => {
     const pub = await pay(OUT_BASE)
-    expect(pub.status).toBe('completed')
+    expect(pub.status).toBe('succeeded')
     expect(pub.result).toMatchObject({
       txHashes: [FILL_TX],
       sourceTxHashes: [ORIGIN_TX],
@@ -73,7 +73,7 @@ describe('Relay wallet payment through the server', () => {
 
   it('flags a short delivery that Relay reports', async () => {
     const pub = await pay('400000000000000')
-    expect(pub.status).toBe('completed')
+    expect(pub.status).toBe('succeeded')
     expect(pub.result).toMatchObject({ outputConfirmed: true, output: { value: '0.0004' }, amountMismatch: { reason: 'short', legIndex: 0 } })
   })
 })

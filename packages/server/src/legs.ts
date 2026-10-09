@@ -1,9 +1,9 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OpenRampException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, openRampError, sub } from '@openrampkit/core'
+import { OpenRampException, bps, cmp, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, openRampError, sub } from '@openrampkit/core'
 import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
-import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
+import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_MAX_ATTEMPTS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
@@ -16,7 +16,7 @@ import { withdrawSender } from './withdraw.js'
 
 const LEG_STATUS_TO_STATE: Record<LegStatus, StateName> = {
   pending: 'PROCESSING',
-  awaiting_user: 'PAYMENT',
+  requires_action: 'PAYMENT',
   processing: 'PROCESSING',
   succeeded: 'COMPLETED',
   failed: 'FAILED',
@@ -109,33 +109,90 @@ export async function startSignature(rt: Runtime, sessionId: string, token: stri
 }
 
 /**
- * The session status for a step state. With an active payment that is not final: `awaiting_user` when
- * the active leg waits for the user (`waitingForUser`), else `processing`. Without one: `open`.
+ * The session status for a step state. With an active payment that is not final: `requires_action` when
+ * the active leg waits for the user (`waitingForUser`), else `processing`. Without one:
+ * `requires_payment_method`. A FAILED step gives `failed` here; `settleStatus` turns a failed attempt
+ * that the user can retry into `requires_payment_method` (see `isFinalFailure`).
  */
 export function sessionStatusFor(state: StateName, hasActive: boolean, waitingForUser = false): SessionStatus {
-  if (state === 'COMPLETED') return 'completed'
+  if (state === 'COMPLETED') return 'succeeded'
   if (state === 'FAILED' || state === 'BLOCKED') return 'failed'
+  if (state === 'CANCELED') return 'canceled'
   if (state === 'EXPIRED') return 'expired'
   if (state === 'REFUNDED') return 'refunded'
   if (state === 'REVERSED') return 'reversed'
-  if (!hasActive) return 'open'
-  return waitingForUser ? 'awaiting_user' : 'processing'
+  if (!hasActive) return 'requires_payment_method'
+  return waitingForUser ? 'requires_action' : 'processing'
 }
 
 /** True when the active leg of the session waits for the user (to pay, sign, or finish a provider step) */
 export function waitsForUser(rec: SessionRecord): boolean {
   const act = rec.active
-  return !!act && act.legs[act.index]?.step?.status === 'awaiting_user'
+  return !!act && act.legs[act.index]?.step?.status === 'requires_action'
 }
 
+/** The most payment attempts of one session (`policy.maxAttempts`) */
+export function maxAttempts(rt: Runtime): number {
+  return Math.max(1, Math.floor(rt.config.policy?.maxAttempts ?? DEFAULT_MAX_ATTEMPTS))
+}
+
+/**
+ * True when the FAILED step of the active payment ends the session (status `failed`), so the user cannot
+ * start a new attempt:
+ * - a leg of the payment succeeded: the funds are at a hop (or arrived in another asset than the
+ *   quote), and a new attempt cannot use them;
+ * - the session has no attempts left (`policy.maxAttempts`).
+ * Else the failure ends only this attempt: the session goes back to `requires_payment_method`.
+ */
+export function isFinalFailure(rt: Runtime, rec: SessionRecord): boolean {
+  if (rec.step.state === 'BLOCKED') return true
+  if (rec.step.state !== 'FAILED') return false
+  const act = rec.active
+  if (!act) return true
+  // Money arrived on a leg (a hop, or another asset than the quote): a new attempt cannot use it.
+  if (act.legs.some((l) => l.step?.status === 'succeeded')) return true
+  return (act.n ?? 0) + 1 >= maxAttempts(rt)
+}
+
+/** The leg fields of a session event. No time: the event id must not change. */
+function legDetail(rec: SessionRecord, i: number): Record<string, unknown> {
+  const act = rec.active!
+  const leg = act.legs[i]!
+  return { attempt: act.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId }
+}
+
+/**
+ * Set the session status from its step, and send the event for a new status once:
+ * - a failed attempt (the user can try again): status `requires_payment_method`, `lastError`, and
+ *   `session.payment_failed`;
+ * - a final failure: status `failed`, `lastError`, and `session.failed`. Nothing follows it;
+ * - `session.requires_action` and `session.processing` once per leg and attempt;
+ * - `session.succeeded`, `session.expired`, `session.refunded` and `session.reversed`.
+ */
 async function settleStatus(rt: Runtime, rec: SessionRecord) {
   const before = rec.status
-  rec.status = sessionStatusFor(rec.step.state, !!rec.active, waitsForUser(rec))
-  if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded', 'reversed'].includes(rec.status)) {
-    const extra = rec.status === 'reversed' ? reversalDetail(rec) : undefined
-    await notify(rt, rec, `session.${rec.status}`, extra)
-    if (rec.direction === 'withdraw' && ['completed', 'failed', 'reversed'].includes(rec.status)) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
+  let status = sessionStatusFor(rec.step.state, !!rec.active, waitsForUser(rec))
+  const act = rec.active
+  const scope = act?.n ? `a${act.n}` : undefined
+  if (status === 'failed') {
+    rec.lastError = rec.step.error ?? openRampError('PAYMENT_FAILED')
+    if (!isFinalFailure(rt, rec)) {
+      rec.status = 'requires_payment_method'
+      // Once per attempt (the key has the attempt and the error).
+      if (act) await notify(rt, rec, 'session.payment_failed', { ...legDetail(rec, act.index), error: rec.lastError }, scope)
+      return
+    }
   }
+  rec.status = status
+  // Once per leg and attempt: `notify` sends each key once.
+  if (status === 'requires_action' || status === 'processing') {
+    if (act) await notify(rt, rec, `session.${status}`, legDetail(rec, act.index), scope)
+    return
+  }
+  if (status === before || status === 'requires_payment_method') return
+  const extra = status === 'reversed' ? reversalDetail(rec) : status === 'failed' ? { error: rec.lastError } : undefined
+  await notify(rt, rec, `session.${status}`, extra)
+  if (rec.direction === 'withdraw' && (status === 'succeeded' || status === 'failed' || status === 'reversed')) await notify(rt, rec, `withdrawal.${status}`, extra)
 }
 
 /** The extra fields of `session.reversed` and `withdrawal.reversed`. No time: the event id must not change. */
@@ -174,7 +231,7 @@ function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
  */
 async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
   if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0 || rec.reversal) return undefined
-  if (ls.surface?.kind !== 'WALLET_TX' || ls.status !== 'awaiting_user') return undefined
+  if (ls.surface?.kind !== 'WALLET_TX' || ls.status !== 'requires_action') return undefined
   const act = rec.active!
   const leg = act.legs[i]!
   const { chain, txs } = ls.surface
@@ -283,7 +340,7 @@ export function inLateGrace(rt: Runtime, rec: SessionRecord): boolean {
 export function adapterMoveAllowed(cur: LegStep, next: LegStep): boolean {
   if (cur.status === next.status) return !isLegTerminal(cur.status)
   if (isLegalLegMove(cur.status, next.status)) return true
-  return cur.status === 'processing' && next.status === 'awaiting_user' && (cur.state === 'KYC' || cur.state === 'AUTH') && !cur.txHash
+  return cur.status === 'processing' && next.status === 'requires_action' && (cur.state === 'KYC' || cur.state === 'AUTH') && !cur.txHash
 }
 
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
@@ -410,6 +467,11 @@ export function archiveActive(rec: SessionRecord): void {
 export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: string, stored: StoredQuote): Promise<void> {
   const before = { active: rec.active, attempts: rec.attempts }
   const n = Math.max(0, ...[...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])].map((a) => (a.n ?? 0) + 1))
+  if (n >= maxAttempts(rt)) {
+    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session has no payment attempts left. Start a new session.' }), 409)
+  }
+  const lastError = rec.lastError
+  delete rec.lastError
   archiveActive(rec)
   rec.active = {
     n,
@@ -437,6 +499,7 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
     rec.active = before.active
     if (before.attempts) rec.attempts = before.attempts
     else delete rec.attempts
+    if (lastError) rec.lastError = lastError
     throw e
   }
 }
@@ -542,8 +605,9 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   // The user picked another withdraw target after the restart: the session must not complete with a
   // destination that this payment did not pay to.
   const otherTarget = !!att.destination && JSON.stringify(att.destination) !== JSON.stringify(rec.destination)
-  // A REVERSED or EXPIRED session: an earlier attempt never becomes its payment again.
-  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution || otherTarget) {
+  // A final session (succeeded, failed, canceled, expired, refunded or reversed): an earlier attempt
+  // never becomes its payment again. `session.failed` and `session.canceled` are never followed by success.
+  if (isFinalStatus(rec.status) || rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution || otherTarget) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
       await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
@@ -605,13 +669,13 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
 }
 
 /**
- * The one move back that a provider event may make: from `processing` to `awaiting_user` with a new
+ * The one move back that a provider event may make: from `processing` to `requires_action` with a new
  * surface. Only when the leg's spec opts in (capability `surface_after_processing`), the surface kind
  * is one the spec declares, the leg has no transaction yet, and the leg did not move back before.
  * For example, an offramp learns its deposit address from a webhook and now needs a WALLET_TX.
  */
 export function surfaceMoveBack(rt: Runtime, leg: ActiveLeg, cur: LegStep, ev: LegEvent): boolean {
-  if (cur.status !== 'processing' || ev.status !== 'awaiting_user' || !ev.surface || cur.txHash || leg.surfaceReopened) return false
+  if (cur.status !== 'processing' || ev.status !== 'requires_action' || !ev.surface || cur.txHash || leg.surfaceReopened) return false
   // Fail closed: a leg with no static spec (for example from a live catalog only) does not opt in.
   const spec = rt.adapters.get(leg.adapterId)?.legs.find((l) => l.id === leg.legId)
   return !!spec?.capabilities?.includes('surface_after_processing') && spec.surfaces.includes(ev.surface.kind)
@@ -669,7 +733,7 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
       if (seen) rec.providerEvents = [...(rec.providerEvents ?? []), seen].slice(-MAX_PROVIDER_EVENTS)
       await saveSession(rt, rec)
       // A session that became active again (or was dropped from the list) must be polled by the sweep.
-      if (!isTerminal(rec.step.state)) await trackOpenSession(rt, rec.id)
+      if (!isFinalStatus(rec.status)) await trackOpenSession(rt, rec.id)
       return 'applied'
     } catch (e) {
       if (e instanceof OpenRampException && e.status === 409) continue

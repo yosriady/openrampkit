@@ -112,7 +112,7 @@ describe('transak adapter', () => {
 
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'IFRAME', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', origin: 'https://global-stg.transak.com', provider: 'Transak' } })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'IFRAME', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', origin: 'https://global-stg.transak.com', provider: 'Transak' } })
     expect(step.ref).toMatch(/^ork_[0-9a-f]{20}$/)
     const tokenCall = calls.find((c) => c.url.includes('refresh-token'))!
     expect(tokenCall.headers.get('api-secret')).toBe('S')

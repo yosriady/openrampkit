@@ -51,7 +51,7 @@ const openramp = createOpenRamp({
 
 Open `{baseUrl}/admin` (for example `https://app.example.com/api/openramp/admin`) and enter the token.
 
-- Stat cards for the last 24 hours: sessions, completed, open or processing, waiting for the user (`awaiting_user`), stuck, failed, dead letters, webhook failures, outbox queue, deposits and withdrawals. Completed volume per currency.
+- Stat cards for the last 24 hours: sessions, completed, open or processing, waiting for the user (`requires_action`), stuck, failed, dead letters, webhook failures, outbox queue, deposits and withdrawals. Completed volume per currency.
 - A table of recent deposits and withdrawals, newest first, with filters (direction, state, stuck only) and "Load more".
 - A search box: a session id, a transaction hash, or `provider:ref` (for example `xendit:inv_123`).
 - A detail drawer: the session data, the active payment and earlier attempts with their legs, the provider refs, the outbox and the timeline.
@@ -85,7 +85,7 @@ Recent sessions, newest first.
 | Option | Description |
 |---|---|
 | `direction` | `'deposit'` or `'withdraw'` |
-| `state` | A session status (`open`, `awaiting_user`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, `PROCESSING`, ...) |
+| `state` | A session status (`requires_payment_method`, `requires_action`, `processing`, `succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, `PROCESSING`, ...) |
 | `olderThan` | Minutes. Only sessions created at least this long ago. |
 | `stuck` | Only sessions that are not final after `admin.stuckAfterMinutes` |
 | `limit` | 1 to 200, default 50 |
@@ -99,7 +99,7 @@ One call reads at most 1000 sessions. When it stops before the end, it returns `
 
 The full operator view: the summary fields, plus the user data, the destination or source, the step, the active payment and earlier attempts (each leg with its adapter, ref, status, input, output, fees and transaction hash), the outbox (with dead letters), the provider refs, the transaction hashes, the timeline and the resolution.
 
-The timeline keeps the last 100 events of a session: webhook event types (`session.created`, `leg.succeeded`, ...), leg status changes (`leg.awaiting_user`, `leg.processing`, ...), `payment.started`, `payment.restarted`, `webhook.dead_letter`, `webhook.replayed` and `admin.resolved`.
+The timeline keeps the last 100 events of a session: webhook event types (`session.created`, `leg.succeeded`, ...), leg status changes (`leg.requires_action`, `leg.processing`, ...), `payment.started`, `payment.restarted`, `webhook.dead_letter`, `webhook.replayed` and `admin.resolved`.
 
 ### findByRef and findByTx
 
@@ -112,7 +112,7 @@ The timeline keeps the last 100 events of a session: webhook event types (`sessi
 Counts for the sessions created since `since` (a time in ms, an ISO 8601 string or a `Date`; default: 24 hours ago):
 
 - `total`, `byStatus`, `byState`, and `byDirection` (total and statuses for deposits and withdrawals)
-- `completedVolume`: the sum that users paid in completed sessions, per direction and currency
+- `succeededVolume`: the sum that users paid in succeeded sessions, per direction and currency
 - `stuck`: the count, the threshold, and the oldest stuck session
 - `outbox`: `queued` (sessions on the outbox queue now), `pendingEvents`, `deadLetters`, `sessionsWithDeadLetters`
 - `webhookFailures`: events with at least one failed delivery
@@ -129,7 +129,7 @@ The server:
 
 1. Sets the step state and the session status.
 2. Stores `resolution: { state, note, at, previous }` in the record and adds `admin.resolved` to the timeline.
-3. Sends the matching webhook: `session.completed`, `session.failed`, `session.refunded` or `session.expired`, and for a withdrawal also `withdrawal.completed` or `withdrawal.failed`. The event data has `resolution: { by: 'admin', state, note, at }`.
+3. Sends the matching webhook: `session.succeeded`, `session.failed`, `session.refunded` or `session.expired`, and for a withdrawal also `withdrawal.succeeded` or `withdrawal.failed`. The event data has `resolution: { by: 'admin', state, note, at }`.
 
 After a resolve:
 
@@ -139,7 +139,7 @@ After a resolve:
 - Browser requests that change the session answer `409`.
 - A resolve to the state that the session already has answers `409`.
 
-Your backend must handle a `session.completed` from a resolve like any other: credit once per session id.
+Your backend must handle a `session.succeeded` from a resolve like any other: credit once per session id.
 
 ### replayWebhooks
 

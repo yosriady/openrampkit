@@ -30,13 +30,14 @@ type PublicSession = {
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only
   targetLocked?: boolean          // withdraw only: the app set and locked the target
-  status: 'open' | 'awaiting_user' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
+  status: 'requires_payment_method' | 'requires_action' | 'processing' | 'succeeded' | 'failed' | 'canceled' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string
   locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
   result?: SessionResult          // once a payment started
+  lastError?: OpenRampError       // the last failed attempt, or the final failure
   expiresAt: string
   livemode: boolean
 }
@@ -46,20 +47,27 @@ type PublicSession = {
 
 | `status` | Meaning |
 |---|---|
-| `open` | No payment started yet. The user picks a method, an amount and a quote. |
-| `awaiting_user` | A payment started, and the active leg waits for the user: to pay, to send from the wallet, or to finish a provider step (the leg status is `awaiting_user`). No money moved on this leg yet. |
-| `processing` | The user paid or acted. The provider or the chain is working. |
-| `completed` | Every leg succeeded. |
-| `failed` | The step is `FAILED` or `BLOCKED`. |
-| `expired` | The session or the payment expired. |
-| `refunded` | The provider returned the payment before it completed. |
-| `reversed` | The payment completed, then the provider refunded it or took it back. |
+The names follow Stripe PaymentIntents.
 
-`awaiting_user` is new. Before, a session that waited for the user to pay had the status `processing`. To find sessions that are not final, check for `open`, `awaiting_user` and `processing`.
+| `status` | Meaning | Final |
+|---|---|---|
+| `requires_payment_method` | No payment is in progress. The user picks a method, an amount and a quote. After a failed attempt, the session comes back here with `lastError`. | no |
+| `requires_action` | A payment started, and the active leg waits for the user: to pay, to send from the wallet, or to finish a provider step (the leg status is `requires_action`). No money moved on this leg yet. | no |
+| `processing` | The user paid or acted. The provider or the chain is working. | no |
+| `succeeded` | Every leg succeeded. | yes (it can still become `reversed`) |
+| `failed` | Final failure, with `lastError`. The session takes no new attempt. | yes |
+| `canceled` | The app or the user canceled the session before a payment was under way. | yes |
+| `expired` | The session deadline passed with no payment, or the provider order expired. | yes (a late payment can still move it on) |
+| `refunded` | The provider returned the payment before it succeeded. | yes |
+| `reversed` | The payment succeeded, then the provider refunded it or took it back. | yes |
+
+A failed attempt is not a failed session. When a leg fails and the user can try again, the status goes back to `requires_payment_method`, `lastError` tells why, and the server sends `session.payment_failed`. The status is `failed` (and the server sends `session.failed`) only when the session ends: no attempts are left (`policy.maxAttempts`, default 10), money already arrived on a leg of the payment, or an operator resolved the session as `FAILED`. Nothing follows `session.failed`.
+
+`isFinalStatus(status)` and `FINAL_SESSION_STATUSES` tell the final statuses apart. To find sessions that are not final, check for `requires_payment_method`, `requires_action` and `processing`.
 
 ### SessionResult
 
-What was paid and delivered. It is present once a payment started, and final when `status` is `completed`.
+What was paid and delivered. It is present once a payment started, and final when `status` is `succeeded`.
 
 ```ts
 type SessionResult = {

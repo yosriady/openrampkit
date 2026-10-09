@@ -56,13 +56,16 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 | `session.created` | A session was created |
 | `leg.succeeded` | One leg finished |
 | `leg.failed` | One leg failed |
-| `session.completed` | Every leg succeeded |
-| `session.failed` | The step became `FAILED` or `BLOCKED` |
+| `session.succeeded` | Every leg succeeded |
+| `session.failed` | Final failure: no attempts are left, money already arrived on a leg, or an operator resolved the session as `FAILED`. No event follows it. |
+| `session.payment_failed` | A payment attempt failed, and the user can try again. The status is back to `requires_payment_method`, with `lastError`. |
+| `session.requires_action` | A leg waits for the user. Once per leg and attempt. |
+| `session.processing` | The user paid or acted, and a provider or the chain works. Once per leg and attempt. |
 | `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed |
 | `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). The step became `REVERSED`. Take back or freeze the credit. |
 | `session.expired` | The session passed its expiry with no payment started, or with a leg that still waits for the user (found by the sweep, or by a request). Also sent when a leg ends as `expired`. |
-| `session.late_payment` | A payment arrived late. `reason: 'after_expiry'`: the session had expired, and the payment arrived after all (a webhook, or the sweep's grace poll); the session goes on and you also get `session.completed`. `reason: 'after_grace'`: the payment arrived after the grace window (`latePayments.graceHours`, default 72); the session stays `EXPIRED`, so refund or credit it by hand. `reason: 'earlier_attempt'`: a payment that the user left with `restart` succeeded, but the session already completed (or was reversed), or another payment is in progress; refund or credit it by hand. |
-| `withdrawal.completed` | Withdraw sessions: sent after `session.completed` |
+| `session.late_payment` | A payment arrived late. `reason: 'after_expiry'`: the session had expired, and the payment arrived after all (a webhook, or the sweep's grace poll); the session goes on and you also get `session.succeeded`. `reason: 'after_grace'`: the payment arrived after the grace window (`latePayments.graceHours`, default 72); the session stays `EXPIRED`, so refund or credit it by hand. `reason: 'earlier_attempt'`: a payment that the user left with `restart` succeeded, but the session already completed (or was reversed), or another payment is in progress; refund or credit it by hand. |
+| `withdrawal.succeeded` | Withdraw sessions: sent after `session.succeeded` |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` |
 | `withdrawal.reversed` | Withdraw sessions: sent after `session.reversed` (for example, the bank returned the payout) |
 

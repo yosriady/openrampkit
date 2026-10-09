@@ -206,7 +206,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
         warning: `Send only ${symbol} on ${name}. Other tokens or chains may be lost.`,
       },
       transitions: [POLL_TRANSITION],
-      status: 'awaiting_user',
+      status: 'requires_action',
       ref,
     }
   }

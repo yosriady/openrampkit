@@ -67,7 +67,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#moonpay).
 |---|---|
 | `completed` | `succeeded` with `cryptoTransactionId` |
 | `pending` | `processing` |
-| `waitingPayment`, `waitingAuthorization` | `awaiting_user` |
+| `waitingPayment`, `waitingAuthorization` | `requires_action` |
 | `failed` | `failed` |
 
 ## Webhooks

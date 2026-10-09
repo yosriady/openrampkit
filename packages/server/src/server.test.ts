@@ -125,7 +125,7 @@ describe('server + controller, mock provider', () => {
     const paid = await fetchToHandler(`${BASE}/adapters/mock/pay`, { method: 'POST', body: form })
     expect(paid.status).toBe(200)
     await waitFor(() => c.getSnapshot().screen === 'result')
-    expect((await c.done).status).toBe('completed')
+    expect((await c.done).status).toBe('succeeded')
     c.destroy()
   })
 
@@ -206,8 +206,8 @@ describe('server + controller, mock provider', () => {
     await waitFor(() => c.getSnapshot().screen === 'result')
     const types = delivered.map((d) => JSON.parse(d.body).type)
     expect(types).toContain('session.created')
-    expect(types).toContain('session.completed')
-    const last = delivered.find((d) => JSON.parse(d.body).type === 'session.completed')!
+    expect(types).toContain('session.succeeded')
+    const last = delivered.find((d) => JSON.parse(d.body).type === 'session.succeeded')!
     expect(await verifyWebhook('whsec_test_0123456789', last.headers, last.body)).toBe(true)
     expect(await verifyWebhook('whsec_wrong', last.headers, last.body)).toBe(false)
     expect(JSON.parse(last.body).data.object.metadata).toEqual({ order: 'o1' })

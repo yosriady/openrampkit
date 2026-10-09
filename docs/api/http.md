@@ -88,7 +88,7 @@ type PublicSession = {
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only, when the app set them
   targetLocked?: boolean          // withdraw only: true when the app set and locked the target
-  status: 'open' | 'awaiting_user' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
+  status: 'requires_payment_method' | 'requires_action' | 'processing' | 'succeeded' | 'failed' | 'canceled' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string             // set after the first plan
   locale?: string               // only when the app set one
@@ -207,7 +207,7 @@ Headers: `Idempotency-Key: <random>` (recommended).
 
 Body: `{ "inputs": { "txHash": "0x..." } }` (`inputs` optional).
 
-- `restart`: back to `SELECT_METHOD`. Allowed with no active payment, during `PAYMENT`, or after a terminal state other than `COMPLETED`. Otherwise `409`. The server keeps the left payment as an earlier attempt. When the provider later reports it as paid, the session completes with it, or sends `session.late_payment` when another payment is already in progress or complete.
+- `restart`: back to `SELECT_METHOD`. Allowed when the status is `requires_payment_method` (no payment in progress, or the last attempt failed) and during `PAYMENT`. A session with a final status (`succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) answers `409`. Otherwise `409`. The server keeps the left payment as an earlier attempt. When the provider later reports it as paid, the session completes with it, or sends `session.late_payment` when another payment is already in progress or complete.
 - Any other name must be a SUBMIT or SURFACE_RESULT transition of the current step, and the adapter must implement `transition()`. Otherwise `409`.
 
 Response `200`: the `PublicSession`.
@@ -218,7 +218,7 @@ When `Idempotency-Key` is present, the server stores the response under `(sessio
 
 ### Session deadline
 
-After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work. The exception is a leg that still waits for the user (`awaiting_user`): the [background sweep](./server.md#background-sweep) expires it after the deadline.
+After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work. The exception is a leg that still waits for the user (`requires_action`): the [background sweep](./server.md#background-sweep) expires it after the deadline.
 
 ### Limits
 

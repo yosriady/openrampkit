@@ -215,7 +215,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
       })
       const out: Record<string, unknown> = {
         session_id: s.id,
-        status: 'open',
+        status: 'requires_payment_method',
         pay_url: link.url,
         pay_url_expires_at: link.expiresAt,
         expires_at: s.expiresAt,
@@ -276,7 +276,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
         const link = await payLink(s.id, s.clientSecret)
         return {
           session_id: s.id,
-          status: 'open',
+          status: 'requires_payment_method',
           pay_url: link.url,
           pay_url_expires_at: link.expiresAt,
           expires_at: s.expiresAt,
@@ -311,7 +311,8 @@ export function createRampOps(config: OpenRampMcpConfig) {
       for (;;) {
         const view = sessionView(await backend.call<PublicSession>(secret, 'GET', `/sessions/${encodeURIComponent(sessionId)}/step`))
         const elapsed = Date.now() - start
-        if (TERMINAL.has(view.status)) return { ...view, waited_seconds: Math.round(elapsed / 1000) }
+        // Stop on a final status, and on a failed attempt (the person must choose again).
+        if (TERMINAL.has(view.status) || view.attempt_failed) return { ...view, waited_seconds: Math.round(elapsed / 1000) }
         await opts.onPoll?.(view, elapsed)
         if (elapsed + pollMs > limit || opts.signal?.aborted) {
           return { ...view, waited_seconds: Math.round(elapsed / 1000), timed_out: true, next: 'Not finished yet. Call wait_for_completion again, or ask the person if they need help.' }

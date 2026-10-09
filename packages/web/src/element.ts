@@ -1201,7 +1201,9 @@ export class OpenRampModal extends LitElement {
         ${step.progress && step.progress.legs.length > 1 ? this._renderProgress(m, step) : nothing}
         <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>`
     }
-    const retry = step.state === 'FAILED' || step.state === 'BLOCKED'
+    // A failed attempt: the session is back to `requires_payment_method`, so the user can try again.
+    // A final failure (status `failed`) offers no retry.
+    const retry = s.session!.status === 'requires_payment_method'
     return html`<div class="center">
         <span class="result-icon failure" aria-hidden="true">${icons.x}</span>
         <h3 class="result-title">${withdraw && step.state === 'FAILED' ? m.withdrawFailedTitle : m.failedTitle[step.state] ?? m.failedBody}</h3>

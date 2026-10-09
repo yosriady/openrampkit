@@ -219,7 +219,7 @@ All results are compact JSON. An error result has `isError: true` and `{ "error"
 
 `list_payment_methods` and `get_quotes` use a short preview session (10 minutes) on your server. They do not move money.
 
-`wait_for_completion` polls the server. It stops when the session is `completed`, `failed`, `expired` or `refunded`, or when the time ends. When the client sends a progress token, the tool sends progress notifications.
+`wait_for_completion` polls the server. It stops when the session is `succeeded`, `failed`, `canceled`, `expired`, `refunded` or `reversed`, when an attempt failed (`attempt_failed: true`, the person must choose again), or when the time ends. When the client sends a progress token, the tool sends progress notifications.
 
 ### A deposit, step by step
 

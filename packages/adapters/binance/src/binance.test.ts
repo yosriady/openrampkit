@@ -86,7 +86,7 @@ describe('binance adapter: conformance', () => {
       ],
     })
     expect(report.problems).toEqual([])
-    expect(report.steps[0]).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: 'https://www.binance.com/en/connect/abc', popup: true, provider: 'Binance' } })
+    expect(report.steps[0]).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'REDIRECT', url: 'https://www.binance.com/en/connect/abc', popup: true, provider: 'Binance' } })
     expect(report.steps[1]).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc' })
     expect(report.events[0]).toEqual([{ ref: 'ork1', status: 'succeeded', txHash: '0xabc', output: { value: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
   })
@@ -270,7 +270,7 @@ describe('binance adapter: start', () => {
 
 describe('binance adapter: status', () => {
   const cases: Array<[number, string, string, string?]> = [
-    [0, 'PAYMENT', 'awaiting_user'],
+    [0, 'PAYMENT', 'requires_action'],
     [1, 'PROCESSING', 'processing'],
     [2, 'PROCESSING', 'processing'],
     [4, 'PROCESSING', 'processing'],
@@ -284,7 +284,7 @@ describe('binance adapter: status', () => {
     [97, 'FAILED', 'failed', 'PAYMENT_FAILED'],
     [98, 'FAILED', 'failed', 'DELIVERY_FAILED'],
     [99, 'FAILED', 'failed', 'PAYMENT_FAILED'],
-    [42, 'PAYMENT', 'awaiting_user'],
+    [42, 'PAYMENT', 'requires_action'],
   ]
   it.each(cases)('status %i -> %s', async (code, state, status, errorCode) => {
     const { fetch, calls } = fakeFetch(routes(code))

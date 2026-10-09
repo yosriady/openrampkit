@@ -72,7 +72,7 @@ The options are in the URL. Copy the URL to share a setup, for example `/playgro
 2. In the widget, select **Use Cash**, then **VietQR**.
 3. Enter an amount, then select **Continue** and **Confirm**.
 4. Select **Simulate payment (test mode)**.
-5. After a few seconds, the widget shows **Deposit complete**. The log shows the `session.completed` webhook.
+5. After a few seconds, the widget shows **Deposit complete**. The log shows the `session.succeeded` webhook.
 
 The page has a mock wallet with 250 USDC on Arbitrum and 40 USDC on Base. Use it for **Pay with wallet** and for withdrawals.
 

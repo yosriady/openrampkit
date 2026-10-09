@@ -6,7 +6,7 @@
 // holds a lease, so a second sweep at the same time skips those entries. Webhooks are still
 // at-least-once (a lease can end during a slow run): the app must dedupe by event id.
 
-import { isLegTerminal, isTerminal, OpenRampException, openRampError } from '@openrampkit/core'
+import { isFinalStatus, isLegTerminal, isTerminal, OpenRampException, openRampError } from '@openrampkit/core'
 import { DEFAULT_LATE_POLL_MINUTES } from './config.js'
 import { inLateGrace, lateGraceMs, refreshActive, refreshAttempts } from './legs.js'
 import { notify } from './notify.js'
@@ -112,16 +112,17 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
   // 2. Open sessions: expire, or refresh the payment (and earlier attempts that still wait)
   for (const id of await q.claim(OPEN_QUEUE, { now, limit, leaseMs: LEASE_MS, token })) {
     const rec = await rt.store.get(id)
-    if (!rec || isTerminal(rec.step.state)) {
+    if (!rec || isFinalStatus(rec.status)) {
       await q.ack(OPEN_QUEUE, id, token)
       continue
     }
     result.sessions.checked++
     let saved = true
     try {
-      // Expire when nothing started, or when the payment still waits for the user past the deadline.
-      const waitingForUser = rec.active?.legs[rec.active.index]?.step?.status === 'awaiting_user'
-      if (Date.now() > rec.expiresAt && (!rec.active || waitingForUser)) {
+      // Expire when no payment is in progress (nothing started, or the last attempt failed), or when the
+      // payment still waits for the user past the deadline.
+      const waitingForUser = rec.active?.legs[rec.active.index]?.step?.status === 'requires_action'
+      if (Date.now() > rec.expiresAt && (!rec.active || waitingForUser || rec.status === 'requires_payment_method')) {
         expire(rec)
         await notify(rt, rec, 'session.expired')
         // The payment may still arrive (a bank transfer, a deposit address): poll it at a slower rate.
@@ -139,7 +140,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
     }
     // Back of the line: a later push time means a later turn. Keep the session when its save failed.
     // (An expired session with a payment that can still arrive is on the grace list now.)
-    if (saved && isTerminal(rec.step.state)) await q.ack(OPEN_QUEUE, id, token)
+    if (saved && isFinalStatus(rec.status)) await q.ack(OPEN_QUEUE, id, token)
     else await q.push(OPEN_QUEUE, id, Date.now())
   }
   result.sessions.open = await q.size(OPEN_QUEUE)
@@ -167,7 +168,7 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
       continue
     }
     // The payment arrived: the session completed, or goes on (the next leg), so the open list polls it.
-    if (!isTerminal(rec.step.state)) await trackOpenSession(rt, id)
+    if (!isFinalStatus(rec.status)) await trackOpenSession(rt, id)
     await q.ack(GRACE_QUEUE, id, token)
   }
   try {

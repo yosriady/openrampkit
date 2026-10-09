@@ -187,7 +187,7 @@ describe('bridge adapter: deposits', () => {
     const leg = depositLeg('usd-ach', 'USD')
     const { s } = await quoteAndStart(a, leg, ctx)
     expect(checkLegStep(s)).toEqual([])
-    expect(s).toMatchObject({ state: 'KYC', sub: 'kyc_details', status: 'awaiting_user', surface: { kind: 'FORM' } })
+    expect(s).toMatchObject({ state: 'KYC', sub: 'kyc_details', status: 'requires_action', surface: { kind: 'FORM' } })
     expect((s.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['full_name', 'email'])
     const ref = s.ref!
     expect(ref).toMatch(/^brg_/)
@@ -209,7 +209,7 @@ describe('bridge adapter: deposits', () => {
     link = { ...link, kyc_status: 'approved' }
     const pay = await a.status!({ leg, ref }, ctx)
     expect(checkLegStep(pay)).toEqual([])
-    expect(pay).toMatchObject({ state: 'PAYMENT', sub: 'bank_details', status: 'awaiting_user', ref })
+    expect(pay).toMatchObject({ state: 'PAYMENT', sub: 'bank_details', status: 'requires_action', ref })
     const fields = (pay.surface as { kind: string; fields: Array<{ label: string; value: string; copy: boolean }> })
     expect(fields.kind).toBe('BANK_FIELDS')
     expect(fields.fields).toEqual(expect.arrayContaining([

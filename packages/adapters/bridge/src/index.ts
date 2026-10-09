@@ -493,7 +493,7 @@ export function bridge(opts: BridgeOptions) {
     return {
       state: 'KYC',
       sub: 'kyc_details',
-      status: 'awaiting_user',
+      status: 'requires_action',
       ref,
       surface: { kind: 'FORM', fields: missing.map((m) => KYC_FIELDS[m]) },
       transitions: [{ name: 'submit_kyc', kind: 'SUBMIT', label: 'Continue to verification' }],
@@ -502,7 +502,7 @@ export function bridge(opts: BridgeOptions) {
 
   function redirectStep(ref: string, url: string, sub: StepSub): LegStep {
     if (!/^https:\/\//.test(url)) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge returned an unsafe verification link.' }), 502)
-    return { state: 'KYC', sub, status: 'awaiting_user', ref, surface: { kind: 'REDIRECT', url, popup: true, provider: 'Bridge' }, transitions: [awaitPoll(KYC_POLL)] }
+    return { state: 'KYC', sub, status: 'requires_action', ref, surface: { kind: 'REDIRECT', url, popup: true, provider: 'Bridge' }, transitions: [awaitPoll(KYC_POLL)] }
   }
 
   const reviewStep = (ref: string): LegStep => ({ state: 'KYC', sub: 'kyc_review', status: 'processing', ref, transitions: [awaitPoll(KYC_POLL)] })
@@ -622,7 +622,7 @@ export function bridge(opts: BridgeOptions) {
   const depositPaymentStep = (ref: string, rec: LegRec): LegStep => ({
     state: 'PAYMENT',
     sub: 'bank_details',
-    status: 'awaiting_user',
+    status: 'requires_action',
     ref,
     surface: depositSurface(rec),
     transitions: [awaitPoll(BANK_POLL)],
@@ -758,7 +758,7 @@ export function bridge(opts: BridgeOptions) {
   const payoutFormStep = (ref: string, r: PayoutRail): LegStep => ({
     state: 'PAYMENT',
     sub: 'payout_account',
-    status: 'awaiting_user',
+    status: 'requires_action',
     ref,
     surface: { kind: 'FORM', fields: payoutFields(r) },
     transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }],
@@ -773,7 +773,7 @@ export function bridge(opts: BridgeOptions) {
     return {
       state: 'PAYMENT',
       sub: 'send_crypto',
-      status: 'awaiting_user',
+      status: 'requires_action',
       ref,
       surface: { kind: 'WALLET_TX', chain: a.chain, txs: [tx] },
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
@@ -892,7 +892,7 @@ export function bridge(opts: BridgeOptions) {
     const extra = { ref: ev.ref, ...(ev.txHash ? { txHash: ev.txHash } : {}), ...(ev.output ? { output: ev.output } : {}) }
     const map: Record<LegStatus, LegStep> = {
       pending: { state: 'PROCESSING', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
-      awaiting_user: { state: 'PAYMENT', status: 'awaiting_user', transitions: [awaitPoll(BANK_POLL)], ...extra },
+      requires_action: { state: 'PAYMENT', status: 'requires_action', transitions: [awaitPoll(BANK_POLL)], ...extra },
       processing: { state: 'PROCESSING', sub: 'settling', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
       succeeded: { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra },
       failed: { state: 'FAILED', status: 'failed', transitions: [], ...extra, ...(ev.error ? { error: ev.error } : {}) },

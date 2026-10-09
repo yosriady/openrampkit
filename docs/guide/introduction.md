@@ -30,7 +30,7 @@ Learn these words first. The rest of the docs use them.
 | **Pathway** | One or two legs in a row that reach the destination. The planner builds them. |
 | **Quote** | The price of a pathway for an amount: what the user pays, the fees and what arrives. |
 | **Step and surface** | What the modal must show now. The surface is the screen part: a QR code, a redirect, a deposit address or a wallet transaction. |
-| **Webhook** | A signed event from the server to your backend, for example `session.completed`. Credit the user only from it. |
+| **Webhook** | A signed event from the server to your backend, for example `session.succeeded`. Credit the user only from it. |
 | **Store and sweep** | The store keeps sessions (memory in dev; Durable Objects, KV or Redis in production). The sweep is a scheduled task that retries webhooks and checks open payments. |
 
 Read in this order: this page, then [Quick start (Next.js)](./quick-start-nextjs.md), then [Sessions and security](../concepts/sessions.md) and [Pathways and legs](../concepts/pathways.md). Or [try the live demo](/playground/){target="_self"} first. It needs no setup.
@@ -68,7 +68,7 @@ The cost of self-hosting is real. You sign up with each provider, you keep their
 3. The user picks a method and an amount. The server quotes up to five pathways in parallel and ranks them.
 4. The user confirms a quote. The server starts the first leg. The modal shows the leg's surface.
 5. The server learns about progress from provider webhooks and status checks. When all legs succeed, the step is `COMPLETED`.
-6. The server sends `session.completed` to your backend. You credit the user.
+6. The server sends `session.succeeded` to your backend. You credit the user.
 
 The [Flows](../concepts/flows.md) page shows each step as a sequence diagram.
 
@@ -78,7 +78,7 @@ The [Flows](../concepts/flows.md) page shows each step as a sequence diagram.
 2. The user picks a target: a network, a token and an address ("To wallet"), or a payout method ("To cash").
 3. The user enters an amount and confirms a quote. The server starts the leg.
 4. The funds leave with a wallet transaction. The user's wallet signs it, or your treasury hook sends it.
-5. The server sends `session.completed` and `withdrawal.completed` to your backend.
+5. The server sends `session.succeeded` and `withdrawal.succeeded` to your backend.
 
 A background sweep keeps each session moving after the user closes the tab. See [Background sweep](../api/server.md#background-sweep).
 

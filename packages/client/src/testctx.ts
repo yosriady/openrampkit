@@ -34,14 +34,29 @@ export function step(p: Partial<Step> & { state: Step['state'] }): Step {
   return { sessionId: 'ors_1', transitions: [], ...p }
 }
 
+/** The session status that the server sets for a step state (a FAILED step is a failed attempt here) */
+const STATUS_FOR: Partial<Record<Step['state'], PublicSession['status']>> = {
+  AUTH: 'requires_action',
+  KYC: 'requires_action',
+  PAYMENT: 'requires_action',
+  PROCESSING: 'processing',
+  COMPLETED: 'succeeded',
+  EXPIRED: 'expired',
+  REFUNDED: 'refunded',
+  REVERSED: 'reversed',
+  BLOCKED: 'failed',
+  CANCELED: 'canceled',
+}
+
 export function session(s: Step | Step['state'], extra: Partial<PublicSession> = {}): PublicSession {
+  const st = typeof s === 'string' ? step({ state: s }) : s
   return {
     id: 'ors_1',
     direction: 'deposit',
     destination: BASE_DEST,
-    status: 'open',
+    status: STATUS_FOR[st.state] ?? 'requires_payment_method',
     currency: 'USD',
-    step: typeof s === 'string' ? step({ state: s }) : s,
+    step: st,
     expiresAt: new Date(Date.now() + 3600_000).toISOString(),
     livemode: false,
     ...extra,

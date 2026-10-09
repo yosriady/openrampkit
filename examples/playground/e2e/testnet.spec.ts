@@ -198,7 +198,7 @@ test.describe('testnet mode on a local chain', () => {
     // Plain settlement to the payer itself: the balance is back to 100.
     expect(await erc20BalanceOf(chain.rpcUrl, chain.token, ANVIL_ACCOUNT)).toBe(100n * UNIT)
     await expect(page.getByTestId('events')).toContainText('COMPLETED')
-    await expect(page.getByTestId('webhooks')).toContainText('session.completed')
+    await expect(page.getByTestId('webhooks')).toContainText('session.succeeded')
     expect(errors).toEqual([])
   })
 

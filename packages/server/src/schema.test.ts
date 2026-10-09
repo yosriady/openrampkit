@@ -86,7 +86,8 @@ describe('migrateRecord', () => {
     const rec = fresh().sessions.completed.record
     const before = structuredClone(rec)
     migrateRecord(rec)
-    expect(rec).toEqual({ ...before, schema: 1, outbox: before.outbox ?? [] })
+    // Schema 0 to 1 adds defaults only; 1 to 2 renames the status and the Amount fields.
+    expect(rec).toMatchObject({ id: before.id, version: before.version, userId: before.userId, createdAt: before.createdAt, schema: SESSION_SCHEMA, status: 'succeeded' })
     const once = structuredClone(rec)
     migrateRecord(rec)
     expect(rec).toEqual(once)
@@ -105,14 +106,14 @@ describe('migrateRecord', () => {
 describe('records written before schema still load and work', () => {
   const at = (ms: number) => vi.useFakeTimers({ now: Date.parse(FIXTURE.capturedAt) + ms, toFake: ['Date'] })
 
-  it('a new session gets schema 1', async () => {
+  it('a new session gets the current schema', async () => {
     const store = memoryStore()
     const { ramp } = make(store)
     const s = await ramp.sessions.create({ userId: 'u', destination: DEST })
-    expect((await store.get(s.id))!.schema).toBe(1)
+    expect((await store.get(s.id))!.schema).toBe(SESSION_SCHEMA)
   })
 
-  it('a payment that waits for the user: loads, finishes, and is saved with schema 1', async () => {
+  it('a payment that waits for the user: loads, finishes, and is saved with the current schema', async () => {
     at(60_000)
     const f = fresh()
     const store = await loadedStore(f)
@@ -125,11 +126,11 @@ describe('records written before schema still load and work', () => {
     expect((await call(`/sessions/${record.id}/transitions/simulate_payment`, clientSecret, {})).status).toBe(200)
     at(120_000)
     const done = await (await call(`/sessions/${record.id}/step`, clientSecret)).json()
-    expect(done.status).toBe('completed')
+    expect(done.status).toBe('succeeded')
     expect(done.step.state).toBe('COMPLETED')
-    expect(sent.map((e) => e.type)).toContain('session.completed')
+    expect(sent.map((e) => e.type)).toContain('session.succeeded')
     const saved = await store.get(record.id)
-    expect(saved!.schema).toBe(1)
+    expect(saved!.schema).toBe(SESSION_SCHEMA)
     expect(saved!.version).toBeGreaterThan(record.version)
     // The operator view reads the attempt numbers.
     const admin = await ramp.admin.get(record.id)
@@ -143,7 +144,7 @@ describe('records written before schema still load and work', () => {
     const { ramp, call } = make(await loadedStore(f))
     const { clientSecret, record } = f.sessions.completed
     const pub = await ramp.sessions.retrieve(record.id)
-    expect(pub).toMatchObject({ status: 'completed', step: { state: 'COMPLETED' }, result: { method: 'vietqr', outputConfirmed: true } })
+    expect(pub).toMatchObject({ status: 'succeeded', step: { state: 'COMPLETED' }, result: { method: 'vietqr', outputConfirmed: true } })
     expect((await call(`/sessions/${record.id}/plan`, clientSecret, {})).status).toBe(409)
     expect(await ramp.sweep()).toMatchObject({ sessions: { checked: expect.any(Number) } })
   })

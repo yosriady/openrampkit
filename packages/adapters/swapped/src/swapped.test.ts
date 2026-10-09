@@ -171,7 +171,7 @@ describe('swapped adapter', () => {
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
     expect(step.state).toBe('PAYMENT')
-    expect(step.status).toBe('awaiting_user')
+    expect(step.status).toBe('requires_action')
     expect(step.ref).toMatch(/^u_42\.[0-9a-f]{12}$/)
     const s = step.surface!
     if (s.kind !== 'IFRAME') throw new Error('expected IFRAME')
@@ -414,7 +414,7 @@ describe('swapped status polling (statusPolling: true)', () => {
     const ref = step.ref!
     const status = () => a.status!({ leg: cardLeg, ref }, ctx)
 
-    expect(await status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     const call = calls.at(-1)!
     const { signature, ...unsigned } = call.body as Record<string, unknown>
     expect(signature).toBe(signB64(JSON.stringify(unsigned)))
@@ -422,7 +422,7 @@ describe('swapped status polling (statusPolling: true)', () => {
     expect(Date.parse(String(unsigned.start_date))).toBeLessThan(Date.now() - 59_000)
 
     list = [{ external_customer_id: 'someone-else', order_status: 'order_broadcasted' }, { external_customer_id: ref, order_status: 'payment_pending' }]
-    expect(await status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     list = [{ external_customer_id: ref, order_status: 'order_completed', order_crypto: 'USDC_BASE', order_crypto_amount: '95.93' }]
     expect(await status()).toMatchObject({ state: 'PROCESSING', status: 'processing' })
     list = [{ external_customer_id: ref, order_status: 'order_completed', transaction_id: '0xtx', order_crypto: 'USDC_BASE', order_crypto_amount: 95.93 }]

@@ -19,7 +19,7 @@ type Sent = { type: string; id: string; header: string; sessionId: string; ok: b
 
 const STATE: Record<LegStatus, LegStep['state']> = {
   pending: 'PROCESSING',
-  awaiting_user: 'PAYMENT',
+  requires_action: 'PAYMENT',
   processing: 'PROCESSING',
   succeeded: 'COMPLETED',
   failed: 'FAILED',
@@ -46,11 +46,11 @@ function hookedAdapter() {
     },
     async start() {
       const ref = `order-${++n}`
-      return { state: 'PAYMENT', status: 'awaiting_user', ref, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll }
+      return { state: 'PAYMENT', status: 'requires_action', ref, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll }
     },
     async status({ ref }) {
-      const status = statusOf[ref] ?? 'awaiting_user'
-      return { state: STATE[status], status, ref, transitions: status === 'awaiting_user' ? poll : [] }
+      const status = statusOf[ref] ?? 'requires_action'
+      return { state: STATE[status], status, ref, transitions: status === 'requires_action' ? poll : [] }
     },
     webhook: {
       async verify() {
@@ -209,17 +209,17 @@ describe('P0-2: events are saved with the change and delivered after the commit'
     const s = await toPayment()
     expect((await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0xabc' }])).status).toBe(200)
     expect(conflicts).toBe(0)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
 
-    const done = app.sent.filter((e) => e.type === 'session.completed')
+    const done = app.sent.filter((e) => e.type === 'session.succeeded')
     expect(done).toHaveLength(1)
-    expect(done[0]!.id).toBe(await eventId(s.id, 'session.completed:{}'))
+    expect(done[0]!.id).toBe(await eventId(s.id, 'session.succeeded:{}'))
     expect(done[0]!.header).toBe(done[0]!.id)
     expect(app.sent.filter((e) => e.type === 'leg.succeeded')).toHaveLength(1)
     // nothing is left to send: the outbox entry from the save is cleared when it is due
     vi.useFakeTimers({ now: Date.now() + 31_000 })
     expect((await ramp.sweep()).webhooks).toMatchObject({ retried: 0, pending: 0 })
-    expect(app.sent.filter((e) => e.type === 'session.completed')).toHaveLength(1)
+    expect(app.sent.filter((e) => e.type === 'session.succeeded')).toHaveLength(1)
   })
 
   it('a retry after a failed delivery keeps the event id', async () => {
@@ -248,33 +248,33 @@ describe('P0-2: events are saved with the change and delivered after the commit'
     const { hook, toPayment, app, ramp } = make({ store })
     const s = await toPayment()
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(503)
-    expect(app.sent.filter((e) => e.type === 'session.completed' || e.type === 'leg.succeeded')).toEqual([])
+    expect(app.sent.filter((e) => e.type === 'session.succeeded' || e.type === 'leg.succeeded')).toEqual([])
     // not saved: the session still waits for the user to pay
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('awaiting_user')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('requires_action')
     // the provider sends it again
     block = false
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
-    expect(app.delivered('session.completed')).toHaveLength(1)
+    expect(app.delivered('session.succeeded')).toHaveLength(1)
   })
 })
 
 describe('session status while the user must act', () => {
-  it('is awaiting_user while the active leg waits for the user, then processing, then completed', async () => {
+  it('is requires_action while the active leg waits for the user, then processing, then completed', async () => {
     const { hook, toPayment, post, ramp } = make()
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('open')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('requires_payment_method')
     await toPayment(s)
     let pub = await ramp.sessions.retrieve(s.id)
-    expect(pub).toMatchObject({ status: 'awaiting_user', step: { state: 'PAYMENT', progress: { legs: [{ status: 'awaiting_user' }] } } })
+    expect(pub).toMatchObject({ status: 'requires_action', step: { state: 'PAYMENT', progress: { legs: [{ status: 'requires_action' }] } } })
     expect((await hook([{ ref: 'order-1', status: 'processing' }])).status).toBe(200)
     pub = await ramp.sessions.retrieve(s.id)
     expect(pub).toMatchObject({ status: 'processing', step: { state: 'PROCESSING' } })
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
     // restart from a waiting payment goes back to open
     const s2 = await toPayment()
     const r = await (await post(`/sessions/${s2.id}/transitions/restart`, s2.clientSecret)).json()
-    expect(r.status).toBe('open')
+    expect(r.status).toBe('requires_payment_method')
   })
 })
 
@@ -293,7 +293,7 @@ describe('transaction hashes in the result', () => {
     statusOf['order-1'] = 'succeeded'
     await ramp.sessions.refresh(s.id)
     pub = await ramp.sessions.retrieve(s.id)
-    expect(pub!.status).toBe('completed')
+    expect(pub!.status).toBe('succeeded')
     expect(pub!.result!.sourceTxHashes).toEqual(['0xsrc'])
     expect(pub!.step.progress!.legs[0]).toMatchObject({ status: 'succeeded', sourceTxHash: '0xsrc' })
   })
@@ -319,9 +319,9 @@ describe('P0-5: restart while waiting for payment keeps the attempt', () => {
 
     expect((await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0x1' }])).status).toBe(200)
     const pub = await ramp.sessions.retrieve(s.id)
-    expect(pub!.status).toBe('completed')
+    expect(pub!.status).toBe('succeeded')
     expect(pub!.result!.txHashes).toEqual(['0x1'])
-    expect(app.delivered('session.completed')).toHaveLength(1)
+    expect(app.delivered('session.succeeded')).toHaveLength(1)
   })
 
   it('the paid attempt becomes active again when the new attempt still waits for the user', async () => {
@@ -330,10 +330,10 @@ describe('P0-5: restart while waiting for payment keeps the attempt', () => {
     await post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
     await toPayment(s) // order-2, waiting
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
     // a later event for the new attempt does not undo it
     expect((await hook([{ ref: 'order-2', status: 'failed' }])).status).toBe(200)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
   })
 
   it('a late success while another payment is under way sends session.late_payment', async () => {
@@ -355,7 +355,7 @@ describe('P0-5: restart while waiting for payment keeps the attempt', () => {
     await post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
     statusOf['order-1'] = 'succeeded'
     expect((await ramp.sweep()).sessions).toMatchObject({ checked: 1, changed: 1, open: 0 })
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
   })
 })
 
@@ -367,7 +367,7 @@ describe('P0-6: provider events that are not applied get a retryable answer', ()
     expect(early.headers.get('retry-after')).toBe('30')
     const s = await toPayment()
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
     // a repeat of the terminal status is verified and ignored
     expect((await hook([{ ref: 'order-1', status: 'succeeded' }])).status).toBe(200)
   })
@@ -415,11 +415,11 @@ describe('upgrade from the KV array lists', () => {
     // The data an earlier version left behind
     await store.kv.put('open-sessions', [s.id])
     await store.kv.put('outbox', ['evt_old'])
-    await store.kv.put('outbox:evt_old', { id: 'evt_old', type: 'session.completed', sessionId: s.id, body: '{"id":"evt_old","type":"session.completed"}', attempts: 2, nextAt: 0 })
+    await store.kv.put('outbox:evt_old', { id: 'evt_old', type: 'session.succeeded', sessionId: s.id, body: '{"id":"evt_old","type":"session.succeeded"}', attempts: 2, nextAt: 0 })
     const r = await ramp.sweep()
     expect(r.webhooks).toMatchObject({ retried: 1, delivered: 1, pending: 0 })
     expect(r.sessions).toMatchObject({ checked: 1, open: 1 })
-    expect(app.delivered('session.completed').map((e) => e.id)).toEqual(['evt_old'])
+    expect(app.delivered('session.succeeded').map((e) => e.id)).toEqual(['evt_old'])
     expect(await store.kv.get('outbox')).toBeNull()
     expect(await store.kv.get('open-sessions')).toBeNull()
   })

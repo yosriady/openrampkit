@@ -416,7 +416,7 @@ export function peer(opts: PeerOptions) {
       } else {
         surface = { kind: 'REDIRECT', url, popup: true, provider: 'Peer' }
       }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'awaiting_user', ref }
+      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'requires_action', ref }
     },
 
     async status(input, ctx) {

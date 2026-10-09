@@ -35,11 +35,11 @@ describe('table', () => {
 
   it('moves a leg only forward', () => {
     expect(isLegalLegMove('pending', 'processing')).toBe(true)
-    expect(isLegalLegMove('awaiting_user', 'awaiting_user')).toBe(true)
+    expect(isLegalLegMove('requires_action', 'requires_action')).toBe(true)
     expect(isLegalLegMove('processing', 'succeeded')).toBe(true)
     expect(isLegalLegMove('processing', 'refunded')).toBe(true)
     expect(isLegalLegMove('processing', 'pending')).toBe(false)
-    expect(isLegalLegMove('processing', 'awaiting_user')).toBe(false)
+    expect(isLegalLegMove('processing', 'requires_action')).toBe(false)
     expect(isLegalLegMove('failed', 'succeeded')).toBe(false)
     expect(isLegalLegMove('succeeded', 'succeeded')).toBe(false)
     expect(isLegalLegMove('succeeded', 'refunded')).toBe(true)

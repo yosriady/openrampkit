@@ -130,7 +130,7 @@ export function relay(opts: RelayOptions = {}) {
         if (rec?.mode === 'direct' && rec.settlement) return verifySettlementWallet(ctx, input.ref, rec)
         if (rec?.mode === 'direct') {
           // Same-chain transfer: the wallet's tx hash is checked on chain before the leg counts.
-          if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
+          if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref: input.ref }
           return verifyDirectWallet(ctx, input.ref, rec)
         }
         const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
@@ -149,7 +149,7 @@ export function relay(opts: RelayOptions = {}) {
         const done = terminalStep(s.status, extra)
         if (done) return done
         if (!rec?.txHash && !s.inTxHashes?.length) {
-          return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
+          return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref: input.ref }
         }
         return { state: 'PROCESSING', sub: relaySub(s.status), providerStatus: s.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
       }
@@ -159,7 +159,7 @@ export function relay(opts: RelayOptions = {}) {
       const waiting: LegStep =
         legId === 'bridge'
           ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [POLL_TRANSITION], ref: input.ref }
-          : { state: 'PAYMENT', status: 'awaiting_user', transitions: [POLL_TRANSITION], ref: input.ref }
+          : { state: 'PAYMENT', status: 'requires_action', transitions: [POLL_TRANSITION], ref: input.ref }
       // Same chain and token: the address is the destination itself; look for Transfer logs to it.
       if (rec?.mode === 'direct') return (await findDirectDeposit(ctx, input.ref, rec, waiting)) ?? waiting
       return findRelayDeposit(ctx, input.ref, rec, waiting).catch((e) => {

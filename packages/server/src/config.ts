@@ -52,6 +52,11 @@ export type OpenRampConfig = {
      * the server flags it (`result.amountMismatch`, timeline entry `leg.amount_mismatch`). Default 100 (1%).
      */
     outputToleranceBps?: number
+    /**
+     * The most payment attempts of one session (the first payment and each new one after `restart`).
+     * A failed attempt that leaves no attempt makes the session `failed`. Default 10.
+     */
+    maxAttempts?: number
   }
   /**
    * Signed webhooks to the app backend. Each event is saved with the session change that made it, and
@@ -116,7 +121,7 @@ export type OpenRampConfig = {
    * Late payments. When the sweep expires a session whose payment still waits for the user (for
    * example a bank transfer or a deposit address), it keeps polling that payment at a slower rate for
    * `graceHours` (default 72; 0 turns it off), every `pollMinutes` (default 10). When the payment
-   * arrives, the session completes, and the server sends `session.late_payment` and `session.completed`.
+   * arrives, the session completes, and the server sends `session.late_payment` and `session.succeeded`.
    * Only adapters with `status()` can be polled; a provider webhook completes an expired session too.
    */
   latePayments?: { graceHours?: number; pollMinutes?: number }
@@ -184,6 +189,8 @@ export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
 /** Defaults of `latePayments` */
 export const DEFAULT_LATE_GRACE_HOURS = 72
 export const DEFAULT_LATE_POLL_MINUTES = 10
+/** Default `policy.maxAttempts` */
+export const DEFAULT_MAX_ATTEMPTS = 10
 /** Default `policy.outputToleranceBps`: 1% */
 export const DEFAULT_OUTPUT_TOLERANCE_BPS = 100
 /** Largest JSON body the browser routes accept */

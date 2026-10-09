@@ -243,7 +243,7 @@ export function meld(opts: MeldOptions) {
         return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
       case 'PENDING_CREATED':
       case 'TWO_FA_REQUIRED':
-        return { ref, status: 'awaiting_user' }
+        return { ref, status: 'requires_action' }
       // ERROR is temporary at Meld: the provider may retry.
       case 'PENDING':
       case 'SETTLING':
@@ -389,7 +389,7 @@ export function meld(opts: MeldOptions) {
         state: 'PAYMENT',
         surface: { kind: 'REDIRECT', url, popup: true, provider: data.serviceProvider },
         transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref,
       }
     },

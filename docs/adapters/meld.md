@@ -67,7 +67,7 @@ The catalog also maps `SOFORT`, `ASTROPAY`, `PAYPAL`, `VENMO`, `CASH_APP`, `ZELL
 | Meld status | Leg |
 |---|---|
 | `SETTLED` | `succeeded` |
-| `PENDING_CREATED`, `TWO_FA_REQUIRED` | `awaiting_user` |
+| `PENDING_CREATED`, `TWO_FA_REQUIRED` | `requires_action` |
 | `PENDING`, `SETTLING`, `TWO_FA_PROVIDED`, `ERROR`, `ACCEPTED`, `AUTHORIZED`, `PARTIALLY_SETTLED` | `processing` (`ERROR` is temporary at Meld) |
 | `FAILED`, `DECLINED`, `CANCELLED`, `AUTHORIZATION_EXPIRED` | `failed` |
 | `REFUNDED` | `refunded` |

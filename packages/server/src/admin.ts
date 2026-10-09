@@ -350,7 +350,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
 
 export type AdminListOptions = {
   direction?: Direction
-  /** A session status (`open`, `awaiting_user`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
+  /** A session status (`requires_payment_method`, `requires_action`, `processing`, `succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
   state?: string
   /** Only sessions created at least this many minutes ago */
   olderThan?: number
@@ -429,8 +429,8 @@ export type AdminStats = {
   byStatus: Record<string, number>
   byState: Record<string, number>
   byDirection: Record<Direction, { total: number; byStatus: Record<string, number> }>
-  /** What users paid in completed sessions, per direction and currency */
-  completedVolume: Array<{ direction: Direction; currency: string; amount: string; count: number }>
+  /** What users paid in succeeded sessions, per direction and currency */
+  succeededVolume: Array<{ direction: Direction; currency: string; amount: string; count: number }>
   stuck: { count: number; afterMinutes: number; oldest?: { id: string; ageMs: number } }
   /** `queued`: sessions on the outbox queue now (all time). The rest count events of the scanned sessions. */
   outbox: { queued: number; pendingEvents: number; deadLetters: number; sessionsWithDeadLetters: number }
@@ -456,7 +456,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
     byStatus: {},
     byState: {},
     byDirection: { deposit: { total: 0, byStatus: {} }, withdraw: { total: 0, byStatus: {} } },
-    completedVolume: [],
+    succeededVolume: [],
     stuck: { count: 0, afterMinutes: stuckAfterMs(rt) / 60_000 },
     outbox: { queued: 0, pendingEvents: 0, deadLetters: 0, sessionsWithDeadLetters: 0 },
     webhookFailures: 0,
@@ -474,7 +474,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
     inc(dir.byStatus, rec.status)
     if (rec.resolution) stats.resolved++
     const input = amountOf(rec)
-    if (rec.status === 'completed' && input) {
+    if (rec.status === 'succeeded' && input) {
       const currency = currencyOf(input)
       const key = `${rec.direction}|${currency}`
       const v = volume.get(key) ?? { direction: rec.direction, currency, amount: '0', count: 0 }
@@ -500,7 +500,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
   })
   stats.scanned = r.scanned
   stats.truncated = !r.done
-  stats.completedVolume = [...volume.values()].sort((a, b) => b.count - a.count)
+  stats.succeededVolume = [...volume.values()].sort((a, b) => b.count - a.count)
   const q = queueOf(rt.store)
   ;[stats.outbox.queued, stats.openQueue] = await Promise.all([q.size(OUTBOX_QUEUE), q.size(OPEN_QUEUE)])
   rt.metric('sessions.stuck', stats.stuck.count, {})
@@ -515,7 +515,7 @@ function finalState(v: unknown): FinalState {
 
 /**
  * Force a final state, with an audit note in the record (`resolution` and the timeline), and send the
- * matching webhook (`session.completed`, `session.failed`, ... and `withdrawal.*` for a withdrawal).
+ * matching webhook (`session.succeeded`, `session.failed`, ... and `withdrawal.*` for a withdrawal).
  * The webhook data has `resolution: { by: 'admin', state, note, at }`. Later provider events still
  * update the legs, but not the session state.
  */
@@ -540,10 +540,11 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
       ...(target === 'EXPIRED' ? { error: openRampError('SESSION_EXPIRED') } : {}),
     }
     rec.status = sessionStatusFor(target, !!rec.active)
+    if (rec.status === 'failed' && rec.step.error) rec.lastError = rec.step.error
     addTimeline(rec, 'admin.resolved', { state: target, previous, note: text })
     const extra = { resolution: { by: 'admin', state: target, note: text, at: iso(now) } }
     await notify(rt, rec, `session.${rec.status}`, extra)
-    if (rec.direction === 'withdraw' && (rec.status === 'completed' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
+    if (rec.direction === 'withdraw' && (rec.status === 'succeeded' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
     try {
       await saveSession(rt, rec)
       rt.log.info('admin resolved a session', { sessionId: rec.id, state: target, previous })

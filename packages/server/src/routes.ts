@@ -1,7 +1,7 @@
 // HTTP routes. Every route takes the runtime and returns a Response; errors are thrown as OpenRampException.
 
 import { claimWebhook, releaseWebhook } from '@openrampkit/adapter'
-import { OpenRampException, isTerminal, openRampError } from '@openrampkit/core'
+import { OpenRampException, isFinalStatus, isTerminal, openRampError } from '@openrampkit/core'
 import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
@@ -46,6 +46,24 @@ function checkQuotesBody(body: QuotesBody): void {
   if (body.source !== undefined) {
     const { chain, token } = (body.source ?? {}) as { chain?: unknown; token?: unknown }
     if (typeof chain !== 'string' || !CAIP2.test(chain) || typeof token !== 'string' || !isValidToken(chain, token)) throw bad('`source` must have a CAIP-2 `chain` and a token address or "native".')
+  }
+}
+
+/** Why a session with a final status takes no change */
+function finalMessage(rec: SessionRecord): string {
+  switch (rec.status) {
+    case 'succeeded':
+      return rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.'
+    case 'reversed':
+      return 'This payment was reversed. Start a new session.'
+    case 'refunded':
+      return 'This payment was refunded. Start a new session.'
+    case 'canceled':
+      return 'This session was canceled. Start a new session.'
+    case 'expired':
+      return 'This session expired. Start a new session.'
+    default:
+      return 'This session failed. Start a new session.'
   }
 }
 
@@ -99,11 +117,11 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return errorResponse(openRampError('BAD_REQUEST', { message: 'This session was closed by the operator.' }), 409)
   }
 
-  // A session with a completed payment (also one reversed after it completed) is final for the
-  // browser: no new plan, quote, target, payment or transition, with the client secret or a pay link.
-  if (method === 'POST' && action !== 'pay-link' && (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED')) {
-    const message = rec.step.state === 'REVERSED' ? 'This payment was reversed. Start a new session.' : rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.'
-    return errorResponse(openRampError('BAD_REQUEST', { message }), 409)
+  // A final session (succeeded, failed, canceled, refunded or reversed) takes no new plan, quote, target,
+  // payment or transition, with the client secret or a pay link. An expired session is refused above
+  // (410) for the routes before payment; a late payment can still move it on.
+  if (method === 'POST' && action !== 'pay-link' && isFinalStatus(rec.status) && rec.status !== 'expired') {
+    return errorResponse(openRampError('BAD_REQUEST', { message: finalMessage(rec) }), 409)
   }
 
   if (action === 'step' && method === 'GET') {
@@ -206,20 +224,17 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
 async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, name: string): Promise<Response> {
   const body = await readJson<{ inputs?: Record<string, unknown> }>(req, {})
   if (name === 'restart') {
-    // Allowed before payment starts, while waiting for payment, or after a terminal state.
-    if (rec.active && !isTerminal(rec.step.state) && rec.step.state !== 'PAYMENT') {
+    // Allowed when no payment is in progress (also after a failed attempt), or while the user still has
+    // to pay (PAYMENT). Never after a final status: `session.failed` is never followed by success.
+    if (isFinalStatus(rec.status)) return errorResponse(openRampError('BAD_REQUEST', { message: finalMessage(rec) }), 409)
+    if (rec.status !== 'requires_payment_method' && rec.step.state !== 'PAYMENT') {
       return errorResponse(openRampError('BAD_REQUEST', { message: 'This payment can no longer be changed.' }), 409)
     }
-    if (rec.step.state === 'COMPLETED') {
-      return errorResponse(openRampError('BAD_REQUEST', { message: rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.' }), 409)
-    }
-    // The payment completed and the provider took it back. The app decides what happens next.
-    if (rec.step.state === 'REVERSED') return errorResponse(openRampError('BAD_REQUEST', { message: 'This payment was reversed. Start a new session.' }), 409)
     // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
     // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).
     archiveActive(rec)
     addTimeline(rec, 'payment.restarted')
-    rec.status = 'open'
+    rec.status = 'requires_payment_method'
     rec.step = { sessionId: rec.id, state: 'SELECT_METHOD', transitions: [], expiresAt: new Date(rec.expiresAt).toISOString() }
     // The sweep polls the session again (it left the list when it reached a terminal state).
     await trackOpenSession(rt, rec.id)

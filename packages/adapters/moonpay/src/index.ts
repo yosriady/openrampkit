@@ -259,7 +259,7 @@ export function moonpay(opts: MoonPayOptions) {
         return { ref, status: 'processing', ...(output ? { output } : {}) }
       case 'waitingPayment':
       case 'waitingAuthorization':
-        return { ref, status: 'awaiting_user' }
+        return { ref, status: 'requires_action' }
       default:
         return undefined
     }
@@ -357,7 +357,7 @@ export function moonpay(opts: MoonPayOptions) {
         opts.surface === 'iframe'
           ? { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 640, provider: 'MoonPay' }
           : { kind: 'REDIRECT', url, popup: true, provider: 'MoonPay' }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'awaiting_user', ref }
+      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'requires_action', ref }
     },
 
     async status(input, ctx) {

@@ -58,7 +58,7 @@ export function walletLeg(rt: RelayRuntime) {
       state: 'PAYMENT',
       surface: { kind: 'WALLET_TX', chain, txs },
       transitions: [SUBMIT_TX],
-      status: 'awaiting_user',
+      status: 'requires_action',
       ref,
     }
   }
@@ -202,7 +202,7 @@ export function walletLeg(rt: RelayRuntime) {
       if (!r.ok) return fail(r.problem!, r.record.txHash)
       return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref, txHash: r.record.txHash, sourceTxHash: r.record.txHash, ...(rec.output ? { output: rec.output } : {}) }
     }
-    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
+    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref }
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: rec.txHash, sourceTxHash: rec.txHash }
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.', rec.txHash)

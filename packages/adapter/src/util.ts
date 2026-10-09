@@ -73,17 +73,17 @@ export function decimalFrom(n: number | string | undefined | null, digits = 8): 
 
 /**
  * The LegStep for a provider order status that was mapped to a LegEvent (by a webhook parser
- * or a status poll). No event means the user is still paying: PAYMENT, awaiting_user.
+ * or a status poll). No event means the user is still paying: PAYMENT, requires_action.
  */
 export function legStepFromEvent(ev: LegEvent | undefined, ref: string, poll: PollSpec): LegStep {
   const extra = { ref, ...(ev?.txHash ? { txHash: ev.txHash } : {}), ...(ev?.output ? { output: ev.output } : {}) }
   switch (ev?.status) {
     case undefined:
     case 'pending':
-    case 'awaiting_user':
+    case 'requires_action':
       return {
         state: 'PAYMENT',
-        status: 'awaiting_user',
+        status: 'requires_action',
         transitions: ev?.surface && ev.transitions ? ev.transitions : [awaitPoll(poll)],
         ref,
         ...(ev?.surface ? { surface: ev.surface } : {}),

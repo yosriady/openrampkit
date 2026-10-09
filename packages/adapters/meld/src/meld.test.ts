@@ -181,7 +181,7 @@ describe('meld adapter', () => {
     const quote = await a.quote({ leg: leg('card'), amountIn: money('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(step.ref).toMatch(/^ork_[0-9a-f]{24}$/)
     expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://banxa.com/checkout?x=1', popup: true, provider: 'BANXA' })
     expect(calls[1]!.url).toBe('https://api-sb.meld.io/crypto/session/widget')
@@ -213,7 +213,7 @@ describe('meld adapter', () => {
     }
     expect(await run([TX('SETTLED')])).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { value: '96.25' } })
     for (const st of ['PENDING', 'SETTLING', 'ERROR', 'AUTHORIZED']) expect(await run([TX(st)])).toMatchObject({ state: 'PROCESSING' })
-    for (const st of ['PENDING_CREATED', 'TWO_FA_REQUIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    for (const st of ['PENDING_CREATED', 'TWO_FA_REQUIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     for (const st of ['FAILED', 'DECLINED', 'CANCELLED', 'AUTHORIZATION_EXPIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'FAILED', error: { code: 'PAYMENT_FAILED' } })
     expect(await run([TX('REFUNDED')])).toMatchObject({ state: 'REFUNDED' })
     expect(await run([])).toMatchObject({ state: 'PAYMENT', ref: 'ork_abc' })

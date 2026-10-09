@@ -220,7 +220,7 @@ await page.getByRole('button', { name: 'Continue' }).click()
 await expect(modal).toContainText('Deposit complete', { timeout: 30_000 })
 ```
 
-The tests also check that your backend received `session.completed`: the demo page lists the webhooks it got.
+The tests also check that your backend received `session.succeeded`: the demo page lists the webhooks it got.
 
 ## Capture screenshots
 

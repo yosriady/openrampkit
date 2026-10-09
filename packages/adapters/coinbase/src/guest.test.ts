@@ -195,7 +195,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
     expect(body).toMatchObject({ isQuote: false, paymentAmount: '100.75', destinationNetwork: 'base', domain: 'app.example.com' })
     expect(body.userAuthToken).toBeUndefined()
     expect(step.ref).toBe(body.partnerUserRef)
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', transitions: [{ kind: 'AWAIT' }] })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', transitions: [{ kind: 'AWAIT' }] })
     expect(step.surface).toEqual({
       kind: 'IFRAME',
       url: `${PAY_URL}&useApplePaySandbox=true`,
@@ -245,10 +245,10 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
     const q = await a.quote({ leg: guestLeg, amountIn: usd('100.75') }, ctx)
     const { ref } = await a.start({ leg: guestLeg, quote: q }, ctx)
     const st = () => a.status!({ leg: guestLeg, ref: ref! }, ctx)
-    expect(await st()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await st()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(calls[2]!.url).toBe(`https://api.cdp.coinbase.com/platform/v2/onramp/orders/${ORDER.orderId}`)
     order = { ...ORDER, status: 'ONRAMP_ORDER_STATUS_PENDING_VERIFICATION' }
-    expect(await st()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await st()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     order = { ...ORDER, status: 'ONRAMP_ORDER_STATUS_PROCESSING' }
     expect(await st()).toMatchObject({ state: 'PROCESSING', status: 'processing' })
     order = { ...ORDER, status: 'ONRAMP_ORDER_STATUS_COMPLETED', txHash: '0xabc' }
@@ -274,7 +274,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
       { ref: 'ork-9', status: 'succeeded', txHash: '0xfeed', output: { value: '100.000000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const created = { ...ORDER, eventType: 'onramp.transaction.created', partnerUserRef: 'ork-9' }
-    expect(await a.webhook!.parse(JSON.stringify(created), ctx)).toEqual([{ ref: 'ork-9', status: 'awaiting_user' }])
+    expect(await a.webhook!.parse(JSON.stringify(created), ctx)).toEqual([{ ref: 'ork-9', status: 'requires_action' }])
     const updated = { ...ORDER, eventType: 'onramp.transaction.updated', status: 'ONRAMP_ORDER_STATUS_PROCESSING', partnerUserRef: 'ork-9' }
     expect(await a.webhook!.parse(JSON.stringify(updated), ctx)).toEqual([{ ref: 'ork-9', status: 'processing' }])
   })

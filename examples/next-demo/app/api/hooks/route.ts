@@ -4,7 +4,7 @@ export const dynamic = 'force-dynamic'
 
 const received: Array<{ type: string; sessionId?: string; at: string }> = []
 
-/** Your backend receives signed events here, e.g. to credit a balance on `session.completed`. */
+/** Your backend receives signed events here, e.g. to credit a balance on `session.succeeded`. */
 export async function POST(req: Request) {
   const body = await req.text()
   const ok = await openramp.webhooks.verify(req, body)

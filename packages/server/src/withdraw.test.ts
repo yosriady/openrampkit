@@ -197,8 +197,8 @@ describe('withdraw to a wallet (custody: user_wallet)', () => {
     expect(sent.body.step.state).toBe('PROCESSING')
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
-    expect(done.body.status).toBe('completed')
-    expect(t.hooks.map((h) => h.type)).toEqual(['session.created', 'leg.succeeded', 'session.completed', 'withdrawal.completed'])
+    expect(done.body.status).toBe('succeeded')
+    expect(t.hooks.map((h) => h.type)).toEqual(['session.created', 'session.requires_action', 'session.processing', 'leg.succeeded', 'session.succeeded', 'withdrawal.succeeded'])
     expect(t.hooks.at(-1)!.data.object.session).toMatchObject({ direction: 'withdraw', destination: { address: ARB_ADDR } })
     // The finished withdrawal can no longer restart.
     const again = await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})
@@ -230,7 +230,7 @@ describe('withdraw to cash with the mock offramp', () => {
     expect((await tr('submit_tx', { txHash: TX })).body.step.state).toBe('PROCESSING')
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
-    expect(t.hooks.map((h) => h.type)).toContain('withdrawal.completed')
+    expect(t.hooks.map((h) => h.type)).toContain('withdrawal.succeeded')
   })
 
   it('bank transfer asks for bank fields; VND payout via MoMo is offered in VN only', async () => {
@@ -288,13 +288,18 @@ describe('withdraw with custody: app (treasury)', () => {
     expect(treasury.send.mock.calls[0]![0]).toMatchObject({ chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'] }] })
   })
 
-  it('a failing treasury fails the leg and sends withdrawal.failed', async () => {
+  it('a failing treasury fails the attempt: session.payment_failed, and the user can try again', async () => {
     const t = make({ treasury: { send: async () => { throw new Error('hot wallet empty') } } })
     const s = await t.create({ source: SRC_APP })
     const { session } = await run(t, s, TO_ARB, 'wallet', '5', false)
     expect(session.step.state).toBe('FAILED')
+    expect(session.status).toBe('requires_payment_method')
     expect(session.step.error).toMatchObject({ code: 'PAYMENT_FAILED', message: 'The withdrawal could not be sent. Contact support.' })
-    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['leg.failed', 'session.failed', 'withdrawal.failed']))
+    expect(session.lastError).toMatchObject({ code: 'PAYMENT_FAILED' })
+    const types = t.hooks.map((h) => h.type)
+    expect(types).toEqual(expect.arrayContaining(['leg.failed', 'session.payment_failed']))
+    expect(types).not.toContain('session.failed')
+    expect(types).not.toContain('withdrawal.failed')
   })
 })
 
@@ -337,7 +342,7 @@ function eventOfframp() {
 
 const PENDING: LegEvent = {
   ref: 'order_1',
-  status: 'awaiting_user',
+  status: 'requires_action',
   surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453']!, data: '0xa9059cbb', chainId: 8453 }] },
   transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
 }
@@ -346,7 +351,7 @@ describe('provider events that carry a surface', () => {
   it('legStepFromEvent uses the event surface and transitions; default AWAIT; terminal events drop surfaces', () => {
     const cur = { state: 'PROCESSING' as const, status: 'processing' as const, transitions: [], ref: 'r', surface: { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'PHP' } }
     const a = legStepFromEvent(cur, PENDING)
-    expect(a).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'WALLET_TX' }, transitions: [{ name: 'submit_tx' }] })
+    expect(a).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'WALLET_TX' }, transitions: [{ name: 'submit_tx' }] })
     const b = legStepFromEvent(cur, { ...PENDING, transitions: undefined } as LegEvent)
     expect(b.transitions).toEqual([expect.objectContaining({ kind: 'AWAIT' })])
     expect(b.surface?.kind).toBe('WALLET_TX')
@@ -394,7 +399,7 @@ describe('provider events that carry a surface', () => {
     await post({ ref: 'order_1', status: 'reversed' })
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
     expect(now.body).toMatchObject({ status: 'reversed', step: { state: 'REVERSED' } })
-    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['withdrawal.completed', 'session.reversed', 'withdrawal.reversed']))
+    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['withdrawal.succeeded', 'session.reversed', 'withdrawal.reversed']))
     expect(t.hooks.filter((h) => h.type === 'withdrawal.reversed')).toHaveLength(1)
   })
 
@@ -488,8 +493,8 @@ describe('provider events that carry a surface', () => {
     await post({ ref: 'order_1', status: 'succeeded' })
     const now = (await t.ramp.sessions.retrieve(s.id))!
     expect(now.destination).toMatchObject({ type: 'fiat', currency: 'USD' })
-    expect(now.status).not.toBe('completed')
-    expect(t.hooks.filter((h) => h.type === 'withdrawal.completed')).toHaveLength(0)
+    expect(now.status).not.toBe('succeeded')
+    expect(t.hooks.filter((h) => h.type === 'withdrawal.succeeded')).toHaveLength(0)
     expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'earlier_attempt', attempt: 0 })
   })
 

@@ -144,7 +144,7 @@ describe('mock adapter', () => {
     const a = mockAdapter({ settleMs: 1000 })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const step = await a.start({ leg: localLeg, quote: await a.quote({ leg: localLeg, amountIn: fiat('VND', '100000') }, ctx) }, ctx)
-    expect(await a.status!({ leg: localLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await a.status!({ leg: localLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     await a.transition!({ leg: localLeg, ref: step.ref!, name: 'simulate_payment' }, ctx)
     expect(await a.status!({ leg: localLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'settling' })
     vi.advanceTimersByTime(1000)

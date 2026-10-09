@@ -46,7 +46,7 @@ Go through this list before real money moves.
 - [ ] `openramp.sweep()` runs every minute or so: a [Cloudflare Cron Trigger](./cloudflare-workers.md#cron-trigger), a [Vercel Cron Job](./nextjs.md#background-sweep), or any scheduler calling `POST {baseUrl}/tasks/sweep` with `tasksToken`. Without it, failed webhooks are never retried, and sessions whose users left are not refreshed or expired.
 - [ ] The cron route refuses requests without the secret, and the secret is set in every environment that runs it.
 - [ ] You watch the logs for `webhook moved to dead letter after retries` (after `webhooks.retryHours`, default 24 hours) and `sweep: session check failed`. To send dead letters again, call `openramp.webhooks.replay(sessionId)` or use "Replay webhooks" in the [ops dashboard](../guide/admin.md#the-dashboard).
-- [ ] Your backend handles `session.late_payment`: a payment the user left with `restart` succeeded after another payment (`earlier_attempt`), or a payment arrived after the session expired (`after_expiry`, followed by `session.completed`). Do not treat `session.expired` as final for crediting.
+- [ ] Your backend handles `session.late_payment`: a payment the user left with `restart` succeeded after another payment (`earlier_attempt`), or a payment arrived after the session expired (`after_expiry`, followed by `session.succeeded`). Do not treat `session.expired` as final for crediting.
 - [ ] Your backend handles `session.reversed`: it takes back or freezes the credit of a payment that the provider refunded or charged back after it completed.
 - [ ] Each run has enough time: it retries up to `limit` (default 50) webhooks and checks up to `limit` open sessions, with provider calls for each.
 
@@ -61,7 +61,7 @@ Go through this list before real money moves.
 ## Your backend
 
 - [ ] Webhooks to your backend are verified with `openramp.webhooks.verify()` or `verifyWebhook()`, using the raw body.
-- [ ] Your handler is idempotent: it drops an event id it already handled (webhooks are at-least-once), and credits once per session id (a unique constraint), only on `session.completed`, after checking the session. See [Webhooks to your backend](../guide/webhooks.md).
+- [ ] Your handler is idempotent: it drops an event id it already handled (webhooks are at-least-once), and credits once per session id (a unique constraint), only on `session.succeeded`, after checking the session. See [Webhooks to your backend](../guide/webhooks.md).
 - [ ] You credit `session.result.output` only when `outputConfirmed` is `true`. Otherwise you check the amount on chain (`result.txHashes`), at the provider, or on your order.
 - [ ] You store transaction hashes with a unique constraint, so one transaction cannot complete two sessions (same-chain Relay moves check the receipt, not who sent it).
 

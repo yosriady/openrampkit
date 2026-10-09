@@ -213,7 +213,7 @@ describe('bound payout targets', () => {
     expect(JSON.stringify(sent[0]!.txs).toLowerCase()).toContain(OPS_WALLET)
 
     const done = await call(client, 'wait_for_completion', { session_id: r.data.session_id, timeout_seconds: 20 })
-    expect(done.data.status).toBe('completed')
+    expect(done.data.status).toBe('succeeded')
 
     // Unknown names fail the schema; a target needs an exact amount.
     expect((await call(client, 'create_withdraw_session', { country: 'SG', target: 'attacker', amount: '5' })).isError).toBe(true)
@@ -257,7 +257,7 @@ describe('pay link revocation', () => {
     expect(await ops.revokePayLink(w.session_id)).toEqual({ session_id: w.session_id, revoked: true })
     expect((await ramp.handle(new Request(url))).status).toBe(410)
     // The MCP server still reads the session with its client secret.
-    expect((await ops.getSessionStatus(w.session_id)).status).toBe('open')
+    expect((await ops.getSessionStatus(w.session_id)).status).toBe('requires_payment_method')
 
     const bound = await ops.createWithdrawSession({ country: 'SG', target: 'ops', amount: '5' })
     await expect(ops.revokePayLink(bound.session_id)).rejects.toMatchObject({ code: 'NO_PAY_LINK' })

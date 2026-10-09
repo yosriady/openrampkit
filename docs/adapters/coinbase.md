@@ -88,7 +88,7 @@ Flow:
 - Quote: `POST /platform/v2/onramp/orders` with `isQuote: true`, `paymentMethod: GUEST_CHECKOUT_APPLE_PAY`, `paymentCurrency: USD`, the network, address, `domain`, `clientIp` and `locale`.
 - Start: the same call with `isQuote: false`. The order's `paymentLink.url` opens in an `IFRAME` surface with `allow="payment"` and `referrerpolicy="no-referrer"`. In sandbox mode the adapter adds `useApplePaySandbox=true` to the link. Sandbox links work on `http://localhost` without domain setup.
 - Frame events: the modal reads the Coinbase `postMessage` events (`eventName`). `onramp_api.commit_success` and `onramp_api.polling_success` make the modal check the status at once. `onramp_api.commit_error`, `onramp_api.polling_error` and `onramp_api.session_error` also do. `onramp_api.cancel` shows the "closed" notice. The server status is always the source of truth.
-- Status: `GET /platform/v2/onramp/orders/{orderId}`. `ONRAMP_ORDER_STATUS_PENDING_*` gives `awaiting_user`, `PROCESSING` gives `processing`, `COMPLETED` gives `succeeded` and `FAILED` gives `failed`.
+- Status: `GET /platform/v2/onramp/orders/{orderId}`. `ONRAMP_ORDER_STATUS_PENDING_*` gives `requires_action`, `PROCESSING` gives `processing`, `COMPLETED` gives `succeeded` and `FAILED` gives `failed`.
 - Errors: `guest_transaction_limit` gives `AMOUNT_TOO_HIGH`. `guest_region_forbidden` gives `REGION_UNSUPPORTED`. `guest_permission_denied` and `guest_transaction_count` give `PROVIDER_DECLINED`.
 
 If the user leaves the frame before paying, Coinbase sends no webhook and the order stays open. The session expires as usual.
@@ -106,7 +106,7 @@ If the user leaves the frame before paying, Coinbase sends no webhook and the or
 Create a CDP webhook subscription for `onramp.transaction.created`, `onramp.transaction.updated`, `onramp.transaction.success` and `onramp.transaction.failed` with the URL `{baseUrl}/webhooks/coinbase`. Pass its `metadata.secret` as `webhookSecret`. The same subscription sends hosted transaction events and guest order events.
 
 - Verification: header `X-Hook0-Signature` with `t=...` and `v0=...`. `v0` is the hex HMAC-SHA256 of `{t}.{body}` ([verify signatures](https://docs.cdp.coinbase.com/webhooks/verify-signatures)). Timestamps older than 5 minutes are rejected.
-- `ONRAMP_TRANSACTION_STATUS_SUCCESS`, `ONRAMP_ORDER_STATUS_COMPLETED` or `onramp.transaction.success` give `succeeded` (with the tx hash and amount). Statuses ending in `_FAILED` or `onramp.transaction.failed` give `failed`. `ONRAMP_ORDER_STATUS_PENDING_*` gives `awaiting_user`. Others give `processing`.
+- `ONRAMP_TRANSACTION_STATUS_SUCCESS`, `ONRAMP_ORDER_STATUS_COMPLETED` or `onramp.transaction.success` give `succeeded` (with the tx hash and amount). Statuses ending in `_FAILED` or `onramp.transaction.failed` give `failed`. `ONRAMP_ORDER_STATUS_PENDING_*` gives `requires_action`. Others give `processing`.
 
 ## Verified vs TO VERIFY
 

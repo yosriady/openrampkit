@@ -145,7 +145,7 @@ export type LegSpec = {
    * - `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
    *   The planner offers a settlement destination only through a pathway whose last leg has it.
    * - `surface_after_processing`: a provider event may move the leg from `processing` back to
-   *   `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
+   *   `requires_action` with a new surface, once, before the leg has a transaction. Only for a leg that
    *   learns where the user must pay after it started (for example an offramp that gets its deposit
    *   address in a webhook). The surface kind must be one of `surfaces`.
    * How the server learns a leg's result is not a capability: it comes from the adapter's `status()`
@@ -282,6 +282,8 @@ export type StateName =
   /** The payment completed, then the provider took it back (a refund or a chargeback after success) */
   | 'REVERSED'
   | 'BLOCKED'
+  /** The app or the user canceled the session (`POST /sessions/:id/cancel`) */
+  | 'CANCELED'
 
 /** An EVM transaction for the wallet to send */
 export type EvmTxRequest = { kind?: 'evm'; to: string; data?: string; value?: string; chainId: number; gas?: string }
@@ -386,7 +388,7 @@ export type Transition =
 
 export type LegStatus =
   | 'pending'
-  | 'awaiting_user'
+  | 'requires_action'
   | 'processing'
   | 'succeeded'
   | 'failed'
@@ -489,13 +491,37 @@ export type LegStep = {
 // ---------- Sessions ----------
 
 /**
- * - `open`: no payment started yet (the user picks a method, an amount and a quote).
- * - `awaiting_user`: a payment started, and the active leg waits for the user (`awaiting_user`): for
- *   example to pay, send from the wallet, or finish a provider step. No money moved on this leg yet.
+ * The coarse status of a session, for apps and webhooks. The names follow Stripe PaymentIntents.
+ * - `requires_payment_method`: no payment in progress. The user picks a method, an amount and a quote.
+ *   After a failed attempt the session comes back here, with `lastError` set (`session.payment_failed`).
+ * - `requires_action`: a payment started, and the active leg waits for the user: for example to pay,
+ *   send from the wallet, or finish a provider step. No money moved on this leg yet.
  * - `processing`: the user paid (or acted), and the provider or the chain is working.
- * - `reversed`: the payment completed, then the provider refunded it or took it back. Take back or freeze the credit.
+ * - `succeeded`: every leg succeeded. Final (it can still become `reversed`).
+ * - `failed`: final failure, with `lastError`. No new attempt is possible (`session.failed`).
+ * - `canceled`: the app or the user canceled the session before a payment was under way. Final.
+ * - `expired`: the deadline passed with no payment. Final (a late payment can still move it on).
+ * - `refunded`: the provider returned the funds before success. Final.
+ * - `reversed`: the payment succeeded, then the provider refunded it or took it back. Take back or freeze the credit.
  */
-export type SessionStatus = 'open' | 'awaiting_user' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
+export type SessionStatus =
+  | 'requires_payment_method'
+  | 'requires_action'
+  | 'processing'
+  | 'succeeded'
+  | 'failed'
+  | 'canceled'
+  | 'expired'
+  | 'refunded'
+  | 'reversed'
+
+/** The statuses after which a session takes no new payment attempt */
+export const FINAL_SESSION_STATUSES: readonly SessionStatus[] = ['succeeded', 'failed', 'canceled', 'expired', 'refunded', 'reversed']
+
+/** True when `status` is final: the session takes no new payment attempt (see `FINAL_SESSION_STATUSES`) */
+export function isFinalStatus(status: SessionStatus): boolean {
+  return FINAL_SESSION_STATUSES.includes(status)
+}
 
 export type PublicSession = {
   id: string
@@ -521,8 +547,13 @@ export type PublicSession = {
   locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
-  /** What was paid and delivered, once a payment started. Final when `status` is `completed`. */
+  /** What was paid and delivered, once a payment started. Final when `status` is `succeeded`. */
   result?: SessionResult
+  /**
+   * The error of the last failed payment attempt (status `requires_payment_method`), or of the final
+   * failure (status `failed`). Cleared when a new payment starts.
+   */
+  lastError?: OpenRampError
   expiresAt: string
   livemode: boolean
 }
@@ -574,15 +605,19 @@ export type AmountMismatch = {
 
 export type OpenRampEventType =
   | 'session.created'
-  | 'session.completed'
+  | 'session.requires_action'
+  | 'session.processing'
+  | 'session.succeeded'
+  | 'session.payment_failed'
   | 'session.failed'
+  | 'session.canceled'
   | 'session.expired'
   | 'session.refunded'
   | 'session.reversed'
   | 'session.late_payment'
   | 'leg.succeeded'
   | 'leg.failed'
-  | 'withdrawal.completed'
+  | 'withdrawal.succeeded'
   | 'withdrawal.failed'
   | 'withdrawal.reversed'
   | 'step.changed'

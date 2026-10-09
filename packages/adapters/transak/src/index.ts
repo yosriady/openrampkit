@@ -423,7 +423,7 @@ export function transak(opts: TransakOptions) {
             : // Transak checks the Referer against the partner domain, so keep it on the start redirect.
               { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak', keepReferrer: true },
         transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref,
       }
     },

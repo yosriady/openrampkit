@@ -283,7 +283,7 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
     expect(calls).toHaveLength(0)
 
     // waiting for the signature
-    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
     // unknown to the RPC yet, then only processed: still confirming
     expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
@@ -369,7 +369,7 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
     // the address is the destination itself; no eth_blockNumber on Solana
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, address: SOL_DEST, token: SOLANA_USDC_MINT, symbol: 'USDC' })
     expect(calls).toHaveLength(0)
-    expect(await a.status!({ leg: transfer, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await a.status!({ leg: transfer, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     // an old deposit and a failed one do not count
     rpc.signatures = [
       { signature: SIG2, err: null, blockTime: now - 7200 },
@@ -467,7 +467,7 @@ describe('relay: Solana transfer to the destination itself, each signature claim
     expect(shared.data.get(used(SIG))).toBe(s4.owner)
     expect(shared.ttls.get(used(SIG))).toBe(90 * 24 * 3600)
     // sess_4 is done (its watch is gone) and holds the signature: sess_3 waits for its own payment
-    expect(await s3.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s3.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await s3.status()).not.toHaveProperty('sub')
     // a retry of sess_4 gives the same answer
     expect(await s4.status()).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { value: '4' } })

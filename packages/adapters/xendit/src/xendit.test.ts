@@ -68,7 +68,7 @@ describe('xendit adapter', () => {
     const q = await a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, c)
     const step = await a.start({ leg: leg('id-qris', 'IDR'), quote: q }, c)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: 'pr-1', surface: { kind: 'QR', payload: '00020101021226...', currency: 'IDR', amount: '150000' } })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', ref: 'pr-1', surface: { kind: 'QR', payload: '00020101021226...', currency: 'IDR', amount: '150000' } })
     const call = calls[0]!
     expect(call.url).toBe('https://api.xendit.co/v3/payment_requests')
     const h = new Headers(call.init.headers)
@@ -91,7 +91,7 @@ describe('xendit adapter', () => {
 
   it('maps every payment request status', async () => {
     const cases: Array<[string, string, string]> = [
-      ['ACCEPTING_PAYMENTS', 'PAYMENT', 'awaiting_user'], ['REQUIRES_ACTION', 'PAYMENT', 'awaiting_user'], ['AUTHORIZED', 'PROCESSING', 'processing'],
+      ['ACCEPTING_PAYMENTS', 'PAYMENT', 'requires_action'], ['REQUIRES_ACTION', 'PAYMENT', 'requires_action'], ['AUTHORIZED', 'PROCESSING', 'processing'],
       ['SUCCEEDED', 'COMPLETED', 'succeeded'], ['FAILED', 'FAILED', 'failed'], ['CANCELED', 'FAILED', 'failed'], ['EXPIRED', 'EXPIRED', 'expired'],
     ]
     for (const [status, state, legStatus] of cases) {
@@ -210,7 +210,7 @@ describe('xendit adapter', () => {
     expect(hook.status).toBe(200)
     expect(await hook.json()).toEqual({ received: true })
     const done = await (await call(`/sessions/${s.id}`)).json()
-    expect(done.status).toBe('completed')
+    expect(done.status).toBe('succeeded')
     // A captured webhook sent again (the callback token is fixed): 200, ignored as a replay.
     const replay = await send(capture)
     expect(replay.status).toBe(200)

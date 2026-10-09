@@ -71,7 +71,7 @@ The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) bui
 |---|---|
 | `completed` | `succeeded` |
 | `paid`, `pending` | `processing` |
-| `new` | `awaiting_user` |
+| `new` | `requires_action` |
 | `failed`, `canceled`, `cancelled` | `failed` |
 
 ### Setup errors

@@ -305,7 +305,7 @@ type Transition =
 
 ### 6.3 Legs inside a session
 
-A session runs its pathway's legs in order. Each leg has a `LegStatus`: `pending`, `awaiting_user`, `processing`, `succeeded`, `failed`, `refunded`, `expired`. The session's `PROCESSING` step shows progress for all legs. A later leg starts automatically when the earlier leg's output arrives. With Relay open deposit addresses, leg 2 needs no action from us: the provider pays into the Relay address, and Relay fills.
+A session runs its pathway's legs in order. Each leg has a `LegStatus`: `pending`, `requires_action`, `processing`, `succeeded`, `failed`, `refunded`, `expired`. The session's `PROCESSING` step shows progress for all legs. A later leg starts automatically when the earlier leg's output arrives. With Relay open deposit addresses, leg 2 needs no action from us: the provider pays into the Relay address, and Relay fills.
 
 ### 6.4 Sequence (card to an unlisted chain)
 
@@ -420,7 +420,7 @@ v1 ships `memoryStore` (dev only), `redisStore`, and `postgresStore` (Drizzle, o
 
 - Envelope: `{ id, type, created, livemode, data: { object } }`.
 - Signature: HMAC-SHA256 over `id.timestamp.body`, with headers `openramp-id`, `openramp-timestamp`, `openramp-signature`. Timestamps older than 300 s are rejected. `openramp.webhooks.verify(req)` is provided.
-- Types: `session.created`, `session.completed`, `session.failed`, `session.expired`, `leg.succeeded`, `leg.failed`, `deposit.received` (merchant destination), `withdrawal.completed`.
+- Types: `session.created`, `session.succeeded`, `session.failed`, `session.expired`, `leg.succeeded`, `leg.failed`, `deposit.received` (merchant destination), `withdrawal.succeeded`.
 - Retries with exponential backoff for 24 hours. The app MUST treat them as at-least-once and credit balances idempotently by `session.id`.
 
 ## 8. Client and UI
@@ -463,7 +463,7 @@ It follows transitions only: it never guesses the next state. It handles `AWAIT`
 
 ### 8.4 Events (browser)
 
-Same envelope as the webhooks. Types: `modal.opened`, `method.selected`, `amount.entered`, `quotes.shown`, `quote.selected`, `surface.opened`, `step.changed`, `session.completed`, `session.failed`, `modal.closed` (with the last step). These map to funnel analytics.
+Same envelope as the webhooks. Types: `modal.opened`, `method.selected`, `amount.entered`, `quotes.shown`, `quote.selected`, `surface.opened`, `step.changed`, `session.succeeded`, `session.failed`, `modal.closed` (with the last step). These map to funnel analytics.
 
 ## 9. Relay integration (`@openrampkit/adapter-relay`)
 

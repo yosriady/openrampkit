@@ -121,7 +121,7 @@ describe('stripe adapter', () => {
     const q = await a.quote({ leg: leg('card'), amountIn: usd('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: 'cos_123' })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', ref: 'cos_123' })
     expect(step.surface).toEqual({
       kind: 'PROVIDER_SDK', provider: 'stripe',
       params: { clientSecret: 'cos_123_secret_abc', publishableKey: PK, sessionId: 'cos_123', redirectUrl: 'https://crypto.link.com?session_hash=abc' },
@@ -171,8 +171,8 @@ describe('stripe adapter', () => {
       expect(checkLegStep(step)).toEqual([])
       return step
     }
-    expect(await run(SESSION('initialized'))).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await run(SESSION('requires_payment'))).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await run(SESSION('initialized'))).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(await run(SESSION('requires_payment'))).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await run(SESSION('fulfillment_processing'))).toMatchObject({ state: 'PROCESSING', status: 'processing' })
     const done = await run(SESSION('fulfillment_complete', { transaction_details: { ...SESSION('x').transaction_details, transaction_id: '0xhash' } }))
     expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { value: '97.912345', asset: { chain: 'eip155:8453' } } })

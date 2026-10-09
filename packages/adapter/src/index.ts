@@ -109,7 +109,7 @@ export type LegEvent = {
   error?: OpenRampError
   /**
    * Optional new surface for a non-terminal event, e.g. an offramp `payment_pending` webhook that
-   * carries the deposit address: `{ kind: 'WALLET_TX', ... }` with status `awaiting_user`.
+   * carries the deposit address: `{ kind: 'WALLET_TX', ... }` with status `requires_action`.
    * The server shows it instead of the current surface.
    */
   surface?: Surface

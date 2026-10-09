@@ -13,7 +13,7 @@ export function createMockFetch({ country = 'US' } = {}) {
   let lastAmount = '0'
 
   const session = () => ({
-    id: 'ses_demo', direction: 'deposit', destination: DEST, status: 'open', country, currency,
+    id: 'ses_demo', direction: 'deposit', destination: DEST, status: 'requires_payment_method', country, currency,
     step, expiresAt: new Date(Date.now() + 3600e3).toISOString(), livemode: false,
   })
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
@@ -74,7 +74,7 @@ export function createMockFetch({ country = 'US' } = {}) {
     const base = { sessionId: 'ses_demo', legIndex: 0 }
     switch (q.method) {
       case 'card':
-        return { ...base, state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://example.com/checkout', popup: true, provider: q.provider }, transitions: [AWAIT, { name: 'completed', kind: 'SURFACE_RESULT', expects: 'completed' }, ...devButtons], progress: progress('awaiting_user', 'pending') }
+        return { ...base, state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://example.com/checkout', popup: true, provider: q.provider }, transitions: [AWAIT, { name: 'completed', kind: 'SURFACE_RESULT', expects: 'completed' }, ...devButtons], progress: progress('requires_action', 'pending') }
       case 'apple_pay':
         return { ...base, state: 'PAYMENT', surface: { kind: 'IFRAME', url: 'https://example.com/', origin: 'https://example.com', height: 420, provider: 'Coinbase' }, transitions: [AWAIT, ...devButtons] }
       case 'wallet':
@@ -86,7 +86,7 @@ export function createMockFetch({ country = 'US' } = {}) {
       case 'gcash': case 'momo': case 'gopay':
         return { ...base, state: 'AUTH', surface: { kind: 'OTP', channel: 'sms', to: '+63 917 *** 1234' }, transitions: [{ name: 'verify', kind: 'SUBMIT', label: 'Verify', inputs: [{ id: 'code', label: 'Code', type: 'text', required: true }] }] }
       default:
-        return { ...base, state: 'PAYMENT', surface: { kind: 'QR', payload: '00020101021228580011ph.ppmi.p2m0111DEMOPHM2XXX0315777148000000000520460165303608540' + q.input.value + '5802PH5913OPENRAMP DEMO6006MANILA6304ABCD', amount: q.input.value, currency, reference: 'ORK-DEMO-42', method: q.method, expiresAt: new Date(Date.now() + 15 * 60e3).toISOString() }, transitions: [AWAIT, ...devButtons], progress: progress('awaiting_user', 'pending') }
+        return { ...base, state: 'PAYMENT', surface: { kind: 'QR', payload: '00020101021228580011ph.ppmi.p2m0111DEMOPHM2XXX0315777148000000000520460165303608540' + q.input.value + '5802PH5913OPENRAMP DEMO6006MANILA6304ABCD', amount: q.input.value, currency, reference: 'ORK-DEMO-42', method: q.method, expiresAt: new Date(Date.now() + 15 * 60e3).toISOString() }, transitions: [AWAIT, ...devButtons], progress: progress('requires_action', 'pending') }
     }
   }
 

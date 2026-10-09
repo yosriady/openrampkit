@@ -61,7 +61,7 @@ PayNow QR uses the channel code `SGQR`, not `PAYNOW`. Source: the Xendit [PayNow
 
 | Xendit status | Leg |
 |---|---|
-| `ACCEPTING_PAYMENTS`, `REQUIRES_ACTION` | `awaiting_user` (`PAYMENT`) |
+| `ACCEPTING_PAYMENTS`, `REQUIRES_ACTION` | `requires_action` (`PAYMENT`) |
 | `AUTHORIZED` | `processing` |
 | `SUCCEEDED` | `succeeded` |
 | `FAILED`, `CANCELED` | `failed` with `PAYMENT_FAILED` |

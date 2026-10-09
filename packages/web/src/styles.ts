@@ -790,7 +790,7 @@ export const styles = css`
     color: var(--ork-color-background);
   }
   .dot.processing,
-  .dot.awaiting_user {
+  .dot.requires_action {
     background: var(--ork-color-accent-soft);
     border-color: var(--ork-color-accent);
     color: var(--ork-color-text);

@@ -147,7 +147,7 @@ type LegEvent = {
 
 The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. When the provider signs the body with no timestamp, a captured webhook could be sent again later. Add `replayKey` and return the provider event id, or `webhookBodyKey(rawBody)` (the SHA-256 of the body). The server keeps the key for 7 days and ignores a repeat (`200`, no change). It gives the key back when it answers `503`, so a provider retry still applies.
 
-Events move a leg only forward. When your leg learns where the user must pay after it started (for example a deposit address in a webhook, while the leg is `processing`), add `'surface_after_processing'` to the leg's `capabilities` and the surface kind to its `surfaces`. The server then allows one move from `processing` back to `awaiting_user` with that surface, before the leg has a transaction. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
+Events move a leg only forward. When your leg learns where the user must pay after it started (for example a deposit address in a webhook, while the leg is `processing`), add `'surface_after_processing'` to the leg's `capabilities` and the surface kind to its `surfaces`. The server then allows one move from `processing` back to `requires_action` with that surface, before the leg has a transaction. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
 
 ## Withdraw legs
 
@@ -160,7 +160,7 @@ A leg can serve [withdrawals](../guide/withdraw.md) when:
 
 `catalog()` gets `direction`, so an adapter can return sell legs for withdrawals only. In `quote()` and `start()`, `source` is the session's source asset, with the sender address when it is known (the user's wallet, or the app's treasury).
 
-The `WALLET_TX` step needs a `SURFACE_RESULT` transition that expects `tx_hash`. The client fires it after the user's wallet sends. For `custody: 'app'`, the server sends the transactions through the app's treasury and fires the same transition itself. When a provider learns its deposit address later (for example in a webhook), return a `LegEvent` with `status: 'awaiting_user'`, the `WALLET_TX` `surface` and its `transitions`.
+The `WALLET_TX` step needs a `SURFACE_RESULT` transition that expects `tx_hash`. The client fires it after the user's wallet sends. For `custody: 'app'`, the server sends the transactions through the app's treasury and fires the same transition itself. When a provider learns its deposit address later (for example in a webhook), return a `LegEvent` with `status: 'requires_action'`, the `WALLET_TX` `surface` and its `transitions`.
 
 ## prepareDeposit()
 
@@ -194,7 +194,7 @@ From the project's design notes:
 | `findDeliverAsset(list, asset)`, `requireDeliverAsset(list, asset, provider)` | Find the token you deliver for the requested destination. No match gives `undefined` (or `NO_QUOTES`). Never quote another token in its place. |
 | `POLL.onchain`, `POLL.checkout`, `POLL.dev` | Poll schedules for AWAIT transitions |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
-| `legStepFromEvent(event, ref, poll)` | The `LegStep` for a mapped provider status (no event means `PAYMENT`, `awaiting_user`) |
+| `legStepFromEvent(event, ref, poll)` | The `LegStep` for a mapped provider status (no event means `PAYMENT`, `requires_action`) |
 | `decimalFrom(n, digits = 8)` | A JSON number from a provider to an exact decimal string |
 | `hmacSha256(secret, message, 'hex' \| 'base64')`, `timingSafeEqual(a, b)`, `randomHex(bytes)` | Crypto helpers |
 | `evmRpc`, `erc20TransferData`, `erc20PaidTo`, `ERC20_TRANSFER_TOPIC`, `topicAddress` | EVM JSON-RPC helpers for on-chain checks. See [EVM helpers](../api/adapter.md#evm-helpers). |
@@ -288,7 +288,7 @@ export function acme(opts: AcmeOptions) {
       }
       return {
         state: 'PAYMENT',
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref: reference,
         surface: { kind: 'REDIRECT', url: order.checkout_url, popup: true, provider: 'Acme Pay' },
         transitions: [awaitPoll(POLL.checkout)],

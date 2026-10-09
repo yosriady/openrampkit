@@ -144,7 +144,7 @@ describe('peer adapter', () => {
     const q = await a.quote({ leg: leg('venmo'), amountIn: money('100') }, ctx)
     const step = await a.start({ leg: leg('venmo'), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: ORDER.id })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', ref: ORDER.id })
     expect(step.surface).toEqual({ kind: 'REDIRECT', url: `https://pay.peer.xyz/?order=${ORDER.id}&token=tok_123&method=venmo`, popup: true, provider: 'Peer' })
     const post = calls.find((c) => c.url.endsWith('/api/v1/orders'))!
     expect(post.method).toBe('POST')
@@ -193,9 +193,9 @@ describe('peer adapter', () => {
       expect(checkLegStep(s)).toEqual([])
       return s
     }
-    expect(await run({}, null)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await run({}, null)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await run({}, { id: 'p', status: 'CREATED', rail: 'venmo' })).toMatchObject({ state: 'PAYMENT' })
-    expect(await run({}, { id: 'p', status: 'EXPIRED' })).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await run({}, { id: 'p', status: 'EXPIRED' })).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await run({}, { id: 'p', status: 'FAILED' })).toMatchObject({ state: 'PAYMENT' })
     expect(await run({ status: 'PARTIALLY_FULFILLED' }, { status: 'SETTLED' })).toMatchObject({ state: 'PROCESSING' })
     expect(await run({ status: 'FULFILLED', remainingUsdcAmount: '0' }, { status: 'SETTLED', netSettledUsdcAmount: '96.09', fulfillTransaction: '0xabc' })).toMatchObject({

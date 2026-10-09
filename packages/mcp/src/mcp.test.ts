@@ -123,12 +123,12 @@ describe('@openrampkit/mcp', () => {
     expect(stored.amountBounds).toEqual({ max: '1000000', currency: 'VND' })
 
     const before = await call(client, 'get_session_status', { session_id: d.session_id })
-    expect(before.data).toMatchObject({ status: 'open', done: false })
+    expect(before.data).toMatchObject({ status: 'requires_payment_method', done: false })
 
     await personPays(ramp, d.pay_url)
 
     const done = await call(client, 'wait_for_completion', { session_id: d.session_id, timeout_seconds: 20 })
-    expect(done.data).toMatchObject({ status: 'completed', state: 'COMPLETED', done: true, method: 'vietqr', paid: '500000 VND' })
+    expect(done.data).toMatchObject({ status: 'succeeded', state: 'COMPLETED', done: true, method: 'vietqr', paid: '500000 VND' })
     expect(done.data.received).toMatch(/ USDC$/)
   })
 
@@ -145,7 +145,7 @@ describe('@openrampkit/mcp', () => {
     )
     expect(r.status).toBe(200)
     const done = await call(client, 'wait_for_completion', { session_id: created.data.session_id, timeout_seconds: 20 })
-    expect(done.data.status).toBe('completed')
+    expect(done.data.status).toBe('succeeded')
   })
 
   it('guardrails: caps, currencies, destinations and session scope', async () => {
@@ -207,7 +207,7 @@ describe('@openrampkit/mcp', () => {
     const created = await call(client, 'create_deposit_session', { country: 'VN' })
     const t0 = Date.now()
     const r = await call(client, 'wait_for_completion', { session_id: created.data.session_id, timeout_seconds: 1 })
-    expect(r.data).toMatchObject({ status: 'open', timed_out: true, done: false })
+    expect(r.data).toMatchObject({ status: 'requires_payment_method', timed_out: true, done: false })
     expect(Date.now() - t0).toBeLessThan(3000)
   })
 
@@ -237,11 +237,11 @@ describe('@openrampkit/mcp', () => {
     expect(created.isError).toBe(false)
     // A later request (a new stateless MCP server) still knows the session.
     const status = await call(client, 'get_session_status', { session_id: created.data.session_id })
-    expect(status.data.status).toBe('open')
+    expect(status.data.status).toBe('requires_payment_method')
 
     await personPays(ramp, created.data.pay_url)
     const done = await call(client, 'wait_for_completion', { session_id: created.data.session_id, timeout_seconds: 20 })
-    expect(done.data.status).toBe('completed')
+    expect(done.data.status).toBe('succeeded')
     await client.close()
 
     const bad = setup({ connection: { baseUrl: BASE, appKey: 'wrong', fetch: toRamp } })

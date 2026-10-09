@@ -406,7 +406,7 @@ export function coinbase(opts: CoinbaseOptions) {
       return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Coinbase purchase did not complete.', recovery: 'retry_payment' }) }
     }
     // A headless order before payment: the user is still in the frame
-    if (ORDER_WAITING.includes(status)) return { ref, status: 'awaiting_user' }
+    if (ORDER_WAITING.includes(status)) return { ref, status: 'requires_action' }
     return { ref, status: 'processing' }
   }
 
@@ -504,7 +504,7 @@ export function coinbase(opts: CoinbaseOptions) {
         },
       },
       transitions: [awaitPoll(POLL)],
-      status: 'awaiting_user',
+      status: 'requires_action',
       ref,
     }
   }
@@ -620,7 +620,7 @@ export function coinbase(opts: CoinbaseOptions) {
         state: 'PAYMENT',
         surface: { kind: 'REDIRECT', url, popup: true, provider: 'Coinbase' },
         transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref,
       }
     },

@@ -207,7 +207,7 @@ describe('onramper adapter', () => {
     const quote = await a.quote({ leg: leg('card'), amountIn: money('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: 'https://buy.onramper.com/checkout?session=s1', popup: true, provider: 'banxa' } })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'REDIRECT', url: 'https://buy.onramper.com/checkout?session=s1', popup: true, provider: 'banxa' } })
     const post = calls[1]!
     expect(post.url).toBe('https://api.onramper.com/checkout/v2/intent')
     expect(post.body).toEqual({
@@ -315,7 +315,7 @@ describe('onramper adapter', () => {
     ])
     expect(await shared.get('tx:ork_abc')).toBe('otx_1')
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
-    expect(await parse(HOOK('new'))).toMatchObject([{ ref: 'ork_abc', status: 'awaiting_user' }])
+    expect(await parse(HOOK('new'))).toMatchObject([{ ref: 'ork_abc', status: 'requires_action' }])
     expect(await parse(HOOK('pending'))).toMatchObject([{ status: 'processing' }])
     expect(await parse(HOOK('paid'))).toMatchObject([{ status: 'processing' }])
     expect(await parse(HOOK('failed'))).toMatchObject([{ status: 'failed', error: { code: 'PAYMENT_FAILED' } }])
@@ -330,7 +330,7 @@ describe('onramper adapter', () => {
     const { fetch, calls } = fakeFetch([{ match: '/transactions/otx_1', reply: () => HOOK('completed', { transactionHash: '0xhash' }) }])
     const a = onramper(opts)
     const ctx = makeCtx({ fetch, shared })
-    expect(await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(calls).toHaveLength(0)
     await shared.put('tx:ork_abc', 'otx_1')
     const s = await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)

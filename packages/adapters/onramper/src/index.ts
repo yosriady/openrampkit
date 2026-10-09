@@ -261,7 +261,7 @@ export function onramper(opts: OnramperOptions) {
       case 'pending':
         return { ref, status: 'processing', ...(output ? { output } : {}) }
       case 'new':
-        return { ref, status: 'awaiting_user' }
+        return { ref, status: 'requires_action' }
       case 'failed':
       case 'canceled':
       case 'cancelled':
@@ -418,7 +418,7 @@ export function onramper(opts: OnramperOptions) {
         state: 'PAYMENT',
         surface: { kind: 'REDIRECT', url: res.redirectUrl, popup: true, provider: data.onramp },
         transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref,
       }
     },

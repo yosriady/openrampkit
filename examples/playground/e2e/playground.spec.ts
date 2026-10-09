@@ -38,7 +38,7 @@ test('Vietnam: VietQR compares mock providers, then the deposit completes with a
   await expect(modal).toContainText('Deposit complete', { timeout: 30_000 })
 
   await expect(page.getByTestId('events')).toContainText('COMPLETED')
-  await expect(page.getByTestId('webhooks')).toContainText('session.completed')
+  await expect(page.getByTestId('webhooks')).toContainText('session.succeeded')
   await expect(page.getByTestId('webhooks')).toContainText('signature ok')
   expect(errors).toEqual([])
 })

@@ -194,7 +194,7 @@ describe('sessions', () => {
     expect(await ramp.sessions.retrieve('nope')).toBeNull()
     expect(await ramp.sessions.refresh('nope')).toBeNull()
     const s = await session(ramp)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('open')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('requires_payment_method')
     expect((await ramp.sessions.refresh(s.id))!.step.state).toBe('SELECT_METHOD')
   })
 
@@ -244,7 +244,7 @@ describe('payment flow rules', () => {
     expect((await call(`/sessions/${s.id}/transitions/poll`, { method: 'POST', secret: s.clientSecret, body: '{}' })).status).toBe(409)
     const r = await (await call(`/sessions/${s.id}/transitions/restart`, { method: 'POST', secret: s.clientSecret, body: '{}' })).json()
     expect(r.step.state).toBe('SELECT_METHOD')
-    expect(r.status).toBe('open')
+    expect(r.status).toBe('requires_payment_method')
     expect((await call(`/sessions/${s.id}/transitions/simulate_payment`, { method: 'POST', secret: s.clientSecret, body: '{}' })).status).toBe(409)
   })
 
@@ -304,7 +304,7 @@ describe('provider webhooks in', () => {
       return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
     },
     async start() {
-      return { state: 'PAYMENT', status: 'awaiting_user', ref: 'order-1', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
+      return { state: 'PAYMENT', status: 'requires_action', ref: 'order-1', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
     },
     webhook: {
       async verify(req) { return req.headers.get('x-sig') === 'good' },
@@ -333,11 +333,11 @@ describe('provider webhooks in', () => {
     expect(unknown.status).toBe(503)
     expect(unknown.headers.get('retry-after')).toBe('30')
     expect((await unknown.json()).error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true })
-    expect(sent.filter((t) => t === 'session.completed')).toHaveLength(1)
+    expect(sent.filter((t) => t === 'session.succeeded')).toHaveLength(1)
     expect(sent).toContain('leg.succeeded')
   })
 
-  it('a failed provider event fails the session and notifies', async () => {
+  it('a failed provider event fails the attempt: back to requires_payment_method, with lastError and session.payment_failed', async () => {
     const sent: string[] = []
     const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('no', { status: 500 }) } }, [hooked])
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
@@ -346,22 +346,25 @@ describe('provider webhooks in', () => {
     await call(`/sessions/${s.id}/select`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ quoteId: q.quotes[0].id }) })
     await call('/webhooks/hooked', { method: 'POST', body: JSON.stringify([{ ref: 'order-1', status: 'failed' }]), headers: { 'x-sig': 'good' } })
     const pub = await (await call(`/sessions/${s.id}`, { secret: s.clientSecret })).json()
-    expect(pub.status).toBe('failed')
-    expect(sent).toEqual(expect.arrayContaining(['leg.failed', 'session.failed']))
+    expect(pub.status).toBe('requires_payment_method')
+    expect(pub.step.state).toBe('FAILED')
+    expect(pub.lastError).toMatchObject({ code: expect.any(String) })
+    expect(sent).toEqual(expect.arrayContaining(['leg.failed', 'session.payment_failed']))
+    expect(sent).not.toContain('session.failed')
   })
 })
 
 describe('leg helpers', () => {
   it('maps states to session status', () => {
-    expect(sessionStatusFor('COMPLETED', true)).toBe('completed')
+    expect(sessionStatusFor('COMPLETED', true)).toBe('succeeded')
     expect(sessionStatusFor('BLOCKED', false)).toBe('failed')
     expect(sessionStatusFor('EXPIRED', true)).toBe('expired')
     expect(sessionStatusFor('REFUNDED', true)).toBe('refunded')
     expect(sessionStatusFor('PAYMENT', true)).toBe('processing')
-    expect(sessionStatusFor('SELECT_METHOD', false)).toBe('open')
+    expect(sessionStatusFor('SELECT_METHOD', false)).toBe('requires_payment_method')
   })
   it('builds leg steps from events and drops the surface when terminal', () => {
-    const cur = { state: 'PAYMENT' as const, status: 'awaiting_user' as const, transitions: [], surface: { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'IDR' } }
+    const cur = { state: 'PAYMENT' as const, status: 'requires_action' as const, transitions: [], surface: { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'IDR' } }
     expect(legStepFromEvent(cur, { ref: 'r', status: 'processing' })).toMatchObject({ state: 'PROCESSING', surface: cur.surface })
     const done = legStepFromEvent(cur, { ref: 'r', status: 'succeeded' })
     expect(done.state).toBe('COMPLETED')

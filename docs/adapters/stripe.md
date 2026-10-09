@@ -63,7 +63,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#stripe).
 |---|---|
 | `fulfillment_complete` | `succeeded` with `transaction_id` |
 | `fulfillment_processing` | `processing` |
-| `initialized`, `requires_payment` | `awaiting_user` |
+| `initialized`, `requires_payment` | `requires_action` |
 | `rejected` | `failed` with `PROVIDER_DECLINED` |
 
 ## Webhooks

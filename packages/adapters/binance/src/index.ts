@@ -364,7 +364,7 @@ export function binance(opts: BinanceOptions) {
       await ctx.store.put(`o:${ref}`, { since: Date.now() }, ORDER_TTL_SEC)
       return {
         state: 'PAYMENT',
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref,
         surface: { kind: 'REDIRECT', url: order.link, popup: true, provider: NAME },
         transitions: [awaitPoll(POLL)],

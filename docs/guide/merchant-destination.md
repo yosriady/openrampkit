@@ -73,14 +73,14 @@ Nothing changes in the browser. Use `DepositButton`, `OpenRampEmbedded` or `open
 2. The quote shows the amount, the fee (if you configured `fees`) and the net amount.
 3. On confirm, the adapter creates a Xendit payment request. QR channels show a `QR` surface with a 15-minute countdown. E-wallets show a `REDIRECT` (web checkout) or a `DEEPLINK` (open the app).
 4. Xendit sends a webhook when the payment succeeds or fails. The server also polls Xendit while the modal is open.
-5. The modal shows "Deposit complete". Your backend receives `session.completed`.
+5. The modal shows "Deposit complete". Your backend receives `session.succeeded`.
 
 ## 5. Credit the order
 
-Handle `session.completed` in your webhook route. The event carries your `metadata`, so you can find the order:
+Handle `session.succeeded` in your webhook route. The event carries your `metadata`, so you can find the order:
 
 ```ts
-if (event.type === 'session.completed') {
+if (event.type === 'session.succeeded') {
   const { session, userId, metadata } = event.data.object
   await markOrderPaid(metadata.orderId, { sessionId: session.id, userId })
 }

@@ -10,7 +10,7 @@ import { resultChannels } from './index.js'
 describe('resultChannels', () => {
   it('polling from status(), webhooks from a webhook that can verify', () => {
     expect(resultChannels({})).toEqual({ polling: false, webhooks: false })
-    expect(resultChannels({ status: async () => ({ state: 'PAYMENT', status: 'awaiting_user', transitions: [] }) })).toEqual({ polling: true, webhooks: false })
+    expect(resultChannels({ status: async () => ({ state: 'PAYMENT', status: 'requires_action', transitions: [] }) })).toEqual({ polling: true, webhooks: false })
     const webhook = { verify: async () => true, parse: async () => [] }
     expect(resultChannels({ webhook })).toEqual({ polling: false, webhooks: true })
     expect(resultChannels({ webhook: { ...webhook, configured: false } })).toEqual({ polling: false, webhooks: false })

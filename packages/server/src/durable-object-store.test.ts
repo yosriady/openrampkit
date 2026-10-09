@@ -99,6 +99,6 @@ describe('durableObjectStore', () => {
     expect(sel.step.surface.kind).toBe('QR')
     await call(`/sessions/${s.id}/transitions/simulate_payment`, {})
     await ramp.sweep()
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
   })
 })

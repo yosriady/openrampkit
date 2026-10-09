@@ -245,7 +245,7 @@ export function stripe(opts: StripeOptions) {
         return { ref, status: 'failed', error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       case 'initialized':
       case 'requires_payment':
-        return { ref, status: 'awaiting_user' }
+        return { ref, status: 'requires_action' }
       default:
         return undefined
     }
@@ -354,7 +354,7 @@ export function stripe(opts: StripeOptions) {
           params: { clientSecret: s.client_secret, publishableKey: opts.publishableKey, sessionId: s.id, ...(s.redirect_url ? { redirectUrl: s.redirect_url } : {}) },
         }
       }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'awaiting_user', ref: s.id }
+      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'requires_action', ref: s.id }
     },
 
     async status(input, ctx) {

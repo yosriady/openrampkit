@@ -1,5 +1,5 @@
 import { isEvmAddress, settlementCallsFrom } from '@openrampkit/adapter'
-import { OpenRampException, isTerminal, openRampError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
 import type { Destination } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
@@ -100,7 +100,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     ...(input.allowedMethods ? { allowedMethods: input.allowedMethods } : {}),
     ...(input.metadata ? { metadata: input.metadata } : {}),
     livemode: rt.livemode,
-    status: 'open',
+    status: 'requires_payment_method',
     createdAt: now,
     expiresAt,
     quotes: {},
@@ -142,7 +142,7 @@ function checkSettlement(d: Extract<Destination, { type: 'crypto' }>): void {
   settlementCallsFrom(d.calls)
 }
 
-/** Load a session from a `Bearer <id>.<secret>` header. Expires an open session past its deadline. */
+/** Load a session from a `Bearer <id>.<secret>` header. Expires a session with no payment in progress past its deadline. */
 export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise<SessionRecord> {
   const auth = req.headers.get('authorization') ?? ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
@@ -155,7 +155,8 @@ export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise
   const rec = await rt.store.get(id)
   if (!rec || (!isPayCredential(secret) && !safeEqual(rec.secretHash, await sha256Hex(secret)))) throw new OpenRampException(openRampError('UNAUTHORIZED'), 401)
   if (isRevokedPayLink(rec, secret)) throw new OpenRampException(openRampError('UNAUTHORIZED', { message: 'This pay link no longer works.' }), 401)
-  if (Date.now() > rec.expiresAt && !isTerminal(rec.step.state) && rec.status === 'open') {
+  // No payment in progress (also after a failed attempt): the session expires at its deadline.
+  if (Date.now() > rec.expiresAt && rec.status === 'requires_payment_method') {
     rec.status = 'expired'
     rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: openRampError('SESSION_EXPIRED') }
     await notify(rt, rec, 'session.expired')

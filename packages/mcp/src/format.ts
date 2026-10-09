@@ -2,7 +2,7 @@
 
 import type { Amount, MethodOption, OpenRampError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
 
-export const TERMINAL = new Set(['completed', 'failed', 'expired', 'refunded', 'reversed'])
+export const TERMINAL = new Set(['succeeded', 'failed', 'canceled', 'expired', 'refunded', 'reversed'])
 
 export function amountText(a: Amount): string {
   const unit = a.asset.kind === 'fiat' ? a.asset.currency : (a.asset.symbol ?? a.asset.token)
@@ -88,6 +88,8 @@ export function sessionView(s: PublicSession) {
     ...(s.destination?.type === 'fiat' ? { payout_currency: s.destination.currency } : {}),
     ...(s.amountBounds ? { bounds: boundsText(s.amountBounds) } : {}),
     ...(s.step.error ? { error: errorView(s.step.error) } : {}),
+    // A failed attempt: the person can try again with another method (or the same one).
+    ...(s.status === 'requires_payment_method' && s.lastError ? { attempt_failed: true, last_error: errorView(s.lastError) } : {}),
     expires_at: s.expiresAt,
   }
 }

@@ -6,6 +6,7 @@ import type {
   Direction,
   LegQuote,
   LegStep,
+  OpenRampError,
   Pathway,
   PlanResult,
   Quote,
@@ -29,7 +30,7 @@ export type ActiveLeg = {
   treasurySent?: string[]
   /** Set when the reported output is short of the quote beyond the tolerance, or not comparable with it */
   amountMismatch?: Omit<AmountMismatch, 'legIndex'>
-  /** Set when a provider event moved the leg from `processing` back to `awaiting_user` (allowed once) */
+  /** Set when a provider event moved the leg from `processing` back to `requires_action` (allowed once) */
   surfaceReopened?: boolean
 }
 
@@ -106,6 +107,8 @@ export type SessionRecord = {
   metadata?: Record<string, string>
   livemode: boolean
   status: SessionStatus
+  /** The error of the last failed attempt, or of the final failure. Cleared when a new payment starts. */
+  lastError?: OpenRampError
   createdAt: number
   expiresAt: number
   walletConnected?: boolean
@@ -208,7 +211,7 @@ export interface SessionStore {
 export class VersionConflictError extends Error {}
 
 /** The schema that this server writes in `SessionRecord.schema`. */
-export const SESSION_SCHEMA = 1
+export const SESSION_SCHEMA = 2
 
 /** True for a session record. A custom store without a `queue` also keeps queue records (`__queue:*`). */
 function isSessionRecord(rec: unknown): rec is SessionRecord {
@@ -224,6 +227,9 @@ function isSessionRecord(rec: unknown): rec is SessionRecord {
  * Schema 0 to 1 (records with no `schema`): `updatedAt` from `createdAt`; `ActivePayment.n` from the number
  * of earlier attempts, and `n` of each earlier attempt from its place; empty `quotes`, `startUrls`,
  * `notified` and `outbox` when absent; each step `sub` in lower case when that is in `STEP_SUBS`, else removed.
+ *
+ * Schema 1 to 2 (see `migrateToV2`): the new status names (`requires_payment_method`, `requires_action`,
+ * `succeeded`) and `Amount.value`.
  *
  * A record with a newer schema (written by a newer server) is returned as it is. Other records (for
  * example the queue records of a custom store) are returned as they are.
@@ -250,8 +256,53 @@ export function migrateRecord<T>(rec: T): T {
       else delete step.sub
     }
   }
+  if (from < 2) migrateToV2(rec)
   rec.schema = SESSION_SCHEMA
   return rec
+}
+
+/** Schema 1 status names (see `migrateRecord`) */
+const V1_STATUS: Record<string, SessionStatus> = { open: 'requires_payment_method', awaiting_user: 'requires_action', completed: 'succeeded' }
+/** Schema 1 event names in `notified` keys */
+const V1_EVENTS: Record<string, string> = { 'session.completed': 'session.succeeded', 'withdrawal.completed': 'withdrawal.succeeded' }
+
+/** Rename `amount` to `value` in every `{ amount, asset }` (an `Amount`) under `v`, in place. */
+function renameAmounts(v: unknown): void {
+  if (!v || typeof v !== 'object') return
+  if (Array.isArray(v)) {
+    for (const x of v) renameAmounts(x)
+    return
+  }
+  const o = v as Record<string, unknown>
+  const asset = o.asset as { kind?: unknown } | undefined
+  if ('amount' in o && !('value' in o) && asset && typeof asset === 'object' && typeof asset.kind === 'string') {
+    o.value = o.amount
+    delete o.amount
+  }
+  for (const x of Object.values(o)) renameAmounts(x)
+}
+
+/**
+ * Schema 1 to 2: the session status `open` is `requires_payment_method`, `awaiting_user` is
+ * `requires_action` and `completed` is `succeeded`; the leg status `awaiting_user` is `requires_action`;
+ * every `Amount` is `{ value, asset }` (was `{ amount, asset }`); `notified` keys use the new event names.
+ * Events already in the outbox keep the body they were made with.
+ */
+function migrateToV2(rec: SessionRecord): void {
+  const status = V1_STATUS[rec.status as string]
+  if (status) rec.status = status
+  const legStatus = (step: { status?: string } | undefined) => {
+    if (step?.status === 'awaiting_user') step.status = 'requires_action'
+  }
+  for (const p of [rec.active, ...(rec.attempts ?? [])]) for (const l of p?.legs ?? []) legStatus(l.step)
+  for (const l of rec.step.progress?.legs ?? []) legStatus(l)
+  rec.notified = rec.notified.map((k) => {
+    const [name] = k.split(':', 1)
+    const next = name ? V1_EVENTS[name] : undefined
+    return next ? `${next}${k.slice(name!.length)}` : k
+  })
+  const { outbox: _outbox, timeline: _timeline, ...rest } = rec
+  renameAmounts(rest)
 }
 
 /**

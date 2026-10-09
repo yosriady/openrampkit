@@ -130,7 +130,7 @@ sequenceDiagram
   S->>S: applyEvent(), setLegStep() with status succeeded
   S->>App: leg.succeeded
   S->>S: composeStep(): every leg succeeded, so COMPLETED
-  S->>App: session.completed (signed)
+  S->>App: session.succeeded (signed)
   B->>S: GET /sessions/:id/step
   S-->>B: Step COMPLETED with result
   B->>U: Result screen, onComplete(session)
@@ -180,7 +180,7 @@ sequenceDiagram
   XP->>S: POST /webhooks/xendit (x-callback-token)
   S->>X: webhook.verify(), webhook.parse(): payment.capture
   S->>S: applyEvent({ ref, status: 'succeeded' })
-  S->>App: session.completed
+  S->>App: session.succeeded
   B->>S: GET /sessions/:id/step
   S-->>B: Step COMPLETED
 ```
@@ -233,7 +233,7 @@ sequenceDiagram
     R-->>S: PROCESSING, or COMPLETED with output and txHash
   end
   S->>S: composeStep(): both legs succeeded, so COMPLETED
-  S->>App: leg.succeeded { index: 1 }, then session.completed
+  S->>App: leg.succeeded { index: 1 }, then session.succeeded
 ```
 
 Notes:
@@ -400,7 +400,7 @@ sequenceDiagram
   else not settled, or a different settlement
     R-->>S: FAILED with DELIVERY_FAILED and a problem message
   end
-  S->>App: session.completed or session.failed
+  S->>App: session.succeeded or session.failed
 ```
 
 The server verifies by session id. A transaction hash from the browser is not enough. Without an intent signer, another wallet can settle the session id first with other values. Then the receipt does not match, and the leg fails.
@@ -460,7 +460,7 @@ sequenceDiagram
   A-->>S: LegStep PROCESSING
   Note over A: A fiat payout completes when the provider pays the user's bank or e-wallet
   S->>A: status() or provider webhook
-  S->>App: session.completed and withdrawal.completed
+  S->>App: session.succeeded and withdrawal.succeeded
 ```
 
 For a fiat payout at an offramp (for example Swapped), the provider first shows its own page in an `IFRAME` for the payout details. Then a provider event carries a new `WALLET_TX` surface that pays the provider's deposit address.
@@ -551,7 +551,7 @@ sequenceDiagram
 
 Other expiry paths:
 
-- `loadAuthed()` expires an `open` session (no payment) on the next browser request after the deadline, and sends `session.expired`.
+- `loadAuthed()` expires a `requires_payment_method` session (no payment in progress, also after a failed attempt) on the next browser request after the deadline, and sends `session.expired`.
 - After the deadline, `plan`, `target`, `quotes`, `select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment in progress can still finish.
 - A leg can end as `expired`, for example a QR code that nobody paid. Then the step is `EXPIRED`.
 
@@ -594,7 +594,7 @@ sequenceDiagram
   loop every pollIntervalMs (3 s), up to timeout_seconds (default 60, capped by maxWaitSeconds)
     M->>S: GET /sessions/:id/step
   end
-  S->>App: session.completed with metadata.reference
+  S->>App: session.succeeded with metadata.reference
   M-->>Ag: status completed, or timed_out with a next hint
 ```
 

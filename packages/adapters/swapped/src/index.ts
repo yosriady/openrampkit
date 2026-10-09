@@ -337,7 +337,7 @@ export function swapped(opts: SwappedOptions) {
       case 'payment_pending': {
         // The user finished the widget; Swapped waits for the crypto at `order_crypto_address`.
         const send = sendFundsStep(ref, n)
-        return send ? { ref, status: 'awaiting_user', ...send } : undefined
+        return send ? { ref, status: 'requires_action', ...send } : undefined
       }
       case 'payout_pending':
         return { ref, status: 'processing', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
@@ -419,7 +419,7 @@ export function swapped(opts: SwappedOptions) {
       state: 'PAYMENT',
       surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 600, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
       transitions: [awaitPoll(POLL)],
-      status: 'awaiting_user',
+      status: 'requires_action',
       ref,
     }
   }
@@ -529,7 +529,7 @@ export function swapped(opts: SwappedOptions) {
         state: 'PAYMENT',
         surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
         transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
         ref,
       }
     },

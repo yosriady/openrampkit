@@ -219,7 +219,7 @@ describe('lifi start', () => {
   it('returns the approval and the LI.FI transaction for the user', async () => {
     const { step } = await started()
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'WALLET_TX', chain: 'eip155:42161' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'WALLET_TX', chain: 'eip155:42161' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
     expect(step.surface?.kind === 'WALLET_TX' && step.surface.txs).toEqual([
       { to: ARB_USDC.token, data: erc20ApproveData(DIAMOND, '10000000'), chainId: 42161 },
       { to: DIAMOND, data: '0x1794958f00', chainId: 42161, gas: String(0x2ae892) },
@@ -289,7 +289,7 @@ describe('lifi status', () => {
 
   it('waits for the tx hash, then completes with the on-chain delivery amount', async () => {
     const s = await started()
-    expect(await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     await s.a.transition!({ leg: walletLeg, ref: s.ref, name: 'submit_tx', inputs: { txHash: HASH } }, s.ctx)
     const done = await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)
     expect(checkLegStep(done)).toEqual([])

@@ -378,7 +378,7 @@ export function mockAdapter(opts: MockOptions = {}) {
   function offrampStep(ref: string, o: MockOrder): LegStep {
     if (!o.account) {
       return {
-        state: 'PAYMENT', sub: 'payout_account', status: 'awaiting_user', ref,
+        state: 'PAYMENT', sub: 'payout_account', status: 'requires_action', ref,
         surface: { kind: 'FORM', fields: payoutFields(o.method) },
         transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }],
       }
@@ -387,7 +387,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     const asset = input.asset.kind === 'crypto' ? input.asset : BASE_USDC
     const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo ?? fakeAddress(ref), toBaseUnits(input.value, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
     return {
-      state: 'PAYMENT', sub: 'send_crypto', status: 'awaiting_user', ref,
+      state: 'PAYMENT', sub: 'send_crypto', status: 'requires_action', ref,
       surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
     }
@@ -396,7 +396,7 @@ export function mockAdapter(opts: MockOptions = {}) {
   /** The card leg's user step with `cardCheckout: 'form'`: test card fields in the widget. */
   function cardFormStep(ref: string): LegStep {
     return {
-      state: 'PAYMENT', sub: 'card_details', status: 'awaiting_user', ref,
+      state: 'PAYMENT', sub: 'card_details', status: 'requires_action', ref,
       surface: { kind: 'FORM', fields: CARD_FIELDS },
       transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }],
     }
@@ -415,7 +415,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       ? buildSettlementTxs({ chainId, contract: o.settlement.contract, sessionId: ctx.session.id, token: asset.token, amount, recipient: o.payTo!, calls })
       : [{ to: asset.token, data: erc20TransferData(o.payTo!, amount.toString()), value: '0', chainId }]
     return {
-      state: 'PAYMENT', sub: 'send_crypto', status: 'awaiting_user', ref,
+      state: 'PAYMENT', sub: 'send_crypto', status: 'requires_action', ref,
       surface: { kind: 'WALLET_TX', chain: asset.chain, txs },
       // With a settlement, a poll also finds a session that the contract already settled.
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }, ...(o.settlement ? [awaitPoll(POLL)] : [])],
@@ -475,7 +475,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     const decimals = asset.decimals ?? 6
     const tx: TxRequest = { kind: 'solana', type: 'transfer', to: o.payTo!, mint: asset.token, amount: toBaseUnits(o.input!.value, decimals), decimals }
     return {
-      state: 'PAYMENT', sub: 'send_crypto', status: 'awaiting_user', ref,
+      state: 'PAYMENT', sub: 'send_crypto', status: 'requires_action', ref,
       surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
     }
@@ -614,7 +614,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'card':
           if (cardForm) return cardFormStep(ref)
           return {
-            state: 'PAYMENT', status: 'awaiting_user', ref,
+            state: 'PAYMENT', status: 'requires_action', ref,
             surface: { kind: 'REDIRECT', url: `${base}/adapters/${id}/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.value}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
             transitions: [awaitPoll(POLL)],
           }
@@ -622,7 +622,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'payin': {
           const cur = quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : 'USD'
           return {
-            state: 'PAYMENT', status: 'awaiting_user', ref,
+            state: 'PAYMENT', status: 'requires_action', ref,
             surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.value}|${cur}`, amount: quote.input.value, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
             transitions: [
               { name: 'simulate_payment', kind: 'SUBMIT', label: 'Simulate payment (test mode)' },
@@ -644,7 +644,7 @@ export function mockAdapter(opts: MockOptions = {}) {
               }
             : { to: deliverTo?.address ?? fakeAddress(ref), data: '0x', value: '0', chainId: evmChainId(src.chain) ?? 8453 }
           return {
-            state: 'PAYMENT', status: 'awaiting_user', ref,
+            state: 'PAYMENT', status: 'requires_action', ref,
             surface: { kind: 'WALLET_TX', chain: src.chain, txs: [tx] },
             transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
           }
@@ -656,7 +656,7 @@ export function mockAdapter(opts: MockOptions = {}) {
             ? `In your exchange, withdraw ${symbolOf(src)} and choose the ${chainName(src.chain)} network. This is a test address.`
             : `Send only ${symbolOf(src)} on ${chainName(src.chain)}. This is a test address.`
           return {
-            state: 'PAYMENT', status: 'awaiting_user', ref,
+            state: 'PAYMENT', status: 'requires_action', ref,
             surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning },
             transitions: [
               { name: 'simulate_deposit', kind: 'SUBMIT', label: 'Simulate deposit (test mode)' },
@@ -778,7 +778,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))
       if (o?.kind === 'offramp') return offrampStep(ref, o)
       if (o?.kind === 'card' && cardForm && o.status === 'awaiting') return cardFormStep(ref)
-      return { state: 'PAYMENT', status: 'awaiting_user', ref, transitions: [awaitPoll(POLL)] }
+      return { state: 'PAYMENT', status: 'requires_action', ref, transitions: [awaitPoll(POLL)] }
     },
 
     async routes(req, subpath, ctx) {

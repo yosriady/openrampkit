@@ -108,7 +108,7 @@ describe('coinbase adapter', () => {
 
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl, popup: true, provider: 'Coinbase' } })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl, popup: true, provider: 'Coinbase' } })
     expect(step.ref).toBe((call.body as { partnerUserRef: string }).partnerUserRef)
     expect(calls).toHaveLength(1)
 
@@ -149,7 +149,7 @@ describe('coinbase adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'GET', match: '/onramp/v1/buy/user/', reply: () => ({ transactions: txs }) }])
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const ctx = makeCtx({ fetch })
-    expect(await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(calls[0]!.url).toBe('https://api.developer.coinbase.com/onramp/v1/buy/user/sandbox-ork-1/transactions?pageSize=1')
     const jwt = calls[0]!.headers.get('authorization')!.replace(/^Bearer /, '')
     expect(decodePart(jwt.split('.')[1]!).uris).toEqual(['GET api.developer.coinbase.com/onramp/v1/buy/user/sandbox-ork-1/transactions'])

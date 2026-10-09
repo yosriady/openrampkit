@@ -171,6 +171,7 @@ export function publicSession(rec: SessionRecord): PublicSession {
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     step: rec.step,
     ...(rec.active ? { result: sessionResult(rec) } : {}),
+    ...(rec.lastError ? { lastError: rec.lastError } : {}),
     expiresAt: new Date(rec.expiresAt).toISOString(),
     livemode: rec.livemode,
   }

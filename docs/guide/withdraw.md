@@ -83,7 +83,7 @@ The user picks a network, a token and an address. The token list has USDC (when 
 2. The server checks the format again, then [`allowedTargets`](#allowed-targets), then your [`screenAddress`](#screen-addresses) hook. It stores the target as the session destination and returns the plan.
 3. When only one method is available, the modal goes straight to the amount screen. The amount is in the source token. The modal shows the wallet balance of the source token when the wallet reports it.
 4. The user confirms a quote. The leg asks for a wallet transaction (`WALLET_TX`). With `custody: 'user_wallet'`, the user approves it in the wallet. With `custody: 'app'`, the server sends it through your [treasury hook](#custody-app).
-5. The leg completes. The server sends `session.completed` and `withdrawal.completed`.
+5. The leg completes. The server sends `session.succeeded` and `withdrawal.succeeded`.
 
 | Confirm in wallet | Done |
 |---|---|
@@ -231,7 +231,7 @@ For a withdraw session, the server sends the usual [session webhooks](./webhooks
 
 | Type | When |
 |---|---|
-| `withdrawal.completed` | The withdrawal completed. Sent after `session.completed`. |
+| `withdrawal.succeeded` | The withdrawal completed. Sent after `session.succeeded`. |
 | `withdrawal.failed` | The withdrawal failed. Sent after `session.failed`. |
 | `withdrawal.reversed` | The withdrawal completed, then the provider took it back (for example, the bank returned the payout). Sent after `session.reversed`. |
 

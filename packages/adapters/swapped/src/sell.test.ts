@@ -66,7 +66,7 @@ describe('swapped sell legs', () => {
     const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, ctx)
     const step = await a.start({ leg: sellLeg('bank-transfer', 'EUR'), quote: q }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'IFRAME', origin: 'https://widget.swapped.com' } })
+    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'IFRAME', origin: 'https://widget.swapped.com' } })
     const url = new URL((step.surface as { url: string }).url)
     expect(url.pathname).toBe('/sell')
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ apiKey: PK, method: 'bank-transfer', userSendsFunds: 'false', cryptoCurrencyCode: 'USDC_BASE', cryptoCurrencyAmount: '100', fiatCurrencyCode: 'EUR', baseCountry: 'DK' })
@@ -80,7 +80,7 @@ describe('swapped sell legs', () => {
     const ctx = makeWebhookCtx()
     const body = { order_type: 'sell', order_status: 'payment_pending', external_customer_id: 'u1.abc', order_crypto: 'USDC_BASE', order_crypto_amount: '100.5', order_crypto_address: '0x00000000000000000000000000000000000000AA' }
     const [ev] = await a.webhook!.parse(JSON.stringify(body), ctx) as Array<Record<string, unknown>>
-    expect(ev).toMatchObject({ ref: 'u1.abc', status: 'awaiting_user', transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
+    expect(ev).toMatchObject({ ref: 'u1.abc', status: 'requires_action', transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
     const surface = ev!.surface as { kind: string; chain: string; txs: Array<{ to: string; data: string; chainId: number; value: string }> }
     expect(surface).toMatchObject({ kind: 'WALLET_TX', chain: 'eip155:8453' })
     const tx = surface.txs[0]!

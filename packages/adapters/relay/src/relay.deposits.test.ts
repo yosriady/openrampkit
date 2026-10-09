@@ -73,7 +73,7 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     expect(s1.ref).not.toBe(s2.ref)
     const log = chain.send(units(10))
     // the 25 USDC session polls first: 10 USDC is not enough for it
-    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash, output: { value: '10' } })
     expect(await s2.status()).toMatchObject({ state: 'PAYMENT' })
     // the completed session checks again: same answer (its own claim)
@@ -120,7 +120,7 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     const s = await directSession(a, fetch, shared, 'sess_a', '10')
     chain.send(1n) // 0.000001 USDC
     chain.send(units(9.9)) // 1% short
-    expect(await s.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     const ok = chain.send(units(9.96)) // 0.4% short: inside the tolerance
     expect(await s.status()).toMatchObject({ state: 'COMPLETED', txHash: ok.transactionHash, output: { value: '9.96' } })
   })
@@ -137,7 +137,7 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     // a later session that started before the log (same start block) and expects the same amount
     chain.state.head = 100n
     const s2 = await directSession(a, fetch, shared, 'sess_b', '10')
-    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     // the same tx hash, submitted to a same-chain wallet leg
     const walletLeg: PathwayLeg = { ...transferLeg, legId: 'wallet' }
     const wctx = makeCtx({ fetch: fakeFetch([wrpc(log)]).fetch, shared, session: { id: 'sess_w' } })
@@ -243,7 +243,7 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     expect(calls[0]!.body).toMatchObject({ slippageTolerance: '150' })
     expect(s1.q.data).toMatchObject({ minOutput: '9.76' })
     byAddress[addrs[1]!] = [request('2', units(10))]
-    expect(await s1.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(await s1.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await s2.status()).toMatchObject({ state: 'COMPLETED', txHash: '0xout2' })
   })
 

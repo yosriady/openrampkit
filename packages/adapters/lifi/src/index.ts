@@ -554,7 +554,7 @@ export function lifi(opts: LifiOptions = {}) {
       } satisfies WalletRecord,
       RECORD_TTL_SEC,
     )
-    return { state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: origin.chain, txs }, transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
+    return { state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: origin.chain, txs }, transitions: [SUBMIT_TX], status: 'requires_action', ref }
   }
 
   // ---------- one transaction, one session ----------
@@ -647,7 +647,7 @@ export function lifi(opts: LifiOptions = {}) {
   async function statusWallet(ctx: AdapterContext, ref: string): Promise<LegStep> {
     const rec = await ctx.store.get<WalletRecord>(`w:${ref}`)
     if (!rec) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
-    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
+    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref }
     // `txHash` becomes the delivery once LI.FI reports it; `sourceTxHash` stays the transaction the wallet sent.
     return { ...(await checkSource(ctx, ref, rec, rec.txHash)), sourceTxHash: rec.txHash }
   }

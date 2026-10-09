@@ -80,8 +80,8 @@ type XenditPaymentRequest = {
 }
 
 const STATUS: Record<XenditPaymentRequest['status'], { status: LegStatus; state: StateName }> = {
-  ACCEPTING_PAYMENTS: { status: 'awaiting_user', state: 'PAYMENT' },
-  REQUIRES_ACTION: { status: 'awaiting_user', state: 'PAYMENT' },
+  ACCEPTING_PAYMENTS: { status: 'requires_action', state: 'PAYMENT' },
+  REQUIRES_ACTION: { status: 'requires_action', state: 'PAYMENT' },
   AUTHORIZED: { status: 'processing', state: 'PROCESSING' },
   SUCCEEDED: { status: 'succeeded', state: 'COMPLETED' },
   FAILED: { status: 'failed', state: 'FAILED' },
@@ -208,13 +208,13 @@ export function xendit(opts: XenditOptions) {
 
   function toStep(pr: XenditPaymentRequest, c: Channel, amount: string): LegStep {
     const m = STATUS[pr.status] ?? { status: 'processing' as const, state: 'PROCESSING' as const }
-    const surface = m.status === 'awaiting_user' ? surfaceFor(pr, c, amount) : undefined
+    const surface = m.status === 'requires_action' ? surfaceFor(pr, c, amount) : undefined
     return {
       state: m.state,
       status: m.status,
       ref: pr.payment_request_id,
       ...(surface ? { surface } : {}),
-      transitions: m.status === 'awaiting_user' || m.status === 'processing' ? [{ name: 'poll', kind: 'AWAIT', poll: POLL }] : [],
+      transitions: m.status === 'requires_action' || m.status === 'processing' ? [{ name: 'poll', kind: 'AWAIT', poll: POLL }] : [],
       ...(m.status === 'failed' ? { error: openRampError('PAYMENT_FAILED', { ...(pr.failure_code ? { message: `The payment failed (${pr.failure_code}).` } : {}) }) } : {}),
       ...(m.status === 'expired' ? { error: openRampError('QUOTE_EXPIRED', { message: 'The payment expired. Start again.' }) } : {}),
     }
