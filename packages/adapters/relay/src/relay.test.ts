@@ -433,13 +433,16 @@ describe('relay errors', () => {
     })
   })
 
-  it('without apiKey, the first call warns that quotes need a key and that /requests/v2 retires', async () => {
+  it('without apiKey, the first call warns that Relay requires a key for quotes and that /requests/v2 retires', async () => {
     const log = recordingLog()
     const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', status: 401, reply: () => ({ errorCode: 'UNAUTHORIZED_QUOTE' }) }])
     await walletQuote(relay(), makeCtx({ fetch, log })).catch(() => undefined)
     const warning = log.warnings.find((w) => w.startsWith('relay: no apiKey'))
     expect(warning).toContain('quote/v2')
-    expect(warning).toContain('live quotes fail')
+    expect(warning).toContain('Relay requires an API key for quotes')
+    expect(warning).toContain('may still work today, but Relay can refuse them at any time')
+    expect(warning).toContain('Always set')
+    expect(warning).not.toContain('live quotes fail')
     expect(warning).toContain('2026-11-24')
   })
 

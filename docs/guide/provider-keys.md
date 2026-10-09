@@ -90,7 +90,7 @@ The adapter sends the key in the `x-api-key` header.
 
 **Gotchas:**
 
-- Since 2 Oct 2026, each Relay quote (`/quote/v2`) needs a key. Without a key, quotes fail with `401 UNAUTHORIZED_QUOTE`.
+- Relay requires an API key for quotes (`POST /quote/v2`) under its announced policy from 2 Oct 2026. Some requests without a key may still work today, but Relay can refuse them at any time. Always set `RELAY_API_KEY`. A refused quote gets `401 UNAUTHORIZED_QUOTE`. A quote that sets `referrer` without a key is refused now.
 - Without a key, status checks use `/requests/v2`. Relay retires it on 24 Nov 2026.
 
 ## LI.FI {#lifi}

@@ -116,7 +116,8 @@ export function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: num
 
 /**
  * Map a failed Relay HTTP call to an OrkException with a safe message. A 401 with errorCode
- * `UNAUTHORIZED_QUOTE` means our setup is wrong: since 2026-10-02, `POST /quote/v2` needs a valid API key.
+ * `UNAUTHORIZED_QUOTE` means our setup is wrong: Relay requires a valid API key for `POST /quote/v2`
+ * (announced policy from 2026-10-02; a quote with a `referrer` and no key is refused now).
  */
 export function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
   if (httpStatus(e) === 401 && (e as { body?: { errorCode?: unknown } } | undefined)?.body?.errorCode === 'UNAUTHORIZED_QUOTE') {

@@ -20,7 +20,11 @@ type Env = {
   WEBHOOK_URL?: string
   WEBHOOK_SECRET?: string
   MOCK?: string
-  /** Relay API key (dashboard.relay.link): needed for quotes since 2026-10-02, and for deposit-address status after 2026-11-24 */
+  /**
+   * Relay API key (dashboard.relay.link). Relay requires it for quotes under its announced policy from
+   * 2026-10-02: some keyless requests may still work today, but Relay can refuse them at any time, so
+   * always set it. Also needed for deposit-address status after 2026-11-24.
+   */
   RELAY_API_KEY?: string
   /** Bearer token for POST /tasks/sweep and GET /health?deep=1 */
   TASKS_TOKEN?: string

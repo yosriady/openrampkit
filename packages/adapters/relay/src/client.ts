@@ -19,14 +19,17 @@ export function createRuntime(opts: RelayOptions) {
   const logBlockRange = BigInt(Math.max(1, Math.floor(opts.logBlockRange ?? DEFAULT_LOG_BLOCK_RANGE)))
 
   /**
-   * Warn once, on the first adapter call, when no API key is set. Since 2026-10-02, Relay quotes
-   * (`POST /quote/v2`) need an API key. Status then also uses /requests/v2, which retires on 2026-11-24.
+   * Warn once, on the first adapter call, when no API key is set. Relay's announced policy: from
+   * 2026-10-02, every `POST /quote/v2` needs a valid API key (https://docs.relay.link/references/api/api-keys).
+   * Some keyless quotes still worked on 2026-10-09, but Relay can refuse them at any time. A quote with a
+   * `referrer` and no key is refused now (401 UNAUTHORIZED_QUOTE). Status then also uses /requests/v2,
+   * which retires on 2026-11-24.
    */
   function warnNoKey(log: Pick<Logger, 'warn'>) {
     if (opts.apiKey || warnedV2) return
     warnedV2 = true
     log.warn(
-      'relay: no apiKey. Relay quotes (POST /quote/v2, used for quotes and deposit addresses) need an API key since 2026-10-02: live quotes fail without one. Status also uses deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Set relay({ apiKey }), for example from RELAY_API_KEY.',
+      'relay: no apiKey. Relay requires an API key for quotes (POST /quote/v2, used for quotes and deposit addresses) under its announced policy from 2026-10-02. Some keyless quotes may still work today, but Relay can refuse them at any time (401 UNAUTHORIZED_QUOTE). Status also uses deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Always set relay({ apiKey }), for example from RELAY_API_KEY.',
     )
   }
 
