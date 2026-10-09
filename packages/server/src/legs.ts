@@ -291,7 +291,8 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   }
   const prevOutput = leg.step?.output
   leg.step = wrapped
-  if (wrapped.output && wrapped.output.amount !== prevOutput?.amount) checkOutput(rt, rec, i, wrapped.output)
+  // Check again when the amount or the asset changes (the same amount in another asset is not the quote).
+  if (wrapped.output && JSON.stringify(wrapped.output) !== JSON.stringify(prevOutput)) checkOutput(rt, rec, i, wrapped.output)
   if (wrapped.ref && wrapped.ref !== leg.ref) {
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)
@@ -483,17 +484,22 @@ export type ApplyResult = 'applied' | 'ignored' | 'unknown' | 'conflict'
 /** Legs whose status shows that money moved */
 const MONEY_MOVED: LegStatus[] = ['processing', 'succeeded', 'refunded']
 
+/** Leg statuses that can make an earlier attempt the payment again: money is under way or arrived */
+const REVIVES: LegStatus[] = ['processing', 'succeeded']
+
 /**
- * A status for a leg of an earlier attempt (one the user left with `restart`). When money moved on it
- * and the session has no other payment under way, that attempt becomes the active payment again, so
- * the session completes. When the session already completed or another payment is under way, a
- * succeeded leg sends `session.late_payment` instead, so the app can refund or credit by hand.
+ * A status for a leg of an earlier attempt (one the user left with `restart`). When money is under way
+ * or arrived on it and the session has no other payment under way, that attempt becomes the active
+ * payment again, so the session completes. A refund before success only updates the attempt. When
+ * the session already completed or another payment is under way, a succeeded leg sends
+ * `session.late_payment` instead, so the app can refund or credit by hand.
  */
 async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
   const att = rec.attempts![k]!
   const leg = att.legs[i]!
   const before = leg.step?.status
   if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+  const prev = leg.step
   leg.step = ls
   if (isReversal(before, ls.status)) {
     // The session moved on from this attempt, so its state stays. The app may have credited this
@@ -505,7 +511,7 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
     if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
     return
   }
-  if (!MONEY_MOVED.includes(ls.status)) return
+  if (!REVIVES.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
   // A REVERSED or EXPIRED session: an earlier attempt never becomes its payment again.
   if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution) {
@@ -520,6 +526,10 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   archiveActive(rec)
   const { endedAt: _ended, ...payment } = att
   rec.active = { ...payment, index: i }
+  // `setLegStep` records the new step itself, from the step before it: the output check, the ref index
+  // and the timeline.
+  if (prev) leg.step = prev
+  else delete leg.step
   await setLegStep(rt, rec, i, ls)
 }
 

@@ -640,3 +640,55 @@ describe('third review: who can move a session on, and how far', () => {
     }
   })
 })
+
+describe('fourth review: output checks and earlier attempts', () => {
+  const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
+  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
+  const other = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } })
+
+  it('checks the output again when only its asset changes: another asset with the same amount does not start the next leg', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    await t.hook([{ ref: s.ref, status: 'processing', output: usdc('9') }])
+    await t.hook([{ ref: s.ref, status: 'succeeded', output: other('9') }])
+    const rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
+    expect(t.bridgeStarts).toHaveLength(0)
+    expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
+  })
+
+  it('checks the output of an earlier attempt that becomes the payment again', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    const first = s.ref
+    expect((await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)).status).toBe(200)
+    await t.pay(s)
+    await t.hook([{ ref: first, status: 'succeeded', output: other('9') }])
+    const rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(first)
+    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch' })
+    expect(t.bridgeStarts).toHaveLength(0)
+    expect(rec.step).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED' } })
+  })
+
+  it('a refund of an earlier attempt that never succeeded does not replace the payment in progress', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    const first = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const second = await t.pay(s)
+    await t.hook([{ ref: first, status: 'refunded' }])
+    let rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(second)
+    expect(rec.step.state).toBe('PAYMENT')
+    expect(rec.attempts![0]!.legs[0]!.step!.status).toBe('refunded')
+    expect(t.app.of('session.refunded')).toHaveLength(0)
+
+    // The user pays the payment in progress: the session completes.
+    await t.hook([{ ref: second, status: 'succeeded' }])
+    rec = await t.record(s.id)
+    expect(rec.step.state).toBe('COMPLETED')
+    expect(t.app.of('session.completed')).toHaveLength(1)
+    expect(t.app.of('session.late_payment')).toHaveLength(0)
+  })
+})
