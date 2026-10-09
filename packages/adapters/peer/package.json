@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-peer",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Peer (zkp2p) adapter for US P2P rails, opt-in",
   "keywords": [
     "adapter",

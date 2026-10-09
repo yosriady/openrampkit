@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-transak",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Transak adapter",
   "keywords": [
     "adapter",

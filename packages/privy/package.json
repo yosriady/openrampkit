@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/privy",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Privy wallet adapter for OpenRampKit",
   "keywords": [
     "embedded wallet",

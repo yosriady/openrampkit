@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/solana",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Solana wallet adapter for OpenRampKit (Wallet Standard and @solana/kit)",
   "keywords": [
     "onramp",

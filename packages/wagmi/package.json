@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/wagmi",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "wagmi wallet adapter for OpenRampKit",
   "keywords": [
     "onramp",
