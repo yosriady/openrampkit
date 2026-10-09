@@ -3,7 +3,7 @@
 
 import { POLL as POLLS, awaitPoll, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, quoteExpiresAt, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
-import { CHAINS, OpenRampException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, minorUnits, mulRatio, nativeDecimals, normalizeToken, openRampError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
+import { CHAINS, OpenRampException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, sameToken, minorUnits, mulRatio, nativeDecimals, normalizeToken, openRampError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
@@ -525,6 +525,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       const spec = legs.find((l) => l.id === leg.legId)
       if (!spec) throw unknownLeg(leg.legId)
       const expiresAt = quoteExpiresAt(1)
+      // The fiat legs use a fixed test rate, so their output is exact: `firm`.
       if (spec.kind === 'crypto_offramp') {
         // USDC in, fiat out: 1 USDC = 1 USD, minus 1%.
         const fiat = (leg.to.asset.kind === 'fiat' ? leg.to.asset.currency : ctx.destination.type === 'fiat' ? ctx.destination.currency : 'USD').toUpperCase()
@@ -534,11 +535,13 @@ export function mockAdapter(opts: MockOptions = {}) {
         const usdc = amountIn ? amountIn.value : roundTo(div(mulRatio(amountOut?.value ?? '0', rate), String((10_000 - fees.offramp) / 10_000)), 6)
         const fee = roundTo(bps(usdc, fees.offramp), 6)
         const out = roundTo(div(sub(usdc, fee), rate), minorUnits(fiat))
+        const usdcAsset: CryptoAsset = { ...inAsset, symbol: 'USDC', decimals: 6 }
         return {
           adapterId: id, legId: leg.legId,
-          input: { value: usdc, asset: { ...inAsset, symbol: 'USDC', decimals: 6 } },
+          input: { value: usdc, asset: usdcAsset },
           output: { value: out.startsWith('-') ? '0' : out, asset: { kind: 'fiat', currency: fiat } },
-          fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: 'USDC' }],
+          fees: [{ kind: 'provider', label: `${name} fee`, amount: { value: fee, asset: usdcAsset }, included: true }],
+          guarantee: 'firm',
           eta: spec.eta, expiresAt,
         }
       }
@@ -554,7 +557,8 @@ export function mockAdapter(opts: MockOptions = {}) {
             adapterId: id, legId: leg.legId,
             input: { value: input, asset: { kind: 'fiat', currency: fiat } },
             output: { value: roundTo(sub(input, fee), minorUnits(fiat)), asset: { kind: 'fiat', currency: fiat } },
-            fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: fiat }],
+            fees: [{ kind: 'provider', label: `${name} fee`, amount: { value: fee, asset: { kind: 'fiat', currency: fiat } }, included: true }],
+            guarantee: 'firm',
             eta: spec.eta, expiresAt,
           }
         }
@@ -565,14 +569,15 @@ export function mockAdapter(opts: MockOptions = {}) {
           adapterId: id, legId: leg.legId,
           input: { value: input, asset: { kind: 'fiat', currency: fiat } },
           output: { value: out.startsWith('-') ? '0' : out, asset: leg.to.asset.kind === 'crypto' ? { ...BASE_USDC, ...leg.to.asset, symbol: 'USDC', decimals: 6 } : BASE_USDC },
-          fees: [{ kind: 'provider', label: `${name} fee`, amount: roundTo(mulRatio(fee, String(1 / Number(rate))), minorUnits(fiat)), currency: fiat }],
+          fees: [{ kind: 'provider', label: `${name} fee`, amount: { value: roundTo(mulRatio(fee, String(1 / Number(rate))), minorUnits(fiat)), asset: { kind: 'fiat', currency: fiat } }, included: true }],
+          guarantee: 'firm',
           eta: spec.eta, expiresAt,
         }
       }
       if (spec.id === 'solana-onchain' && solAsset) {
         // A plain transfer on the cluster: what the user sends arrives.
         const amount = amountIn?.value ?? amountOut?.value ?? '0'
-        return { adapterId: id, legId: leg.legId, input: { value: amount, asset: solAsset }, output: { value: amount, asset: solAsset }, fees: [], eta: spec.eta, expiresAt }
+        return { adapterId: id, legId: leg.legId, input: { value: amount, asset: solAsset }, output: { value: amount, asset: solAsset }, fees: [], guarantee: 'firm', eta: spec.eta, expiresAt }
       }
       if (spec.id === 'onchain' && localAsset) {
         // A plain transfer on the local chain: what the user sends arrives.
@@ -582,18 +587,30 @@ export function mockAdapter(opts: MockOptions = {}) {
           input: { value: amount, asset: localAsset },
           output: { value: amount, asset: localAsset },
           fees: [],
+          guarantee: 'firm',
           eta: spec.eta, expiresAt,
         }
       }
       // crypto legs: 1:1 minus 5 bps
       const input = amountIn?.value ?? amountOut?.value ?? '0'
       const fee = bps(input, fees.crypto)
-      const inAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : BASE_USDC
+      const rawIn = amountIn?.asset.kind === 'crypto' ? amountIn.asset : BASE_USDC
+      const inAsset: CryptoAsset = { ...rawIn, symbol: symbolOf(rawIn), decimals: rawIn.decimals ?? (symbolOf(rawIn) === 'USDC' ? 6 : nativeDecimals(rawIn.chain)) }
+      const outAsset = destAsset(ctx)
+      const output = roundTo(sub(input, fee), 6)
+      // A wallet or transfer leg that stays on one chain and one token is a plain transfer: `firm`.
+      // A bridge or swap acts like a real one: the test provider guarantees output minus 0.5% (50 bps
+      // slippage), so the server's `min_output` path has a test provider.
+      const plain = leg.legId !== 'bridge' && inAsset.chain === outAsset.chain && sameToken(inAsset.chain, inAsset.token, outAsset.token)
+      const guarantee = plain
+        ? { guarantee: 'firm' as const }
+        : { guarantee: 'min_output' as const, minOutput: { value: roundTo(sub(output, bps(output, 50)), 6), asset: outAsset }, slippageBps: 50 }
       return {
         adapterId: id, legId: leg.legId,
-        input: { value: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : nativeDecimals(inAsset.chain)) } },
-        output: { value: roundTo(sub(input, fee), 6), asset: destAsset(ctx) },
-        fees: [{ kind: 'network', label: 'Network and bridge', amount: roundTo(fee, 6), currency: 'USDC' }],
+        input: { value: input, asset: inAsset },
+        output: { value: output, asset: outAsset },
+        fees: [{ kind: plain ? 'network' : 'bridge', label: 'Network and bridge', amount: { value: roundTo(fee, 6), asset: inAsset }, included: true }],
+        ...guarantee,
         eta: spec.eta, expiresAt,
         ...(leg.legId === 'transfer' ? { data: { anyAmount: true } } : {}),
       }

@@ -18,7 +18,7 @@ const MONAD_TOKEN = '0x00000000000000000000000000000000000000c0'
 const usdc = (chainId: number, address: string) => ({ chainId, address, symbol: 'USDC', name: 'USD Coin', decimals: 6 })
 const eth = (chainId: number) => ({ chainId, address: '0x0000000000000000000000000000000000000000', symbol: 'ETH', name: 'Ether', decimals: 18 })
 
-function relayQuote(opts: { deposit?: boolean; signature?: boolean; amountIn?: string } = {}): RelayQuoteResponse {
+function relayQuote(opts: { deposit?: boolean; signature?: boolean; amountIn?: string; noMinimum?: boolean } = {}): RelayQuoteResponse {
   const amountIn = opts.amountIn ?? '10000000'
   const out = String(BigInt(amountIn) - 39555n)
   return {
@@ -40,7 +40,7 @@ function relayQuote(opts: { deposit?: boolean; signature?: boolean; amountIn?: s
     },
     details: {
       currencyIn: { currency: usdc(42161, ARB_USDC.token), amount: amountIn },
-      currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: out },
+      currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: out, ...(opts.noMinimum ? {} : { minimumAmount: String(BigInt(out) - 50000n) }) },
       timeEstimate: 2,
     },
   } as RelayQuoteResponse
@@ -108,10 +108,15 @@ describe('relay adapter', () => {
     expectConformant(q)
     expect(q.input.value).toBe('10')
     expect(q.output.value).toBe('9.960445')
+    // Gas: paid by the wallet on top of the input, in native ETH. Relay fee: taken from the routed amount.
     expect(q.fees).toEqual([
-      { kind: 'network', label: 'Network fee', amount: '0.000000484', currency: 'ETH' },
-      { kind: 'provider', label: 'Relay fee', amount: '0.038336', currency: 'USDC' },
+      { kind: 'network', label: 'Network fee', amount: { value: '0.000000484', asset: { kind: 'crypto', chain: 'eip155:42161', token: 'native', symbol: 'ETH', decimals: 18 } }, included: false },
+      { kind: 'provider', label: 'Relay fee', amount: { value: '0.038336', asset: { kind: 'crypto', chain: 'eip155:42161', token: ARB_USDC.token, symbol: 'USDC', decimals: 6 } }, included: true },
     ])
+    // Relay's minimumAmount is the guaranteed minimum, in the output asset; no slippageBps sent, so none stated
+    expect(q.guarantee).toBe('min_output')
+    expect(q.minOutput).toEqual({ value: '9.910445', asset: q.output.asset })
+    expect(q.slippageBps).toBeUndefined()
     const body = calls[0]!.body as Record<string, unknown>
     expect(body).toMatchObject({ user: USER, recipient: DEST, originChainId: 42161, destinationChainId: 8453, amount: '10000000', tradeType: 'EXACT_INPUT', referrer: 'myapp', appFees: [{ recipient: DEST, fee: '25' }] })
     expect(calls[0]!.headers.get('x-api-key')).toBe('k')
@@ -131,6 +136,24 @@ describe('relay adapter', () => {
     expect(s).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xdest', sourceTxHash: hash })
   })
 
+  it('wallet: slippageBps states the sent slippage; a quote without minimumAmount is an estimate', async () => {
+    let noMinimum = false
+    const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => relayQuote({ noMinimum }) }])
+    const a = relay({ apiKey: 'k', slippageBps: 75 })
+    const ctx = makeCtx({ fetch })
+    const input = { leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token, address: USER }, deliverTo: { address: DEST } }
+    const q = await a.quote(input, ctx)
+    expectConformant(q)
+    expect(calls[0]!.body).toMatchObject({ slippageTolerance: '75' })
+    expect(q).toMatchObject({ guarantee: 'min_output', minOutput: { value: '9.910445' }, slippageBps: 75 })
+    noMinimum = true
+    const est = await a.quote(input, ctx)
+    expectConformant(est)
+    expect(est.guarantee).toBe('estimate')
+    expect(est.minOutput).toBeUndefined()
+    expect(est.slippageBps).toBeUndefined()
+  })
+
   describe('wallet: delivered output on success', () => {
     const BASE_ETH: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: 'native', symbol: 'ETH', decimals: 18 }
     const ethLeg: PathwayLeg = { ...walletLeg, to: { asset: BASE_ETH, location: { kind: 'address', address: DEST } } }
@@ -141,7 +164,9 @@ describe('relay adapter', () => {
       input: { value: '1', asset: { ...ARB_USDC, symbol: 'USDC', decimals: 6 } },
       output: { value: '0.000491803942453585', asset: BASE_ETH },
       fees: [],
+      guarantee: 'estimate',
       eta: { min: 2, max: 8 },
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
       data: { direct: false, steps: relayQuote().steps, requestId: '0xreq1', quotedAt: Date.now(), user: USER },
     })
     const hash = `0x${'cd'.repeat(32)}`
@@ -233,6 +258,7 @@ describe('relay adapter', () => {
     expectConformant(q)
     expect(q.output.value).toBe('12.5')
     expect(q.fees).toEqual([])
+    expect(q.guarantee).toBe('firm')
     const step = await a.start({ leg: walletLeg, quote: q }, ctx)
     expect(step.surface).toEqual({
       kind: 'WALLET_TX',
@@ -383,6 +409,7 @@ describe('relay adapter', () => {
     const a = relay()
     const ctx = makeCtx({ fetch })
     const q = await a.quote({ leg: transferLeg, amountIn: { value: '0', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, ctx)
+    expect(q.guarantee).toBe('firm')
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', address: DEST, chain: 'eip155:8453' })
     expect(calls.every((c) => !c.url.includes('relay.link'))).toBe(true)
@@ -775,7 +802,7 @@ describe('relay deposit addresses', () => {
     await a.prepareDeposit!({ leg: bridgeLeg }, ctx)
     expect((await ctx.store.get<{ since: number }>(`d:dep:sess_1:${DEPOSIT}`))!.since).toBe(rec!.since)
     // a quote without the deposit address in its data (e.g. from an older server)
-    const quote: LegQuote = { adapterId: 'relay', legId: 'bridge', input: { value: '5', asset: BASE_USDC }, output: { value: '5', asset: { kind: 'crypto', chain: 'eip155:143', token: MONAD_TOKEN, decimals: 18 } }, fees: [], eta: { min: 1, max: 2 } }
+    const quote: LegQuote = { adapterId: 'relay', legId: 'bridge', input: { value: '5', asset: BASE_USDC }, output: { value: '5', asset: { kind: 'crypto', chain: 'eip155:143', token: MONAD_TOKEN, decimals: 18 } }, fees: [], guarantee: 'estimate', eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() }
     const step = await a.start({ leg: bridgeLeg, quote }, ctx)
     expect(step).toMatchObject({ state: 'PROCESSING', ref: `dep:sess_1:${DEPOSIT}` })
     expect(calls).toHaveLength(1)

@@ -34,8 +34,11 @@ export function checkLegQuote(q: LegQuote): ConformanceProblem[] {
   const out: ConformanceProblem[] = []
   if (!isDecimal(q.input.value)) out.push({ where: 'quote.input', problem: 'not a decimal string' })
   if (!isDecimal(q.output.value)) out.push({ where: 'quote.output', problem: 'not a decimal string' })
-  for (const f of q.fees) if (!isDecimal(f.amount)) out.push({ where: `fee ${f.label}`, problem: 'not a decimal string' })
-  if (q.expiresAt && Number.isNaN(Date.parse(q.expiresAt))) out.push({ where: 'quote.expiresAt', problem: 'not an ISO date' })
+  for (const f of q.fees) {
+    if (f.amount === null) continue
+    if (!f.amount || typeof f.amount !== 'object' || typeof f.amount.value !== 'string' || !isDecimal(f.amount.value)) out.push({ where: `fee ${f.label}`, problem: 'amount is not null and not an Amount with a decimal string' })
+  }
+  if (typeof q.expiresAt !== 'string' || Number.isNaN(Date.parse(q.expiresAt))) out.push({ where: 'quote.expiresAt', problem: 'not an ISO date' })
   return out
 }
 

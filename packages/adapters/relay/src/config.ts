@@ -37,7 +37,8 @@ export type RelayOptions = {
   settlementIntentTtlSec?: number
   /**
    * Relay `slippageTolerance` in basis points (0 to 10000), sent with every quote. Default: Relay
-   * picks a value. The quote data carries Relay's `minimumAmount` as `minOutput`.
+   * picks a value. A `wallet` quote carries Relay's `minimumAmount` as `minOutput` (guarantee
+   * `min_output`), and this value as `slippageBps` when it is set.
    */
   slippageBps?: number
   /**

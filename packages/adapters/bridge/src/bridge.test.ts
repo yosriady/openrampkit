@@ -121,9 +121,12 @@ describe('bridge adapter: shape and quotes', () => {
     expect(q.output.value).toBe('198.000000')
     expect(q.output.asset).toMatchObject({ kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6 })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Bridge fee', amount: '1.00', currency: 'USD' },
-      { kind: 'app', label: 'App fee', amount: '1.00', currency: 'USD' },
+      { kind: 'provider', label: 'Bridge fee', amount: { value: '1.00', asset: { kind: 'fiat', currency: 'USD' } }, included: true },
+      { kind: 'app', label: 'App fee', amount: { value: '1.00', asset: { kind: 'fiat', currency: 'USD' } }, included: true },
     ])
+    // no rate lock: the output is an estimate
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(calls).toHaveLength(0)
   })
 
@@ -131,6 +134,10 @@ describe('bridge adapter: shape and quotes', () => {
     const { ctx, calls } = ctxWith([{ method: 'GET', match: '/exchange_rates', reply: () => ({ midmarket_rate: '1.09', buy_rate: '1.08', sell_rate: '1.07' }) }])
     const q = await a.quote({ leg: depositLeg('eur-sepa', 'EUR'), amountIn: fiat('100', 'EUR') }, ctx)
     expect(q.output.value).toBe('108.000000')
+    // Bridge's FX fee is in the rate, and Bridge does not say how much
+    expect(q.fees).toEqual([{ kind: 'provider', label: 'FX fee in the rate', amount: null, included: true }])
+    expect(q.guarantee).toBe('estimate')
+    expect(checkLegQuote(q)).toEqual([])
     expect(calls[0]!.url).toBe(`${API}/exchange_rates?from=eur&to=usd`)
     expect(calls[0]!.headers.get('api-key')).toBe('sk-live-x')
     expect(calls[0]!.headers.get('idempotency-key')).toBeNull()
@@ -144,8 +151,10 @@ describe('bridge adapter: shape and quotes', () => {
     const q = await a.quote({ leg: payoutLeg('payout-usd-ach', 'USD'), amountIn: usdc('50') }, ctx)
     expect(q.input.value).toBe('50.000000')
     expect(q.output).toEqual(fiat('50.00', 'USD'))
+    expect(q).toMatchObject({ fees: [], guarantee: 'estimate' })
     const e = await a.quote({ leg: payoutLeg('payout-eur-sepa', 'EUR'), amountIn: usdc('50') }, ctx)
     expect(e.output).toEqual(fiat('45.00', 'EUR'))
+    expect(e.fees).toEqual([{ kind: 'provider', label: 'FX fee in the rate', amount: null, included: true }])
     expect(calls[0]!.url).toBe(`${API}/exchange_rates?from=usd&to=eur`)
     const o = await a.quote({ leg: payoutLeg('payout-usd-wire', 'USD'), amountOut: fiat('20', 'USD') }, ctx)
     expect(o.input.value).toBe('20.000000')

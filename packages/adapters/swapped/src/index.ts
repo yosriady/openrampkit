@@ -379,14 +379,16 @@ export function swapped(opts: SwappedOptions) {
     const grossFiat = Math.floor(Number(cryptoAmount) * perCrypto * 100) / 100
     const p = await sellPricing(ctx, { payout_method: slug, crypto_currency: d.currencyCode, fiat_amount: grossFiat, fiat_currency: fiat })
     const fees: Fee[] = []
-    if (p.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: dec(p.processing_fee, 2), currency: fiat })
-    if (p.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: dec(p.markup_fiat_value, 2), currency: fiat })
+    if (p.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: { value: dec(p.processing_fee, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+    if (p.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: { value: dec(p.markup_fiat_value, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
     return {
       adapterId: 'swapped',
       legId: input.leg.legId,
       input: { value: cryptoAmount, asset: assetOf(d) },
       output: { value: dec(p.fiat_amount_excl_fees_local ?? p.fiat_amount_excl_fees, 2), asset: { kind: 'fiat', currency: fiat } },
       fees,
+      // `estimate`: Swapped sets the final amount inside the widget, at the rate when it executes.
+      guarantee: 'estimate',
       eta: { min: 600, max: 3 * 24 * 3600 },
       expiresAt: quoteExpiresAt(10),
       data: { slug, currencyCode: d.currencyCode, fiat, estimate: true },
@@ -482,9 +484,9 @@ export function swapped(opts: SwappedOptions) {
       }
       const fiat = fiatAsset.currency.toUpperCase()
       const fees: Fee[] = []
-      if (d.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: dec(d.processing_fee, 2), currency: fiat })
-      if (d.network_fee_local) fees.push({ kind: 'network', label: 'Network fee', amount: dec(d.network_fee_local, 2), currency: fiat })
-      if (d.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: dec(d.markup_fiat_value, 2), currency: fiat })
+      if (d.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: { value: dec(d.processing_fee, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+      if (d.network_fee_local) fees.push({ kind: 'network', label: 'Network fee', amount: { value: dec(d.network_fee_local, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+      if (d.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: { value: dec(d.markup_fiat_value, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
       const inputAmount = input.amountIn?.value ?? dec(d.fiat_amount_incl_fees_local, 2)
       return {
         adapterId: 'swapped',
@@ -492,6 +494,8 @@ export function swapped(opts: SwappedOptions) {
         input: { value: inputAmount, asset: { kind: 'fiat', currency: fiat } },
         output: { value: dec(d.crypto_amount, target.decimals ?? 8), asset: assetOf(target) },
         fees,
+        // `estimate`: Swapped prices move with the market, and the rate is set when the order executes.
+        guarantee: 'estimate',
         eta: input.leg.legId === 'creditcard' || input.leg.legId.endsWith('-pay') ? { min: 120, max: 900 } : { min: 120, max: 1800 },
         // Swapped prices move with the market; the widget shows the final price.
         expiresAt: quoteExpiresAt(10),

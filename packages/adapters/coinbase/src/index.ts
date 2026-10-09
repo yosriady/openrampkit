@@ -18,7 +18,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, cachedJson, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, verifyTimestampedHmac } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, cachedJson, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, quoteExpiresAt, randomHex, requireDeliverAsset, resolveEnv, verifyTimestampedHmac } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
@@ -410,12 +410,14 @@ export function coinbase(opts: CoinbaseOptions) {
     return { ref, status: 'processing' }
   }
 
+  // Coinbase states its fees in the payment currency, and paymentTotal (the quote input) is the
+  // subtotal plus the fees, so each fee is included.
   function feesOf(list: Array<{ type: string; amount: string; currency: string }> | undefined): Fee[] {
     return (list ?? []).map((f) => ({
       kind: f.type === 'FEE_TYPE_NETWORK' ? 'network' : 'provider',
       label: f.type === 'FEE_TYPE_NETWORK' ? 'Network fee' : 'Coinbase fee',
-      amount: f.amount,
-      currency: f.currency,
+      amount: { value: f.amount, asset: { kind: 'fiat', currency: f.currency } },
+      included: true,
     }))
   }
 
@@ -441,7 +443,10 @@ export function coinbase(opts: CoinbaseOptions) {
       input: { value: o.paymentTotal, asset: { kind: 'fiat', currency: o.paymentCurrency ?? 'USD' } },
       output: { value: o.purchaseAmount, asset: t.asset },
       fees: feesOf(o.fees),
+      // A Coinbase order quote is indicative: Coinbase sets the crypto price when the user pays.
+      guarantee: 'estimate',
       eta: legs.find((l) => l.id === GUEST_APPLE_PAY)!.eta,
+      expiresAt: quoteExpiresAt(5),
       limits: GUEST_LIMITS,
       data: { network: t.network },
     }
@@ -573,7 +578,11 @@ export function coinbase(opts: CoinbaseOptions) {
         input: { value: q.paymentTotal, asset: { kind: 'fiat', currency: q.paymentCurrency } },
         output: { value: q.purchaseAmount, asset: t.asset },
         fees,
+        // A Coinbase session quote is indicative: Coinbase sets the crypto price when the user pays.
+        guarantee: 'estimate',
         eta: (legs.find((l) => l.id === input.leg.legId) ?? legs[0]!).eta,
+        // The session token behind the quote's onramp URL expires after 5 minutes.
+        expiresAt: quoteExpiresAt(5),
         data: { ref, onrampUrl: res.session?.onrampUrl, createdAt: Date.now(), network: t.network, paymentMethod, country, ...(sub ? { subdivision: sub } : {}) },
       }
     },

@@ -73,9 +73,11 @@ describe('stripe adapter', () => {
     expect(q.input).toEqual(usd('103.26'))
     expect(q.output).toEqual({ value: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Stripe fee', amount: '3.25', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.01', currency: 'USD' },
+      { kind: 'provider', label: 'Stripe fee', amount: usd('3.25'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0.01'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
   })
 
   it('quote: falls back to /v1/crypto/onramp/quotes on 404, supports exact output', async () => {
@@ -146,7 +148,7 @@ describe('stripe adapter', () => {
   })
 
   it('start: REDIRECT to the hosted onramp when asked, SDK fallback without redirect_url, rejected sessions fail', async () => {
-    const quote = { adapterId: 'stripe', legId: 'card', input: usd('103'), output: { value: '97', asset: ETH_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { network: 'ethereum', sourceCurrency: 'usd', sourceAmount: '100.00' } }
+    const quote = { adapterId: 'stripe', legId: 'card', input: usd('103'), output: { value: '97', asset: ETH_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z', data: { network: 'ethereum', sourceCurrency: 'usd', sourceAmount: '100.00' } }
     const run = async (session: unknown, surface: 'sdk' | 'redirect' = 'redirect') => {
       const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/onramp_sessions', reply: () => session }])
       const step = await stripe({ ...opts, surface }).start({ leg: leg('card', ETH_USDC), quote }, makeCtx({ fetch }))

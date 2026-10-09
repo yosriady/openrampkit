@@ -17,6 +17,7 @@ import type {
   WithdrawSource,
 } from '@openrampkit/core'
 import { isStepSub } from '@openrampkit/core'
+import { migrateToV3 } from './migrate-v3.js'
 
 export type ActiveLeg = {
   adapterId: string
@@ -218,7 +219,7 @@ export interface SessionStore {
 export class VersionConflictError extends Error {}
 
 /** The schema that this server writes in `SessionRecord.schema`. */
-export const SESSION_SCHEMA = 2
+export const SESSION_SCHEMA = 3
 
 /** True for a session record. A custom store without a `queue` also keeps queue records (`__queue:*`). */
 function isSessionRecord(rec: unknown): rec is SessionRecord {
@@ -237,6 +238,9 @@ function isSessionRecord(rec: unknown): rec is SessionRecord {
  *
  * Schema 1 to 2 (see `migrateToV2`): the new status names (`requires_payment_method`, `requires_action`,
  * `succeeded`), `Amount.value`, and the withdraw names `allowedDestinations` and `destinationLocked`.
+ *
+ * Schema 2 to 3 (see `migrateToV3` in migrate-v3.ts): the adapter contract v2 shapes. Quotes get typed fees, a
+ * `guarantee` and an `expiresAt`.
  *
  * A record with a newer schema (written by a newer server) is returned as it is. Other records (for
  * example the queue records of a custom store) are returned as they are.
@@ -264,6 +268,7 @@ export function migrateRecord<T>(rec: T): T {
     }
   }
   if (from < 2) migrateToV2(rec)
+  if (from < 3) migrateToV3(rec)
   rec.schema = SESSION_SCHEMA
   return rec
 }

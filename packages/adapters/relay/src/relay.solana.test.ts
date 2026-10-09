@@ -278,6 +278,7 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply: solanaRpc(rpc) }])
     const { a, ctx, q, step } = await startDirect(fetch)
     expect(q.fees).toEqual([])
+    expect(q.guarantee).toBe('firm')
     expect(q.output).toMatchObject({ value: '12.5', asset: { chain: SOL, token: SOLANA_USDC_MINT } })
     expect(step.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '12500000', decimals: 6 }] })
     expect(calls).toHaveLength(0)

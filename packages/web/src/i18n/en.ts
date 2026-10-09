@@ -55,6 +55,10 @@ export const en = {
   youPay: (amount: string) => `You pay ${amount}`,
   fees: (amount: string) => `Fees ${amount}`,
   noFees: 'No fees',
+  /** A quote with a fee whose amount the provider does not say (it is in the exchange rate) */
+  feesInRate: 'Fees included in the rate',
+  /** Added after known fees when another fee is in the rate */
+  feeInRate: 'a fee in the rate',
   bestPrice: 'Best price',
   fastest: 'Fastest',
   gettingQuotes: 'Getting quotes',

@@ -21,6 +21,9 @@ import type {
 import { toOpenRampError } from './client.js'
 import type { OpenRampClient } from './client.js'
 
+/** The longest delay that `setTimeout` takes (2^31 - 1 ms); a longer one fires at once */
+const MAX_TIMER_MS = 2_147_483_647
+
 export type Tab = 'crypto' | 'cash'
 
 /** What an embedded provider page reported, via `notifySurface()`. */
@@ -473,11 +476,12 @@ export class RampController {
       this.set({ quotes: r.quotes, quoteErrors: r.errors, quotesLoading: false, ...(first ? { selectedQuoteId: first.id } : {}) })
       this.emit('quotes.shown', { method: m.method, count: r.quotes.length })
       // Re-quote shortly before the earliest expiry while the quote screen is open.
-      const exp = r.quotes.map((q) => (q.expiresAt ? Date.parse(q.expiresAt) : Infinity)).reduce((a, b) => Math.min(a, b), Infinity)
+      const exp = r.quotes.map((q) => Date.parse(q.expiresAt)).filter((t) => Number.isFinite(t)).reduce((a, b) => Math.min(a, b), Infinity)
       if (Number.isFinite(exp) && this.snap.screen === 'quotes') {
         this.quoteTimer = setTimeout(() => {
           if (this.snap.screen === 'quotes' && !this.snap.busy) void this.refreshQuotes()
-        }, Math.max(5_000, exp - Date.now() - 10_000))
+          // A timer longer than 2^31 - 1 ms fires at once, so cap it (a quote that lives for weeks).
+        }, Math.min(MAX_TIMER_MS, Math.max(5_000, exp - Date.now() - 10_000)))
       }
     } catch (e) {
       if (seq !== this.quoteSeq || this.destroyed) return

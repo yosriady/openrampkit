@@ -3,7 +3,7 @@
 import type { Snapshot } from '@openrampkit/client'
 import { CHAINS, USDC, isStepSub, mulRatio } from '@openrampkit/core'
 import type { IframeMessages, MethodOption, OpenRampError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
-import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
+import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, hasUnstatedFee, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
 
@@ -171,9 +171,10 @@ export function quoteSubtitle(q: PublicQuote, m: Messages, direction: 'deposit' 
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
   if (Number(q.input.value) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
-  // A fee in the rate with no known amount: say nothing rather than "No fees".
-  if (fees) sub.push(m.fees(fees))
-  else if (!q.fees.some((f) => f.inRate)) sub.push(m.noFees)
+  // A fee with no stated amount (in the rate): never say "No fees".
+  if (fees) sub.push(m.fees(hasUnstatedFee(q.fees) ? `${fees} + ${m.feeInRate}` : fees))
+  else if (hasUnstatedFee(q.fees)) sub.push(m.feesInRate)
+  else sub.push(m.noFees)
   return sub.join(' · ')
 }
 

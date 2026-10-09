@@ -41,7 +41,7 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
   const adapter = createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       const ref = `order-${++n}`
@@ -86,7 +86,7 @@ function bridgeAdapter() {
       return { address: '0x00000000000000000000000000000000000000dd' }
     },
     async quote({ leg, amountIn }) {
-      return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { value: amountIn!.value, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { value: amountIn!.value, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       if (ctl.down) throw new Error('bridge API down')

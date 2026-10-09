@@ -47,6 +47,8 @@ export const vi: Messages = {
   youPay: (amount) => `Bạn trả ${amount}`,
   fees: (amount) => `Phí ${amount}`,
   noFees: 'Miễn phí',
+  feesInRate: 'Phí đã tính vào tỷ giá',
+  feeInRate: 'phí trong tỷ giá',
   bestPrice: 'Giá tốt nhất',
   fastest: 'Nhanh nhất',
   gettingQuotes: 'Đang lấy báo giá',

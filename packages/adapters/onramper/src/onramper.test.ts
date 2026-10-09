@@ -175,9 +175,11 @@ describe('onramper adapter', () => {
     expect(q.output).toEqual({ value: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.input).toEqual(money('100.00'))
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'banxa fee', amount: '2.5', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.05', currency: 'USD' },
+      { kind: 'provider', label: 'banxa fee', amount: money('2.5'), included: true },
+      { kind: 'network', label: 'Network fee', amount: money('0.05'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(q.data!.onramp).toBe('banxa')
     expect((q.data!.providers as Array<{ ramp: string }>).map((p) => p.ramp)).toEqual(['banxa', 'moonpay'])
     // `onramps` filters providers
@@ -233,7 +235,7 @@ describe('onramper adapter', () => {
 
   it('start: needs the user IP, a wallet and a provider; maps HTTP errors', async () => {
     const a = onramper(opts)
-    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z', data: { onramp: 'banxa' } }
     const f = (status = 200, body: unknown = { redirectUrl: 'https://x' }) => fakeFetch([{ method: 'POST', match: '/checkout/v2/intent', status, reply: () => body }]).fetch
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f() }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote: { ...quote, data: {} } }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'QUOTE_EXPIRED' } })
@@ -245,7 +247,7 @@ describe('onramper adapter', () => {
 
   it('start: 401 "No V2 signing key" is a setup error: not retryable, operator log names the public key, user message is neutral', async () => {
     const a = onramper(opts)
-    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z', data: { onramp: 'banxa' } }
     const run = async (status: number, body: unknown) => {
       const log = recordingLog()
       const e = await a
@@ -284,10 +286,10 @@ describe('onramper adapter', () => {
     const usd = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/usd/usdc_base', reply: () => [guardarian] }]).fetch }))
     expect(checkLegQuote(usd)).toEqual([])
     // USD to USDC: comparable units, so the cost is 100 - 95.2
-    expect(usd.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: '4.80', currency: 'USD', inRate: true }])
-    // EUR to USDC: no reference rate in the response, so the amount is not known
+    expect(usd.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: money('4.80'), included: true }])
+    // EUR to USDC: no reference rate in the response, so the amount is not known (null)
     const eur = await onramper(opts).quote({ leg: leg('card', 'EUR'), amountIn: money('100', 'EUR') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/eur/usdc_base', reply: () => [guardarian] }]).fetch }))
-    expect(eur.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: '0', currency: 'EUR', inRate: true }])
+    expect(eur.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: null, included: true }])
     // Explicit fee fields (also zero) keep the old lines
     const zero = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/', reply: () => [{ ...guardarian, transactionFee: 0, networkFee: 0 }] }]).fetch }))
     expect(zero.fees).toEqual([])

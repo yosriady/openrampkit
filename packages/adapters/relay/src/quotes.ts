@@ -7,7 +7,7 @@ import type { CryptoAsset, LegQuote, LegSpec } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { HOP_CHAINS, SOLANA_CAIP2, WALLET_QUOTE_TTL_MIN } from './config.js'
 import type { DepositAddresses } from './deposit-address.js'
-import { cryptoAsset, destAsset, etaFrom, feesFrom, fmt, minOutputOf, quoteUser, recipientOf, requestIdOf, sameAsset, settlementOf, toOpenRamp, withMeta } from './helpers.js'
+import { cryptoAsset, destAsset, etaFrom, feesFrom, fmt, guaranteeOf, quoteUser, recipientOf, requestIdOf, sameAsset, settlementOf, toOpenRamp, withMeta } from './helpers.js'
 import type { RelayQuoteResponse } from './types.js'
 
 /** The leg specs, new for each adapter instance */
@@ -52,7 +52,7 @@ export function relayLegs(): LegSpec[] {
 }
 
 export function quotes(rt: RelayRuntime, deposits: Pick<DepositAddresses, 'depositQuote' | 'nominalAmount'>, legs: LegSpec[]) {
-  const { api, decimalsOf, baseBody } = rt
+  const { api, decimalsOf, baseBody, slippageBps } = rt
   const { depositQuote, nominalAmount } = deposits
 
   async function quoteWallet(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote> {
@@ -85,7 +85,10 @@ export function quotes(rt: RelayRuntime, deposits: Pick<DepositAddresses, 'depos
         input: { value: amount, asset: originMeta },
         output: { value: amount, asset: withMeta(dest, inDec) },
         fees: [],
+        // A plain transfer of the same token: the recipient gets exactly `amount`.
+        guarantee: 'firm',
         eta: { min: 5, max: 30 },
+        expiresAt: quoteExpiresAt(),
         data: { direct: true, recipient, amountBase: toBaseUnits(amount, inDec), decimals: inDec, user },
       }
     }
@@ -105,15 +108,20 @@ export function quotes(rt: RelayRuntime, deposits: Pick<DepositAddresses, 'depos
     const cin = q.details?.currencyIn
     const cout = q.details?.currencyOut
     if (!cin || !cout) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Relay returned an incomplete quote.' }), 502)
+    const outAsset = withMeta(dest, cout.currency.decimals, cout.currency.symbol)
     return {
       adapterId: 'relay',
       legId: 'wallet',
       input: { value: fmt(cin), asset: withMeta(origin, cin.currency.decimals, cin.currency.symbol) },
-      output: { value: fmt(cout), asset: withMeta(dest, cout.currency.decimals, cout.currency.symbol) },
+      output: { value: fmt(cout), asset: outAsset },
       fees: feesFrom(q),
+      // Relay guarantees the minimum output after slippage of the quote the user signs. start() may
+      // re-quote a stale quote (older than WALLET_QUOTE_REUSE_MS) with the same body; a delivery below
+      // this minOutput then shows as an amount mismatch.
+      ...guaranteeOf(q, outAsset, slippageBps),
       eta: etaFrom(q, legEta),
       expiresAt: quoteExpiresAt(WALLET_QUOTE_TTL_MIN),
-      data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps ?? [], requestId: requestIdOf(q), ...minOutputOf(q) },
+      data: { direct: false, body, user, quotedAt: Date.now(), steps: q.steps ?? [], requestId: requestIdOf(q) },
     }
   }
 
@@ -137,7 +145,10 @@ export function quotes(rt: RelayRuntime, deposits: Pick<DepositAddresses, 'depos
         input: { value: given, asset: originMeta },
         output: { value: given, asset: withMeta(dest, inDec) },
         fees: [],
+        // A plain transfer of the same token into the recipient: 1:1.
+        guarantee: 'firm',
         eta: { min: 5, max: 60 },
+        expiresAt: quoteExpiresAt(),
         data: { direct: true, depositAddress: recipient, anyAmount, nominal: false, ...(cmp(given, '0') > 0 ? { amountBase: toBaseUnits(given, inDec) } : {}) },
       }
     }
@@ -154,9 +165,13 @@ export function quotes(rt: RelayRuntime, deposits: Pick<DepositAddresses, 'depos
       input: { value: fmt(cin), asset: withMeta(origin, cin.currency.decimals, cin.currency.symbol) },
       output: { value: fmt(cout), asset: withMeta(dest, cout.currency.decimals, cout.currency.symbol) },
       fees: feesFrom(q),
+      // Open deposit addresses accept any amount, and Relay prices each deposit when it arrives (the
+      // session also reuses its address across quotes). So the quote's `minimumAmount` does not bind
+      // the deposit: the output is the rate-based estimate for `input`.
+      guarantee: 'estimate',
       eta: etaFrom(q, spec.eta),
-      // Open deposit addresses accept any amount; the output is the rate-based estimate for `input`.
-      data: { direct: false, depositAddress: address, requestId, anyAmount, nominal, recipient, ...(nominal ? {} : { amountBase: cin.amount, ...minOutputOf(q) }) },
+      expiresAt: quoteExpiresAt(),
+      data: { direct: false, depositAddress: address, requestId, anyAmount, nominal, recipient, ...(nominal ? {} : { amountBase: cin.amount }) },
     }
   }
 

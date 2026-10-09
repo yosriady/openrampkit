@@ -79,7 +79,7 @@ describe('mock adapter: solanaLocalChain', () => {
     expect(a.legs[0]).toMatchObject({ methods: ['wallet'], surfaces: ['WALLET_TX'], from: { asset: { chains: { [SOLANA_DEVNET]: [MINT] } } } })
     const q = await a.quote({ leg: legOf(USDC), amountIn: { value: '5', asset: USDC } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q).toMatchObject({ input: { value: '5', asset: USDC }, output: { value: '5', asset: USDC }, fees: [] })
+    expect(q).toMatchObject({ input: { value: '5', asset: USDC }, output: { value: '5', asset: USDC }, fees: [], guarantee: 'firm' })
   })
 
   it('asks for one SPL transfer to the destination owner, and completes when the chain shows it', async () => {

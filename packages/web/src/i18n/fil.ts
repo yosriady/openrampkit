@@ -48,6 +48,8 @@ export const fil: Messages = {
   youPay: (amount) => `Babayaran mo ang ${amount}`,
   fees: (amount) => `Singil ${amount}`,
   noFees: 'Walang singil',
+  feesInRate: 'Kasama ang singil sa rate',
+  feeInRate: 'singil sa rate',
   bestPrice: 'Pinakamagandang presyo',
   fastest: 'Pinakamabilis',
   gettingQuotes: 'Kinukuha ang mga quote',

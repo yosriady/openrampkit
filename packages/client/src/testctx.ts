@@ -100,8 +100,10 @@ export function quote(p: Partial<Quote> & { id: string }): Quote {
     legs: [],
     input: { value: '100', asset: { kind: 'fiat', currency: 'USD' } },
     output: { value: '97.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } },
-    fees: [{ kind: 'provider', label: 'Fee', amount: '2.5', currency: 'USD' }],
+    fees: [{ kind: 'provider', label: 'Fee', amount: { value: '2.5', asset: { kind: 'fiat', currency: 'USD' } }, included: true }],
+    guarantee: 'estimate',
     eta: { min: 60, max: 300 },
+    expiresAt: '2099-01-01T00:00:00.000Z',
     ...p,
   }
 }

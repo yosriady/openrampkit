@@ -148,10 +148,12 @@ describe('meld adapter', () => {
     expect(quote.output).toEqual({ value: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(quote.input).toEqual(money('100'))
     expect(quote.fees).toEqual([
-      { kind: 'provider', label: 'BANXA fee', amount: '2.5', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.5', currency: 'USD' },
-      { kind: 'app', label: 'App fee', amount: '0.25', currency: 'USD' },
+      { kind: 'provider', label: 'BANXA fee', amount: money('2.5'), included: true },
+      { kind: 'network', label: 'Network fee', amount: money('0.5'), included: true },
+      { kind: 'app', label: 'App fee', amount: money('0.25'), included: true },
     ])
+    expect(quote.guarantee).toBe('estimate')
+    expect(quote.minOutput).toBeUndefined()
     expect(quote.data!.serviceProvider).toBe('BANXA')
     expect(quote.data!.providers).toEqual([
       { serviceProvider: 'BANXA', destinationAmount: '96.25', sourceAmount: '100', totalFee: '3.5', rampScore: 80 },

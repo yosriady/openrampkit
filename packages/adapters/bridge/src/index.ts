@@ -45,7 +45,7 @@ import {
   toBaseUnits,
   toScaled,
 } from '@openrampkit/core'
-import type { Amount, CryptoAsset, FieldSpec, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StepSub, Surface, TxRequest } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, FieldSpec, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StepSub, Surface, TxRequest } from '@openrampkit/core'
 
 export type BridgeCustomerHint = {
   /** An existing Bridge customer id. The adapter skips the KYC link and checks this customer. */
@@ -397,11 +397,16 @@ export function bridge(opts: BridgeOptions) {
     return fromScaled(toScaled(dev, WORK) + toScaled(bridgeFee, WORK), WORK)
   }
 
-  function feesFor(amount: string, currency: string, digits: number): Fee[] {
+  /**
+   * Fees in `asset` (the input asset), taken from the input. `fx`: the leg converts between currencies,
+   * and Bridge's `buy_rate` includes its FX fee without saying how much (a fee with no amount).
+   */
+  function feesFor(amount: string, asset: Asset, digits: number, fx: boolean): Fee[] {
     const fees: Fee[] = []
-    if (opts.bridgeFeeBps) fees.push({ kind: 'provider', label: 'Bridge fee', amount: roundTo(applyBps(amount, opts.bridgeFeeBps), digits), currency })
+    if (opts.bridgeFeeBps) fees.push({ kind: 'provider', label: 'Bridge fee', amount: { value: roundTo(applyBps(amount, opts.bridgeFeeBps), digits), asset }, included: true })
+    if (fx) fees.push({ kind: 'provider', label: 'FX fee in the rate', amount: null, included: true })
     if (opts.developerFeePercent && cmp(opts.developerFeePercent, '0') > 0) {
-      fees.push({ kind: 'app', label: 'App fee', amount: roundTo(div(toScaledMul(amount, opts.developerFeePercent), '100'), digits), currency })
+      fees.push({ kind: 'app', label: 'App fee', amount: { value: roundTo(div(toScaledMul(amount, opts.developerFeePercent), '100'), digits), asset }, included: true })
     }
     return fees
   }
@@ -449,7 +454,9 @@ export function bridge(opts: BridgeOptions) {
       legId: r.id,
       input: { value: fiat, asset: { kind: 'fiat', currency: cur } },
       output: { value: output, asset: usdcAsset(c) },
-      fees: feesFor(fiat, cur, digits),
+      fees: feesFor(fiat, { kind: 'fiat', currency: cur }, digits, cur !== 'USD'),
+      // `estimate`: Bridge has no rate lock, and it converts what the bank transfer brings, when it arrives.
+      guarantee: 'estimate',
       eta: r.eta,
       // Bridge has no rate lock; the rate moves about every 30 s. The bank transfer settles later at the rate of that day.
       expiresAt: quoteExpiresAt(10),
@@ -478,7 +485,9 @@ export function bridge(opts: BridgeOptions) {
       legId: r.id,
       input: { value: usdc, asset: usdcAsset(c) },
       output: { value: output, asset: { kind: 'fiat', currency: cur } },
-      fees: feesFor(usdc, 'USDC', 6),
+      fees: feesFor(usdc, usdcAsset(c), 6, cur !== 'USD'),
+      // `estimate`: Bridge has no rate lock; it sets the rate when it pays out the transfer.
+      guarantee: 'estimate',
       eta: r.eta,
       expiresAt: quoteExpiresAt(10),
       limits: { min: r.min, currency: 'USDC' },

@@ -70,7 +70,7 @@ describe('coinbase account balance (coinbase_account)', () => {
     const q = await a.quote({ leg: accountLeg, amountIn: usd('50'), deliverTo: { address: DEST } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
     expect(calls[0]!.body).toMatchObject({ paymentMethod: 'FIAT_WALLET', paymentAmount: '50.00', country: 'US', subdivision: 'CA' })
-    expect(q.fees).toEqual([{ kind: 'provider', label: 'Coinbase fee', amount: '0', currency: 'USD' }])
+    expect(q.fees).toEqual([{ kind: 'provider', label: 'Coinbase fee', amount: usd('0'), included: true }])
     const step = await a.start({ leg: accountLeg, quote: { ...q, data: { ...q.data, createdAt: 0 } } }, ctx)
     expect(calls[1]!.body).toMatchObject({ paymentMethod: 'FIAT_WALLET' })
     expect(step.surface).toMatchObject({ kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl })
@@ -136,9 +136,11 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
       limits: { min: '5', max: '2500', currency: 'USD' },
     })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Coinbase fee', amount: '0.5', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.25', currency: 'USD' },
+      { kind: 'provider', label: 'Coinbase fee', amount: usd('0.5'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0.25'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.expiresAt).toEqual(expect.any(String))
     // exact output
     await a.quote({ leg: guestLeg, amountOut: { value: '20', asset: BASE_USDC } }, ctx)
     expect(calls[1]!.body).toMatchObject({ purchaseAmount: '20', isQuote: true })
@@ -222,7 +224,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
   it('start: live orders keep the link as is; no link is an error; guest errors are mapped', async () => {
     const secret = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret, guestCheckout: GUEST })
-    const quote = { adapterId: 'coinbase', legId: 'guest_apple_pay', input: usd('10'), output: { value: '9.8', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'coinbase', legId: 'guest_apple_pay', input: usd('10'), output: { value: '9.8', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z' }
     const live = fakeFetch([{ method: 'POST', match: '/onramp/orders', reply: () => ({ order: ORDER, paymentLink: { url: PAY_URL } }) }])
     const step = await a.start({ leg: guestLeg, quote }, makeCtx({ fetch: live.fetch, session: { livemode: true } }))
     expect(step.surface).toMatchObject({ kind: 'IFRAME', url: PAY_URL })

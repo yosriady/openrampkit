@@ -124,7 +124,7 @@ export function xendit(opts: XenditOptions) {
     let total = '0'
     if (f.bps) total = add(total, applyBps(amount, f.bps))
     if (f.fixed) total = add(total, f.fixed)
-    return [{ kind: 'provider', label: 'Xendit fee', amount: roundTo(total, minorUnits(c.currency)), currency: c.currency }]
+    return [{ kind: 'provider', label: 'Xendit fee', amount: { value: roundTo(total, minorUnits(c.currency)), asset: { kind: 'fiat', currency: c.currency } }, included: true }]
   }
 
   async function call<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, method: 'GET' | 'POST', path: string, body?: unknown, idem?: string, c?: Channel): Promise<T> {
@@ -232,13 +232,16 @@ export function xendit(opts: XenditOptions) {
       if (cmp(amount, c.min) < 0) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${c.min} ${c.currency}.` }), 422)
       if (cmp(amount, c.max) > 0) throw new OpenRampException(openRampError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${c.max} ${c.currency}.` }), 422)
       const fees = feesFor(c, amount)
-      const net = fees.reduce((acc, f) => sub(acc, f.amount), amount)
+      const net = fees.reduce((acc, f) => (f.amount ? sub(acc, f.amount.value) : acc), amount)
       return {
         adapterId: 'xendit',
         legId: leg.legId,
         input: { value: amount, asset: { kind: 'fiat', currency: c.currency } },
         output: { value: roundTo(net, minorUnits(c.currency)), asset: { kind: 'fiat', currency: c.currency } },
         fees,
+        // `firm`: a same-currency pay-in with no rate. The payment request is for exactly `input`, and the
+        // output is `input` minus the fee from the options (the merchant's Xendit pricing).
+        guarantee: 'firm',
         eta: legs.find((l) => l.id === leg.legId)!.eta,
         expiresAt: quoteExpiresAt(10),
         limits: { min: c.min, max: c.max, currency: c.currency },

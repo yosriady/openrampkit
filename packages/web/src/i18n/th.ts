@@ -48,6 +48,8 @@ export const th: Messages = {
   youPay: (amount) => `คุณจ่าย ${amount}`,
   fees: (amount) => `ค่าธรรมเนียม ${amount}`,
   noFees: 'ไม่มีค่าธรรมเนียม',
+  feesInRate: 'รวมค่าธรรมเนียมในอัตราแลกเปลี่ยนแล้ว',
+  feeInRate: 'ค่าธรรมเนียมในอัตราแลกเปลี่ยน',
   bestPrice: 'ราคาดีที่สุด',
   fastest: 'เร็วที่สุด',
   gettingQuotes: 'กำลังขอราคา',

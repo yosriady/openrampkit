@@ -39,7 +39,7 @@ function surfaceAdapter(surface: Surface): Adapter {
   return createAdapter({
     id: 'surf', name: 'Surf', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'surf', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'surf', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       return { state: 'PAYMENT', status: 'requires_action', ref: `r-${Math.random()}`, surface, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }

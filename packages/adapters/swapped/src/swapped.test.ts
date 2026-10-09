@@ -105,9 +105,12 @@ describe('swapped adapter', () => {
     expect(checkLegQuote(q)).toEqual([])
     expect(q.output).toEqual({ value: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Swapped fee', amount: '2.16', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.02', currency: 'USD' },
+      { kind: 'provider', label: 'Swapped fee', amount: { value: '2.16', asset: { kind: 'fiat', currency: 'USD' } }, included: true },
+      { kind: 'network', label: 'Network fee', amount: { value: '0.02', asset: { kind: 'fiat', currency: 'USD' } }, included: true },
     ])
+    // the rate is set when the order executes
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(calls[0]!.url).toBe('https://widget.swapped.com/api/v1/merchant/pricing')
     expect(calls[0]!.body).toEqual({ api_key: PK, payment_method: 'creditcard', fiat_currency: 'USD', fiat_amount: 100, crypto_currency: 'USDC_BASE', region: 'US', markup: 1 })
   })
@@ -285,7 +288,7 @@ describe('swapped errors and edge cases', () => {
     expect(calls[0]!.body).toEqual({ api_key: PK, payment_method: 'vietqr', fiat_currency: 'USD', crypto_currency: 'USDC_ARBITRUM', crypto_amount: 50, region: 'VN', markup: 0.5 })
     expect(q.input.value).toBe('52.5')
     expect(q.output.asset).toMatchObject({ chain: 'eip155:42161', decimals: 6 })
-    expect(q.fees).toEqual([{ kind: 'app', label: 'App fee', amount: '0.25', currency: 'USD' }])
+    expect(q.fees).toEqual([{ kind: 'app', label: 'App fee', amount: { value: '0.25', asset: { kind: 'fiat', currency: 'USD' } }, included: true }])
     expect(q.eta).toEqual({ min: 120, max: 1800 })
     const ap = await a.quote({ leg: { ...cardLeg, legId: 'apple-pay' }, amountIn: usd('10') }, makeCtx({ fetch }))
     expect(ap.eta).toEqual({ min: 120, max: 900 })
@@ -316,7 +319,7 @@ describe('swapped errors and edge cases', () => {
 
   it('start: needs a wallet address; falls back to the leg and target when quote data is missing', async () => {
     const a = swapped({ publicKey: PK, secretKey: SK, markup: 1 })
-    const quote = { adapterId: 'swapped', legId: 'creditcard', input: usd('20'), output: { value: '19', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'swapped', legId: 'creditcard', input: usd('20'), output: { value: '19', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() }
     await expect(a.start({ leg: cardLeg, quote }, makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', merchantId: 'm', currency: 'USD' } as never }))).rejects.toMatchObject({
       error: { code: 'BAD_REQUEST', message: 'Swapped needs a wallet address to deliver to.' },
     })

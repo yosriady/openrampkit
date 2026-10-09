@@ -99,11 +99,14 @@ describe('transak adapter', () => {
     const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
     expect(q.output).toEqual({ value: '102.345678', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
-    expect(q.fees.map((f) => [f.kind, f.amount])).toEqual([
-      ['provider', '4.5'],
-      ['app', '1'],
-      ['network', '0.14'],
+    expect(q.fees.map((f) => [f.kind, f.amount?.value, f.included])).toEqual([
+      ['provider', '4.5', true],
+      ['app', '1', true],
+      ['network', '0.14', true],
     ])
+    expect(q.fees[0]!.amount).toEqual({ value: '4.5', asset: { kind: 'fiat', currency: 'EUR' } })
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     const priceUrl = new URL(calls[0]!.url)
     expect(priceUrl.origin + priceUrl.pathname).toBe('https://api-stg.transak.com/api/v1/pricing/public/quotes')
     expect(Object.fromEntries(priceUrl.searchParams)).toEqual({
@@ -173,7 +176,7 @@ describe('transak adapter', () => {
 const eur = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
 const opts = { apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test' }
 const TOKEN_ROUTE = { method: 'POST', match: '/partners/api/v2/refresh-token', reply: () => ({ data: { accessToken: 'ACCESS_TOKEN_1', expiresAt: Math.floor(Date.now() / 1000) + 7 * 86400 } }) }
-const QUOTE = { adapterId: 'transak', legId: 'card', input: eur('100'), output: { value: '100', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+const QUOTE = { adapterId: 'transak', legId: 'card', input: eur('100'), output: { value: '100', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z' }
 
 describe('transak conformance', () => {
   it('card leg and HS256 webhooks pass runAdapterConformance', async () => {

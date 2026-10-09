@@ -47,6 +47,8 @@ export const ms: Messages = {
   youPay: (amount) => `Anda bayar ${amount}`,
   fees: (amount) => `Caj ${amount}`,
   noFees: 'Tiada caj',
+  feesInRate: 'Caj termasuk dalam kadar',
+  feeInRate: 'caj dalam kadar',
   bestPrice: 'Harga terbaik',
   fastest: 'Terpantas',
   gettingQuotes: 'Mendapatkan sebut harga',

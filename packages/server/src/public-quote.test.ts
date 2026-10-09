@@ -53,11 +53,14 @@ describe('public quotes', () => {
       input: { value: '10', asset: { kind: 'fiat', currency: 'USD' } },
       output: { value: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0xabc' } },
       fees: [], eta: { min: 1, max: 2 }, data: { onrampUrl: 'https://secret.test/?sessionToken=t', nonce: 'n' },
+      guarantee: 'min_output', minOutput: { value: '8.9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0xabc' } }, slippageBps: 50,
+      expiresAt: '2026-10-09T12:05:00.000Z',
     }
-    const q = { id: 'q_1', pathwayId: 'p', method: 'card', provider: 'X', legs: [leg], input: leg.input, output: leg.output, fees: [], eta: leg.eta }
+    const q = { id: 'q_1', pathwayId: 'p', method: 'card', provider: 'X', legs: [leg], input: leg.input, output: leg.output, fees: [], eta: leg.eta, guarantee: 'min_output' as const, minOutput: leg.minOutput!, slippageBps: 50, expiresAt: leg.expiresAt }
     const pub = publicQuote(q)
     expect(pub.legs[0]).not.toHaveProperty('data')
-    expect(pub.legs[0]).toMatchObject({ adapterId: 'x', legId: 'card', input: leg.input, output: leg.output })
+    expect(pub.legs[0]).toMatchObject({ adapterId: 'x', legId: 'card', input: leg.input, output: leg.output, guarantee: 'min_output', minOutput: leg.minOutput, slippageBps: 50, expiresAt: leg.expiresAt })
+    expect(pub).toMatchObject({ guarantee: 'min_output', minOutput: leg.minOutput, slippageBps: 50, expiresAt: leg.expiresAt })
     // The source quote is not changed: the server still needs the data for start().
     expect(q.legs[0]!.data).toEqual(leg.data)
   })

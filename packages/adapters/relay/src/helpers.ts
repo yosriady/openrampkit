@@ -3,7 +3,7 @@
 import { awaitPoll, httpErrorToOpenRamp, httpStatus } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { CHAINS, OpenRampException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, openRampError, sameToken } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegStep, StepSub } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegQuote, LegStep, StepSub } from '@openrampkit/core'
 import { EVM_NATIVE, PLACEHOLDER_SOLANA_USER, PLACEHOLDER_USER, RELAY_POLL, RELAY_SOLANA_CHAIN_ID, SOLANA_CAIP2, SOLANA_NATIVE } from './config.js'
 import type { RelayAmount, RelayQuoteResponse, RelayRequest } from './types.js'
 
@@ -110,24 +110,44 @@ export function deliveredOutput(r: RelayRequest | undefined, expected?: Amount):
   return relayOutput(r?.data?.route?.actual?.destination?.outputCurrency, expected) ?? relayOutput(r?.data?.metadata?.currencyOut, expected)
 }
 
+/** A Relay currency as our crypto asset. Relay names the native token `0x0000...0000` (EVM) or the system program (Solana). */
+export function relayAsset(c: RelayAmount['currency']): CryptoAsset {
+  const chain = caip2FromRelay(c.chainId)
+  return { kind: 'crypto', chain, token: isNative(chain, c.address) ? 'native' : c.address, symbol: c.symbol, decimals: c.decimals }
+}
+
+/**
+ * The fees of a Relay quote, each in its own token. `gas` is the origin-chain gas that the user's wallet
+ * pays on top of `input` (not included). Relay takes the relayer and app fees from the amount it routes,
+ * so `currencyOut` already counts them (included).
+ */
 export function feesFrom(q: RelayQuoteResponse): Fee[] {
   const out: Fee[] = []
-  const add = (kind: Fee['kind'], label: string, f?: RelayAmount) => {
-    if (!f || !f.amount || f.amount === '0') return
-    out.push({ kind, label, amount: fmt(f), currency: f.currency.symbol })
+  const add = (kind: Fee['kind'], label: string, included: boolean, f?: RelayAmount) => {
+    if (!f?.currency || !f.amount || f.amount === '0') return
+    out.push({ kind, label, amount: { value: fmt(f), asset: relayAsset(f.currency) }, included })
   }
-  add('network', 'Network fee', q.fees?.gas)
+  add('network', 'Network fee', false, q.fees?.gas)
   // `relayer` already includes relayerGas and relayerService, so we do not add those.
-  add('provider', 'Relay fee', q.fees?.relayer)
-  add('app', 'App fee', q.fees?.app)
+  add('provider', 'Relay fee', true, q.fees?.relayer)
+  add('app', 'App fee', true, q.fees?.app)
   return out
 }
 
-/** Relay's minimum output after slippage (`details.currencyOut.minimumAmount`), as a decimal string */
-export function minOutputOf(q: RelayQuoteResponse): { minOutput?: string } {
+/**
+ * How firm a Relay quote is. Relay guarantees the minimum output after slippage
+ * (`details.currencyOut.minimumAmount`), so a quote with it is `min_output`, in the asset of `output`.
+ * Without it the output is only an `estimate`. `slippageBps` is the `slippageTolerance` the adapter sent;
+ * when it sends none, Relay picks a value and we do not state one.
+ */
+export function guaranteeOf(q: RelayQuoteResponse, output: CryptoAsset, slippageBps?: number): Pick<LegQuote, 'guarantee' | 'minOutput' | 'slippageBps'> {
   const out = q.details?.currencyOut
-  if (!out?.minimumAmount || !/^[0-9]+$/.test(out.minimumAmount)) return {}
-  return { minOutput: fromBaseUnits(out.minimumAmount, out.currency.decimals) }
+  if (!out?.minimumAmount || !/^[0-9]+$/.test(out.minimumAmount) || typeof out.currency?.decimals !== 'number') return { guarantee: 'estimate' }
+  return {
+    guarantee: 'min_output',
+    minOutput: { value: fromBaseUnits(out.minimumAmount, out.currency.decimals), asset: output },
+    ...(slippageBps !== undefined ? { slippageBps } : {}),
+  }
 }
 
 export const toHex = (n: bigint) => `0x${n.toString(16)}`

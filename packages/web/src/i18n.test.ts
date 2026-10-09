@@ -167,7 +167,7 @@ describe('locale number and currency formatting', () => {
     expect(formatToken('1234.5', 'USDC', 'en')).toBe('1,234.5 USDC')
     expect(sp(formatAmount({ value: '1234.5', asset: { kind: 'fiat', currency: 'USD' } }, 'vi'))).toBe('1.234,50 US$')
     expect(formatAmount({ value: '1234.5', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'ETH' } }, 'id')).toBe('1.234,5 ETH')
-    expect(sp(formatFees([{ kind: 'provider', label: 'Fee', amount: '15000', currency: 'IDR' }], 'id'))).toBe('Rp 15.000')
+    expect(sp(formatFees([{ kind: 'provider', label: 'Fee', amount: { value: '15000', asset: { kind: 'fiat', currency: 'IDR' } }, included: true }], 'id'))).toBe('Rp 15.000')
     expect(sp(formatLimit({ max: '50000000', currency: 'VND' }, resolveMessages({ locale: 'vi' })))).toBe('Hạn mức 50.000.000 ₫')
     // Non-ISO codes fall back to token formatting in the locale
     expect(formatFiat('1234.5', 'USDC', { locale: 'vi' })).toBe('1.234,5 USDC')

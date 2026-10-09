@@ -327,12 +327,13 @@ export function peer(opts: PeerOptions) {
       if (opts.feePayer === 'PAYEE') {
         // Buyer pays: checkout grosses the price up so the full principal settles.
         inputAmount = roundTo(fromScaled((toScaled(amount, 18) * 10_000n) / BigInt(10_000 - feeBps), 18), 2)
-        fees.push({ kind: 'provider', label: 'Peer fee', amount: roundTo(sub(inputAmount, amount), 2), currency })
+        // The fee is part of `input` (the grossed-up fiat), so the quote counts it.
+        fees.push({ kind: 'provider', label: 'Peer fee', amount: { value: roundTo(sub(inputAmount, amount), 2), asset: { kind: 'fiat', currency } }, included: true })
         output = usdc(gross)
       } else {
         // Merchant pays (default) or split (TO VERIFY: split is estimated like merchant pays): fee comes off the USDC.
         const fee = usdc(bps(gross, feeBps))
-        fees.push({ kind: 'provider', label: 'Peer fee', amount: fee, currency: 'USDC' })
+        fees.push({ kind: 'provider', label: 'Peer fee', amount: { value: fee, asset: BASE_USDC }, included: true })
         output = usdc(sub(gross, fee))
       }
       return {
@@ -341,6 +342,9 @@ export function peer(opts: PeerOptions) {
         input: { value: inputAmount, asset: { kind: 'fiat', currency } },
         output: { value: output, asset: BASE_USDC },
         fees,
+        // An estimate: the price comes from the current orderbook, and a seller fills the order only when
+        // the user pays. Availability reserves no liquidity and locks no rate.
+        guarantee: 'estimate',
         eta: { min: 120, max: 3600 },
         // Availability is advisory and reserves nothing.
         expiresAt: quoteExpiresAt(2),

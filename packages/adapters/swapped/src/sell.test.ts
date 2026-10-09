@@ -56,6 +56,8 @@ describe('swapped sell legs', () => {
     expect(q.input).toEqual({ value: '100', asset: expect.objectContaining({ chain: 'eip155:8453' }) })
     expect(q.output).toEqual({ value: '90.16', asset: { kind: 'fiat', currency: 'EUR' } })
     expect(q.data).toMatchObject({ estimate: true, slug: 'bank-transfer' })
+    expect(q.guarantee).toBe('estimate')
+    expect(q.fees).toEqual([{ kind: 'provider', label: 'Swapped fee', amount: { value: '1.84', asset: { kind: 'fiat', currency: 'EUR' } }, included: true }])
     const bad = fakeFetch([{ match: 'sell/pricing', reply: () => ({ success: true, data: { crypto_amount: 0, fiat_amount_incl_fees: 0, fiat_amount_excl_fees: 0 } }) }])
     await expect(a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })

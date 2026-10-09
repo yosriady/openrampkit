@@ -248,8 +248,8 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
     if (quote.adapterId !== adapter.id) problem(`${name} quote`, `adapterId ${quote.adapterId} is not ${adapter.id}`)
     if (quote.legId !== f.leg.legId) problem(`${name} quote`, `legId ${quote.legId} is not ${f.leg.legId}`)
     if (quote.eta.min > quote.eta.max) problem(`${name} quote`, 'eta.min > eta.max')
-    for (const [label, amount] of [['input', quote.input.value], ['output', quote.output.value], ...quote.fees.map((x) => [`fee ${x.label}`, x.amount])] as const) {
-      if (amount.startsWith('-')) problem(`${name} quote.${label}`, 'negative amount')
+    for (const [label, amount] of [['input', quote.input.value], ['output', quote.output.value], ...quote.fees.map((x) => [`fee ${x.label}`, x.amount?.value ?? ''])] as const) {
+      if (typeof amount === 'string' && amount.startsWith('-')) problem(`${name} quote.${label}`, 'negative amount')
     }
 
     if (f.start === false) continue

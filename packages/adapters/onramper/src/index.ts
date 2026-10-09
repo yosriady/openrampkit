@@ -38,7 +38,7 @@ import {
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, cmp, openRampError, roundTo, sub } from '@openrampkit/core'
-import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
 
 export { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, sha256Hex, signV2 } from './sign.js'
@@ -359,17 +359,20 @@ export function onramper(opts: OnramperOptions) {
         .sort((a, b) => cmp(b.payout, a.payout))
       const best = providers[0]!
       const cur = fiat.toUpperCase()
+      // The onramp takes its fees out of `amount` (the quote input) before it converts, so each fee is included.
+      const fiatAmt = (value: string): Amount => ({ value, asset: { kind: 'fiat', currency: cur } })
       const fees: Fee[] = []
-      if (best.transactionFee !== '0') fees.push({ kind: 'provider', label: `${best.ramp} fee`, amount: best.transactionFee, currency: cur })
-      if (best.networkFee !== '0') fees.push({ kind: 'network', label: 'Network fee', amount: best.networkFee, currency: cur })
+      if (best.transactionFee !== '0') fees.push({ kind: 'provider', label: `${best.ramp} fee`, amount: fiatAmt(best.transactionFee), included: true })
+      if (best.networkFee !== '0') fees.push({ kind: 'network', label: 'Network fee', amount: fiatAmt(best.networkFee), included: true })
       const inputAmount = roundTo(input.amountIn.value, 2)
       if (best.feesInRate) {
         // No fee fields and no reference rate in the response. For USD to a USD stablecoin, the cost is the
         // difference between what the user pays and what arrives. Otherwise the amount is not known: a line
-        // with amount '0' and `inRate` keeps the UI from saying "No fees".
+        // with amount null keeps the UI from saying "No fees".
         const comparable = cur === 'USD' && USD_STABLES.has((target.symbol ?? '').toUpperCase())
         const diff = comparable ? roundTo(sub(inputAmount, best.payout), 2) : '0'
-        if (!comparable || cmp(diff, '0') > 0) fees.push({ kind: 'provider', label: `${best.ramp} fee (included in rate)`, amount: diff, currency: cur, inRate: true })
+        if (!comparable) fees.push({ kind: 'provider', label: `${best.ramp} fee (included in rate)`, amount: null, included: true })
+        else if (cmp(diff, '0') > 0) fees.push({ kind: 'provider', label: `${best.ramp} fee (included in rate)`, amount: fiatAmt(diff), included: true })
       }
       return {
         adapterId: 'onramper',
@@ -377,6 +380,8 @@ export function onramper(opts: OnramperOptions) {
         input: { value: inputAmount, asset: { kind: 'fiat', currency: cur } },
         output: { value: best.payout, asset: assetOf(target) },
         fees,
+        // Onramper relays the onramp's indicative price: the onramp sets the rate when it executes the order.
+        guarantee: 'estimate',
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
         expiresAt: quoteExpiresAt(5),
         data: { onramp: best.ramp, providers, paymentMethod, cryptoId: target.cryptoId, network: target.network, fiat, country },

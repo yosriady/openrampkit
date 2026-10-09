@@ -47,6 +47,8 @@ export const id: Messages = {
   youPay: (amount) => `Anda bayar ${amount}`,
   fees: (amount) => `Biaya ${amount}`,
   noFees: 'Tanpa biaya',
+  feesInRate: 'Biaya sudah termasuk dalam kurs',
+  feeInRate: 'biaya dalam kurs',
   bestPrice: 'Harga terbaik',
   fastest: 'Tercepat',
   gettingQuotes: 'Mengambil penawaran',

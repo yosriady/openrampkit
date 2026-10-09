@@ -18,6 +18,8 @@ export function createRuntime(opts: RelayOptions) {
   let warnedV2 = false
   const toleranceBps = Math.max(0, Math.min(10_000, Math.round(opts.amountToleranceBps ?? DEFAULT_TOLERANCE_BPS)))
   const logBlockRange = BigInt(Math.max(1, Math.floor(opts.logBlockRange ?? DEFAULT_LOG_BLOCK_RANGE)))
+  /** The `slippageTolerance` (bps) sent with every quote, or undefined when Relay picks it */
+  const slippageBps = opts.slippageBps !== undefined ? Math.max(0, Math.min(10_000, Math.round(opts.slippageBps))) : undefined
 
   /**
    * Warn once, on the first adapter call, when no API key is set. Relay's announced policy: from
@@ -89,7 +91,7 @@ export function createRuntime(opts: RelayOptions) {
       destinationChainId: relayChainId(dest.chain),
       destinationCurrency: relayCurrency(dest.chain, dest.token),
       ...(opts.referrer ? { referrer: opts.referrer } : {}),
-      ...(opts.slippageBps !== undefined ? { slippageTolerance: String(Math.max(0, Math.min(10_000, Math.round(opts.slippageBps)))) } : {}),
+      ...(slippageBps !== undefined ? { slippageTolerance: String(slippageBps) } : {}),
       ...(opts.appFee && opts.appFee.bps > 0 ? { appFees: [{ recipient: opts.appFee.recipient, fee: String(Math.round(opts.appFee.bps)) }] } : {}),
     }
   }
@@ -104,5 +106,5 @@ export function createRuntime(opts: RelayOptions) {
     return rpc<SolTx | null>(ctx, chain, 'getTransaction', [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }])
   }
 
-  return { opts, toleranceBps, logBlockRange, warnNoKey, api, listRequests, decimalsOf, refundTo, baseBody, rpc, solanaTx }
+  return { opts, toleranceBps, slippageBps, logBlockRange, warnNoKey, api, listRequests, decimalsOf, refundTo, baseBody, rpc, solanaTx }
 }

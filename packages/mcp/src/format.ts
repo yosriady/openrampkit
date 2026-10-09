@@ -1,6 +1,6 @@
 // Compact, agent-friendly views of server objects. No secrets, no provider internals.
 
-import type { Amount, MethodOption, OpenRampError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
+import type { Amount, Fee, MethodOption, OpenRampError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
 
 export const TERMINAL = new Set(['succeeded', 'failed', 'canceled', 'expired', 'refunded', 'reversed'])
 
@@ -37,11 +37,21 @@ export function quoteView(q: PublicQuote) {
     provider: q.provider,
     pay: amountText(q.input),
     receive: amountText(q.output),
-    fees: q.fees.map((f) => (f.inRate && Number(f.amount) === 0 ? `${f.label}: amount not given` : `${f.amount} ${f.currency} ${f.label}`)),
+    // A fiat onramp or a bridge may only estimate the output. `min_output`: `min_receive` is guaranteed.
+    guarantee: q.guarantee,
+    ...(q.minOutput ? { min_receive: amountText(q.minOutput) } : {}),
+    ...(q.slippageBps !== undefined ? { slippage_bps: q.slippageBps } : {}),
+    fees: q.fees.map(feeText),
     eta: eta(q.eta),
     ...(q.badges?.length ? { badges: q.badges } : {}),
-    ...(q.expiresAt ? { expires_at: q.expiresAt } : {}),
+    expires_at: q.expiresAt,
   }
+}
+
+/** One fee line: the amount (or "amount not given"), and whether the quote already counts it */
+export function feeText(f: Fee): string {
+  const where = f.included ? 'included in rate' : 'charged on top'
+  return f.amount ? `${amountText(f.amount)} ${f.label} (${where})` : `${f.label}: amount not given (${where})`
 }
 
 export function errorView(e: OpenRampError) {

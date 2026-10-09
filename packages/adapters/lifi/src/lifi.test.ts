@@ -4,7 +4,7 @@ import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, planPathways } from '@openrampk
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, memoryKV, runAdapterConformance } from '@openrampkit/adapter/testing'
 import type { FakeCall } from '@openrampkit/adapter/testing'
-import { LIFI_SOLANA_CHAIN_ID, caip2FromLifi, erc20ApproveData, lifi, lifiChainId, lifiToken } from './index.js'
+import { LIFI_SOLANA_CHAIN_ID, caip2FromLifi, erc20ApproveData, feesFrom, lifi, lifiChainId, lifiToken, slippageBpsOf } from './index.js'
 import type { LifiQuote, LifiStatus } from './index.js'
 
 const USER = '0x03508bB71268BBA25ECaCC8F620e01866650532c'
@@ -162,12 +162,17 @@ describe('lifi quote', () => {
     expect(calls[0]!.headers.get('x-lifi-api-key')).toBe('k')
     expect(q.input.value).toBe('10')
     expect(q.output.value).toBe('9.970218')
-    expect(q.data?.minOutput).toBe('9.920367')
+    // toAmountMin is the guaranteed minimum, in the output asset; action.slippage 0.005 is 50 bps
+    expect(q.guarantee).toBe('min_output')
+    expect(q.minOutput).toEqual({ value: '9.920367', asset: q.output.asset })
+    expect(q.slippageBps).toBe(50)
+    const arbUsdc = { kind: 'crypto', chain: 'eip155:42161', token: ARB_USDC.token, symbol: 'USDC', decimals: 6 }
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'LIFI Fixed Fee', amount: '0.02', currency: 'USDC' },
-      { kind: 'app', label: 'App fee', amount: '0.005', currency: 'USDC' },
-      { kind: 'provider', label: 'Relayer fee', amount: '0.000997', currency: 'USDC' },
-      { kind: 'network', label: 'Network fee', amount: '0.00000416898132', currency: 'ETH' },
+      { kind: 'provider', label: 'LIFI Fixed Fee', amount: { value: '0.02', asset: arbUsdc }, included: true },
+      { kind: 'app', label: 'App fee', amount: { value: '0.005', asset: arbUsdc }, included: true },
+      { kind: 'provider', label: 'Relayer fee', amount: { value: '0.000997', asset: arbUsdc }, included: true },
+      // gas: the wallet pays it on top of the input, in native ETH
+      { kind: 'network', label: 'Network fee', amount: { value: '0.00000416898132', asset: { kind: 'crypto', chain: 'eip155:42161', token: 'native', symbol: 'ETH', decimals: 18 } }, included: false },
     ])
     expect(q.eta.min).toBe(2)
   })
@@ -180,6 +185,18 @@ describe('lifi quote', () => {
     expect(url.searchParams.get('toAmount')).toBe('10000000')
     expect(url.searchParams.get('fromAddress')).toBe('0x000000000000000000000000000000000000dEaD')
     expect(q.input.value).toBe('10')
+  })
+
+  it('fees: a fee cost LI.FI does not include is paid on top; no action.slippage gives no slippageBps', () => {
+    const q = lifiQuote()
+    q.estimate.feeCosts = [{ name: 'Bridge fee', amount: '1000', included: false, token: tok(42161, '0x0000000000000000000000000000000000000000', 'ETH', 18) }]
+    q.estimate.gasCosts = []
+    expect(feesFrom(q)).toEqual([
+      { kind: 'provider', label: 'Bridge fee', amount: { value: '0.000000000000001', asset: { kind: 'crypto', chain: 'eip155:42161', token: 'native', symbol: 'ETH', decimals: 18 } }, included: false },
+    ])
+    expect(slippageBpsOf(q)).toBe(50)
+    delete q.action.slippage
+    expect(slippageBpsOf(q)).toBeUndefined()
   })
 
   it('looks up unknown decimals once with /token', async () => {

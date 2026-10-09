@@ -301,7 +301,7 @@ describe('provider webhooks in', () => {
   const hooked = createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       return { state: 'PAYMENT', status: 'requires_action', ref: 'order-1', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }

@@ -91,7 +91,9 @@ describe('peer adapter', () => {
     // 100 USD at 1.01 USD/USDC = 99.00990099 USDC; fee 2.95% = 2.920792; out = 96.089109
     expect(q.input).toEqual(money('100.00'))
     expect(q.output).toEqual({ value: '96.089109', asset: BASE_USDC_FULL })
-    expect(q.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: '2.920792', currency: 'USDC' }])
+    expect(q.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: { value: '2.920792', asset: BASE_USDC_FULL }, included: true }])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(q.data).toMatchObject({ rail: 'venmo', currency: 'USD', amount: '100.00', quoteCount: 3 })
   })
 
@@ -105,7 +107,8 @@ describe('peer adapter', () => {
     const payee = await peer({ ...opts, feePayer: 'PAYEE' }).quote({ leg: leg('zelle'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch(routes()).fetch }))
     expect(payee.input.value).toBe('103.04')
     expect(payee.output.value).toBe('99.009901')
-    expect(payee.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: '3.04', currency: 'USD' }])
+    expect(payee.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: money('3.04'), included: true }])
+    expect(payee.guarantee).toBe('estimate')
 
     const down = fakeFetch(routes([{ match: 'api.zkp2p.xyz', status: 503, reply: () => ({}) }]))
     const q = await peer(opts).quote({ leg: leg('cashapp'), amountIn: money('50') }, makeCtx({ fetch: down.fetch }))

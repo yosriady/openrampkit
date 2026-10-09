@@ -219,16 +219,29 @@ function cryptoAsset(a: Amount | undefined, what: string): CryptoAsset {
   return a.asset
 }
 
-/** Fees from a LI.FI quote. The integrator part of a fee is the app fee. Gas is summed per gas token. */
+/** A LI.FI token as our crypto asset (LI.FI names the native token `0x0000...0000` or the Solana system program) */
+function lifiAsset(t: LifiToken): CryptoAsset {
+  const chain = caip2FromLifi(t.chainId)
+  return { kind: 'crypto', chain, token: isNative(chain, t.address) ? 'native' : t.address, symbol: t.symbol, decimals: t.decimals }
+}
+
+/**
+ * Fees from a LI.FI quote, each in its own token. The integrator part of a fee is the app fee.
+ * A fee cost is included when LI.FI says so (`included`, default true: LI.FI deducts it from the
+ * routed amount); `included: false` means the user pays it on top of `input`. Gas is summed per gas
+ * token, and the user's wallet pays it on top of `input` (not included).
+ */
 export function feesFrom(q: LifiQuote): Fee[] {
   const out: Fee[] = []
   for (const f of q.estimate.feeCosts ?? []) {
     const total = big(f.amount)
-    if (total === undefined || total === 0n) continue
+    if (total === undefined || total === 0n || !f.token) continue
     const app = big(f.feeSplit?.integratorFee) ?? 0n
     const rest = total - app
-    if (rest > 0n) out.push({ kind: 'provider', label: f.name || 'LI.FI fee', amount: fromBaseUnits(rest.toString(), f.token.decimals), currency: f.token.symbol })
-    if (app > 0n) out.push({ kind: 'app', label: 'App fee', amount: fromBaseUnits(app.toString(), f.token.decimals), currency: f.token.symbol })
+    const asset = lifiAsset(f.token)
+    const included = f.included !== false
+    if (rest > 0n) out.push({ kind: 'provider', label: f.name || 'LI.FI fee', amount: { value: fromBaseUnits(rest.toString(), f.token.decimals), asset }, included })
+    if (app > 0n) out.push({ kind: 'app', label: 'App fee', amount: { value: fromBaseUnits(app.toString(), f.token.decimals), asset }, included })
   }
   const gas = new Map<string, { sum: bigint; token: LifiToken }>()
   for (const g of q.estimate.gasCosts ?? []) {
@@ -238,8 +251,15 @@ export function feesFrom(q: LifiQuote): Fee[] {
     const cur = gas.get(k)
     gas.set(k, { sum: (cur?.sum ?? 0n) + n, token: g.token })
   }
-  for (const { sum, token } of gas.values()) out.push({ kind: 'network', label: 'Network fee', amount: fromBaseUnits(sum.toString(), token.decimals), currency: token.symbol })
+  for (const { sum, token } of gas.values()) out.push({ kind: 'network', label: 'Network fee', amount: { value: fromBaseUnits(sum.toString(), token.decimals), asset: lifiAsset(token) }, included: false })
   return out
+}
+
+/** LI.FI `action.slippage` (a fraction: 0.005 is 0.5%) in basis points, or undefined when LI.FI does not say it */
+export function slippageBpsOf(q: LifiQuote): number | undefined {
+  const s = q.action.slippage
+  if (typeof s !== 'number' || !Number.isFinite(s) || s < 0 || s > 1) return undefined
+  return Math.round(s * 10_000)
 }
 
 function etaFrom(q: LifiQuote, fallback: { min: number; max: number }) {
@@ -450,12 +470,20 @@ export function lifi(opts: LifiOptions = {}) {
     checkRoute(q, params)
     const from = q.action.fromToken
     const to = q.action.toToken
+    const outAsset = withMeta(dest, to.decimals, to.symbol)
+    const slippageBps = slippageBpsOf(q)
     return {
       adapterId: 'lifi',
       legId: 'wallet',
       input: { value: fromBaseUnits(q.estimate.fromAmount, from.decimals), asset: withMeta(origin, from.decimals, from.symbol) },
-      output: { value: fromBaseUnits(q.estimate.toAmount, to.decimals), asset: withMeta(dest, to.decimals, to.symbol) },
+      output: { value: fromBaseUnits(q.estimate.toAmount, to.decimals), asset: outAsset },
       fees: feesFrom(q),
+      // LI.FI guarantees `toAmountMin` (the route reverts below it), and the leg completes only at or
+      // above it. start() may re-quote a stale quote (older than WALLET_QUOTE_REUSE_MS) with the same
+      // params; a delivery below this minOutput then shows as an amount mismatch.
+      guarantee: 'min_output',
+      minOutput: { value: fromBaseUnits(q.estimate.toAmountMin, to.decimals), asset: outAsset },
+      ...(slippageBps !== undefined ? { slippageBps } : {}),
       eta: etaFrom(q, legs[0]!.eta),
       expiresAt: quoteExpiresAt(WALLET_QUOTE_TTL_MIN),
       data: {
@@ -465,7 +493,6 @@ export function lifi(opts: LifiOptions = {}) {
         quotedAt: Date.now(),
         step: q,
         recipient,
-        minOutput: fromBaseUnits(q.estimate.toAmountMin, to.decimals),
         ...(q.tool ? { tool: q.tool } : {}),
       },
     }

@@ -350,13 +350,14 @@ export function transak(opts: TransakOptions) {
       }
       const r = res.response
       if (!r) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Transak did not return a quote.' }), 422)
+      // Transak takes its fees out of fiatAmount (the quote input) before it converts, so each fee is included.
       const fees: Fee[] = (r.feeBreakdown ?? [])
         .filter((f) => f.value)
         .map((f) => ({
           kind: f.id.includes('network') ? 'network' : f.id.includes('partner') ? 'app' : 'provider',
           label: f.name,
-          amount: dec(f.value, 2),
-          currency,
+          amount: { value: dec(f.value, 2), asset: { kind: 'fiat', currency } },
+          included: true,
         }))
       return {
         adapterId: 'transak',
@@ -364,6 +365,8 @@ export function transak(opts: TransakOptions) {
         input: { value: dec(r.fiatAmount, 2), asset: { kind: 'fiat', currency } },
         output: { value: dec(r.cryptoAmount, 6), asset: t.asset },
         fees,
+        // Transak sets the crypto price when the order executes, so cryptoAmount is an estimate.
+        guarantee: 'estimate',
         eta: legs.find((l) => l.id === input.leg.legId)?.eta ?? { min: 120, max: 1800 },
         expiresAt: quoteExpiresAt(10),
         data: { quoteId: r.quoteId, paymentMethod, network: t.network },

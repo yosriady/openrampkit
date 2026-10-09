@@ -155,9 +155,10 @@ describe('binance adapter: quote', () => {
       input: eur('100'),
       output: { value: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
       fees: [
-        { kind: 'provider', label: 'Binance fee', amount: '1', currency: 'EUR' },
-        { kind: 'network', label: 'Network fee', amount: '0.5', currency: 'USDC' },
+        { kind: 'provider', label: 'Binance fee', amount: eur('1'), included: true },
+        { kind: 'network', label: 'Network fee', amount: { value: '0.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } }, included: true },
       ],
+      guarantee: 'estimate',
       data: { amountType: 1, network: 'BASE', payMethodCode: 'BUY_WALLET', estimate: true },
     })
     expect(Date.parse(q.expiresAt!)).toBeGreaterThan(Date.now())
@@ -172,6 +173,17 @@ describe('binance adapter: quote', () => {
     expect(q.input).toEqual(eur('50.75'))
     expect(q.output.value).toBe('50.12345678')
     expect(q.fees).toEqual([])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
+  })
+
+  it('maps a fee in the delivered crypto, and a fee in another crypto as amount null', async () => {
+    const usdcFee = fakeFetch(routes(20, { quote: () => ok({ ...QUOTE, feeCurrency: 'usdc', networkFee: null }) }))
+    const a = await binance(opts()).quote({ leg, amountIn: eur('100') }, makeCtx({ fetch: usdcFee.fetch }))
+    expect(a.fees).toEqual([{ kind: 'provider', label: 'Binance fee', amount: { value: '1', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } }, included: true }])
+    const bnbFee = fakeFetch(routes(20, { quote: () => ok({ ...QUOTE, feeCurrency: 'BNB', networkFee: null }) }))
+    const b = await binance(opts()).quote({ leg, amountIn: eur('100') }, makeCtx({ fetch: bnbFee.fetch }))
+    expect(b.fees).toEqual([{ kind: 'provider', label: 'Binance fee', amount: null, included: true }])
   })
 
   it('omits payMethodCode when the app sets null', async () => {

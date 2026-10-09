@@ -207,6 +207,9 @@ export const ALL_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLIN
 export const DEFAULT_POLL: PollSpec = { intervalMs: 2500, backoff: 1.2, maxIntervalMs: 10_000, giveUpAfterMs: 30 * 60_000 }
 
 export const MAX_STORED_QUOTES = 20
+
+/** How long a leg quote lives when its adapter sent no valid `expiresAt` (a third-party adapter bug): 5 minutes */
+export const DEFAULT_QUOTE_TTL_MS = 5 * 60_000
 export const MAX_QUOTED_PATHWAYS = 5
 export const START_URL_TTL_MS = 10 * 60_000
 /** A pay link works until the session expires plus this grace, so a payment in progress can finish. */

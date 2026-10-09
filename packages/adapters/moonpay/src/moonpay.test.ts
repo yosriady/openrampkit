@@ -94,9 +94,11 @@ describe('moonpay adapter', () => {
     expect(q.input).toEqual(usd('100'))
     expect(q.output).toEqual({ value: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'MoonPay fee', amount: '4.99', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.39', currency: 'USD' },
+      { kind: 'provider', label: 'MoonPay fee', amount: usd('4.99'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0.39'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(q.data).toMatchObject({ currencyCode: 'usdc_base', paymentMethod: 'credit_debit_card' })
   })
 
@@ -110,7 +112,7 @@ describe('moonpay adapter', () => {
     expect(u.searchParams.get('baseCurrencyAmount')).toBeNull()
     expect(u.searchParams.get('paymentMethod')).toBe('apple_pay')
     expect(u.searchParams.get('extraFeePercentage')).toBe('1')
-    expect(q.fees.find((f) => f.kind === 'app')).toEqual({ kind: 'app', label: 'App fee', amount: '1', currency: 'USD' })
+    expect(q.fees.find((f) => f.kind === 'app')).toEqual({ kind: 'app', label: 'App fee', amount: usd('1'), included: true })
     expect(q.output.asset).toMatchObject({ chain: 'eip155:1' })
   })
 
@@ -189,7 +191,7 @@ describe('moonpay adapter', () => {
   it('start: needs a wallet address', async () => {
     const a = moonpay(opts)
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', currency: 'USD' } })
-    const quote = { adapterId: 'moonpay', legId: 'card', input: usd('10'), output: { value: '9', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'moonpay', legId: 'card', input: usd('10'), output: { value: '9', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z' }
     await expect(a.start({ leg: leg('card'), quote }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 

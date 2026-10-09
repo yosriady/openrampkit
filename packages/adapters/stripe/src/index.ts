@@ -33,7 +33,7 @@ import {
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
-import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type StripeOptions = {
   /** Secret key (sk_live_... or sk_test_...). A restricted key with onramp access also works. */
@@ -287,17 +287,21 @@ export function stripe(opts: StripeOptions) {
       const total = num(nq?.source_total_amount)
       if (!nq || !out || !total) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Stripe did not return a quote for this amount.' }), 422)
       const cur = fiat.toUpperCase()
+      // source_total_amount (the quote input) is the source amount plus both fees, so each fee is included.
+      const fiatAmt = (value: string): Amount => ({ value, asset: { kind: 'fiat', currency: cur } })
       const fees: Fee[] = []
       const txFee = num(nq.fees?.transaction_fee_monetary)
       const netFee = num(nq.fees?.network_fee_monetary)
-      if (txFee) fees.push({ kind: 'provider', label: 'Stripe fee', amount: txFee, currency: cur })
-      if (netFee) fees.push({ kind: 'network', label: 'Network fee', amount: netFee, currency: cur })
+      if (txFee) fees.push({ kind: 'provider', label: 'Stripe fee', amount: fiatAmt(txFee), included: true })
+      if (netFee) fees.push({ kind: 'network', label: 'Network fee', amount: fiatAmt(netFee), included: true })
       return {
         adapterId: 'stripe',
         legId: d.id,
         input: { value: total, asset: { kind: 'fiat', currency: cur } },
         output: { value: out, asset: assetOf(target) },
         fees,
+        // Stripe's onramp quotes are indicative: the session sets the crypto price when the user pays.
+        guarantee: 'estimate',
         eta: d.eta,
         expiresAt: quoteExpiresAt(5),
         data: {

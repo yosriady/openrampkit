@@ -299,8 +299,9 @@ function sameAsset(a: Asset, b: Asset): boolean {
 }
 
 /**
- * Compare a leg's reported output with its quote. When the provider reports less than the quote by
- * more than `policy.outputToleranceBps`, the leg keeps its result but gets `amountMismatch`, and the
+ * Compare a leg's reported output with its quote. When the provider reports less than the quote's
+ * `minOutput` (or, without one, less than the quote by more than `policy.outputToleranceBps`), the
+ * leg keeps its result but gets `amountMismatch`, and the
  * timeline gets `leg.amount_mismatch`. `result.amountMismatch` then shows it in every webhook.
  */
 function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): void {
@@ -312,8 +313,14 @@ function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): v
   if (!got?.asset || !sameAsset(expected.asset, got.asset)) reason = 'asset_mismatch'
   else if (typeof got.value !== 'string' || !isDecimal(got.value) || !isDecimal(expected.value)) reason = 'invalid_amount'
   else {
-    const tolerance = Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)
-    if (cmp(got.value, sub(expected.value, bps(expected.value, tolerance))) >= 0) {
+    // A quote with a guaranteed minimum (`minOutput`, in the quote's asset) is short only below that
+    // minimum. Else the reported output may be `policy.outputToleranceBps` below the quoted output.
+    const min = leg.quote.minOutput
+    const floor =
+      min && sameAsset(min.asset, expected.asset) && typeof min.value === 'string' && isDecimal(min.value)
+        ? min.value
+        : sub(expected.value, bps(expected.value, Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)))
+    if (cmp(got.value, floor) >= 0) {
       delete leg.amountMismatch
       return
     }

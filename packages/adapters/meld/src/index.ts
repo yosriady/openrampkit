@@ -32,7 +32,7 @@ import {
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, USDC, cmp, openRampError, roundTo } from '@openrampkit/core'
-import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type MeldDeliverAsset = { chain: string; token: string; currencyCode: string; symbol?: string; decimals?: number }
 
@@ -339,16 +339,20 @@ export function meld(opts: MeldOptions) {
         }))
         .sort((a, b) => cmp(b.destinationAmount, a.destinationAmount))
       const best = quotes.find((q) => q.serviceProvider === providers[0]!.serviceProvider)!
+      // Meld states each fee in the source fiat, inside `sourceAmount` (it also returns `sourceAmountWithoutFees`): all `included`.
+      const fiatFee = (n: number): Amount => ({ value: dec(n, 2), asset: { kind: 'fiat', currency: fiat } })
       const fees: Fee[] = []
-      if (best.transactionFee) fees.push({ kind: 'provider', label: `${best.serviceProvider} fee`, amount: dec(best.transactionFee, 2), currency: fiat })
-      if (best.networkFee) fees.push({ kind: 'network', label: 'Network fee', amount: dec(best.networkFee, 2), currency: fiat })
-      if (best.partnerFee) fees.push({ kind: 'app', label: 'App fee', amount: dec(best.partnerFee, 2), currency: fiat })
+      if (best.transactionFee) fees.push({ kind: 'provider', label: `${best.serviceProvider} fee`, amount: fiatFee(best.transactionFee), included: true })
+      if (best.networkFee) fees.push({ kind: 'network', label: 'Network fee', amount: fiatFee(best.networkFee), included: true })
+      if (best.partnerFee) fees.push({ kind: 'app', label: 'App fee', amount: fiatFee(best.partnerFee), included: true })
       return {
         adapterId: 'meld',
         legId: input.leg.legId,
         input: { value: dec(best.sourceAmount, 2), asset: { kind: 'fiat', currency: fiat } },
         output: { value: providers[0]!.destinationAmount, asset: assetOf(target) },
         fees,
+        // An estimate: the provider Meld routes to sets the rate when it executes the order.
+        guarantee: 'estimate',
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
         expiresAt: quoteExpiresAt(5),
         data: { serviceProvider: best.serviceProvider, providers, paymentMethodType, currencyCode: target.currencyCode, fiat, country },

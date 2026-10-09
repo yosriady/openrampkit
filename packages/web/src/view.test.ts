@@ -180,10 +180,12 @@ describe('quotes', () => {
   it('quoteSubtitle', () => {
     expect(quoteSubtitle(quote({ id: 'a' }), en)).toBe('You pay $100.00 · Fees $2.50')
     expect(quoteSubtitle(quote({ id: 'a', input: { value: '0', asset: { kind: 'fiat', currency: 'USD' } }, fees: [] }), en)).toBe('No fees')
-    // Fees in the rate: a known amount shows; an unknown amount never says "No fees"
-    const inRate = (amount: string) => [{ kind: 'provider' as const, label: 'guardarian fee (included in rate)', amount, currency: 'EUR', inRate: true }]
-    expect(quoteSubtitle(quote({ id: 'a', input: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } }, fees: inRate('0') }), en)).toBe('You pay €100.00')
-    expect(quoteSubtitle(quote({ id: 'a', fees: inRate('4.8').map((f) => ({ ...f, currency: 'USD' })) }), en)).toBe('You pay $100.00 · Fees $4.80')
+    // Fees in the rate: a known amount shows; an amount that the provider does not give never says "No fees"
+    const unstated = { kind: 'provider' as const, label: 'guardarian fee', amount: null, included: true }
+    const known = { kind: 'network' as const, label: 'Network fee', amount: { value: '4.8', asset: { kind: 'fiat' as const, currency: 'USD' } }, included: true }
+    expect(quoteSubtitle(quote({ id: 'a', input: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } }, fees: [unstated] }), en)).toBe('You pay €100.00 · Fees included in the rate')
+    expect(quoteSubtitle(quote({ id: 'a', fees: [known] }), en)).toBe('You pay $100.00 · Fees $4.80')
+    expect(quoteSubtitle(quote({ id: 'a', fees: [known, unstated] }), en)).toBe('You pay $100.00 · Fees $4.80 + a fee in the rate')
   })
 
   it('nextQuoteId wraps both ways', () => {

@@ -39,7 +39,7 @@ function hookedAdapter() {
   return createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: { value: amountIn!.value, asset: { kind: 'fiat', currency: 'SGD' } }, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: { value: amountIn!.value, asset: { kind: 'fiat', currency: 'SGD' } }, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       const ref = `order-${++n}`

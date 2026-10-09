@@ -157,17 +157,34 @@ export type LegSpec = {
 /** A leg capability (see `LegSpec.capabilities`) */
 export type LegCapability = 'settlement' | 'surface_after_processing'
 
+/** What a fee pays for */
+export type FeeKind = 'provider' | 'network' | 'app' | 'swap' | 'bridge' | 'other'
+
 export type Fee = {
-  kind: 'provider' | 'network' | 'app' | 'swap' | 'other'
+  kind: FeeKind
   label: string
-  amount: string
-  currency: string
   /**
-   * The provider takes this fee in the exchange rate, not on top. With amount '0', the provider did not
-   * say how much it is: a UI must not show "No fees" for such a quote.
+   * The fee in its own asset (a fiat currency, or a token on a chain). `null`: the provider takes this
+   * fee but does not say how much (for example a fee in the exchange rate). A UI must not show
+   * "No fees" for a quote with such a fee.
    */
-  inRate?: boolean
+  amount: Amount | null
+  /**
+   * True: the quote already counts this fee. It is part of `input`, or the provider takes it in the
+   * rate or from `output`. False: the user pays it on top of `input` (for example network gas that
+   * the wallet pays).
+   */
+  included: boolean
 }
+
+/**
+ * How firm a quote is:
+ * - `firm`: the provider delivers `output` exactly, if the user pays before `expiresAt`.
+ * - `min_output`: the provider delivers at least `minOutput` (for example a bridge with slippage).
+ * - `estimate`: `output` is an estimate. The rate is set when the provider executes (most fiat
+ *   onramps and offramps).
+ */
+export type QuoteGuarantee = 'firm' | 'min_output' | 'estimate'
 
 /** Amount on one side of a leg or pathway */
 export type Amount = { value: string; asset: Asset }
@@ -178,9 +195,16 @@ export type LegQuote = {
   input: Amount
   output: Amount
   fees: Fee[]
+  /** How firm `output` is (see `QuoteGuarantee`) */
+  guarantee: QuoteGuarantee
+  /** The least output the provider guarantees, in the asset of `output`. Set for `min_output`. */
+  minOutput?: Amount
+  /** The slippage the provider allows, in basis points, when it says it */
+  slippageBps?: number
   /** Seconds */
   eta: { min: number; max: number }
-  expiresAt?: string
+  /** ISO 8601. Always set: use `quoteExpiresAt()` from `@openrampkit/adapter`. */
+  expiresAt: string
   /** Opaque adapter data carried to start() */
   data?: Record<string, unknown>
   limits?: { min?: string; max?: string; currency: string }
@@ -216,10 +240,18 @@ export type Quote = {
   provider: string
   legs: LegQuote[]
   input: Amount
+  /** The expected output. See `guarantee` for how firm it is. */
   output: Amount
+  /** The weakest guarantee of the legs: a leg cannot promise more than the leg that feeds it */
+  guarantee: QuoteGuarantee
+  /** The least output, from the last leg. Set when `guarantee` is `firm` (equal to `output`) or `min_output`. */
+  minOutput?: Amount
+  /** The slippage of the last leg, in basis points, when `guarantee` is not `estimate` */
+  slippageBps?: number
   fees: Fee[]
   eta: { min: number; max: number }
-  expiresAt?: string
+  /** ISO 8601: the earliest expiry of the legs. Always set. */
+  expiresAt: string
   badges?: Array<'best_price' | 'fastest'>
 }
 

@@ -111,6 +111,7 @@ describe('rankQuotes', () => {
       id, pathwayId: id, method: 'card', provider: id, legs: [],
       input: { value: '100', asset: { kind: 'fiat', currency: 'USD' } },
       output: { value: out, asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x' } }, fees: [], eta: { min: 0, max: eta },
+      guarantee: 'estimate', expiresAt: '2099-01-01T00:00:00.000Z',
     })
     const r = rankQuotes([q('a', '97', 300), q('b', '98', 600), q('c', '95', 60)])
     expect(r.map((x) => x.id)).toEqual(['b', 'a', 'c'])

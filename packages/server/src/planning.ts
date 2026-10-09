@@ -1,6 +1,6 @@
 import { OpenRampException, currencyForCountry, openRampError, planPathways, rankQuotes, cmp } from '@openrampkit/core'
-import type { Amount, Fee, LegQuote, OpenRampError, Pathway, PlanResult, PublicLegQuote, PublicQuote, Quote, SurfaceKind } from '@openrampkit/core'
-import { ALL_SURFACES, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
+import type { Amount, Fee, LegQuote, OpenRampError, Pathway, PlanResult, PublicLegQuote, PublicQuote, Quote, QuoteGuarantee, SurfaceKind } from '@openrampkit/core'
+import { ALL_SURFACES, DEFAULT_QUOTE_TTL_MS, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
 import { randomHex } from './crypto.js'
 import { adapterContext, destinationOf, withTimeout } from './runtime.js'
 import type { Runtime } from './runtime.js'
@@ -121,11 +121,31 @@ async function timed<T>(rt: Runtime, adapter: string, run: () => Promise<T>): Pr
   }
 }
 
+/** The order of quote guarantees, weakest first */
+const GUARANTEE_RANK: Record<QuoteGuarantee, number> = { estimate: 0, min_output: 1, firm: 2 }
+
+/**
+ * The expiry of a leg quote. A leg quote must have a valid `expiresAt` (adapter contract v2). When a
+ * third-party adapter leaves it out or sends no valid date, the quote lives `DEFAULT_QUOTE_TTL_MS`.
+ */
+function legExpiry(q: LegQuote, now: number): number {
+  const at = typeof q.expiresAt === 'string' ? Date.parse(q.expiresAt) : Number.NaN
+  return Number.isFinite(at) ? at : now + DEFAULT_QUOTE_TTL_MS
+}
+
+/**
+ * The pathway quote from its leg quotes. The guarantee is the weakest of the legs: a later leg
+ * cannot promise more than the leg that feeds it. `minOutput` and `slippageBps` come from the last
+ * leg, and only when the pathway guarantee is not `estimate`. `expiresAt` is the earliest leg expiry.
+ */
 export function combineLegQuotes(p: Pathway, legQuotes: LegQuote[]): Quote {
   const first = legQuotes[0]!
   const last = legQuotes[legQuotes.length - 1]!
   const fees: Fee[] = legQuotes.flatMap((q) => q.fees)
-  const expiries = legQuotes.map((q) => q.expiresAt).filter((x): x is string => !!x).sort()
+  const now = Date.now()
+  const expiresAt = Math.min(...legQuotes.map((q) => legExpiry(q, now)))
+  const guarantee = legQuotes.map((q) => q.guarantee ?? 'estimate').reduce((a, b) => (GUARANTEE_RANK[b] < GUARANTEE_RANK[a] ? b : a))
+  const minOutput = guarantee === 'firm' ? last.output : guarantee === 'min_output' ? last.minOutput : undefined
   return {
     id: `q_${randomHex(8)}`,
     pathwayId: p.id,
@@ -134,9 +154,12 @@ export function combineLegQuotes(p: Pathway, legQuotes: LegQuote[]): Quote {
     legs: legQuotes,
     input: first.input,
     output: last.output,
+    guarantee,
+    ...(minOutput ? { minOutput } : {}),
+    ...(guarantee !== 'estimate' && last.slippageBps !== undefined ? { slippageBps: last.slippageBps } : {}),
     fees,
     eta: legQuotes.reduce((acc, q) => ({ min: acc.min + q.eta.min, max: acc.max + q.eta.max }), { min: 0, max: 0 }),
-    ...(expiries.length ? { expiresAt: expiries[0]! } : {}),
+    expiresAt: new Date(expiresAt).toISOString(),
   }
 }
 

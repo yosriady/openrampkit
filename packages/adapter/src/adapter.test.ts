@@ -260,12 +260,13 @@ describe('testkit checks', () => {
       legId: 'card',
       input: { value: '10', asset: { kind: 'fiat', currency: 'USD' } },
       output: { value: '9.5', asset: { kind: 'fiat', currency: 'USD' } },
-      fees: [{ kind: 'provider', label: 'Fee', amount: '0.5', currency: 'USD' }],
+      fees: [{ kind: 'provider', label: 'Fee', amount: { value: '0.5', asset: { kind: 'fiat', currency: 'USD' } }, included: true }],
+      guarantee: 'estimate',
       eta: { min: 1, max: 2 },
       expiresAt: new Date().toISOString(),
     }
     expect(checkLegQuote(q)).toEqual([])
-    const bad = { ...q, input: { ...q.input, value: '1e1' }, output: { ...q.output, value: '' }, fees: [{ ...q.fees[0]!, amount: 'x' }], expiresAt: 'tomorrow' }
+    const bad = { ...q, input: { ...q.input, value: '1e1' }, output: { ...q.output, value: '' }, fees: [{ ...q.fees[0]!, amount: { value: 'x', asset: { kind: 'fiat' as const, currency: 'USD' } } }], expiresAt: 'tomorrow' }
     expect(checkLegQuote(bad).map((p) => p.where)).toEqual(['quote.input', 'quote.output', 'fee Fee', 'quote.expiresAt'])
   })
 
@@ -341,8 +342,10 @@ describe('runAdapterConformance', () => {
     legId: 'card',
     input: { value: '10', asset: { kind: 'fiat', currency: 'USD' } },
     output: { value: '9', asset: { kind: 'fiat', currency: 'USD' } },
-    fees: [{ kind: 'provider', label: 'Fee', amount: '1', currency: 'USD' }],
+    fees: [{ kind: 'provider', label: 'Fee', amount: { value: '1', asset: { kind: 'fiat', currency: 'USD' } }, included: true }],
+    guarantee: 'estimate',
     eta: { min: 1, max: 2 },
+    expiresAt: new Date(Date.now() + 60_000).toISOString(),
     ...over,
   })
   const good = () =>

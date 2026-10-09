@@ -196,15 +196,17 @@ async function refresh() {
   }
 }
 
+function feesText(fees) { return (fees || []).map((f) => (f.amount ? amountText(f.amount) : 'amount not given') + ' ' + f.label + (f.included ? '' : ' (on top)')).join(', ') || '-' }
 function dl(pairs) { return h('dl', null, pairs.filter((p) => p[1] !== undefined && p[1] !== '').flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)])) }
 function legsTable(p) {
   return h('div', { class: 'table-wrap' }, h('table', null,
     h('caption', { class: 'sr' }, 'Legs of attempt ' + p.attempt),
-    h('thead', null, h('tr', null, ['#', 'Adapter', 'Status', 'Input', 'Output', 'Ref', 'Tx'].map((t) => h('th', { scope: 'col' }, t)))),
+    h('thead', null, h('tr', null, ['#', 'Adapter', 'Status', 'Input', 'Output', 'Fees', 'Ref', 'Tx'].map((t) => h('th', { scope: 'col' }, t)))),
     h('tbody', null, p.legs.map((l, i) => h('tr', null,
       h('td', null, String(i)), h('td', null, l.adapterId),
       h('td', null, chip(l.status, l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
       h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.amountMismatch ? h('div', null, chip(l.amountMismatch.reason === 'short' ? 'short by ' + l.amountMismatch.shortfall : l.amountMismatch.reason.replace('_', ' '), 'failed')) : ''),
+      h('td', null, feesText(l.fees)),
       h('td', { class: 'mono' }, l.ref || '-'), h('td', { class: 'mono' }, l.txHash || '-'),
     ))),
   ))

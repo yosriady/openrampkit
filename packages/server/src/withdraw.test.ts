@@ -215,7 +215,7 @@ describe('withdraw to cash with the mock offramp', () => {
     const t = make()
     const s = await t.create()
     const { quote, session } = await run(t, s, { type: 'fiat', currency: 'PHP' }, 'gcash', '20')
-    expect(quote).toMatchObject({ method: 'gcash', input: { value: '20' }, output: { asset: { kind: 'fiat', currency: 'PHP' } }, fees: [{ amount: '0.200000', currency: 'USDC' }] })
+    expect(quote).toMatchObject({ method: 'gcash', input: { value: '20' }, output: { asset: { kind: 'fiat', currency: 'PHP' } }, fees: [{ amount: { value: '0.200000', asset: { kind: 'crypto', symbol: 'USDC' } }, included: true }], guarantee: 'firm' })
     expect(quote.output.value).toBe('1131.43') // (20 - 1%) / 0.0175
     expect(session.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'FORM', fields: [{ id: 'account_name' }, { id: 'phone', type: 'tel', label: 'GCash phone number' }] }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] })
 
@@ -328,7 +328,7 @@ function eventOfframp() {
       },
     ],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { value: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 } }
+      return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { value: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       return { state: 'PROCESSING', status: 'processing', ref: 'order_1', transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] }

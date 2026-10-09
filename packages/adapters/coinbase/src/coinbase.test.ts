@@ -93,9 +93,12 @@ describe('coinbase adapter', () => {
     expect(q.input).toEqual({ value: '100.00', asset: { kind: 'fiat', currency: 'USD' } })
     expect(q.output).toEqual({ value: '98.520000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Coinbase fee', amount: '1.48', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0', currency: 'USD' },
+      { kind: 'provider', label: 'Coinbase fee', amount: usd('1.48'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
+    expect(Date.parse(q.expiresAt) - Date.now()).toBeLessThanOrEqual(5 * 60_000)
     const call = calls[0]!
     expect(call.url).toBe('https://api.cdp.coinbase.com/platform/v2/onramp/sessions')
     const jwt = call.headers.get('authorization')!.replace(/^Bearer /, '')
@@ -330,7 +333,7 @@ describe('coinbase errors and edge cases', () => {
   it('start: new session without quote data, and its errors', async () => {
     const { secret } = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
-    const quote = { adapterId: 'coinbase', legId: 'card', input: { value: '10', asset: BASE_USDC }, output: { value: '10', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'coinbase', legId: 'card', input: { value: '10', asset: BASE_USDC }, output: { value: '10', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z' }
     const ok = fakeFetch([{ method: 'POST', match: '/onramp/sessions', reply: () => SESSION_RES }])
     const step = await a.start({ leg: cardLeg, quote }, makeCtx({ fetch: ok.fetch }))
     expect(step.surface).toMatchObject({ kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl })

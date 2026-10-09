@@ -239,9 +239,12 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     expect(s1.step.surface).toMatchObject({ address: addrs[0] })
     expect(s2.step.surface).toMatchObject({ address: addrs[1] })
     expect(s1.step.ref).not.toBe(s2.step.ref)
-    // slippage goes to Relay, and the quote shows Relay's minimum output
+    // slippage goes to Relay. Relay prices an open deposit address when the deposit arrives, so the
+    // quote's minimumAmount does not bind it: the quote is an estimate, with no minOutput.
     expect(calls[0]!.body).toMatchObject({ slippageTolerance: '150' })
-    expect(s1.q.data).toMatchObject({ minOutput: '9.76' })
+    expect(s1.q).toMatchObject({ guarantee: 'estimate', output: { value: '9.96' } })
+    expect(s1.q.minOutput).toBeUndefined()
+    expect(s1.q.slippageBps).toBeUndefined()
     byAddress[addrs[1]!] = [request('2', units(10))]
     expect(await s1.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     expect(await s2.status()).toMatchObject({ state: 'COMPLETED', txHash: '0xout2' })

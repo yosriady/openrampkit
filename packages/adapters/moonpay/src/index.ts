@@ -34,7 +34,7 @@ import {
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, USDC, openRampError, roundTo } from '@openrampkit/core'
-import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type MoonPayDeliverAsset = {
   /** CAIP-2 chain */
@@ -310,10 +310,12 @@ export function moonpay(opts: MoonPayOptions) {
       if (res.quoteCurrencyAmount === undefined || res.totalAmount === undefined) {
         throw new OpenRampException(openRampError('NO_QUOTES', { message: 'MoonPay did not return a quote for this amount.' }), 422)
       }
+      // areFeesIncluded=true: MoonPay counts every fee inside totalAmount (the quote input).
+      const fiatAmt = (v: number): Amount => ({ value: dec(v, 2), asset: { kind: 'fiat', currency: fiat } })
       const fees: Fee[] = []
-      if (res.feeAmount) fees.push({ kind: 'provider', label: 'MoonPay fee', amount: dec(res.feeAmount, 2), currency: fiat })
-      if (res.networkFeeAmount) fees.push({ kind: 'network', label: 'Network fee', amount: dec(res.networkFeeAmount, 2), currency: fiat })
-      if (res.extraFeeAmount) fees.push({ kind: 'app', label: 'App fee', amount: dec(res.extraFeeAmount, 2), currency: fiat })
+      if (res.feeAmount) fees.push({ kind: 'provider', label: 'MoonPay fee', amount: fiatAmt(res.feeAmount), included: true })
+      if (res.networkFeeAmount) fees.push({ kind: 'network', label: 'Network fee', amount: fiatAmt(res.networkFeeAmount), included: true })
+      if (res.extraFeeAmount) fees.push({ kind: 'app', label: 'App fee', amount: fiatAmt(res.extraFeeAmount), included: true })
       const total = dec(res.totalAmount, 2)
       return {
         adapterId: 'moonpay',
@@ -321,6 +323,8 @@ export function moonpay(opts: MoonPayOptions) {
         input: { value: total, asset: { kind: 'fiat', currency: fiat } },
         output: { value: dec(res.quoteCurrencyAmount, target.decimals ?? 8), asset: assetOf(target) },
         fees,
+        // MoonPay sets the crypto rate when it executes the order, so the output is an estimate.
+        guarantee: 'estimate',
         eta: d.eta,
         expiresAt: quoteExpiresAt(5, res.expiresAt),
         data: { currencyCode: target.currencyCode, paymentMethod: d.paymentMethod, fiat, total },

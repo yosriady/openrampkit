@@ -303,10 +303,17 @@ export function binance(opts: BinanceOptions) {
       )
       if (!q.totalAmount || !isDecimal(q.totalAmount)) throw new OpenRampException(openRampError('NO_QUOTES', { message: `${NAME} returned no price.` }), 422)
       const fees: Fee[] = []
-      // `feeCurrency` is "fiat currency or crypto" per the docs.
-      if (q.feeAmount && isDecimal(q.feeAmount) && Number(q.feeAmount) > 0) fees.push({ kind: 'provider', label: 'Binance fee', amount: q.feeAmount, currency: q.feeCurrency || fiat })
+      // Binance takes both fees from the fiat amount or the delivered crypto: the user pays nothing on top (`included`).
+      // `feeCurrency` is "fiat currency or crypto" per the docs. A fee in a crypto other than the delivered
+      // one has no asset we can name, so its amount is unknown here (null).
+      if (q.feeAmount && isDecimal(q.feeAmount) && Number(q.feeAmount) > 0) {
+        const feeCurrency = (q.feeCurrency || fiat).toUpperCase()
+        const feeAsset: Asset | undefined =
+          feeCurrency === fiat ? { kind: 'fiat', currency: fiat } : feeCurrency === target.cryptoCurrency.toUpperCase() ? assetOf(target) : undefined
+        fees.push({ kind: 'provider', label: 'Binance fee', amount: feeAsset ? { value: q.feeAmount, asset: feeAsset } : null, included: true })
+      }
       // TO VERIFY: the docs do not say the unit of `networkFee`. We assume the delivered crypto.
-      if (q.networkFee && isDecimal(q.networkFee) && Number(q.networkFee) > 0) fees.push({ kind: 'network', label: 'Network fee', amount: q.networkFee, currency: target.cryptoCurrency })
+      if (q.networkFee && isDecimal(q.networkFee) && Number(q.networkFee) > 0) fees.push({ kind: 'network', label: 'Network fee', amount: { value: q.networkFee, asset: assetOf(target) }, included: true })
       // TO VERIFY: whether `totalAmount` is before or after the fees.
       const fiatAmount = byFiat ? requested : q.totalAmount
       const cryptoAmount = byFiat ? q.totalAmount : requested
@@ -316,8 +323,10 @@ export function binance(opts: BinanceOptions) {
         input: { value: fiatAmount, asset: { kind: 'fiat', currency: fiat } },
         output: { value: cryptoAmount, asset: assetOf(target) },
         fees,
+        // An estimate: Binance sets the price when the user confirms the order on its page.
+        guarantee: 'estimate',
         eta: { min: 60, max: 1800 },
-        // An estimate: Binance shows the final price on its page. TO VERIFY the quote lifetime.
+        // TO VERIFY the quote lifetime.
         expiresAt: quoteExpiresAt(5),
         data: {
           fiat,
