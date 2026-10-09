@@ -26,11 +26,12 @@ import {
   httpStatus,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type StripeOptions = {
   /** Secret key (sk_live_... or sk_test_...). A restricted key with onramp access also works. */
@@ -174,12 +175,9 @@ export function stripe(opts: StripeOptions) {
   }))
   const byId = new Map(defs.map((d) => [d.id, d]))
 
-  function deliverFor(asset: CryptoAsset | undefined): DeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = STRIPE_DELIVER_ASSETS.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return STRIPE_DELIVER_ASSETS[0]!
+  /** The asset Stripe delivers for `asset`. NO_QUOTES when Stripe does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): DeliverAsset {
+    return requireDeliverAsset(STRIPE_DELIVER_ASSETS, asset, 'Stripe')
   }
 
   function assetOf(d: DeliverAsset): CryptoAsset {

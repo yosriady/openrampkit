@@ -151,6 +151,9 @@ The server uses these with `webhook.replayKey`. `claimWebhook` returns a token f
 |---|---|
 | `fetchJson<T>(fetch, url, init?)` | JSON request with `accept: application/json`, `content-type` when there is a body, and a timeout (`init.timeoutMs`, default `DEFAULT_TIMEOUT_MS` = 8000). Throws an `HttpError` with `status` and parsed `body` on non-2xx, `timeout: true` on timeout, and a clear error for non-JSON bodies. |
 | `httpErrorToOrk(e, provider, { what?, noQuoteStatuses?, log?, setupHint? })` | `OrkException` passes through; 429 gives `RATE_LIMITED` (429); `noQuoteStatuses` (default 400, 404, 409, 422) give `NO_QUOTES` (422) with the provider's message; 401 and 403 give a setup error (see below); a timeout gives `PROVIDER_UNAVAILABLE` (504); anything else gives `PROVIDER_UNAVAILABLE` (502) and a warning log |
+| `findDeliverAsset(list, asset)` | The entry of `list` (`{ chain, token, symbol?, decimals? }`) that delivers `asset`: same chain and token (EVM addresses without case). `undefined` on no match. It never falls back to another entry. |
+| `requireDeliverAsset(list, asset, provider)` | `findDeliverAsset`, or `NO_QUOTES` (422, recovery `choose_other`) "{provider} does not deliver {token} on {chain}." Use it in `quote()`, so the user never gets a quote for another token. |
+| `deliverableToAsset(d)` | The `CryptoAsset` of a list entry, with `symbol` and `decimals` when known |
 | `providerSetupError(provider)` | The setup error: `PROVIDER_UNAVAILABLE` (502), `retryable: false`, recovery `choose_other`, message "{provider} is not set up for this app yet. Try another method." Use it in an adapter with its own error mapping. |
 | `httpStatus(e)` | The numeric `status` of an error, or `undefined` |
 | `providerMessage(e)` | The provider's message from `body.message`, `body.errorMessage` or `body.error(.message)` |

@@ -19,17 +19,19 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, evmChainId, orkError, roundTo, toBaseUnits } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, Surface, Transition, TxRequest } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, Surface, Transition, TxRequest } from '@openrampkit/core'
 
 export type SwappedDeliverAsset = {
   /** CAIP-2 chain */
@@ -226,17 +228,12 @@ export function swapped(opts: SwappedOptions) {
   /** Used when the live catalog is not available */
   const staticLegs: LegSpec[] = [leg('creditcard'), leg('apple-pay'), leg('google-pay'), ...staticSellLegs]
 
-  function deliverAssetFor(asset: Amount['asset'] | undefined): SwappedDeliverAsset {
-    if (asset?.kind === 'crypto' && asset.chain !== '*') {
-      const found = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (found) return found
-    }
-    return deliver[0]!
+  /** The asset Swapped delivers for `asset`. NO_QUOTES when Swapped does not deliver that token on that chain (never another token). */
+  function deliverAssetFor(asset: Asset | undefined): SwappedDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Swapped')
   }
 
-  function assetOf(d: SwappedDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   async function methodsByCountry(ctx: Pick<AdapterContext, 'fetch' | 'shared'>): Promise<Record<string, SwappedMethod[]>> {
     const cached = await ctx.shared.get<Record<string, SwappedMethod[]>>('methods')

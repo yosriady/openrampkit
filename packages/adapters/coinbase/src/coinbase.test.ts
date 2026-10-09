@@ -299,9 +299,17 @@ describe('coinbase errors and edge cases', () => {
     await a.quote({ leg: cardLeg, amountIn: usd('10') }, makeCtx({ fetch, session: { country: 'GB', region: 'US-NY' } }))
     expect((calls[1]!.body as Record<string, unknown>).subdivision).toBeUndefined()
     expect(calls[1]!.body).toMatchObject({ country: 'GB' })
-    // unknown chain: Base; google_pay maps to CARD; sandbox forced on
+    // unknown chain, or another token on a known chain: no quote (never USDC on Base instead), and no Coinbase call
     const b = coinbase({ apiKeyId: 'k', apiKeySecret: secret, sandbox: true })
-    await b.quote({ leg: { ...cardLeg, legId: 'google_pay', to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: DEST } } }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))
+    for (const asset of [{ kind: 'crypto' as const, chain: 'eip155:143', token: '0x1' }, { kind: 'crypto' as const, chain: 'eip155:8453', token: '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2' }]) {
+      await expect(b.quote({ leg: { ...cardLeg, to: { asset, location: { kind: 'address', address: DEST } } }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))).rejects.toMatchObject({
+        status: 422,
+        error: { code: 'NO_QUOTES', message: expect.stringMatching(/^Coinbase does not deliver /) },
+      })
+    }
+    expect(calls).toHaveLength(2)
+    // google_pay maps to CARD; sandbox forced on
+    await b.quote({ leg: { ...cardLeg, legId: 'google_pay' }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))
     expect(calls[2]!.body).toMatchObject({ destinationNetwork: 'base', paymentMethod: 'CARD' })
     expect((calls[2]!.body as { partnerUserRef: string }).partnerUserRef).toMatch(/^sandbox-ork-/)
     expect(COINBASE_NETWORKS['eip155:8453']).toBe('base')

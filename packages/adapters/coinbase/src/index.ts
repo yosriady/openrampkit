@@ -18,10 +18,10 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, timingSafeEqual } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, requireDeliverAsset, timingSafeEqual } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
 import type { CdpKey } from './jwt.js'
 
@@ -114,6 +114,9 @@ export const COINBASE_NETWORKS: Record<string, string> = {
 }
 
 const USDC_TOKENS: Record<string, string> = { ...USDC, [SOLANA]: SOLANA_USDC }
+
+/** The tokens Coinbase delivers: USDC on each supported network */
+const DELIVERABLE = Object.keys(COINBASE_NETWORKS).map((chain) => ({ chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 }))
 
 /** Fiat currencies for the hosted onramp. TO VERIFY per country with the Buy Options API. */
 const FIATS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'SGD', 'CHF']
@@ -279,9 +282,15 @@ export function coinbase(opts: CoinbaseOptions) {
     })
   }
 
-  function target(asset: CryptoAsset | undefined): { chain: string; network: string; asset: CryptoAsset } {
-    const chain = asset && asset.chain !== '*' && COINBASE_NETWORKS[asset.chain] ? asset.chain : 'eip155:8453'
-    return { chain, network: COINBASE_NETWORKS[chain]!, asset: { kind: 'crypto', chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 } }
+  /** USDC on a chain that Coinbase delivers to */
+  function usdcOn(chain: string): CryptoAsset {
+    return deliverableToAsset(DELIVERABLE.find((d) => d.chain === chain)!)
+  }
+
+  /** What Coinbase delivers for `asset`: USDC on a supported chain. NO_QUOTES for another token or chain (never USDC on Base instead). */
+  function target(asset: Asset | undefined): { chain: string; network: string; asset: CryptoAsset } {
+    const d = requireDeliverAsset(DELIVERABLE, asset, 'Coinbase')
+    return { chain: d.chain, network: COINBASE_NETWORKS[d.chain]!, asset: deliverableToAsset(d) }
   }
 
   function chainForNetwork(network: string | undefined): string | undefined {
@@ -385,7 +394,7 @@ export function coinbase(opts: CoinbaseOptions) {
     const txHash = hash && hash !== '0x' ? hash : undefined
     const chain = chainForNetwork(tx.purchaseNetwork ?? tx.purchase_network ?? tx.destinationNetwork)
     const amount = amountValue(tx.purchaseAmount ?? tx.purchase_amount)
-    const output = chain && amount ? { amount, asset: target({ kind: 'crypto', chain, token: '' }).asset } : undefined
+    const output = chain && amount ? { amount, asset: usdcOn(chain) } : undefined
     if (status === 'ONRAMP_TRANSACTION_STATUS_SUCCESS' || status === 'ONRAMP_ORDER_STATUS_COMPLETED' || tx.eventType === 'onramp.transaction.success') {
       return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
     }

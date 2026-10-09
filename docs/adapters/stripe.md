@@ -48,7 +48,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#stripe).
 | `ach` | USD | US |
 
 - Every leg denies `US-HI`.
-- Delivers USDC on Base, Ethereum, Polygon, Solana and Avalanche. Some networks are not sold everywhere: USDC on Base, Polygon, Solana and Avalanche is not sold in the EU, and USDC on Polygon and Avalanche is not sold in New York. The quote then fails with `REGION_UNSUPPORTED`.
+- Delivers USDC on Base, Ethereum, Polygon, Solana and Avalanche. Another token or chain gets no quote (`NO_QUOTES`). Some networks are not sold everywhere: USDC on Base, Polygon, Solana and Avalanche is not sold in the EU, and USDC on Polygon and Avalanche is not sold in New York. The quote then fails with `REGION_UNSUPPORTED`.
 - The Stripe onramp UI picks the payment method itself. The legs only tell the planner what to show.
 
 ## Quotes and start

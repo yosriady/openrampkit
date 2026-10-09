@@ -27,7 +27,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#meld).
 | `serviceProviders` | `string[]` | all on your account | Only quote these providers, e.g. `['TRANSAK', 'BANXA']` |
 | `webhookSecret` | `string` | none | Webhook profile secret. Without it, webhooks are rejected. |
 | `webhookUrl` | `string` | the request URL | The URL registered in the Meld profile (the signature covers it). Set it when a proxy rewrites URLs. |
-| `deliverAssets` | `MeldDeliverAsset[]` | USDC on Base, Ethereum, Polygon, Arbitrum | Assets to buy, most preferred first |
+| `deliverAssets` | `MeldDeliverAsset[]` | USDC on Base, Ethereum, Polygon, Arbitrum | Assets to buy, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `defaultCountry` | `string` | `'US'` | Country for quotes when the session has none |
 | `version` | `string` | `'2026-02-03'` | `Meld-Version` header |
 | `apiUrl` | `string` | by `env` | API base URL |

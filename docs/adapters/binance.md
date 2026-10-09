@@ -72,7 +72,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#binance).
 | `webhookPartnerCode` | `string` | none | When set, a webhook must have this value in `X-BN-Connect-For`. TO VERIFY: the client id or the partner code. |
 | `payMethodCode` | `string \| null` | `'BUY_WALLET'` | Binance payment method. `BUY_WALLET` is the fiat balance in the Binance account. `null` lets the user choose on the Binance page (card and P2P too). |
 | `method` | `string` | `'exchange'` | Method id of the leg |
-| `deliverAssets` | `BinanceDeliverAsset[]` | USDC on Base, Arbitrum, Ethereum, Optimism, BNB Chain, Solana | Assets Binance may send, most preferred first |
+| `deliverAssets` | `BinanceDeliverAsset[]` | USDC on Base, Arbitrum, Ethereum, Optimism, BNB Chain, Solana | Assets Binance may send, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `regions` | `RegionPolicy` | `BINANCE_REGIONS` | Where the leg is offered |
 | `timeoutMs` | `number` | `8000` | Request timeout |
 

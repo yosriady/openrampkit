@@ -28,7 +28,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#onramper).
 | `env` | `'sandbox' \| 'production'` | required | Sandbox is `https://api-stg.onramper.com` |
 | `webhookSecret` | `string` | none | Verifies webhooks, and is sent as `x-onramper-secret` for status reads |
 | `onramps` | `string[]` | all | Only these onramps, e.g. `['moonpay', 'banxa']` |
-| `deliverAssets` | `OnramperDeliverAsset[]` | USDC on Base, Ethereum, Polygon, Arbitrum | Assets to buy, most preferred first |
+| `deliverAssets` | `OnramperDeliverAsset[]` | USDC on Base, Ethereum, Polygon, Arbitrum | Assets to buy, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `defaultCountry` | `string` | `'US'` | Country when the session has none |
 | `apiUrl` | `string` | by `env` | API base URL |
 

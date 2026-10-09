@@ -27,7 +27,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, httpErrorToOrk, importRsaPublicKey, randomHex, rsaVerify } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOrk, importRsaPublicKey, randomHex, rsaVerify } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   OrkException,
@@ -134,6 +134,9 @@ export const BRIDGE_CHAINS: BridgeChain[] = [
   { chain: 'eip155:43114', rail: 'avalanche_c_chain', usdc: '0xb97ef9ef8734c71904d8002f8b6bc66dd9c48a6e' },
   { chain: SOLANA, rail: 'solana', usdc: USDC[SOLANA]! },
 ]
+
+/** USDC on each Bridge network, for `findDeliverAsset` */
+const DELIVERABLE = BRIDGE_CHAINS.map((c) => ({ chain: c.chain, token: c.usdc, c }))
 
 /**
  * Countries and regions where Bridge does not serve customers
@@ -404,10 +407,11 @@ export function bridge(opts: BridgeOptions) {
     return fromScaled((toScaled(a, WORK) * toScaled(b, WORK)) / 10n ** BigInt(WORK), WORK)
   }
 
+  /** The Bridge network for USDC on `asset`'s chain. NO_QUOTES for another chain or another token (never USDC instead). */
   function chainFor(asset: CryptoAsset | undefined): BridgeChain {
-    const c = asset && BRIDGE_CHAINS.find((x) => x.chain === asset.chain)
-    if (!c) throw new OrkException(orkError('NO_QUOTES', { message: 'Bridge does not deliver to this network.', recovery: 'choose_other' }), 422)
-    return c
+    const d = findDeliverAsset(DELIVERABLE, asset)
+    if (!d) throw new OrkException(orkError('NO_QUOTES', { message: 'Bridge does not deliver this token on this network.', recovery: 'choose_other' }), 422)
+    return d.c
   }
 
   function usdcAsset(c: BridgeChain): CryptoAsset {

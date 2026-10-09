@@ -289,10 +289,12 @@ describe('swapped errors and edge cases', () => {
     expect(q.eta).toEqual({ min: 120, max: 1800 })
     const ap = await a.quote({ leg: { ...cardLeg, legId: 'apple-pay' }, amountIn: usd('10') }, makeCtx({ fetch }))
     expect(ap.eta).toEqual({ min: 120, max: 900 })
-    // unknown chain: the first deliver asset
-    const other = await a.quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: 'x' } } }, amountIn: usd('10') }, makeCtx({ fetch }))
-    expect((calls[2]!.body as { crypto_currency: string }).crypto_currency).toBe('USDC_BASE')
-    expect(other.data).toMatchObject({ currencyCode: 'USDC_BASE' })
+    // a token Swapped does not deliver: no quote (never the first deliver asset instead), and no Swapped call
+    await expect(a.quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: 'x' } } }, amountIn: usd('10') }, makeCtx({ fetch }))).rejects.toMatchObject({
+      status: 422,
+      error: { code: 'NO_QUOTES', message: 'Swapped does not deliver 0x1 on eip155:143.' },
+    })
+    expect(calls).toHaveLength(2)
     // Swapped needs a fiat amount
     await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch }))).rejects.toMatchObject({
       error: { code: 'BAD_REQUEST' },

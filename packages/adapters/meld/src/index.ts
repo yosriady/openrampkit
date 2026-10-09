@@ -19,16 +19,18 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type MeldDeliverAsset = { chain: string; token: string; currencyCode: string; symbol?: string; decimals?: number }
 
@@ -223,17 +225,12 @@ export function meld(opts: MeldOptions) {
     return fetchJson<T>(ctx.fetch, `${api}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
   }
 
-  function deliverFor(asset: CryptoAsset | undefined): MeldDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return deliver[0]!
+  /** The asset Meld delivers for `asset`. NO_QUOTES when Meld does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): MeldDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Meld')
   }
 
-  function assetOf(d: MeldDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   function eventFrom(ref: string, status: string | undefined, tx?: MeldTransaction): LegEvent | undefined {
     const d = deliver.find((x) => x.currencyCode === tx?.destinationCurrencyCode)

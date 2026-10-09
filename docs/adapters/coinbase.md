@@ -94,6 +94,7 @@ If the user leaves the frame before paying, Coinbase sends no webhook and the or
 
 ## Quotes and start (hosted legs)
 
+- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana. Another token or chain gets no quote (`NO_QUOTES`). The adapter does not quote USDC on Base in its place.
 - Quote: `POST /platform/v2/onramp/sessions` with the payment amount, currency and method, the country, the US subdivision (from `session.region` such as `US-CA`, else `defaultSubdivision`), the destination network and address, and `partnerUserRef`. It returns a quote and a single-use one-click URL.
 - Start: reuses the quote's URL when it is less than 4 minutes old (session tokens last 5 minutes). Otherwise it makes a new session with the same method and location.
 - Reference: `partnerUserRef`, `ork-{random}` (with `sandbox-` in front in sandbox mode). Guest orders use the same reference.

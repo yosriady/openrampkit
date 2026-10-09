@@ -24,7 +24,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#swapped).
 | `widgetUrl` | `string` | `https://widget.swapped.com` or the sandbox URL | Widget base URL |
 | `apiUrl` | `string` | same as `widgetUrl` | Merchant API base URL |
 | `markup` | `number` | none | Your markup in percent, 0 to 5 (0.5 means 0.5%) |
-| `deliverAssets` | `SwappedDeliverAsset[]` | USDC on Base, Arbitrum, Polygon, Ethereum | Assets Swapped may deliver, most preferred first |
+| `deliverAssets` | `SwappedDeliverAsset[]` | USDC on Base, Arbitrum, Polygon, Ethereum | Assets Swapped may deliver, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `defaultCountry` | `string` | `'US'` | Country for pricing when the session has none |
 | `statusPolling` | `boolean` | `false` | Also poll `get_transactions` for order status. **TO VERIFY** (see below). |
 

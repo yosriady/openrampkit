@@ -2,7 +2,7 @@
 
 `@openrampkit/adapter-bridge` connects [Bridge](https://apidocs.bridge.xyz) (a Stripe company).
 
-- **Deposits:** Bridge opens a virtual bank account for the user. The user sends ACH, wire, SEPA, SPEI, Pix or Faster Payments to it. Bridge converts the money to USDC and sends it on chain to the destination address.
+- **Deposits:** Bridge opens a virtual bank account for the user. The user sends ACH, wire, SEPA, SPEI, Pix or Faster Payments to it. Bridge converts the money to USDC and sends it on chain to the destination address. A destination that is not USDC on a Bridge network gets no quote (`NO_QUOTES`).
 - **Withdrawals:** the user sends USDC to Bridge. Bridge pays out to the user's US bank account (ACH or wire) or IBAN (SEPA).
 
 Bridge needs KYC for each user. The adapter sends the user to the Bridge hosted pages for the terms of service and for KYC. Then it shows the bank details.

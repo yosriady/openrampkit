@@ -19,10 +19,10 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, fetchJson, httpErrorToOrk, legStepFromEvent, randomHex } from '@openrampkit/adapter'
+import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOrk, legStepFromEvent, POLL as POLLS, randomHex, requireDeliverAsset } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, SOLANA_MAINNET, USDC, isDecimal, isWebUrl, orkError } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegSpec, PollSpec, RegionPolicy } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, RegionPolicy } from '@openrampkit/core'
 import { importRsaPrivateKey, importRsaPublicKey, rsaSign, rsaVerify } from './rsa.js'
 
 export { importRsaPrivateKey, importRsaPublicKey, rsaSign, rsaVerify } from './rsa.js'
@@ -184,17 +184,12 @@ export function binance(opts: BinanceOptions) {
     },
   ]
 
-  function deliverAssetFor(asset: Amount['asset'] | undefined): BinanceDeliverAsset {
-    if (asset?.kind === 'crypto' && asset.chain !== '*') {
-      const found = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (found) return found
-    }
-    return deliver[0]!
+  /** The asset Binance delivers for `asset`. NO_QUOTES when Binance does not deliver that token on that chain (never another token). */
+  function deliverAssetFor(asset: Asset | undefined): BinanceDeliverAsset {
+    return requireDeliverAsset(deliver, asset, NAME)
   }
 
-  function assetOf(d: BinanceDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   /** Signed POST to the Binance API. Throws an OrkException for HTTP errors and for a non-success envelope. */
   async function call<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, path: string, body: Record<string, unknown>, what: string): Promise<T> {

@@ -20,6 +20,7 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
@@ -28,12 +29,13 @@ import {
   providerMessage,
   providerSetupError,
   randomHex,
+  requireDeliverAsset,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo, sub } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
 
 export { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, sha256Hex, signV2 } from './sign.js'
@@ -234,17 +236,12 @@ export function onramper(opts: OnramperOptions) {
   })
   const staticLegs = STATIC.map((s) => leg(s.id, { from: { asset: { kind: 'fiat', currencies: s.currencies }, location: ['user_account'] }, regions: { allow: s.countries ?? ['*'], deny: [] }, eta: s.eta }))
 
-  function deliverFor(asset: CryptoAsset | undefined): OnramperDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return deliver[0]!
+  /** The asset Onramper delivers for `asset`. NO_QUOTES when Onramper does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): OnramperDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Onramper')
   }
 
-  function assetOf(d: OnramperDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   const get = <T>(ctx: Pick<AdapterContext, 'fetch'>, pathAndQuery: string, extra: Record<string, string> = {}) =>
     fetchJson<T>(ctx.fetch, `${api}${pathAndQuery}`, { headers: { authorization: opts.apiKey, ...extra } })

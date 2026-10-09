@@ -19,17 +19,19 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
   httpStatus,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type MoonPayDeliverAsset = {
   /** CAIP-2 chain */
@@ -216,17 +218,12 @@ export function moonpay(opts: MoonPayOptions) {
     return d
   }
 
-  function deliverAssetFor(asset: CryptoAsset | undefined): MoonPayDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const found = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (found) return found
-    }
-    return deliver[0]!
+  /** The asset MoonPay delivers for `asset`. NO_QUOTES when MoonPay does not deliver that token on that chain (never another token). */
+  function deliverAssetFor(asset: Asset | undefined): MoonPayDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'MoonPay')
   }
 
-  function assetOf(d: MoonPayDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   /** Per-asset restrictions (e.g. usdc_base is not sold in New York or Canada) */
   function checkAssetRegion(d: MoonPayDeliverAsset, ctx: AdapterContext) {
