@@ -187,7 +187,7 @@ describe('bridge adapter: deposits', () => {
     const leg = depositLeg('usd-ach', 'USD')
     const { s } = await quoteAndStart(a, leg, ctx)
     expect(checkLegStep(s)).toEqual([])
-    expect(s).toMatchObject({ state: 'KYC', sub: 'KYC_DETAILS', status: 'awaiting_user', surface: { kind: 'FORM' } })
+    expect(s).toMatchObject({ state: 'KYC', sub: 'kyc_details', status: 'awaiting_user', surface: { kind: 'FORM' } })
     expect((s.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['full_name', 'email'])
     const ref = s.ref!
     expect(ref).toMatch(/^brg_/)
@@ -195,21 +195,21 @@ describe('bridge adapter: deposits', () => {
     await expect(a.transition!({ leg, ref, name: 'submit_kyc', inputs: { full_name: 'J', email: 'jane@example.com' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     await expect(a.transition!({ leg, ref, name: 'submit_kyc', inputs: { full_name: 'Jane Doe', email: 'nope' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const tos = await a.transition!({ leg, ref, name: 'submit_kyc', inputs: { full_name: 'Jane Doe', email: 'jane@example.com' } }, ctx)
-    expect(tos).toMatchObject({ state: 'KYC', sub: 'KYC_TERMS', surface: { kind: 'REDIRECT', url: 'https://bridge.test/tos', popup: true, provider: 'Bridge' } })
+    expect(tos).toMatchObject({ state: 'KYC', sub: 'kyc_terms', surface: { kind: 'REDIRECT', url: 'https://bridge.test/tos', popup: true, provider: 'Bridge' } })
     const post = calls.find((c) => c.method === 'POST' && c.url.endsWith('/kyc_links'))!
     expect(post.url).toBe(`${API}/kyc_links`)
     expect(post.headers.get('idempotency-key')).toBe(`sess_1:bridge:kyc:${ref}`)
     expect(post.body).toEqual({ full_name: 'Jane Doe', email: 'jane@example.com', type: 'individual', endorsements: ['base'], redirect_uri: 'https://app.test/api/openramp/return' })
 
     link = { ...link, tos_status: 'approved' }
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'KYC', sub: 'KYC_VERIFY', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } })
+    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'KYC', sub: 'kyc_verify', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } })
     link = { ...link, kyc_status: 'under_review', customer_id: 'cust_1' }
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'KYC', sub: 'KYC_REVIEW', status: 'processing' })
+    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'KYC', sub: 'kyc_review', status: 'processing' })
 
     link = { ...link, kyc_status: 'approved' }
     const pay = await a.status!({ leg, ref }, ctx)
     expect(checkLegStep(pay)).toEqual([])
-    expect(pay).toMatchObject({ state: 'PAYMENT', sub: 'BANK_DETAILS', status: 'awaiting_user', ref })
+    expect(pay).toMatchObject({ state: 'PAYMENT', sub: 'bank_details', status: 'awaiting_user', ref })
     const fields = (pay.surface as { kind: string; fields: Array<{ label: string; value: string; copy: boolean }> })
     expect(fields.kind).toBe('BANK_FIELDS')
     expect(fields.fields).toEqual(expect.arrayContaining([
@@ -293,10 +293,10 @@ describe('bridge adapter: deposits', () => {
     }
     expect(await run({ id: 'cust_1', status: 'rejected' })).toMatchObject({ state: 'FAILED', error: { code: 'KYC_REJECTED' } })
     expect(await run({ id: 'cust_1', status: 'paused' })).toMatchObject({ state: 'FAILED', error: { code: 'PROVIDER_DECLINED' } })
-    expect(await run({ id: 'cust_1', status: 'under_review' })).toMatchObject({ state: 'KYC', sub: 'KYC_REVIEW' })
+    expect(await run({ id: 'cust_1', status: 'under_review' })).toMatchObject({ state: 'KYC', sub: 'kyc_review' })
     expect(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'sepa', status: 'revoked' }] })).toMatchObject({ state: 'FAILED', error: { code: 'KYC_REJECTED' } })
     const link = { id: 'kyc_1', customer_id: 'cust_1', kyc_link: 'https://bridge.test/kyc', tos_status: 'approved', kyc_status: 'approved' }
-    expect(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'base', status: 'approved' }, { name: 'sepa', status: 'incomplete' }] }, link)).toMatchObject({ state: 'KYC', sub: 'KYC_VERIFY', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } })
+    expect(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'base', status: 'approved' }, { name: 'sepa', status: 'incomplete' }] }, link)).toMatchObject({ state: 'KYC', sub: 'kyc_verify', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } })
     expect(await run({ id: 'cust_1', status: 'active' }, { ...link, customer_id: null, kyc_status: 'rejected' })).toMatchObject({ state: 'FAILED' })
   })
 
@@ -342,17 +342,17 @@ describe('bridge adapter: payouts', () => {
     const leg = payoutLeg('payout-usd-ach', 'USD')
     const { q, s } = await quoteAndStart(a, leg, ctx, usdc('50'), { source: { chain: 'eip155:8453', token: BASE_USDC, address: '0x00000000000000000000000000000000000000f0' } })
     expect(q.output).toEqual(fiat('49.50', 'USD'))
-    expect(s).toMatchObject({ state: 'PAYMENT', sub: 'PAYOUT_ACCOUNT', surface: { kind: 'FORM' }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] })
+    expect(s).toMatchObject({ state: 'PAYMENT', sub: 'payout_account', surface: { kind: 'FORM' }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] })
     const ref = s.ref!
     // The status before the account is set shows the form again.
-    expect((await a.status!({ leg, ref }, ctx)).sub).toBe('PAYOUT_ACCOUNT')
+    expect((await a.status!({ leg, ref }, ctx)).sub).toBe('payout_account')
     await expect(a.transition!({ leg, ref, name: 'submit_tx', inputs: { txHash: '0x1' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     await expect(a.transition!({ leg, ref, name: 'submit_details', inputs: { ...usInputs, routing_number: '12' } }, ctx)).rejects.toMatchObject({ error: { message: expect.stringContaining('routing') } })
     await expect(a.transition!({ leg, ref, name: 'submit_details', inputs: { ...usInputs, city: '' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
 
     const send = await a.transition!({ leg, ref, name: 'submit_details', inputs: usInputs }, ctx)
     expect(checkLegStep(send)).toEqual([])
-    expect(send).toMatchObject({ state: 'PAYMENT', sub: 'SEND_CRYPTO', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
+    expect(send).toMatchObject({ state: 'PAYMENT', sub: 'send_crypto', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
     expect((send.surface as { txs: unknown[] }).txs).toEqual([{ to: BASE_USDC, data: erc20TransferData('0x00000000000000000000000000000000000000aa', '50000000'), value: '0', chainId: 8453 }])
     const ea = calls.find((c) => c.url.endsWith('/external_accounts'))!
     expect(ea.url).toBe(`${API}/customers/cust_1/external_accounts`)
@@ -369,10 +369,10 @@ describe('bridge adapter: payouts', () => {
     await a.transition!({ leg, ref, name: 'submit_details', inputs: usInputs }, ctx)
     expect(calls.filter((c) => c.url.endsWith('/external_accounts'))).toHaveLength(1)
 
-    expect((await a.status!({ leg, ref }, ctx)).sub).toBe('SEND_CRYPTO')
+    expect((await a.status!({ leg, ref }, ctx)).sub).toBe('send_crypto')
     const sent = await a.transition!({ leg, ref, name: 'submit_tx', inputs: { txHash: '0xfeed' } }, ctx)
     expect(sent).toMatchObject({ state: 'PROCESSING', status: 'processing', txHash: '0xfeed' })
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'CONFIRMING' })
+    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
     state.transfer = { ...state.transfer, state: 'payment_processed', receipt: { final_amount: '49.5', destination_tx_hash: '0xd' } }
     expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'COMPLETED', status: 'succeeded', output: fiat('49.5', 'USD') })
   })
@@ -421,7 +421,7 @@ describe('bridge adapter: payouts', () => {
     const { ctx } = ctxWith([])
     const a = bridge(opts())
     const { s } = await quoteAndStart(a, payoutLeg('payout-usd-ach', 'USD'), ctx, usdc('10'))
-    expect(s).toMatchObject({ state: 'KYC', sub: 'KYC_DETAILS' })
+    expect(s).toMatchObject({ state: 'KYC', sub: 'kyc_details' })
     // submit_details before KYC goes back to the KYC step
     expect(await a.transition!({ leg: payoutLeg('payout-usd-ach', 'USD'), ref: s.ref!, name: 'submit_details', inputs: usInputs }, ctx)).toMatchObject({ state: 'KYC' })
   })

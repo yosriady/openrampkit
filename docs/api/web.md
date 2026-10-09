@@ -148,6 +148,8 @@ Types: `Theme`, `ThemeOptions`, `ThemeColors`, `ThemeMode`, `RadiusScale`, `Appe
 
 Types: `Messages`, `CatalogLocale`, `LocaleSources`.
 
+`messages.stepSub` has one label for each value of `Step.sub` (`STEP_SUBS` in `@openrampkit/core`), in every catalog. The processing screen shows it. Without a known `sub`, the screen shows the state title (`messages.stepTitle`). It never shows a raw provider status. To change a label, override the whole `stepSub` object.
+
 ## Provider renderers
 
 | Export | Description |

@@ -130,7 +130,13 @@ A shared destination (one treasury or vault address for all users) cannot tell t
 | `success` | `succeeded` (`COMPLETED`) |
 | `failure` | `failed` with `DELIVERY_FAILED` |
 | `refund` | `refunded` (`REFUNDED`) |
-| other | `processing` (the Relay status is the `sub` state) |
+| `waiting` | `processing`, sub-state `waiting_for_deposit` |
+| `pending` | `processing`, sub-state `bridging` |
+| `submitted` | `processing`, sub-state `confirming` |
+| `delayed` | `processing`, sub-state `delayed` |
+| other | `processing`, sub-state `processing` |
+
+The raw Relay status goes to `providerStatus`, which the session timeline keeps. The browser does not get it.
 
 ## Webhooks
 

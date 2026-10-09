@@ -5,6 +5,7 @@ import { USDC, planPathways } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { RELAY_POLL, RELAY_SOLANA_CHAIN_ID, caip2FromRelay, erc20TransferData, relay, relayChainId, relayCurrency } from './index.js'
 import type { RelayQuoteResponse } from './index.js'
+import { relaySub } from './helpers.js'
 import { fakeFetch, makeCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 
 const USER = '0x03508bB71268BBA25ECaCC8F620e01866650532c'
@@ -642,6 +643,10 @@ describe('relay errors', () => {
     expect(await ctx.store.get('w:0xunknown')).toEqual({ mode: 'relay', requestId: '0xunknown', txHash: HASH })
   })
 
+  it('maps a running Relay status to a Step.sub from the closed list', () => {
+    expect(['waiting', 'pending', 'submitted', 'delayed', 'something_new'].map(relaySub)).toEqual(['waiting_for_deposit', 'bridging', 'confirming', 'delayed', 'processing'])
+  })
+
   it('wallet status: waiting before the tx, processing after (tx hash from our record)', async () => {
     let s: unknown = { status: 'waiting' }
     const { fetch } = fakeFetch([{ method: 'GET', match: '/intents/status/v3', reply: () => s }])
@@ -650,7 +655,7 @@ describe('relay errors', () => {
     expect(await a.status!({ leg: walletLeg, ref: '0xr' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', transitions: [{ kind: 'SURFACE_RESULT' }] })
     await a.transition!({ leg: walletLeg, ref: '0xr', name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
     const p = await a.status!({ leg: walletLeg, ref: '0xr' }, ctx)
-    expect(p).toMatchObject({ state: 'PROCESSING', sub: 'waiting', txHash: HASH })
+    expect(p).toMatchObject({ state: 'PROCESSING', sub: 'waiting_for_deposit', providerStatus: 'waiting', txHash: HASH })
     expect(checkLegStep(p)).toEqual([])
     s = { status: 'success' }
     expect(await a.status!({ leg: walletLeg, ref: '0xr' }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: HASH })

@@ -608,9 +608,9 @@ describe('third review: who can move a session on, and how far', () => {
     expect((await t.record(s.id)).step.state).toBe('PROCESSING')
 
     const k = await t.toPayment()
-    t.statusOf[k.ref] = { status: 'processing', state: 'KYC', sub: 'KYC_REVIEW' }
+    t.statusOf[k.ref] = { status: 'processing', state: 'KYC', sub: 'kyc_review' }
     await t.ramp.sessions.refresh(k.id)
-    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', sub: 'KYC_REVIEW' })
+    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', sub: 'kyc_review' })
     t.statusOf[k.ref] = { status: 'awaiting_user' }
     await t.ramp.sessions.refresh(k.id)
     expect((await t.record(k.id)).step.state).toBe('PAYMENT')

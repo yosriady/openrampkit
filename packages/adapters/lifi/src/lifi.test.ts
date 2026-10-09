@@ -299,26 +299,32 @@ describe('lifi status', () => {
   })
 
   it('maps LI.FI statuses', async () => {
-    const cases: Array<[Partial<LifiStatus>, string, string?]> = [
-      [{ status: 'PENDING', substatus: 'WAIT_DESTINATION_TRANSACTION' }, 'PROCESSING', 'wait_destination_transaction'],
-      [{ status: 'NOT_FOUND' }, 'PROCESSING', 'not_found'],
+    // sub: a value from the closed list; the raw LI.FI status stays in providerStatus.
+    const cases: Array<[Partial<LifiStatus>, string, string?, string?]> = [
+      [{ status: 'PENDING', substatus: 'WAIT_DESTINATION_TRANSACTION' }, 'PROCESSING', 'bridging', 'WAIT_DESTINATION_TRANSACTION'],
+      [{ status: 'PENDING', substatus: 'WAIT_SOURCE_CONFIRMATIONS' }, 'PROCESSING', 'confirming', 'WAIT_SOURCE_CONFIRMATIONS'],
+      [{ status: 'PENDING', substatus: 'REFUND_IN_PROGRESS' }, 'PROCESSING', 'refunding', 'REFUND_IN_PROGRESS'],
+      [{ status: 'PENDING', substatus: 'BRIDGE_NOT_AVAILABLE' }, 'PROCESSING', 'delayed', 'BRIDGE_NOT_AVAILABLE'],
+      [{ status: 'PENDING', substatus: 'SOMETHING_NEW' }, 'PROCESSING', 'processing', 'SOMETHING_NEW'],
+      [{ status: 'NOT_FOUND' }, 'PROCESSING', 'confirming', 'NOT_FOUND'],
       [{ status: 'FAILED', substatus: 'SLIPPAGE_EXCEEDED' }, 'FAILED'],
       [{ status: 'FAILED', substatus: 'REFUNDED' }, 'REFUNDED'],
       [{ status: 'DONE', substatus: 'REFUNDED' }, 'REFUNDED'],
       [{ status: 'DONE', substatus: 'PARTIAL' }, 'FAILED'],
       [{ status: 'INVALID' }, 'FAILED'],
     ]
-    for (const [st, state, sub] of cases) {
+    for (const [st, state, sub, raw] of cases) {
       const { result } = await statusFor({ status: () => lifiStatus(st) })
       expect(checkLegStep(result)).toEqual([])
       expect(result.state).toBe(state)
       if (sub) expect(result.sub).toBe(sub)
+      if (raw) expect(result.providerStatus).toBe(raw)
     }
   })
 
   it('a 404 from LI.FI (not indexed yet) keeps the leg processing', async () => {
     const { result } = await statusFor({ statusCode: 404, status: () => ({ message: 'Transaction hash not found', code: 1003 }) })
-    expect(result).toMatchObject({ state: 'PROCESSING', sub: 'not_found', txHash: HASH })
+    expect(result).toMatchObject({ state: 'PROCESSING', sub: 'confirming', providerStatus: 'NOT_FOUND', txHash: HASH })
   })
 
   it('waits while the delivery receipt is not on chain yet', async () => {

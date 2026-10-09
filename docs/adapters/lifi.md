@@ -67,12 +67,18 @@ Status calls `GET /v1/status?txHash=...&fromChain=...&toChain=...`.
 
 | LI.FI status | Substatus | Leg |
 |---|---|---|
-| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, sub-state `not_found` |
-| `PENDING` | any | `processing`, the substatus in lower case is the sub-state |
+| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, sub-state `confirming` (LI.FI has not indexed the transaction yet) |
+| `PENDING` | `WAIT_SOURCE_CONFIRMATIONS` | `processing`, sub-state `confirming` |
+| `PENDING` | `WAIT_DESTINATION_TRANSACTION`, or none | `processing`, sub-state `bridging` |
+| `PENDING` | `BRIDGE_NOT_AVAILABLE`, `CHAIN_NOT_AVAILABLE`, `NOT_PROCESSABLE_REFUND_NEEDED` | `processing`, sub-state `delayed` |
+| `PENDING` | `REFUND_IN_PROGRESS` | `processing`, sub-state `refunding` |
+| `PENDING` | other | `processing`, sub-state `processing` |
 | `DONE` | `COMPLETED` | `succeeded`, after the delivery checks below |
 | `DONE` | `PARTIAL` | `failed` with `DELIVERY_FAILED`: LI.FI delivered another token |
 | `DONE` or `FAILED` | `REFUNDED` | `refunded` |
 | `FAILED` | other | `failed` with `DELIVERY_FAILED` |
+
+The raw LI.FI status or substatus goes to `providerStatus`, which the session timeline keeps. The browser does not get it.
 | `INVALID` | | `failed` with `DELIVERY_FAILED` |
 
 ## One payment, one session

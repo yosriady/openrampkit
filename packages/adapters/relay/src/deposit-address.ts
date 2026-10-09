@@ -8,7 +8,7 @@ import type { Amount, CryptoAsset, LegQuote, LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEPOSIT_ADDRESS_TTL_SEC, RECORD_TTL_SEC, USED_TTL_SEC } from './config.js'
 import type { DirectTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, addrKey, caip2FromRelay, cryptoAsset, fmt, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, addrKey, caip2FromRelay, cryptoAsset, fmt, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relaySub, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
 import type { DepositRecord, RelayQuoteResponse, RelayRequest } from './types.js'
 
 export type DepositAddresses = ReturnType<typeof depositAddresses>
@@ -155,7 +155,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     const txHash = requestTxHash(r)
     const output = requestOutput(r)
     const extra = { ref, ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
-    return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+    return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: relaySub(r.status), providerStatus: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
   }
 
   async function startDeposit(legId: 'transfer' | 'bridge', input: StartInput, ctx: AdapterContext): Promise<LegStep> {

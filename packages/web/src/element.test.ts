@@ -604,7 +604,7 @@ describe('other surfaces (fake client)', () => {
 
   it('a step without a surface shows processing, progress and extra buttons', async () => {
     const h = await mountStep(undefined, [{ name: 'cancel', kind: 'SUBMIT', label: 'Cancel order' }], {
-      sub: 'KYC_REVIEW',
+      sub: 'kyc_review',
       progress: {
         legs: [
           { adapterId: 'mock', legId: 'a', provider: 'Mock', status: 'succeeded', txHash: '0x1234567890abcdef1234567890abcdef' },
@@ -613,7 +613,9 @@ describe('other surfaces (fake client)', () => {
       },
       error: orkError('PAYMENT_FAILED'),
     })
-    expect(h.text()).toContain('Kyc Review')
+    // The sub is translated (en.stepSub), not the raw value title-cased
+    expect(h.text()).toContain('Checking your identity')
+    expect(h.text()).not.toContain('Kyc Review')
     expect(h.$$('.progress li')).toHaveLength(2)
     expect(h.$$('.leg-status').map((l) => l.textContent)).toEqual(['done', 'in progress'])
     expect(h.text()).toContain('0x1234...cdef')

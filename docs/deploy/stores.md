@@ -159,6 +159,7 @@ Schema 0 to 1 sets:
 - `updatedAt` to `createdAt` when it is missing.
 - `ActivePayment.n` (the attempt number) to the number of earlier attempts, and `n` of each earlier attempt to its place in `attempts`.
 - `quotes`, `startUrls`, `notified` and `outbox` to empty values when they are missing.
+- Each step `sub` (the session step, and the step of each leg) to its lower-case form when that is in `STEP_SUBS`. Another value is removed. See [Sub-states](../concepts/flow.md#sub-states).
 
 Rules:
 

@@ -1,7 +1,7 @@
 // Pure view logic for <openramp-modal>. No Lit and no DOM here, so it is easy to test.
 
 import type { Snapshot } from '@openrampkit/client'
-import { CHAINS, USDC, mulRatio } from '@openrampkit/core'
+import { CHAINS, USDC, isStepSub, mulRatio } from '@openrampkit/core'
 import type { IframeMessages, MethodOption, OrkError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
 import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
@@ -19,6 +19,15 @@ export function resolveMode(theme: Theme | undefined, systemDark: boolean): 'lig
 /** Identifies one step screen. Form inputs reset when it changes. */
 export function stepKey(step: Step | undefined): string {
   return step ? `${step.state}|${step.sub ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
+}
+
+/**
+ * The label of a step: the translated `sub` (an i18n key from the closed list `STEP_SUBS`), else the
+ * state title. A `sub` that this version does not know (from a newer server) falls back to the state title.
+ */
+export function stepLabel(m: Messages, step: Step): string {
+  const sub = isStepSub(step.sub) ? m.stepSub[step.sub] : undefined
+  return sub || m.stepTitle[step.state] || m.checkingStatus
 }
 
 /** Screen shown for a snapshot, or for an element that has no controller yet. */

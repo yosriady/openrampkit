@@ -123,6 +123,8 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 - `status({ leg, ref })` asks the provider for the current state. The server calls it when the browser polls (at most every 2 seconds per leg), from the background `sweep()`, and from `sessions.refresh()`.
 - `transition({ leg, ref, name, inputs })` handles SUBMIT and SURFACE_RESULT transitions that your steps offer, for example an OTP form or `submit_tx` with `{ txHash }`.
 
+A `LegStep` can carry `sub`, a finer label from the closed list `STEP_SUBS` (see [Sub-states](../concepts/flow.md#sub-states)). Map your provider's statuses to it. Put the raw provider status in `providerStatus`: the server keeps it in the timeline for operators, and the browser never gets it. The server drops a `sub` that is not in the list.
+
 The server learns a leg result from `status()` (polling), from the `webhook`, or from both. `resultChannels(adapter)` in `@openrampkit/adapter` tells which: `{ polling: !!status, webhooks: webhook configured }`. When an adapter with legs has neither, the server writes a warning at start: its payments cannot complete. An adapter without `status()` (for example Transak) relies on its webhook only.
 
 ## webhook

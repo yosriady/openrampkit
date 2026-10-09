@@ -1,6 +1,8 @@
 // English catalog: the source of truth for every key of `Messages`.
 // Keep copy short and plain. Do not use em dashes or en dashes.
 
+import type { StepSub } from '@openrampkit/core'
+
 export const en = {
   /** BCP 47 tag used for number and currency formatting */
   locale: 'en',
@@ -112,6 +114,25 @@ export const en = {
   checkingStatus: 'Checking status',
   chooseOther: 'Choose another method',
   progressLabel: 'Progress',
+  /** Labels for `Step.sub` (the closed list `STEP_SUBS` in core) */
+  stepSub: {
+    kyc_details: 'Enter your details',
+    kyc_terms: 'Accept the terms',
+    kyc_verify: 'Verify your identity',
+    kyc_review: 'Checking your identity',
+    card_details: 'Enter your card details',
+    bank_details: 'Send the bank transfer',
+    payout_account: 'Add your payout account',
+    send_crypto: 'Send the crypto',
+    waiting_for_deposit: 'Waiting for your deposit',
+    ambiguous_deposit: 'Deposit needs a manual check',
+    confirming: 'Confirming on chain',
+    bridging: 'Moving funds between networks',
+    settling: 'Settling the payment',
+    delayed: 'Taking longer than usual',
+    refunding: 'Refunding',
+    processing: 'Processing',
+  } satisfies Record<StepSub, string>,
   legStatus: {
     pending: 'waiting',
     awaiting_user: 'needs your action',

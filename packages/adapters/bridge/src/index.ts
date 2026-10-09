@@ -45,7 +45,7 @@ import {
   toBaseUnits,
   toScaled,
 } from '@openrampkit/core'
-import type { Amount, CryptoAsset, FieldSpec, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, Surface, TxRequest } from '@openrampkit/core'
+import type { Amount, CryptoAsset, FieldSpec, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StepSub, Surface, TxRequest } from '@openrampkit/core'
 
 export type BridgeCustomerHint = {
   /** An existing Bridge customer id. The adapter skips the KYC link and checks this customer. */
@@ -492,7 +492,7 @@ export function bridge(opts: BridgeOptions) {
   function kycFormStep(ref: string, missing: Array<'full_name' | 'email'>): LegStep {
     return {
       state: 'KYC',
-      sub: 'KYC_DETAILS',
+      sub: 'kyc_details',
       status: 'awaiting_user',
       ref,
       surface: { kind: 'FORM', fields: missing.map((m) => KYC_FIELDS[m]) },
@@ -500,12 +500,12 @@ export function bridge(opts: BridgeOptions) {
     }
   }
 
-  function redirectStep(ref: string, url: string, sub: string): LegStep {
+  function redirectStep(ref: string, url: string, sub: StepSub): LegStep {
     if (!/^https:\/\//.test(url)) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge returned an unsafe verification link.' }), 502)
     return { state: 'KYC', sub, status: 'awaiting_user', ref, surface: { kind: 'REDIRECT', url, popup: true, provider: 'Bridge' }, transitions: [awaitPoll(KYC_POLL)] }
   }
 
-  const reviewStep = (ref: string): LegStep => ({ state: 'KYC', sub: 'KYC_REVIEW', status: 'processing', ref, transitions: [awaitPoll(KYC_POLL)] })
+  const reviewStep = (ref: string): LegStep => ({ state: 'KYC', sub: 'kyc_review', status: 'processing', ref, transitions: [awaitPoll(KYC_POLL)] })
   const failStep = (ref: string, error = kycRejected()): LegStep => ({ state: 'FAILED', status: 'failed', ref, transitions: [], error })
 
   async function createKycLink(ref: string, rec: LegRec, endorsement: string, fullName: string, email: string, ctx: AdapterContext): Promise<KycLink> {
@@ -557,7 +557,7 @@ export function bridge(opts: BridgeOptions) {
 
   async function linkStep(ref: string, rec: LegRec, link: KycLink, endorsement: string, ctx: AdapterContext): Promise<LegStep | undefined> {
     if (link.kyc_status === 'rejected' || link.kyc_status === 'offboarded') return failStep(ref)
-    if (link.tos_status !== 'approved' && link.tos_link) return redirectStep(ref, link.tos_link, 'KYC_TERMS')
+    if (link.tos_status !== 'approved' && link.tos_link) return redirectStep(ref, link.tos_link, 'kyc_terms')
     if (link.kyc_status === 'approved' && link.customer_id) {
       if (rec.customerId !== link.customer_id) {
         rec.customerId = link.customer_id
@@ -566,7 +566,7 @@ export function bridge(opts: BridgeOptions) {
       return customerStep(ref, rec, endorsement, ctx, link)
     }
     if (link.kyc_link && ['not_started', 'incomplete', 'awaiting_questionnaire', 'awaiting_ubo', undefined].includes(link.kyc_status)) {
-      return redirectStep(ref, link.kyc_link, 'KYC_VERIFY')
+      return redirectStep(ref, link.kyc_link, 'kyc_verify')
     }
     return reviewStep(ref)
   }
@@ -582,10 +582,10 @@ export function bridge(opts: BridgeOptions) {
     if (e?.status === 'revoked') return failStep(ref)
     // Not approved yet (or the rail's endorsement needs more steps): send the user back to the KYC link when we have one.
     // TO VERIFY: how to add an endorsement to a customer that was approved without it (a new KYC link with the endorsement?).
-    if (link?.kyc_link && c.status !== 'under_review') return redirectStep(ref, link.kyc_link, 'KYC_VERIFY')
+    if (link?.kyc_link && c.status !== 'under_review') return redirectStep(ref, link.kyc_link, 'kyc_verify')
     if (!link && rec.kycLinkId) {
       const l = await call<KycLink>(ctx, 'GET', `/kyc_links/${encodeURIComponent(rec.kycLinkId)}`, 'check identity verification')
-      if (l.kyc_link && c.status !== 'under_review' && l.kyc_status !== 'under_review') return redirectStep(ref, l.kyc_link, 'KYC_VERIFY')
+      if (l.kyc_link && c.status !== 'under_review' && l.kyc_status !== 'under_review') return redirectStep(ref, l.kyc_link, 'kyc_verify')
     }
     return reviewStep(ref)
   }
@@ -621,7 +621,7 @@ export function bridge(opts: BridgeOptions) {
 
   const depositPaymentStep = (ref: string, rec: LegRec): LegStep => ({
     state: 'PAYMENT',
-    sub: 'BANK_DETAILS',
+    sub: 'bank_details',
     status: 'awaiting_user',
     ref,
     surface: depositSurface(rec),
@@ -757,7 +757,7 @@ export function bridge(opts: BridgeOptions) {
 
   const payoutFormStep = (ref: string, r: PayoutRail): LegStep => ({
     state: 'PAYMENT',
-    sub: 'PAYOUT_ACCOUNT',
+    sub: 'payout_account',
     status: 'awaiting_user',
     ref,
     surface: { kind: 'FORM', fields: payoutFields(r) },
@@ -772,7 +772,7 @@ export function bridge(opts: BridgeOptions) {
       : { to: a.token, data: erc20TransferData(rec.payTo!, amount), value: '0', chainId: evmChainId(a.chain)! }
     return {
       state: 'PAYMENT',
-      sub: 'SEND_CRYPTO',
+      sub: 'send_crypto',
       status: 'awaiting_user',
       ref,
       surface: { kind: 'WALLET_TX', chain: a.chain, txs: [tx] },
@@ -882,7 +882,7 @@ export function bridge(opts: BridgeOptions) {
   async function payoutStatus(ref: string, rec: LegRec, ctx: AdapterContext): Promise<LegStep> {
     const t = await call<Transfer>(ctx, 'GET', `/transfers/${encodeURIComponent(rec.transferId!)}`, 'check the payout')
     const ev = transferEvent(ref, rec, t)
-    if (!ev) return rec.txHash ? { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, txHash: rec.txHash, transitions: [awaitPoll(BANK_POLL)] } : sendStep(ref, rec)
+    if (!ev) return rec.txHash ? { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, txHash: rec.txHash, transitions: [awaitPoll(BANK_POLL)] } : sendStep(ref, rec)
     return stepFromEvent(ev)
   }
 
@@ -893,7 +893,7 @@ export function bridge(opts: BridgeOptions) {
     const map: Record<LegStatus, LegStep> = {
       pending: { state: 'PROCESSING', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
       awaiting_user: { state: 'PAYMENT', status: 'awaiting_user', transitions: [awaitPoll(BANK_POLL)], ...extra },
-      processing: { state: 'PROCESSING', sub: 'SETTLING', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
+      processing: { state: 'PROCESSING', sub: 'settling', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
       succeeded: { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra },
       failed: { state: 'FAILED', status: 'failed', transitions: [], ...extra, ...(ev.error ? { error: ev.error } : {}) },
       refunded: { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra },
@@ -1005,7 +1005,7 @@ export function bridge(opts: BridgeOptions) {
           rec.txHash = txHash
           await saveRec(ref, rec, ctx)
         }
-        return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, transitions: [awaitPoll(BANK_POLL)], ...(txHash ? { txHash } : {}) }
+        return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, transitions: [awaitPoll(BANK_POLL)], ...(txHash ? { txHash } : {}) }
       }
       throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
     },

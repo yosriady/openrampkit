@@ -67,9 +67,9 @@ The `wallet` leg (with `crypto: true`) also serves withdrawals to a wallet: it a
 - Currencies: the test FX currencies below. Limits: 5 to 5000 USD.
 - Quote: 1 USDC is 1 USD, minus a 1% fee in USDC, converted at the test FX rate.
 - Steps:
-  1. `FORM` (sub-state `PAYOUT_ACCOUNT`): the payout account. Bank transfer asks for the account holder name, the bank name and the account number. GCash, MoMo and PromptPay ask for the name and a phone number. Transition `submit_details`.
-  2. `WALLET_TX` (sub-state `SEND_CRYPTO`): an ERC-20 USDC `transfer` of the quoted amount to a fake provider address. Transition `submit_tx`. With `custody: 'app'`, the server's treasury hook sends it.
-  3. `PROCESSING` (`SETTLING`) for `settleMs`, then `COMPLETED` with the quoted payout as the output.
+  1. `FORM` (sub-state `payout_account`): the payout account. Bank transfer asks for the account holder name, the bank name and the account number. GCash, MoMo and PromptPay ask for the name and a phone number. Transition `submit_details`.
+  2. `WALLET_TX` (sub-state `send_crypto`): an ERC-20 USDC `transfer` of the quoted amount to a fake provider address. Transition `submit_tx`. With `custody: 'app'`, the server's treasury hook sends it.
+  3. `PROCESSING` (`settling`) for `settleMs`, then `COMPLETED` with the quoted payout as the output.
 
 ## Local chain leg
 
@@ -83,7 +83,7 @@ mockAdapter({
 
 - The destination must be an address on `chain` in `token`.
 - Quote: 1:1 with no fee.
-- Step 1: `WALLET_TX` (sub-state `SEND_CRYPTO`). The wallet sends an ERC-20 `transfer` of the quoted amount to the destination address. Transition `submit_tx` with the hash.
+- Step 1: `WALLET_TX` (sub-state `send_crypto`). The wallet sends an ERC-20 `transfer` of the quoted amount to the destination address. Transition `submit_tx` with the hash.
 - Step 2: the adapter reads the receipt with `eth_getTransactionReceipt` at `rpcUrl`. The leg is `COMPLETED` when the receipt shows a `Transfer` of at least the quoted amount to the destination. It stays `PROCESSING` while there is no receipt. It is `FAILED` when the transaction reverted, pays less, pays another address or was already used for another payment.
 
 This is the same check that the Relay adapter does for a same-chain wallet payment. See [Testing with mocks](../guide/testing.md#real-chain-test-with-anvil).
@@ -115,7 +115,7 @@ mockAdapter({
 - The destination must be an owner address on `chain` in `mint`. Use `mint: 'native'` for SOL (9 decimals).
 - Quote: 1:1 with no fee.
 - At start, the leg reads the current slot with `getSlot`.
-- Step 1: `WALLET_TX` (sub-state `SEND_CRYPTO`) with one Solana `transfer` of the quoted amount to the destination. `@openrampkit/solana` builds it. Transition `submit_tx` with the base58 signature.
+- Step 1: `WALLET_TX` (sub-state `send_crypto`) with one Solana `transfer` of the quoted amount to the destination. `@openrampkit/solana` builds it. Transition `submit_tx` with the base58 signature.
 - Step 2: the adapter checks the signature at `rpcUrl`:
   - `getSignatureStatuses`: the signature must be `confirmed` or `finalized`, with no error.
   - `getTransaction` (`jsonParsed`): the transaction must be in a slot at or after the start slot. Its SPL `transfer` and `transferChecked` instructions (or System Program transfers, for SOL) must move at least the quoted amount into a token account of the mint that the destination owns.
@@ -148,7 +148,7 @@ The check reads the instructions, not the balance change. Thus a transfer from t
 | `bridge` | Nothing: it is paid when it starts and settles after `settleMs` |
 | `offramp` | Fill in the payout form (`submit_details`), then send with a wallet adapter or the treasury (`submit_tx`) |
 
-After "paid", the leg is `PROCESSING` (sub-state `SETTLING`) until `settleMs` has passed, then `COMPLETED` with a fake transaction hash.
+After "paid", the leg is `PROCESSING` (sub-state `settling`) until `settleMs` has passed, then `COMPLETED` with a fake transaction hash.
 
 | Hosted checkout | QR with the simulate button |
 |---|---|

@@ -268,7 +268,7 @@ The server sends one `Step` at a time. The client draws the state and offers the
 type Step = {
   sessionId: string
   state: StateName
-  sub?: string                                  // e.g. KYC 'IN_REVIEW'
+  sub?: StepSub                                 // closed list STEP_SUBS, e.g. KYC 'kyc_review'
   legIndex?: number                             // which leg this step belongs to
   surface?: Surface                             // what to show
   transitions: Transition[]                     // what the user or client can do now

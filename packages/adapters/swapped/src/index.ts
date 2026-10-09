@@ -566,7 +566,7 @@ export function swapped(opts: SwappedOptions) {
     async transition(input) {
       if (input.name !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown transition ${input.name}.` }), 409)
       const txHash = typeof input.inputs?.txHash === 'string' ? input.inputs.txHash : undefined
-      return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref: input.ref, transitions: [awaitPoll(POLL)], ...(txHash ? { txHash } : {}) }
+      return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref: input.ref, transitions: [awaitPoll(POLL)], ...(txHash ? { txHash } : {}) }
     },
 
     webhook: {

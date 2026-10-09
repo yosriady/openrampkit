@@ -395,10 +395,48 @@ export type LegStatus =
   /** The provider took back a payment (a chargeback or a reversal) */
   | 'reversed'
 
+/**
+ * The closed list of sub-states that `Step.sub` can have: a finer label inside `Step.state` for the UI.
+ * The values are i18n keys in `@openrampkit/web` (`messages.stepSub`). Adapters map provider statuses to
+ * these values and put the raw provider status in `LegStep.providerStatus` (timeline and logs only).
+ */
+export const STEP_SUBS = [
+  // KYC
+  'kyc_details',
+  'kyc_terms',
+  'kyc_verify',
+  'kyc_review',
+  // PAYMENT: what the user does
+  'card_details',
+  'bank_details',
+  'payout_account',
+  'send_crypto',
+  // PROCESSING: what the provider or the chain does
+  'waiting_for_deposit',
+  'ambiguous_deposit',
+  'confirming',
+  'bridging',
+  'settling',
+  'delayed',
+  'refunding',
+  'processing',
+] as const
+
+/** A value of `Step.sub` (see `STEP_SUBS`) */
+export type StepSub = (typeof STEP_SUBS)[number]
+
+const STEP_SUB_SET: ReadonlySet<string> = new Set(STEP_SUBS)
+
+/** True when `v` is one of `STEP_SUBS` */
+export function isStepSub(v: unknown): v is StepSub {
+  return typeof v === 'string' && STEP_SUB_SET.has(v)
+}
+
 export type Step = {
   sessionId: string
   state: StateName
-  sub?: string
+  /** A finer label inside `state` (see `STEP_SUBS`). The server drops a value that is not in the list. */
+  sub?: StepSub
   legIndex?: number
   surface?: Surface
   transitions: Transition[]
@@ -410,7 +448,13 @@ export type Step = {
 /** What an adapter returns for one leg; the server wraps it into a Step */
 export type LegStep = {
   state: StateName
-  sub?: string
+  /** A finer label inside `state`, from the closed list `STEP_SUBS`. Map provider statuses to it. */
+  sub?: StepSub
+  /**
+   * The provider's own status for this step (for example Relay `pending`), for operators. The server
+   * keeps it in the session timeline. It never reaches the browser.
+   */
+  providerStatus?: string
   surface?: Surface
   transitions: Transition[]
   status: LegStatus

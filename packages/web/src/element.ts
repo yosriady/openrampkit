@@ -30,6 +30,7 @@ import {
   screenTitle,
   sourceForChain,
   stepKey,
+  stepLabel,
   transferChains,
   transferTokens,
 } from './view.js'
@@ -943,7 +944,7 @@ export class OpenRampModal extends LitElement {
   private _renderProcessing(m: Messages, step: Step, withdraw = false) {
     return html`<div class="center">
       <span class="spinner large" aria-hidden="true"></span>
-      <div class="secondary-text">${step.sub ? titleCase(step.sub.toLowerCase()) : m.stepTitle[step.state] ?? m.checkingStatus}</div>
+      <div class="secondary-text">${stepLabel(m, step)}</div>
       ${withdraw && step.state === 'PROCESSING' ? html`<p class="secondary-text">${m.sendingBody}</p>` : nothing}
     </div>`
   }

@@ -3,7 +3,7 @@
 import { awaitPoll, httpErrorToOrk, httpStatus } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { CHAINS, OrkException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, orkError, sameToken } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegStep } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegStep, StepSub } from '@openrampkit/core'
 import { EVM_NATIVE, PLACEHOLDER_SOLANA_USER, PLACEHOLDER_USER, RELAY_POLL, RELAY_SOLANA_CHAIN_ID, SOLANA_CAIP2, SOLANA_NATIVE } from './config.js'
 import type { RelayAmount, RelayQuoteResponse } from './types.js'
 
@@ -130,6 +130,25 @@ export function toOrk(e: unknown, log?: Pick<Logger, 'warn'> & Partial<Pick<Logg
 
 export const POLL_TRANSITION = awaitPoll(RELAY_POLL)
 export const SUBMIT_TX = { name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' } as const
+
+/**
+ * The `Step.sub` for a Relay request or intent status that is not final. The raw status goes into
+ * `LegStep.providerStatus` (timeline only), not to the browser.
+ */
+export function relaySub(status: string): StepSub {
+  switch (status) {
+    case 'waiting':
+      return 'waiting_for_deposit'
+    case 'pending':
+      return 'bridging'
+    case 'submitted':
+      return 'confirming'
+    case 'delayed':
+      return 'delayed'
+    default:
+      return 'processing'
+  }
+}
 
 /** Terminal LegStep for a Relay request or intent status, or undefined while it is still running */
 export function terminalStep(status: string, extra: { ref: string; txHash?: string; output?: Amount }): LegStep | undefined {

@@ -14,6 +14,7 @@ import type {
   Step,
   WithdrawSource,
 } from '@openrampkit/core'
+import { isStepSub } from '@openrampkit/core'
 
 export type ActiveLeg = {
   adapterId: string
@@ -222,7 +223,7 @@ function isSessionRecord(rec: unknown): rec is SessionRecord {
  *
  * Schema 0 to 1 (records with no `schema`): `updatedAt` from `createdAt`; `ActivePayment.n` from the number
  * of earlier attempts, and `n` of each earlier attempt from its place; empty `quotes`, `startUrls`,
- * `notified` and `outbox` when absent.
+ * `notified` and `outbox` when absent; each step `sub` in lower case when that is in `STEP_SUBS`, else removed.
  *
  * A record with a newer schema (written by a newer server) is returned as it is. Other records (for
  * example the queue records of a custom store) are returned as they are.
@@ -241,6 +242,13 @@ export function migrateRecord<T>(rec: T): T {
       p.n ??= i
     })
     if (rec.active) rec.active.n ??= rec.attempts?.length ?? 0
+    // `sub` was free text (for example 'SETTLING'); now it is the closed list `STEP_SUBS`.
+    for (const step of [rec.step, ...[rec.active, ...(rec.attempts ?? [])].flatMap((p) => p?.legs.map((l) => l.step) ?? [])]) {
+      if (step?.sub === undefined || isStepSub(step.sub)) continue
+      const lower = String(step.sub).toLowerCase()
+      if (isStepSub(lower)) step.sub = lower
+      else delete step.sub
+    }
   }
   rec.schema = SESSION_SCHEMA
   return rec
