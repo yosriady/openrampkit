@@ -293,11 +293,19 @@ describe('moonpay adapter', () => {
     expect(report.quotes).toHaveLength(2)
   })
 
-  it.runIf(process.env.LIVE === '1')('live: public countries and a test-mode quote', async () => {
-    const a = moonpay(opts)
+  // LIVE=1 with a real key in MOONPAY_PUBLISHABLE_KEY. A fake key proves nothing, so without one the test skips.
+  // Test mode sells USDC only as `usdc` (Ethereum): usdc_base, usdc_arbitrum, usdc_optimism and usdc_polygon are not in test mode.
+  it.runIf(process.env.LIVE === '1')('live: public countries and a real test-mode quote for usdc (MOONPAY_PUBLISHABLE_KEY)', async ({ skip }) => {
+    const publishableKey = process.env.MOONPAY_PUBLISHABLE_KEY
+    skip(!publishableKey, 'MOONPAY_PUBLISHABLE_KEY is not set. Set a pk_test_ key to quote against MoonPay test mode.')
+    const a = moonpay({ ...opts, publishableKey: publishableKey!, env: publishableKey!.startsWith('pk_live_') ? 'production' : 'sandbox' })
     const legs = await a.catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, { fetch, log: silentLog, shared: memoryKV() })
     expect(legs.find((l) => l.id === 'card')!.regions.allow).toContain('US')
-    const q = await a.quote({ leg: leg('card', ETH_USDC), amountIn: usd('100') }, makeCtx({ fetch }))
+    const q = await a.quote({ leg: leg('card', ETH_USDC), amountIn: usd('100') }, makeCtx({ fetch, session: { country: 'US' } }))
+    expect(checkLegQuote(q)).toEqual([])
+    expect(q.data).toMatchObject({ currencyCode: 'usdc' })
+    expect(q.output.asset).toMatchObject({ chain: 'eip155:1', token: USDC['eip155:1'] })
     expect(Number(q.output.amount)).toBeGreaterThan(50)
-  })
+    expect(Number(q.output.amount)).toBeLessThan(110)
+  }, 30_000)
 })

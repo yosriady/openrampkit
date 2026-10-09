@@ -424,3 +424,17 @@ describe('lifi conformance', () => {
     expect(await lifi().health!({ fetch, log: makeCtx({ fetch }).log })).toEqual({ ok: true })
   })
 })
+
+// LIVE=1 with a real key in LIFI_API_KEY. LI.FI has no sandbox host (staging.li.quest returns 403), so this asks
+// the mainnet API for one small quote. It never starts, signs or sends anything.
+describe('lifi live API', () => {
+  it.runIf(process.env.LIVE === '1')('a small mainnet quote: 1 USDC Arbitrum -> USDC Base (LIFI_API_KEY)', async ({ skip }) => {
+    const apiKey = process.env.LIFI_API_KEY
+    skip(!apiKey, 'LIFI_API_KEY is not set. Set a key from the LI.FI Partner Portal.')
+    const q = await lifi({ apiKey: apiKey! }).quote({ leg: walletLeg, amountIn: { amount: '1', asset: ARB_USDC }, source: src }, makeCtx({ fetch: globalThis.fetch }))
+    expect(checkLegQuote(q)).toEqual([])
+    expect(q.output.asset).toMatchObject({ chain: BASE_USDC.chain })
+    expect(Number(q.output.amount)).toBeGreaterThan(0.5)
+    expect(Number(q.output.amount)).toBeLessThanOrEqual(1)
+  }, 30_000)
+})

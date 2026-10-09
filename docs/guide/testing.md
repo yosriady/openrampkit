@@ -120,6 +120,33 @@ pnpm typecheck
 
 Tests for the web component and React run in `happy-dom`. Adapter tests use `fakeFetch` from `@openrampkit/adapter/testing`, so they never call a real provider.
 
+## Live provider tests
+
+Some adapters also have live tests. They call the real provider API, so `pnpm test` does not run them. They run only when `LIVE=1` is set.
+
+Put your keys in `.env.local` at the repo root (git ignores this file). Then run the live tests for one adapter:
+
+```bash
+set -a; . ./.env.local; set +a; LIVE=1 pnpm vitest run packages/adapters/<name>
+```
+
+For example, `packages/adapters/moonpay`. The `set -a` line exports every value in `.env.local` to the test process. Do not print the keys, and do not paste them in logs.
+
+| Adapter | Key | What the live test does |
+|---|---|---|
+| MoonPay | `MOONPAY_PUBLISHABLE_KEY` (`pk_test_...`) | Reads the public countries and gets a test mode quote for USD 100 to `usdc` (Ethereum). |
+| Relay | `RELAY_API_KEY` | Gets a deposit address quote and a wallet quote, USDC Arbitrum to USDC Base. Nothing is signed or sent. |
+| LI.FI | `LIFI_API_KEY` | Gets one quote for 1 USDC, Arbitrum to Base, from the mainnet API. Nothing is signed or sent. |
+| Peer | none | Reads the public orderbook. |
+| Swapped | none | Reads the public catalog and prices. |
+
+Rules:
+
+- Without its key, a live test skips. The skip note gives the name of the missing variable. A fake key proves nothing, so the tests do not use one.
+- Each live test has a 30 s timeout. The vitest default (5 s) is too short for real provider calls.
+- Live tests get quotes only. They never send a transaction or move money.
+- Sandboxes have limits. For example, MoonPay test mode has USDC only as `usdc` on Ethereum, and LI.FI has no sandbox. See the sandbox notes in [Get provider keys](./provider-keys.md).
+
 ## Real-chain test with Anvil
 
 The mock wallet does not touch a chain. To test a `WALLET_TX` leg with real transactions, use a local [Anvil](https://book.getfoundry.sh/anvil/) chain. The test `packages/wagmi/src/anvil.test.ts` does these steps:

@@ -784,9 +784,13 @@ describe('relay deposit addresses', () => {
 
 // ---------------- live (LIVE=1) ----------------
 
+// LIVE=1 with a real key in RELAY_API_KEY: Relay requires a key for quotes, so without one the test skips.
+// Quotes and unsigned transactions only: nothing is sent and no money moves.
 describe('relay live API', () => {
-  it.runIf(process.env.LIVE === '1')('open deposit address quote: USDC Arbitrum -> USDC Base, and a wallet quote', async () => {
-    const a = relay()
+  it.runIf(process.env.LIVE === '1')('open deposit address quote: USDC Arbitrum -> USDC Base, and a wallet quote (RELAY_API_KEY)', async ({ skip }) => {
+    const apiKey = process.env.RELAY_API_KEY
+    skip(!apiKey, 'RELAY_API_KEY is not set. Relay requires an API key for quotes.')
+    const a = relay({ apiKey: apiKey! })
     const ctx = makeCtx({ fetch: globalThis.fetch })
     const q = await a.quote({ leg: transferLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, ctx)
     expectConformant(q)

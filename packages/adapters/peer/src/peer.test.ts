@@ -283,8 +283,9 @@ describe('peer adapter', () => {
     expect(report.problems).toEqual([])
   })
 
+  // Live calls to the provider: allow 30 s, not the 5 s vitest default.
   it.runIf(process.env.LIVE === '1')('live: the public orderbook has USD liquidity on some rail', async () => {
     const legs = await peer({ ...opts, rails: ['venmo', 'cashapp', 'zelle', 'paypal'] }).catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, { fetch, log: silentLog, shared: memoryKV() })
     expect(legs.length).toBeGreaterThan(0)
-  })
+  }, 30_000)
 })
