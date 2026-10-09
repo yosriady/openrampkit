@@ -3,7 +3,7 @@
 // plans pathways, runs legs, takes provider webhooks and sends signed webhooks to the app.
 
 import { API_VERSION, OpenRampException, openRampError } from '@openrampkit/core'
-import type { Session } from '@openrampkit/core'
+import type { CancelReason, Session } from '@openrampkit/core'
 import type { OpenRampConfig } from './config.js'
 import { verifyWebhook } from './crypto.js'
 import { corsHeaders, errorResponse, withCors } from './http.js'
@@ -11,7 +11,7 @@ import { refreshActive } from './legs.js'
 import { route } from './routes.js'
 import { replayDeadLetters, saveSession } from './outbox.js'
 import { backendSession, createRuntime } from './runtime.js'
-import { createSession } from './sessions.js'
+import { cancelSession, createSession } from './sessions.js'
 import { createPayLink, revokePayLink } from './pay.js'
 import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
@@ -78,6 +78,26 @@ export function createOpenRamp(config: OpenRampConfig) {
         if (!rec) return null
         if (await refreshActive(rt, rec, true)) await saveSession(rt, rec)
         return backendSession(rec)
+      },
+      /**
+       * Cancel a session that has no payment under way (status `requires_payment_method` or
+       * `requires_action`): the step becomes CANCELED, the status `canceled`, and the server sends
+       * `session.canceled`. Returns the backend view, or null when the session does not exist. Throws a
+       * `409` while a payment is processing or after another final status.
+       */
+      async cancel(id: string, opts: { reason?: CancelReason } = {}): Promise<Session | null> {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const rec = await rt.store.get(id)
+          if (!rec) return null
+          await cancelSession(rt, rec, opts.reason ?? 'requested_by_app')
+          try {
+            await saveSession(rt, rec)
+            return backendSession(rec)
+          } catch (e) {
+            if (!(e instanceof OpenRampException && e.status === 409)) throw e
+          }
+        }
+        throw new OpenRampException(openRampError('CONFLICT'), 409)
       },
       /**
        * A signed, expiring link to a hosted page where a person completes this session

@@ -3,7 +3,7 @@
 import { claimWebhook, releaseWebhook } from '@openrampkit/adapter'
 import { OpenRampException, isFinalStatus, isTerminal, openRampError } from '@openrampkit/core'
 import type { SurfaceKind } from '@openrampkit/core'
-import { safeEqual } from './crypto.js'
+import { safeEqual, sha256Hex } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
 import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
 import { adapterMoveAllowed, applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
@@ -13,7 +13,7 @@ import { saveSession } from './outbox.js'
 import { trackOpenSession } from './queue.js'
 import { adapterContext, publicSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
-import { createSession, loadAuthed } from './sessions.js'
+import { cancelSession, createSession, loadAuthed } from './sessions.js'
 import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
 import { adminRoute } from './admin.js'
@@ -90,19 +90,29 @@ export async function route(rt: Runtime, req: Request): Promise<Response> {
   return errorResponse(openRampError('NOT_FOUND'), 404)
 }
 
-/** POST /sessions: browser-created sessions, only through the app's `authorize` hook. */
+/**
+ * POST /sessions: browser-created sessions, only through the app's `authorize` hook. An
+ * `Idempotency-Key` is scoped to the user that `authorize` returns.
+ */
 async function createSessionRoute(rt: Runtime, req: Request): Promise<Response> {
   if (!rt.config.authorize) return errorResponse(openRampError('NOT_FOUND'), 404)
-  const body = await readJson<unknown>(req, {})
+  const body = await readJson<unknown>(req.clone(), {})
   const input = await rt.config.authorize(req, body)
   if (!input) return errorResponse(openRampError('UNAUTHORIZED'), 401)
-  return json(await createSession(rt, { ...geoOf(rt, req), ...input }), 201)
+  const scopeId = `create:${(await sha256Hex(String(input.userId))).slice(0, 32)}`
+  return withIdempotency(rt, scopeId, 'sessions', req, async () => json(await createSession(rt, { ...geoOf(rt, req), ...input }), 201))
 }
 
 async function sessionRoute(rt: Runtime, req: Request, method: string, id: string, action?: string, arg?: string): Promise<Response> {
   const rec = await loadAuthed(rt, req, id)
   const ip = clientIp(req)
   if (ip) rec.ip = ip
+  // `Idempotency-Key` on every POST, scoped to the session and the route
+  if (method === 'POST') return withIdempotency(rt, rec.id, [action ?? '', arg ?? ''].filter(Boolean).join('/'), req, () => sessionAction(rt, req, rec, method, action, arg))
+  return sessionAction(rt, req, rec, method, action, arg)
+}
+
+async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, method: string, action?: string, arg?: string): Promise<Response> {
 
   if (!action && method === 'GET') return json(publicSession(rec))
 
@@ -110,6 +120,14 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
   const restart = action === 'transitions' && arg === 'restart'
   if (method === 'POST' && (CHANGES_BEFORE_PAYMENT.has(action ?? '') || restart) && Date.now() > rec.expiresAt) {
     return errorResponse(openRampError('SESSION_EXPIRED'), 410)
+  }
+
+  // The user cancels: allowed while no payment is under way.
+  if (action === 'cancel' && method === 'POST' && !arg) {
+    if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(openRampError('UNAUTHORIZED'), 403)
+    await cancelSession(rt, rec, 'requested_by_user')
+    await saveSession(rt, rec)
+    return json(publicSession(rec))
   }
 
   // An operator closed this session (`admin.resolve`): the browser cannot change it.
@@ -166,12 +184,9 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return json(result)
   }
 
-  if (action === 'select' && method === 'POST') return withIdempotency(rt, rec.id, 'select', req, () => selectRoute(rt, req, rec))
+  if (action === 'select' && method === 'POST') return selectRoute(rt, req, rec)
 
-  if (action === 'transitions' && arg && method === 'POST') {
-    const name = decodeURIComponent(arg)
-    return withIdempotency(rt, rec.id, `transitions/${name}`, req, () => transitionRoute(rt, req, rec, name))
-  }
+  if (action === 'transitions' && arg && method === 'POST') return transitionRoute(rt, req, rec, decodeURIComponent(arg))
   return errorResponse(openRampError('NOT_FOUND'), 404)
 }
 

@@ -123,6 +123,8 @@ stateDiagram-v2
   PROCESSING --> REVERSED
   PROCESSING --> EXPIRED
   FAILED --> SELECT_METHOD: restart
+  SELECT_METHOD --> CANCELED: cancel
+  PAYMENT --> CANCELED: cancel
   COMPLETED --> REVERSED: refund or chargeback
   EXPIRED --> PROCESSING: late payment
   EXPIRED --> COMPLETED: late payment
@@ -130,6 +132,7 @@ stateDiagram-v2
   EXPIRED --> [*]
   REFUNDED --> [*]
   REVERSED --> [*]
+  CANCELED --> [*]
 ```
 
 `FAILED` is terminal, but the table lets it go back to `SELECT_METHOD`: the `restart` transition does this after a failed attempt (session status `requires_payment_method`). After a final failure (session status `failed`), the server refuses `restart`. `BLOCKED`, `REFUNDED`, `REVERSED` and `CANCELED` have no way out. `EXPIRED` can go to `PROCESSING` or `COMPLETED` (a late payment).

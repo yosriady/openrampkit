@@ -148,6 +148,12 @@ export interface Adapter {
   start(input: StartInput, ctx: AdapterContext): Promise<LegStep>
   transition?(input: TransitionInput, ctx: AdapterContext): Promise<LegStep>
   status?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<LegStep>
+  /**
+   * Optional: void the provider order of a started leg when the session is canceled
+   * (`POST /sessions/:id/cancel`, `openramp.sessions.cancel`). Best effort: the server logs an error and
+   * cancels the session anyway. A payment that arrives later takes the late payment path.
+   */
+  cancel?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<void>
   webhook?: {
     /**
      * False when the adapter cannot verify webhooks with its options (for example no webhook secret),

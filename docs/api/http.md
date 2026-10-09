@@ -8,7 +8,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/sessions` | `authorize` hook | Create a session (only when `authorize` is set) |
+| `POST` | `/sessions` | `authorize` hook, `Idempotency-Key` | Create a session (only when `authorize` is set) |
 | `GET` | `/sessions/:id` | Bearer client secret | Read the session |
 | `GET` | `/sessions/:id/step` | Bearer | Read the session after a status check |
 | `POST` | `/sessions/:id/plan` | Bearer | Plan pathways and methods |
@@ -16,6 +16,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `POST` | `/sessions/:id/quotes` | Bearer | Quote a method |
 | `POST` | `/sessions/:id/select` | Bearer, `Idempotency-Key` | Confirm a quote and start the first leg |
 | `POST` | `/sessions/:id/transitions/:name` | Bearer, `Idempotency-Key` | Fire a transition |
+| `POST` | `/sessions/:id/cancel` | Bearer client secret | Cancel the session while no payment is under way |
 | `POST` | `/sessions/:id/pay-link` | Bearer client secret | Make a signed pay link |
 | `POST` | `/sessions/:id/pay-link/revoke` | Bearer client secret | Make one pay link stop working |
 | `GET` | `/start/:token` | Signed token | Popup-safe redirect to a provider |
@@ -28,6 +29,8 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `GET` | `/admin` | none (the page asks for the token) | Ops dashboard page (only with `admin.token`) |
 | `GET`, `POST` | `/admin/*` | Bearer `admin.token` | [Admin routes](#admin-routes): list, inspect, resolve, replay, stats |
 | `OPTIONS` | any | none | CORS preflight: `204` |
+
+Every `POST` accepts an `Idempotency-Key` header (see [Idempotency](#idempotency)). Every response has the header `openramp-version: 1`.
 
 ## Authentication
 
@@ -75,6 +78,8 @@ Available only when `authorize` is set; otherwise `404`.
 - The hook returns a `CreateSessionInput` or `null` (`401`).
 - `country` and `region` from geo headers are the defaults; the hook's values win.
 - Response `201`: `{ "id": "ors_...", "clientSecret": "ors_....", "expiresAt": "2026-09-29T10:30:00.000Z" }`
+- With an `externalId` in the input: a repeat for a session that is not final returns that session (the same body). A repeat for a final session answers `409 CONFLICT`.
+- An `Idempotency-Key` here is scoped to the `userId` that `authorize` returns.
 
 ## GET /sessions/:id
 
@@ -214,7 +219,15 @@ Response `200`: the `PublicSession`.
 
 ### Idempotency
 
-When `Idempotency-Key` is present, the server stores the response under `(session, route, key)` for 24 hours. The route is `select` or `transitions/{name}`. A repeat on the same route returns the stored status and body with `idempotent-replay: true`. The same key on another route does not replay. The key must have 1 to 255 printable ASCII characters (else `400`).
+Every `POST` accepts `Idempotency-Key: <random>`. Send a new random key for each new request, and the same key when you send the same request again (for example after a timeout).
+
+- The server stores the response under `(session, route, key)` for 24 hours, with a hash of the request body. The route is the path after the session id, for example `select`, `quotes` or `transitions/{name}`. For `POST /sessions`, the scope is the user from `authorize`.
+- A repeat with the same body returns the stored status and body, with the header `idempotent-replay: true`.
+- A repeat with another body answers `422 IDEMPOTENCY_MISMATCH`. Use a new key for a new request.
+- A repeat while the first request still runs answers `409 CONFLICT` (`retryable: true`).
+- The same key on another route is another request.
+- A request that fails with an error before it has a response stores nothing, so the key is free again.
+- The key must have 1 to 255 printable ASCII characters (else `400`).
 
 ### Session deadline
 
@@ -225,6 +238,18 @@ After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` tr
 - A JSON body can have at most 64 KiB, and a provider webhook body at most 1 MiB. A larger body gets `413`.
 - `walletAddress` (in `/plan`, `/target` and `/select`) must be 8 to 128 printable characters.
 - `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` call provider APIs. Together they count against `limits.providerCallsPerMinute` per session (default 60). Over the limit: `429 RATE_LIMITED`.
+
+## POST /sessions/:id/cancel
+
+Cancels the session while no payment is under way: the status is `requires_payment_method` or `requires_action`. The client secret only: a pay link gets `403`.
+
+- When a leg started and waits for the user, the server asks its adapter to void the provider order (`adapter.cancel()`, when the adapter has it). This is best effort.
+- The step becomes `CANCELED` (with the error `CANCELED`), the status `canceled`, and `canceled: { at, reason: 'requested_by_user' }` is set. The server sends `session.canceled`.
+- Response `200`: the `PublicSession`. A session that is already canceled is returned as it is.
+- `409` while the payment is `processing`, and after another final status.
+- A payment that arrives after the cancel does not complete the session: the server sends `session.late_payment` with `reason: 'after_cancel'`.
+
+Your backend can also call `openramp.sessions.cancel(id, { reason })`.
 
 ## GET /start/:sessionId.:token.:sig
 

@@ -28,6 +28,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
+| `cancel(secret)` | `POST /sessions/:id/cancel` (with a random `idempotency-key`) | `PublicSession`. Cancels the session while no payment is under way. |
 | `baseUrl` | | The base URL without a trailing slash |
 
 The type is `OpenRampClient`.

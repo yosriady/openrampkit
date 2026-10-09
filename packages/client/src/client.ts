@@ -89,6 +89,8 @@ export function createOpenRampClient(opts: ClientOptions) {
     transition: (secret: string, name: string, inputs?: Record<string, unknown>) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/transitions/${encodeURIComponent(name)}`, { inputs: inputs ?? {} }, idemKey()),
     step: (secret: string) => call<PublicSession>(secret, 'GET', `/sessions/${sessionId(secret)}/step`),
+    /** Cancel the session while no payment is under way (`POST /sessions/:id/cancel`) */
+    cancel: (secret: string) => call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/cancel`, {}, idemKey()),
   }
 }
 

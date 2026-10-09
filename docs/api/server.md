@@ -27,6 +27,7 @@ const openramp = createOpenRamp({
 | `policy.regions` | `RegionPolicy` | allow all | App-wide region policy, applied on top of each leg's policy |
 | `policy.methodPriority` | `Record<country, string[]>` | built-in | Method order per country |
 | `policy.disabledMethods` | `string[]` | none | Methods never offered |
+| `policy.maxAttempts` | `number` | `10` | The most payment attempts of one session. A failed attempt that leaves no attempt makes the session `failed` (final). |
 | `policy.outputToleranceBps` | `number` | `100` (1%) | How much less than the quote a provider may report as a leg's output before the server sets `result.amountMismatch`. See [SessionResult](./core.md#sessionresult). |
 | `policy.hopPreference` | `CryptoAsset[]` | USDC on Base, Arbitrum, Polygon, Optimism, Ethereum | Hop assets for two-leg pathways, most preferred first. See [Hops](../concepts/pathways.md#hops). |
 | `webhooks` | `{ url: string; secret: string; retryHours?: number; maxAttempts?: number }` | none | Signed webhooks to your backend. `secret` must have at least 16 characters (use 32 random bytes). `sweep()` retries failed deliveries for `retryHours` (default `24`), or until `maxAttempts` attempts in all when you set it. Then the event is a dead letter. See [Delivery](../guide/webhooks.md#delivery). |
@@ -61,6 +62,7 @@ openramp.nextHandlers()       // { GET, POST, OPTIONS } for a Next.js App Router
 await openramp.sessions.create(input)  // Promise<CreatedSession>
 await openramp.sessions.retrieve(id)   // Promise<Session | null>: the backend view (PublicSession plus userId and metadata)
 await openramp.sessions.refresh(id)    // Promise<Session | null>: ask the active leg's adapter for status now
+await openramp.sessions.cancel(id, { reason? })        // Promise<Session | null>: cancel while no payment is under way (reason default 'requested_by_app'); 409 otherwise
 await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { id, url, expiresAt }, a signed link to the pay page
 await openramp.sessions.revokePayLink(id, linkId)    // Promise<boolean>: make one pay link stop working; false when the session does not exist
 
@@ -129,7 +131,8 @@ The server tracks only the sessions it creates. A session goes back on the open-
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `userId` | `string` | required | Your user id. Passed to adapters and echoed in webhooks. |
+| `userId` | `string` | required | Your user id. Passed to adapters, and in the backend view of the session (`session.userId`) in webhooks. |
+| `externalId` | `string` | none | Your own id for the session (for example an order id): 1 to 256 printable characters, unique per app. A create that repeats the `externalId` of a session that is not final returns that session, with the same client secret. A repeat for a final session throws `409 CONFLICT`. It is in the backend view (`session.externalId`) and the admin views, never in the browser view. |
 | `direction` | `'deposit' \| 'withdraw'` | `'deposit'` | See [Withdrawals](../guide/withdraw.md) |
 | `destination` | `Destination` | required for a deposit | Where the money goes. See below. A withdraw session must not have one (`400`): the user picks the target, or the app sets `target`. |
 | `source` | `WithdrawSource` | required for a withdrawal | `{ chain, token, symbol?, decimals?, custody }`: the asset that leaves, and who holds it (`'user_wallet'` or `'app'`) |
@@ -142,7 +145,7 @@ The server tracks only the sessions it creates. A session goes back on the open-
 | `locale` | `string` | none | BCP 47. Picks the modal language; adapters get `en` when unset. |
 | `amountBounds` | `{ min?, max?, currency }` | none | Shown on the amount screen and enforced by the server on what the user pays (see below) |
 | `allowedMethods` | `string[]` | all | Only these methods are planned and quoted |
-| `metadata` | `Record<string, string>` | none | Echoed in every webhook. At most 50 keys. A key has at most 40 characters, a value at most 500. |
+| `metadata` | `Record<string, string>` | none | In the backend view of the session (`session.metadata`) in every webhook. At most 50 keys. A key has at most 40 characters, a value at most 500. |
 | `ttlMinutes` | `number` | `30` | Session lifetime. More than 0 and at most 10080 (7 days). |
 
 The server checks the input and throws a `400` (`BAD_REQUEST`) when a field is not valid:

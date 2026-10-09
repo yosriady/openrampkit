@@ -185,6 +185,7 @@ export function publicSession(rec: SessionRecord): PublicSession {
     step: rec.step,
     ...(rec.active ? { result: sessionResult(rec) } : {}),
     ...(rec.lastError ? { lastError: rec.lastError } : {}),
+    ...(rec.canceled ? { canceled: { at: new Date(rec.canceled.at).toISOString(), reason: rec.canceled.reason } } : {}),
     expiresAt: new Date(rec.expiresAt).toISOString(),
     livemode: rec.livemode,
   }
@@ -192,7 +193,7 @@ export function publicSession(rec: SessionRecord): PublicSession {
 
 /** The backend view of a session: the browser view plus `userId` and `metadata`. Webhooks and `sessions.retrieve()` use it. */
 export function backendSession(rec: SessionRecord): Session {
-  return { ...publicSession(rec), userId: rec.userId, metadata: rec.metadata ?? {} }
+  return { ...publicSession(rec), userId: rec.userId, ...(rec.externalId ? { externalId: rec.externalId } : {}), metadata: rec.metadata ?? {} }
 }
 
 /** What was paid and delivered so far, from the active pathway's quotes and leg steps. */

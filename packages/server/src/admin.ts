@@ -159,6 +159,8 @@ export type AdminSessionSummary = {
   method?: string
   provider?: string
   userId: string
+  /** The app's own id (`externalId` at create) */
+  externalId?: string
   livemode: boolean
   createdAt: string
   updatedAt: string
@@ -259,6 +261,7 @@ function summarize(rt: Runtime, rec: SessionRecord, now: number): AdminSessionSu
     ...(input ? { amount: input.value, currency: currencyOf(input) } : {}),
     ...(act ? { method: act.pathway.method, provider: act.pathway.provider } : {}),
     userId: rec.userId,
+    ...(rec.externalId ? { externalId: rec.externalId } : {}),
     livemode: rec.livemode,
     createdAt: iso(rec.createdAt)!,
     updatedAt: iso(rec.updatedAt ?? rec.createdAt)!,

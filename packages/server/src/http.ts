@@ -1,6 +1,7 @@
 import { OpenRampException, openRampError } from '@openrampkit/core'
 import type { OpenRampError } from '@openrampkit/core'
 import { IDEMPOTENCY_TTL_SEC, MAX_JSON_BODY_BYTES } from './config.js'
+import { sha256Hex } from './crypto.js'
 import type { Runtime } from './runtime.js'
 
 export const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
@@ -44,19 +45,53 @@ export function clientIp(req: Request): string | undefined {
 
 const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/
 
+/** What the store keeps for one `Idempotency-Key` */
+type IdemEntry = { status?: number; body?: string; hash?: string; pending?: true }
+
+/** How long a request with a key holds it before its answer is stored */
+const IDEMPOTENCY_PENDING_SEC = 60
+
 /**
- * Replay the stored response for a repeated `Idempotency-Key` within the same session and route.
- * `scope` names the route (e.g. `select`), so one key cannot replay the answer of another route.
+ * `Idempotency-Key` on a POST. The first request with a key runs and its answer is stored for 24 hours,
+ * with a hash of the request body. A repeat with the same body gets the stored answer (header
+ * `idempotent-replay: true`). A repeat with another body gets `422 IDEMPOTENCY_MISMATCH`. A repeat
+ * while the first request still runs gets `409 CONFLICT` (retryable). `scopeId` and `scope` name the
+ * caller and the route (e.g. a session id and `select`), so one key cannot replay the answer of another
+ * route or session. A request that throws stores nothing: the key is free again.
  */
-export async function withIdempotency(rt: Runtime, sessionId: string, scope: string, req: Request, run: () => Promise<Response>): Promise<Response> {
+export async function withIdempotency(rt: Runtime, scopeId: string, scope: string, req: Request, run: () => Promise<Response>): Promise<Response> {
   const key = req.headers.get('idempotency-key')
   if (!key) return run()
   if (!IDEMPOTENCY_KEY.test(key)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: '`Idempotency-Key` must be 1 to 255 printable ASCII characters.' }), 400)
-  const k = `idem:${sessionId}:${scope}:${key}`
-  const hit = await rt.store.kv.get<{ status: number; body: string }>(k)
-  if (hit) return new Response(hit.body, { status: hit.status, headers: { 'content-type': 'application/json', 'idempotent-replay': 'true' } })
-  const res = await run()
-  await rt.store.kv.put(k, { status: res.status, body: await res.clone().text() }, IDEMPOTENCY_TTL_SEC)
+  const body = await readText(req.clone(), MAX_JSON_BODY_BYTES)
+  const hash = (await sha256Hex(`${req.method} ${scope}\n${body}`)).slice(0, 32)
+  const k = `idem:${scopeId}:${scope}:${key}`
+  const kv = rt.store.kv
+  const answer = (hit: IdemEntry): Response => {
+    // Entries from earlier versions have no hash: they replay as before.
+    if (hit.hash !== undefined && hit.hash !== hash) return errorResponse(openRampError('IDEMPOTENCY_MISMATCH', { message: 'This Idempotency-Key was used with another request body. Use a new key for a new request.' }), 422)
+    if (hit.pending) return errorResponse(openRampError('CONFLICT', { message: 'A request with this Idempotency-Key is still running. Try again later.' }), 409)
+    return new Response(hit.body ?? '', { status: hit.status ?? 200, headers: { 'content-type': 'application/json', 'idempotent-replay': 'true' } })
+  }
+  const hit = await kv.get<IdemEntry | null>(k)
+  if (hit) return answer(hit)
+  const pending: IdemEntry = { pending: true, hash }
+  if (kv.putIfAbsent) {
+    if (!(await kv.putIfAbsent(k, pending, IDEMPOTENCY_PENDING_SEC))) {
+      const other = await kv.get<IdemEntry | null>(k)
+      if (other) return answer(other)
+    }
+  } else {
+    await kv.put(k, pending, IDEMPOTENCY_PENDING_SEC)
+  }
+  let res: Response
+  try {
+    res = await run()
+  } catch (e) {
+    await kv.put(k, null, 1)
+    throw e
+  }
+  await kv.put(k, { status: res.status, body: await res.clone().text(), hash } satisfies IdemEntry, IDEMPOTENCY_TTL_SEC)
   return res
 }
 

@@ -382,6 +382,16 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   // An operator closed this session (`admin.resolve`). Keep the leg data for the record, but do not
   // send from the treasury, start the next leg, notify or change the session state.
   if (rec.resolution) return
+  // The session was canceled. Keep the leg data, and move no funds. A payment that arrives after all
+  // is a late payment: the app refunds or credits it by hand.
+  if (rec.step.state === 'CANCELED') {
+    if (wrapped.status === 'succeeded' && before !== 'succeeded') {
+      rt.log.warn('a payment arrived after the session was canceled; the session stays CANCELED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
+      const scope = act.n ? `a${act.n}` : undefined
+      await notify(rt, rec, 'session.late_payment', { reason: 'after_cancel', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+    }
+    return
+  }
   // The session is REVERSED, and that is final. Keep the leg data, but move no more funds: no
   // treasury send, no next leg, no leg events, no other session state.
   if (rec.reversal) {

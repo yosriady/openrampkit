@@ -2,6 +2,7 @@ import type { ScopedKV } from '@openrampkit/adapter'
 import type {
   AllowedTargets,
   AmountMismatch,
+  CancelReason,
   Destination,
   Direction,
   LegQuote,
@@ -85,6 +86,8 @@ export type SessionRecord = {
   /** Optimistic-lock counter: each write adds 1 (see `SessionStore.put`). Not the record schema. */
   version: number
   userId: string
+  /** The app's own id (`CreateSessionInput.externalId`), unique per app */
+  externalId?: string
   direction: Direction
   /** Deposit: set at creation. Withdraw: the target the user picked, absent until then. */
   destination?: Destination
@@ -109,6 +112,8 @@ export type SessionRecord = {
   status: SessionStatus
   /** The error of the last failed attempt, or of the final failure. Cleared when a new payment starts. */
   lastError?: OpenRampError
+  /** Set when the session was canceled */
+  canceled?: { at: number; reason: CancelReason }
   createdAt: number
   expiresAt: number
   walletConnected?: boolean

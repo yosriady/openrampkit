@@ -560,6 +560,8 @@ export type PublicSession = {
    * failure (status `failed`). Cleared when a new payment starts.
    */
   lastError?: OpenRampError
+  /** Set when the session was canceled (status `canceled`) */
+  canceled?: { at: string; reason: CancelReason }
   expiresAt: string
   livemode: boolean
 }
@@ -618,6 +620,8 @@ export const API_VERSION = 1
  */
 export type Session = PublicSession & {
   userId: string
+  /** The app's own id for this session (`externalId` at create). Unique per app. */
+  externalId?: string
   metadata: Record<string, string>
 }
 
@@ -638,7 +642,7 @@ export type EventResolution = { by: 'admin'; state: 'COMPLETED' | 'FAILED' | 'RE
 export type CancelReason = 'requested_by_app' | 'requested_by_user' | 'abandoned'
 
 /** Why a payment counts as late (`session.late_payment`) */
-export type LatePaymentReason = 'after_expiry' | 'after_grace' | 'earlier_attempt'
+export type LatePaymentReason = 'after_expiry' | 'after_grace' | 'earlier_attempt' | 'after_cancel'
 
 /** The fields that each webhook event type adds to `data.object` (next to `session`) */
 export type WebhookEventFields = {

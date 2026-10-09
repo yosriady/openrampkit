@@ -4,6 +4,12 @@ import type { SessionStore } from './store.js'
 
 export type CreateSessionInput = {
   userId: string
+  /**
+   * Your own id for this session (an order id, for example): 1 to 256 printable characters, unique per
+   * app. A create that repeats the `externalId` of a session that is not final returns that session
+   * (with the same client secret). A repeat for a final session answers `409 CONFLICT`.
+   */
+  externalId?: string
   direction?: Direction
   /** Deposit: where the money ends (required). Withdraw: leave it out; the user picks the target. */
   destination?: Destination
@@ -185,6 +191,8 @@ export const START_URL_TTL_MS = 10 * 60_000
 export const PAY_LINK_GRACE_MS = 30 * 60_000
 export const IDEMPOTENCY_TTL_SEC = 60 * 60 * 24
 export const REF_INDEX_TTL_SEC = 60 * 60 * 24 * 30
+/** How long the `externalId` index keeps an id (longer than the longest session) */
+export const EXTERNAL_ID_TTL_SEC = 60 * 60 * 24 * 30
 export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
 /** Defaults of `latePayments` */
 export const DEFAULT_LATE_GRACE_HOURS = 72
