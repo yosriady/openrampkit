@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { OpenRampException, openRampError, timingSafeEqual as coreTimingSafeEqual } from '@openrampkit/core'
+import { OpenRampException, openRampError, stateFor, timingSafeEqual as coreTimingSafeEqual } from '@openrampkit/core'
 import type { LegQuote, LegSpec, LegStep, PathwayLeg } from '@openrampkit/core'
 import {
   POLL,
@@ -39,7 +39,10 @@ afterEach(() => {
 
 describe('createAdapter', () => {
   it('sets the API version and rejects bad ids and duplicate legs', () => {
-    expect(createAdapter({ id: 'ok-1', name: 'Ok', legs: [spec()], quote: vi.fn(), start: vi.fn() }).apiVersion).toBe(1)
+    expect(createAdapter({ id: 'ok-1', name: 'Ok', legs: [spec()], quote: vi.fn(), start: vi.fn() }).apiVersion).toBe(2)
+    expect(createAdapter({ id: 'ok-2', name: 'Ok', apiVersion: 2, legs: [spec()], quote: vi.fn(), start: vi.fn() }).apiVersion).toBe(2)
+    // An adapter built for the version 1 contract (LegStep.state, txHash) is refused with a clear message.
+    expect(() => createAdapter({ id: 'old', name: 'Old', apiVersion: 1, legs: [spec()], quote: vi.fn(), start: vi.fn() })).toThrow(/built for adapter API version 1.*supports version 2/)
     expect(() => createAdapter({ id: 'Bad Id', name: 'x', legs: [], quote: vi.fn(), start: vi.fn() })).toThrow(/lowercase/)
     expect(() => createAdapter({ id: '', name: 'x', legs: [], quote: vi.fn(), start: vi.fn() })).toThrow(/lowercase/)
     expect(() => createAdapter({ id: 'dup', name: 'x', legs: [spec(), spec()], quote: vi.fn(), start: vi.fn() })).toThrow(/duplicate leg id card/)
@@ -206,14 +209,16 @@ describe('util', () => {
     expect(decimalFrom(Number.POSITIVE_INFINITY)).toBe('0')
   })
 
-  it('legStepFromEvent maps every leg status to a legal step', () => {
+  it('legStepFromEvent keeps the event and adds a poll; stateFor gives the state', () => {
     const ref = 'r1'
     const cases: Array<[Parameters<typeof legStepFromEvent>[0], string, string]> = [
       [undefined, 'PAYMENT', 'requires_action'],
-      [{ ref, status: 'pending' }, 'PAYMENT', 'requires_action'],
+      [{ ref, status: 'pending' }, 'PROCESSING', 'pending'],
       [{ ref, status: 'requires_action' }, 'PAYMENT', 'requires_action'],
       [{ ref, status: 'processing' }, 'PROCESSING', 'processing'],
-      [{ ref, status: 'succeeded', txHash: '0x1', output: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, 'COMPLETED', 'succeeded'],
+      [{ ref, status: 'processing', phase: 'kyc' }, 'KYC', 'processing'],
+      [{ ref, status: 'requires_action', action: { kind: 'kyc', transitions: [] } }, 'KYC', 'requires_action'],
+      [{ ref, status: 'succeeded', transactions: [{ role: 'destination', hash: '0x1' }], output: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, 'COMPLETED', 'succeeded'],
       [{ ref, status: 'failed', error: openRampError('PAYMENT_FAILED') }, 'FAILED', 'failed'],
       [{ ref, status: 'failed' }, 'FAILED', 'failed'],
       [{ ref, status: 'refunded' }, 'REFUNDED', 'refunded'],
@@ -221,10 +226,13 @@ describe('util', () => {
     ]
     for (const [ev, state, status] of cases) {
       const s = legStepFromEvent(ev, ref, POLL.checkout)
-      expect(s).toMatchObject({ state, status, ref })
+      expect(s).toMatchObject({ status, ref })
+      expect(stateFor(s)).toBe(state)
       expect(checkLegStep(s)).toEqual([])
     }
-    expect(legStepFromEvent({ ref, status: 'succeeded', txHash: '0x1' }, ref, POLL.checkout).txHash).toBe('0x1')
+    expect(legStepFromEvent(undefined, ref, POLL.checkout)).toEqual({ status: 'requires_action', action: { kind: 'payment', transitions: [awaitPoll(POLL.checkout)] }, ref })
+    expect(legStepFromEvent({ ref, status: 'processing', eventId: 'e1' }, ref, POLL.checkout)).toEqual({ ref, status: 'processing', poll: POLL.checkout })
+    expect(legStepFromEvent({ ref, status: 'succeeded', transactions: [{ role: 'destination', hash: '0x1' }] }, ref, POLL.checkout).transactions).toEqual([{ role: 'destination', hash: '0x1' }])
     expect(legStepFromEvent({ ref, status: 'failed', error: openRampError('PAYMENT_FAILED') }, ref, POLL.checkout).error?.code).toBe('PAYMENT_FAILED')
     expect(awaitPoll(POLL.onchain, 'wait')).toEqual({ name: 'wait', kind: 'AWAIT', poll: POLL.onchain })
   })
@@ -237,11 +245,11 @@ describe('testkit checks', () => {
     expect(checkAdapterShape(base)).toEqual([])
     const bad = {
       ...base,
-      apiVersion: 2,
+      apiVersion: 1,
       legs: [spec({ eta: { min: 5, max: 1 }, surfaces: [], regions: { allow: [], deny: [] }, limits: { min: '1e3', max: 'ten', currency: 'USD' } }), spec({ id: 'ok', limits: { min: '1', currency: 'USD' } })],
     } as Adapter
     expect(checkAdapterShape(bad).map((p) => p.problem)).toEqual([
-      'Unsupported apiVersion 2',
+      'Unsupported apiVersion 1 (this kit checks version 2)',
       'eta.min > eta.max',
       'No surfaces declared',
       'Region policy allows nothing',
@@ -270,13 +278,24 @@ describe('testkit checks', () => {
     expect(checkLegQuote(bad).map((p) => p.where)).toEqual(['quote.input', 'quote.output', 'fee Fee', 'quote.expiresAt'])
   })
 
-  it('checkLegStep checks the table and terminal status', () => {
-    const ok: LegStep = { state: 'PAYMENT', status: 'requires_action', transitions: [awaitPoll(POLL.dev)], ref: 'r' }
+  it('checkLegStep checks the v2 rules', () => {
+    const ok: LegStep = { status: 'requires_action', action: { kind: 'payment', transitions: [awaitPoll(POLL.dev)] }, ref: 'r' }
     expect(checkLegStep(ok)).toEqual([])
-    expect(checkLegStep({ state: 'PROCESSING', status: 'succeeded', transitions: [] })).toEqual([])
-    expect(checkLegStep({ state: 'COMPLETED', status: 'processing', transitions: [] })).toEqual([{ where: 'step COMPLETED', problem: 'state terminal=true but leg status processing' }])
-    expect(checkLegStep({ state: 'PAYMENT', status: 'succeeded', transitions: [] })[0]!.problem).toMatch(/terminal=false/)
-    expect(checkLegStep({ state: 'COMPLETED', status: 'succeeded', transitions: [awaitPoll(POLL.dev)] })[0]!.problem).toMatch(/must not have AWAIT/)
+    expect(checkLegStep({ status: 'succeeded', transactions: [{ role: 'source', hash: '0x1' }, { role: 'destination', hash: '0x2' }] })).toEqual([])
+    expect(checkLegStep({ status: 'processing', phase: 'kyc', detail: { code: 'kyc_review', providerStatus: 'UNDER_REVIEW' } })).toEqual([])
+    const problems = (s: unknown) => checkLegStep(s as LegStep).map((p) => p.problem)
+    expect(problems({ status: 'bogus' })).toEqual(['unknown leg status bogus'])
+    expect(problems({ status: 'requires_action' })).toEqual(['requires_action without an action'])
+    expect(problems({ status: 'processing', action: { kind: 'payment', transitions: [] } })).toEqual(['an action with status processing (only requires_action has one)'])
+    expect(problems({ status: 'succeeded', phase: 'kyc' })).toEqual(['phase kyc with status succeeded (only pending or processing)'])
+    expect(problems({ status: 'requires_action', action: { kind: 'pay', transitions: [] } })).toEqual(['unknown action kind pay'])
+    expect(problems({ status: 'processing', detail: { code: 'SETTLING' } })).toEqual(['detail code SETTLING is not in STEP_DETAIL_CODES'])
+    expect(problems({ status: 'succeeded', transactions: [{ role: 'hop', hash: '0x1' }, { role: 'source', hash: '' }] })).toEqual(['transaction role hop (hop is set by the server)', 'transaction without a hash'])
+    expect(problems({ state: 'PAYMENT', status: 'requires_action', action: { kind: 'payment', transitions: [] }, txHash: '0x1' })).toEqual([
+      'has the adapter API v1 field state (v2: status, action, detail, transactions)',
+      'has the adapter API v1 field txHash (v2: status, action, detail, transactions)',
+    ])
+    expect(problems({ status: 'requires_action', action: { kind: 'payment', transitions: [awaitPoll(POLL.dev), awaitPoll(POLL.dev)] } })).toEqual(['Duplicate transition poll'])
   })
 })
 
@@ -354,9 +373,9 @@ describe('runAdapterConformance', () => {
       name: 'Conf',
       legs: [spec()],
       quote: async () => quote(),
-      start: async () => ({ state: 'PAYMENT', status: 'requires_action', transitions: [awaitPoll(POLL.dev)], ref: 'r1' }),
-      transition: async (i) => ({ state: 'PROCESSING', status: 'processing', transitions: [awaitPoll(POLL.dev)], ref: i.ref }),
-      status: async (i) => ({ state: 'COMPLETED', status: 'succeeded', transitions: [], ref: i.ref }),
+      start: async () => ({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://p.test', popup: true }, transitions: [awaitPoll(POLL.dev)] }, ref: 'r1' }),
+      transition: async (i) => ({ status: 'processing', poll: POLL.dev, ref: i.ref }),
+      status: async (i) => ({ status: 'succeeded', ref: i.ref }),
       webhook: {
         verify: async (req) => req.headers.get('sig') === 'ok',
         parse: async (raw) => [{ ref: JSON.parse(raw).ref as string, status: 'succeeded' }],
@@ -375,7 +394,7 @@ describe('runAdapterConformance', () => {
     })
     expect(r.problems).toEqual([])
     expect(r.quotes).toHaveLength(1)
-    expect(r.steps.map((s) => s.state)).toEqual(['PAYMENT', 'PROCESSING', 'COMPLETED'])
+    expect(r.steps.map((s) => stateFor(s))).toEqual(['PAYMENT', 'PROCESSING', 'COMPLETED'])
     expect(r.events).toEqual([[{ ref: 'r1', status: 'succeeded' }]])
   })
 
@@ -391,13 +410,13 @@ describe('runAdapterConformance', () => {
       },
       start: async (i) => {
         if (i.leg.legId === 'nostart') throw new Error('start boom')
-        if (i.leg.legId === 'noref') return { state: 'PAYMENT', status: 'requires_action', transitions: [] }
-        return { state: 'COMPLETED', status: 'bogus' as never, transitions: [], ref: 'r' }
+        if (i.leg.legId === 'noref') return { status: 'requires_action', action: { kind: 'payment', transitions: [] } }
+        return { status: 'bogus' as never, ref: 'r' }
       },
       transition: async () => {
         throw new Error('transition boom')
       },
-      status: async () => ({ state: 'PAYMENT', status: 'requires_action', transitions: [] }),
+      status: async () => ({ status: 'requires_action', action: { kind: 'payment', transitions: [] } }),
       webhook: {
         verify: async () => true,
         parse: async () => [{ ref: '', status: `s${n++}` as never }],
@@ -421,8 +440,8 @@ describe('runAdapterConformance', () => {
       'main quote: legId x is not card',
       'main quote: eta.min > eta.max',
       'main quote.output: negative amount',
-      'main start: unknown leg status bogus',
-      'main start: state COMPLETED, expected PAYMENT',
+      'main start: step bogus: unknown leg status bogus',
+      'main start: state PROCESSING, expected PAYMENT',
       'main transition t1: threw transition boom',
       'main status: state PAYMENT, expected COMPLETED',
       'throws: adapter declares no leg throws',
@@ -431,6 +450,7 @@ describe('runAdapterConformance', () => {
       'nostart start: threw start boom',
       'noref: adapter declares no leg noref',
       'noref start: step has no ref, so webhooks and status checks cannot find it',
+      'noref start: the first requires_action step has no surface',
       'webhook 0: verify() returned true, expected false',
       'webhook 1: parse() is not idempotent: a replay gave other events',
       'webhook 1: parse() gave 1 events, expected 2',
@@ -438,7 +458,6 @@ describe('runAdapterConformance', () => {
       'webhook 1: unknown leg status s0',
     ]
     for (const e of expected) expect(text).toContain(e)
-    expect(text).toContain('main start: step COMPLETED: state terminal=true but leg status bogus')
   })
 
   it('reports missing transition(), status() and webhook handlers', async () => {
@@ -447,7 +466,7 @@ describe('runAdapterConformance', () => {
       name: 'Conf',
       legs: [spec()],
       quote: async () => quote(),
-      start: async () => ({ state: 'PAYMENT', status: 'requires_action', transitions: [], ref: 'r' }),
+      start: async () => ({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://p.test', popup: true }, transitions: [] }, ref: 'r' }),
     })
     const r = await runAdapterConformance(bare, {
       fixtures: [{ leg, quote: {}, transitions: [{ name: 'a' }, { name: 'b' }], status: true, ctx: makeCtx({ fetch: fakeFetch([]).fetch }) }],

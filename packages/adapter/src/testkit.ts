@@ -1,7 +1,8 @@
 // Conformance checks any adapter can run in its own tests.
 
-import { isDecimal, isLegTerminal, TRANSITION_TABLE, validateStep } from '@openrampkit/core'
-import type { LegQuote, LegStep } from '@openrampkit/core'
+import { isDecimal, isStepDetailCode, stateFor, validateStep } from '@openrampkit/core'
+import type { LegQuote, LegStatus, LegStep } from '@openrampkit/core'
+import { ADAPTER_API_VERSION } from './index.js'
 import type { Adapter } from './index.js'
 
 export type ConformanceProblem = { where: string; problem: string }
@@ -11,7 +12,7 @@ const KNOWN_CAPABILITIES: string[] = ['settlement', 'surface_after_processing']
 
 export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
   const out: ConformanceProblem[] = []
-  if (adapter.apiVersion !== 1) out.push({ where: 'apiVersion', problem: `Unsupported apiVersion ${adapter.apiVersion}` })
+  if (adapter.apiVersion !== ADAPTER_API_VERSION) out.push({ where: 'apiVersion', problem: `Unsupported apiVersion ${adapter.apiVersion} (this kit checks version ${ADAPTER_API_VERSION})` })
   if (!adapter.legs.length) out.push({ where: 'legs', problem: 'Adapter declares no legs' })
   for (const leg of adapter.legs) {
     if (leg.eta.min > leg.eta.max) out.push({ where: `leg ${leg.id}`, problem: 'eta.min > eta.max' })
@@ -42,12 +43,40 @@ export function checkLegQuote(q: LegQuote): ConformanceProblem[] {
   return out
 }
 
+/** Every leg status (`LegStatus`) */
+export const LEG_STATUSES: readonly LegStatus[] = ['pending', 'requires_action', 'processing', 'succeeded', 'failed', 'refunded', 'expired', 'reversed']
+
+const ACTION_KINDS = ['auth', 'kyc', 'payment']
+const TX_ROLES = ['approval', 'source', 'destination', 'settlement', 'refund']
+
+/**
+ * Check one leg step against the adapter contract v2: a known status; an action (with a known kind and
+ * transitions) with `requires_action` and with no other status; a phase only while pending or
+ * processing; a detail code from `STEP_DETAIL_CODES`; well formed transactions; and the transitions
+ * against the flow table.
+ */
 export function checkLegStep(s: LegStep): ConformanceProblem[] {
-  const out: ConformanceProblem[] = validateStep(s).map((problem) => ({ where: `step ${s.state}`, problem }))
-  const terminal = TRANSITION_TABLE[s.state].terminal
-  if (terminal !== isLegTerminal(s.status) && s.state !== 'PROCESSING') {
-    // PROCESSING may carry a succeeded leg status while later legs continue
-    out.push({ where: `step ${s.state}`, problem: `state terminal=${terminal} but leg status ${s.status}` })
+  const where = `step ${s.status}`
+  if (!LEG_STATUSES.includes(s.status)) return [{ where, problem: `unknown leg status ${String(s.status)}` }]
+  const legacy = s as LegStep & { state?: unknown; sub?: unknown; txHash?: unknown; sourceTxHash?: unknown; surface?: unknown; transitions?: unknown }
+  const out: ConformanceProblem[] = []
+  for (const k of ['state', 'sub', 'txHash', 'sourceTxHash', 'surface', 'transitions'] as const) {
+    if (legacy[k] !== undefined) out.push({ where, problem: `has the adapter API v1 field ${k} (v2: status, action, detail, transactions)` })
   }
+  if (s.status === 'requires_action') {
+    if (!s.action) out.push({ where, problem: 'requires_action without an action' })
+    else {
+      if (!ACTION_KINDS.includes(s.action.kind)) out.push({ where, problem: `unknown action kind ${String(s.action.kind)}` })
+      if (!Array.isArray(s.action.transitions)) out.push({ where, problem: 'action without transitions' })
+    }
+  } else if (s.action) out.push({ where, problem: `an action with status ${s.status} (only requires_action has one)` })
+  if (s.phase && s.status !== 'processing' && s.status !== 'pending') out.push({ where, problem: `phase ${s.phase} with status ${s.status} (only pending or processing)` })
+  if (s.phase && s.phase !== 'auth' && s.phase !== 'kyc') out.push({ where, problem: `unknown phase ${String(s.phase)}` })
+  if (s.detail && !isStepDetailCode(s.detail.code)) out.push({ where, problem: `detail code ${String(s.detail.code)} is not in STEP_DETAIL_CODES` })
+  for (const t of s.transactions ?? []) {
+    if (!TX_ROLES.includes(t.role)) out.push({ where, problem: `transaction role ${String(t.role)} (hop is set by the server)` })
+    if (typeof t.hash !== 'string' || !t.hash) out.push({ where, problem: 'transaction without a hash' })
+  }
+  out.push(...validateStep({ state: stateFor(s), transitions: s.action?.transitions ?? [] }).map((problem) => ({ where, problem })))
   return out
 }

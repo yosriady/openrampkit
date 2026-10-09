@@ -91,10 +91,11 @@ export function sessionView(s: PublicSession) {
           paid: amountText(r.input),
           received: amountText(r.output),
           received_confirmed: r.outputConfirmed,
-          ...(r.txHashes.length ? { tx_hashes: r.txHashes } : {}),
-          ...(r.sourceTxHashes?.length ? { source_tx_hashes: r.sourceTxHashes } : {}),
+          ...(r.transactions.length ? { transactions: r.transactions.map((t) => ({ role: t.role, chain: t.chain, hash: t.hash, leg: t.legIndex })) } : {}),
         }
       : {}),
+    // The provider's own order ids, for provider support
+    ...(s.payment?.legs.some((l) => l.providerRef) ? { provider_refs: s.payment.legs.filter((l) => l.providerRef).map((l) => ({ provider: l.provider, ref: l.providerRef! })) } : {}),
     ...(s.destination?.type === 'fiat' ? { payout_currency: s.destination.currency } : {}),
     ...(s.amountBounds ? { bounds: boundsText(s.amountBounds) } : {}),
     ...(s.step.error ? { error: errorView(s.step.error) } : {}),

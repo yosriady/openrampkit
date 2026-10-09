@@ -1,10 +1,10 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { POLL as POLLS, awaitPoll, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, quoteExpiresAt, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, awaitingPayment, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, quoteExpiresAt, settlementCallsFrom, solanaPaidTo, statusMap, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
 import { CHAINS, OpenRampException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, sameToken, minorUnits, mulRatio, nativeDecimals, normalizeToken, openRampError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
-import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
+import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStatus, LegStep, LegTransaction, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
   /** How long a mock payment or bridge takes to settle (ms). Default 3000. */
@@ -136,6 +136,13 @@ function fakeAddressFor(chain: string, seed: string): string {
 }
 
 const POLL: PollSpec = POLLS.dev
+/** The mock is its own provider: its order id is our ref, so a step of a mock provider order carries both. */
+const ids = (ref: string) => ({ ref, providerRef: ref })
+/** The outcomes of the hosted checkout page. Another value is refused: it never counts as paid. */
+const CHECKOUT_OUTCOME = statusMap<{ order: 'paid' | 'failed'; status: LegStatus }>('Mock checkout', {
+  success: { order: 'paid', status: 'processing' },
+  fail: { order: 'failed', status: 'failed' },
+})
 const ORDER_TTL_SEC = 24 * 60 * 60
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 }
 const usdcChains = Object.fromEntries(Object.entries(USDC).map(([c, t]) => [c, [t]]))
@@ -366,11 +373,15 @@ export function mockAdapter(opts: MockOptions = {}) {
   async function settled(ref: string, ctx: Pick<AdapterContext, 'shared'>): Promise<LegStep | undefined> {
     const o = await ctx.shared.get<MockOrder>(orderKey(ref))
     if (!o) return undefined
-    if (o.status === 'failed') return { state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED'), ref }
+    if (o.status === 'failed') return { status: 'failed', error: openRampError('PAYMENT_FAILED'), ...ids(ref) }
     if (o.status === 'paid' && o.paidAt && Date.now() - o.paidAt >= settleMs) {
-      return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: `0x${ref.replace(/[^0-9a-f]/g, '').padEnd(64, '0').slice(0, 64)}` }
+      // A fake delivery hash, for a crypto output only: a fiat payout has no onchain delivery.
+      const transactions: LegTransaction[] = o.output.asset.kind === 'crypto'
+        ? [{ role: 'destination', chain: o.output.asset.chain, hash: `0x${ref.replace(/[^0-9a-f]/g, '').padEnd(64, '0').slice(0, 64)}` }]
+        : []
+      return { status: 'succeeded', output: o.output, ...ids(ref), ...(transactions.length ? { transactions } : {}) }
     }
-    if (o.status === 'paid') return { state: 'PROCESSING', sub: 'settling', status: 'processing', transitions: [awaitPoll(POLL)], ref }
+    if (o.status === 'paid') return { status: 'processing', detail: { code: 'settling' }, poll: POLL, ...ids(ref) }
     return undefined
   }
 
@@ -378,27 +389,24 @@ export function mockAdapter(opts: MockOptions = {}) {
   function offrampStep(ref: string, o: MockOrder): LegStep {
     if (!o.account) {
       return {
-        state: 'PAYMENT', sub: 'payout_account', status: 'requires_action', ref,
-        surface: { kind: 'FORM', fields: payoutFields(o.method) },
-        transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }],
+        status: 'requires_action', detail: { code: 'payout_account' }, ...ids(ref),
+        action: { kind: 'payment', surface: { kind: 'FORM', fields: payoutFields(o.method) }, transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }] },
       }
     }
     const input = o.input ?? { value: '0', asset: BASE_USDC }
     const asset = input.asset.kind === 'crypto' ? input.asset : BASE_USDC
     const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo ?? fakeAddress(ref), toBaseUnits(input.value, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
     return {
-      state: 'PAYMENT', sub: 'send_crypto', status: 'requires_action', ref,
-      surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
-      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+      status: 'requires_action', detail: { code: 'send_crypto' }, ...ids(ref),
+      action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] },
     }
   }
 
   /** The card leg's user step with `cardCheckout: 'form'`: test card fields in the widget. */
   function cardFormStep(ref: string): LegStep {
     return {
-      state: 'PAYMENT', sub: 'card_details', status: 'requires_action', ref,
-      surface: { kind: 'FORM', fields: CARD_FIELDS },
-      transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }],
+      status: 'requires_action', detail: { code: 'card_details' }, ...ids(ref),
+      action: { kind: 'payment', surface: { kind: 'FORM', fields: CARD_FIELDS }, transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }] },
     }
   }
 
@@ -415,10 +423,13 @@ export function mockAdapter(opts: MockOptions = {}) {
       ? buildSettlementTxs({ chainId, contract: o.settlement.contract, sessionId: ctx.session.id, token: asset.token, amount, recipient: o.payTo!, calls })
       : [{ to: asset.token, data: erc20TransferData(o.payTo!, amount.toString()), value: '0', chainId }]
     return {
-      state: 'PAYMENT', sub: 'send_crypto', status: 'requires_action', ref,
-      surface: { kind: 'WALLET_TX', chain: asset.chain, txs },
-      // With a settlement, a poll also finds a session that the contract already settled.
-      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }, ...(o.settlement ? [awaitPoll(POLL)] : [])],
+      status: 'requires_action', detail: { code: 'send_crypto' }, ref,
+      action: {
+        kind: 'payment',
+        surface: { kind: 'WALLET_TX', chain: asset.chain, txs },
+        // With a settlement, a poll also finds a session that the contract already settled.
+        transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }, ...(o.settlement ? [awaitPoll(POLL)] : [])],
+      },
     }
   }
 
@@ -429,8 +440,9 @@ export function mockAdapter(opts: MockOptions = {}) {
   async function verifyLocalSettlement(ref: string, o: MockOrder, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'session' | 'destination'>): Promise<LegStep> {
     const asset = localAsset!
     const s = o.settlement!
+    const sent = (hash: string): LegTransaction => ({ role: 'source', chain: asset.chain, hash })
     const fail = (message: string, txHash?: string): LegStep => ({
-      state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message }), ref, ...(txHash ? { txHash } : {}),
+      status: 'failed', error: openRampError('PAYMENT_FAILED', { message }), ref, ...(txHash ? { transactions: [sent(txHash)] } : {}),
     })
     const r = await verifySettlement({
       rpcUrl: local!.rpcUrl,
@@ -443,11 +455,13 @@ export function mockAdapter(opts: MockOptions = {}) {
     })
     if (r.settled) {
       if (!r.ok) return fail(r.problem!, r.record.txHash)
-      return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: r.record.txHash }
+      // The settle transaction pays from the wallet into the contract and delivers through it.
+      const hash = r.record.txHash
+      return { status: 'succeeded', output: o.output, ref, transactions: [sent(hash), { role: 'settlement', chain: asset.chain, hash }] }
     }
     if (!o.txHash) return localStep(ref, o, ctx)
     const receipt = await evmRpc<EvmReceipt | null>(ctx.fetch, local!.rpcUrl, 'eth_getTransactionReceipt', [o.txHash], { log: ctx.log })
-    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, txHash: o.txHash, transitions: [awaitPoll(POLL)] }
+    if (!receipt) return { status: 'processing', detail: { code: 'confirming' }, poll: POLL, ref, transactions: [sent(o.txHash)] }
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.', o.txHash)
     return fail('The transaction did not settle this session.', o.txHash)
   }
@@ -457,8 +471,9 @@ export function mockAdapter(opts: MockOptions = {}) {
     const asset = localAsset!
     const txHash = o.txHash!
     const receipt = await evmRpc<EvmReceipt | null>(ctx.fetch, local!.rpcUrl, 'eth_getTransactionReceipt', [txHash], { log: ctx.log })
-    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, txHash, transitions: [awaitPoll(POLL)] }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message }), ref, txHash })
+    const sent: LegTransaction = { role: 'source', chain: asset.chain, hash: txHash }
+    if (!receipt) return { status: 'processing', detail: { code: 'confirming' }, poll: POLL, ref, transactions: [sent] }
+    const fail = (message: string): LegStep => ({ status: 'failed', error: openRampError('PAYMENT_FAILED', { message }), ref, transactions: [sent] })
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
     if (erc20PaidTo(receipt, asset.token, o.payTo!) < BigInt(toBaseUnits(o.input!.value, asset.decimals ?? 6))) {
       return fail('The transaction does not pay the destination the quoted amount.')
@@ -466,7 +481,8 @@ export function mockAdapter(opts: MockOptions = {}) {
     // One transaction completes one payment only.
     const usedKey = `txused:${asset.chain}:${txHash.toLowerCase()}`
     if (!(await claimOnce(ctx.shared, usedKey, ref, ORDER_TTL_SEC))) return fail('This transaction was already used for another payment.')
-    return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash }
+    // One transfer on one chain: it pays into the leg and delivers it.
+    return { status: 'succeeded', output: o.output, ref, transactions: [sent, { role: 'destination', chain: asset.chain, hash: txHash }] }
   }
 
   /** The Solana leg's user step: one transfer of the mint to the destination owner address. */
@@ -475,9 +491,8 @@ export function mockAdapter(opts: MockOptions = {}) {
     const decimals = asset.decimals ?? 6
     const tx: TxRequest = { kind: 'solana', type: 'transfer', to: o.payTo!, mint: asset.token, amount: toBaseUnits(o.input!.value, decimals), decimals }
     return {
-      state: 'PAYMENT', sub: 'send_crypto', status: 'requires_action', ref,
-      surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
-      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+      status: 'requires_action', detail: { code: 'send_crypto' }, ref,
+      action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] },
     }
   }
 
@@ -489,8 +504,9 @@ export function mockAdapter(opts: MockOptions = {}) {
     const asset = solAsset!
     const sig = o.txHash!
     const rpc = <T>(method: string, params: unknown[]) => evmRpc<T>(ctx.fetch, sol!.rpcUrl, method, params, { log: ctx.log })
-    const waiting: LegStep = { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, txHash: sig, transitions: [awaitPoll(POLL)] }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message }), ref, txHash: sig })
+    const sent: LegTransaction = { role: 'source', chain: asset.chain, hash: sig }
+    const waiting: LegStep = { status: 'processing', detail: { code: 'confirming' }, poll: POLL, ref, transactions: [sent] }
+    const fail = (message: string): LegStep => ({ status: 'failed', error: openRampError('PAYMENT_FAILED', { message }), ref, transactions: [sent] })
     // One signature completes one payment only. Solana signatures are case-sensitive.
     const usedKey = `txused:${asset.chain}:${sig}`
     // Fail early (before the RPC calls) when another payment has it. The claim at the end is the real check.
@@ -510,7 +526,8 @@ export function mockAdapter(opts: MockOptions = {}) {
       return fail('The transaction does not pay the destination the quoted amount.')
     }
     if (!(await claimOnce(ctx.shared, usedKey, ref, ORDER_TTL_SEC))) return fail('This transaction was already used for another payment.')
-    return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: sig }
+    // One transfer on one cluster: it pays into the leg and delivers it.
+    return { status: 'succeeded', output: o.output, ref, transactions: [sent, { role: 'destination', chain: asset.chain, hash: sig }] }
   }
 
   return createAdapter({
@@ -630,20 +647,26 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'card':
           if (cardForm) return cardFormStep(ref)
           return {
-            state: 'PAYMENT', status: 'requires_action', ref,
-            surface: { kind: 'REDIRECT', url: `${base}/adapters/${id}/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.value}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
-            transitions: [awaitPoll(POLL)],
+            status: 'requires_action', ...ids(ref),
+            action: {
+              kind: 'payment',
+              surface: { kind: 'REDIRECT', url: `${base}/adapters/${id}/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.value}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
+              transitions: [awaitPoll(POLL)],
+            },
           }
         case 'local':
         case 'payin': {
           const cur = quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : 'USD'
           return {
-            state: 'PAYMENT', status: 'requires_action', ref,
-            surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.value}|${cur}`, amount: quote.input.value, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
-            transitions: [
-              { name: 'simulate_payment', kind: 'SUBMIT', label: 'Simulate payment (test mode)' },
-              awaitPoll(POLL),
-            ],
+            status: 'requires_action', ...ids(ref),
+            action: {
+              kind: 'payment',
+              surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.value}|${cur}`, amount: quote.input.value, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
+              transitions: [
+                { name: 'simulate_payment', kind: 'SUBMIT', label: 'Simulate payment (test mode)' },
+                awaitPoll(POLL),
+              ],
+            },
           }
         }
         case 'wallet': {
@@ -660,9 +683,8 @@ export function mockAdapter(opts: MockOptions = {}) {
               }
             : { to: deliverTo?.address ?? fakeAddress(ref), data: '0x', value: '0', chainId: evmChainId(src.chain) ?? 8453 }
           return {
-            state: 'PAYMENT', status: 'requires_action', ref,
-            surface: { kind: 'WALLET_TX', chain: src.chain, txs: [tx] },
-            transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+            status: 'requires_action', ...ids(ref),
+            action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: src.chain, txs: [tx] }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] },
           }
         }
         case 'transfer': {
@@ -672,12 +694,15 @@ export function mockAdapter(opts: MockOptions = {}) {
             ? `In your exchange, withdraw ${symbolOf(src)} and choose the ${chainName(src.chain)} network. This is a test address.`
             : `Send only ${symbolOf(src)} on ${chainName(src.chain)}. This is a test address.`
           return {
-            state: 'PAYMENT', status: 'requires_action', ref,
-            surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning },
-            transitions: [
-              { name: 'simulate_deposit', kind: 'SUBMIT', label: 'Simulate deposit (test mode)' },
-              awaitPoll(POLL),
-            ],
+            status: 'requires_action', ...ids(ref),
+            action: {
+              kind: 'payment',
+              surface: { kind: 'DEPOSIT_ADDRESS', chain: src.chain, chainName: chainName(src.chain), token: src.token, symbol: symbolOf(src), address, min: '1', warning },
+              transitions: [
+                { name: 'simulate_deposit', kind: 'SUBMIT', label: 'Simulate deposit (test mode)' },
+                awaitPoll(POLL),
+              ],
+            },
           }
         }
         case 'onchain': {
@@ -711,7 +736,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'bridge': {
           // The previous leg delivers into the deposit address; treat it as paid now.
           await ctx.shared.put(orderKey(ref), { ...order, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
-          return { state: 'PROCESSING', sub: 'bridging', status: 'processing', ref, transitions: [awaitPoll(POLL)] }
+          return { status: 'processing', detail: { code: 'bridging' }, poll: POLL, ...ids(ref) }
         }
       }
       throw unknownLeg(leg.legId)
@@ -758,10 +783,10 @@ export function mockAdapter(opts: MockOptions = {}) {
         if (!/^[0-9]{3,4}$/.test(v('cvc'))) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter a valid CVC.' }), 400)
         if (v('card_number') === MOCK_DECLINED_CARD) {
           await ctx.shared.put(orderKey(ref), { ...o, status: 'failed' }, ORDER_TTL_SEC)
-          return { state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message: 'The test card was declined.' }), ref }
+          return { status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The test card was declined.' }), ...ids(ref) }
         }
         await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
-        return { state: 'PROCESSING', sub: 'settling', status: 'processing', ref, transitions: [awaitPoll(POLL)] }
+        return { status: 'processing', detail: { code: 'settling' }, poll: POLL, ...ids(ref) }
       }
       if (o.kind === 'offramp' && t === 'submit_tx' && !o.account) {
         throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
@@ -773,10 +798,10 @@ export function mockAdapter(opts: MockOptions = {}) {
           ? { ...o.output, value: typeof inputs?.amount === 'string' && /[1-9]/.test(inputs.amount) ? inputs.amount : SIMULATED_DEPOSIT }
           : o.output
         await ctx.shared.put(orderKey(ref), { ...o, output, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
+        // The hash of the wallet transaction that the user sent (wallet and offramp legs): the source.
         return {
-          state: 'PROCESSING', sub: 'settling', status: 'processing', ref,
-          transitions: [awaitPoll(POLL)],
-          ...(typeof inputs?.txHash === 'string' ? { txHash: inputs.txHash } : {}),
+          status: 'processing', detail: { code: 'settling' }, poll: POLL, ...ids(ref),
+          ...(typeof inputs?.txHash === 'string' && inputs.txHash ? { transactions: [{ role: 'source' as const, hash: inputs.txHash }] } : {}),
         }
       }
       throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
@@ -794,7 +819,8 @@ export function mockAdapter(opts: MockOptions = {}) {
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))
       if (o?.kind === 'offramp') return offrampStep(ref, o)
       if (o?.kind === 'card' && cardForm && o.status === 'awaiting') return cardFormStep(ref)
-      return { state: 'PAYMENT', status: 'requires_action', ref, transitions: [awaitPoll(POLL)] }
+      // Not paid yet (or an unknown order): keep the current surface and poll.
+      return o ? { ...awaitingPayment(ref, POLL), providerRef: ref } : awaitingPayment(ref, POLL)
     },
 
     async routes(req, subpath, ctx) {
@@ -808,17 +834,18 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (subpath === 'pay' && req.method === 'POST') {
         const form = await req.formData()
         const r = String(form.get('ref') ?? '')
-        const outcome = String(form.get('outcome') ?? 'success')
+        const outcome = CHECKOUT_OUTCOME(String(form.get('outcome') ?? 'success'), ctx.log)
+        if (!outcome) return new Response('Unknown outcome', { status: 400 })
         const o = await ctx.shared.get<MockOrder>(orderKey(r))
         if (!o) return new Response('Unknown order', { status: 404 })
-        if (outcome === 'fail') {
+        if (outcome.order === 'failed') {
           await ctx.shared.put(orderKey(r), { ...o, status: 'failed' }, ORDER_TTL_SEC)
-          await ctx.applyEvent({ ref: r, status: 'failed', error: openRampError('PAYMENT_FAILED') } satisfies LegEvent)
+          await ctx.applyEvent({ ...ids(r), status: outcome.status, error: openRampError('PAYMENT_FAILED') } satisfies LegEvent)
         } else {
           await ctx.shared.put(orderKey(r), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
-          await ctx.applyEvent({ ref: r, status: 'processing' })
+          await ctx.applyEvent({ ...ids(r), status: outcome.status, detail: { code: 'settling' } } satisfies LegEvent)
         }
-        return new Response(donePage(outcome !== 'fail'), { headers: { 'content-type': 'text/html; charset=utf-8' } })
+        return new Response(donePage(outcome.order === 'paid'), { headers: { 'content-type': 'text/html; charset=utf-8' } })
       }
       return undefined
     },

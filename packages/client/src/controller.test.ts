@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { USDC, combineWallets, openRampError } from '@openrampkit/core'
-import type { ClientEvent, PublicSession, StepSub, WalletAdapter } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, StepDetailCode, WalletAdapter } from '@openrampkit/core'
 import { DepositController, OpenRampClientError, createMockWallet } from './index.js'
 import type { ControllerOptions } from './index.js'
-import { BEEF, POLL, fakeClient, method, plan, quote, session, step } from './testctx.js'
+import { BEEF, POLL, fakeClient, method, payment as paymentOf, plan, quote, session, step } from './testctx.js'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -668,7 +668,7 @@ describe('back and restart', () => {
 })
 
 describe('polling', () => {
-  const awaiting = (sub?: StepSub) => session(step({ state: 'PROCESSING', ...(sub ? { sub } : {}), transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }))
+  const awaiting = (code?: StepDetailCode) => session(step({ state: 'PROCESSING', ...(code ? { detail: { code } } : {}), transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }))
 
   it('polls with backoff up to the max interval, then gives up', async () => {
     vi.useFakeTimers()
@@ -700,17 +700,17 @@ describe('polling', () => {
     c.destroy()
   })
 
-  it('applies a changed step (sub or progress) and restarts the backoff', async () => {
+  it('applies a changed step (detail or payment) and restarts the backoff', async () => {
     vi.useFakeTimers()
-    const progressed = session(step({ state: 'PROCESSING', transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], progress: { legs: [{ adapterId: 'mock', legId: 'a', status: 'succeeded' }] } }))
+    const progressed = session(step({ state: 'PROCESSING', detail: { code: 'bridging' }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }), { payment: paymentOf([{ adapterId: 'mock', legId: 'a', status: 'succeeded' }]) })
     const client = fakeClient({ select: vi.fn(async () => awaiting()), step: vi.fn().mockResolvedValueOnce(awaiting('bridging')).mockResolvedValueOnce(progressed).mockResolvedValue(progressed) })
     const { c, types } = await atQuotes({}, client)
     await c.confirm()
     await vi.advanceTimersByTimeAsync(1000)
-    expect(c.getSnapshot().session?.step.sub).toBe('bridging')
+    expect(c.getSnapshot().session?.step.detail?.code).toBe('bridging')
     expect(types().filter((t) => t === 'step.changed')).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1000) // backoff restarted at 1000
-    expect(c.getSnapshot().session?.step.progress?.legs[0]!.status).toBe('succeeded')
+    expect(c.getSnapshot().session?.payment?.legs[0]!.status).toBe('succeeded')
     c.destroy()
   })
 
@@ -853,8 +853,8 @@ describe('terminal states and done', () => {
 
 describe('notifySurface (provider iframe messages)', () => {
   const iframe = { kind: 'IFRAME' as const, url: 'https://p.example/w', origin: 'https://p.example' }
-  const payment = (sub?: StepSub) =>
-    session(step({ state: 'PAYMENT', surface: iframe, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ...(sub ? { sub } : {}) }))
+  const payment = (code?: StepDetailCode) =>
+    session(step({ state: 'PAYMENT', surface: iframe, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ...(code ? { detail: { code } } : {}) }))
 
   async function atIframe(stepFn = vi.fn(async () => payment())) {
     const client = fakeClient({ select: vi.fn(async () => payment()), step: stepFn })
@@ -927,7 +927,7 @@ describe('notifySurface (provider iframe messages)', () => {
     await vi.advanceTimersByTimeAsync(0)
     stepFn.mockResolvedValue(payment('card_details'))
     await vi.advanceTimersByTimeAsync(1000)
-    expect(c.getSnapshot().session?.step.sub).toBe('card_details')
+    expect(c.getSnapshot().session?.step.detail?.code).toBe('card_details')
     expect(c.getSnapshot().surfaceClosed).toBe(false)
     c.destroy()
   })

@@ -1,12 +1,15 @@
 // One deposit completes one session: Transfer logs to a shared destination (P0-3) and Relay
 // deposit-address requests (P0-4).
 import { describe, expect, it } from 'vitest'
-import { USDC } from '@openrampkit/core'
+import { USDC, stateFor } from '@openrampkit/core'
 import type { CryptoAsset, LegStep, PathwayLeg } from '@openrampkit/core'
 import type { AdapterContext } from '@openrampkit/adapter'
 import { erc20TransferData, relay } from './index.js'
 import { fakeFetch, makeCtx, memoryKV, recordingLog } from '@openrampkit/adapter/testing'
 import type { FakeCall, MemoryKV } from '@openrampkit/adapter/testing'
+
+/** A leg step with its UI state (`stateFor`) and its transaction hashes by role, for assertions */
+const v = (s: LegStep) => ({ ...s, state: stateFor(s), tx: Object.fromEntries((s.transactions ?? []).map((t) => [t.role, t.hash])) })
 
 const DEST = '0x000000000000000000000000000000000000beef'
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']! }
@@ -73,11 +76,11 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     expect(s1.ref).not.toBe(s2.ref)
     const log = chain.send(units(10))
     // the 25 USDC session polls first: 10 USDC is not enough for it
-    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
-    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash, output: { value: '10' } })
-    expect(await s2.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(v(await s1.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: log.transactionHash }, output: { value: '10' } })
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT' })
     // the completed session checks again: same answer (its own claim)
-    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash })
+    expect(v(await s1.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: log.transactionHash } })
   })
 
   it('a larger open session does not take the exact payment of another session', async () => {
@@ -89,12 +92,12 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     const s10 = await directSession(a, fetch, shared, 'sess_10', '10')
     const log = chain.send(units(10))
     // 10 USDC is at least 5, but it is the exact amount of the other session: contested for sess_5
-    expect(await s5.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
-    expect(await s10.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash })
+    expect(v(await s5.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(v(await s10.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: log.transactionHash } })
     // after sess_10 took it, sess_5 sees a used log and keeps waiting
     const after = await s5.status()
-    expect(after).toMatchObject({ state: 'PAYMENT' })
-    expect(after.sub).toBeUndefined()
+    expect(v(after)).toMatchObject({ state: 'PAYMENT' })
+    expect(after.detail).toBeUndefined()
   })
 
   it('a transfer that two open sessions could claim is ambiguous: neither session completes', async () => {
@@ -105,8 +108,8 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     const s1 = await directSession(a, fetch, shared, 'sess_a', '10')
     const s2 = await directSession(a, fetch, shared, 'sess_b', '10')
     chain.send(units(10))
-    expect(await s1.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
-    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(v(await s1.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
     expect(s1.log.warnings.some((w) => w.includes('matches more than one open session'))).toBe(true)
     // nothing was recorded as used
     expect([...shared.data.keys()].some((k) => k.startsWith('txused:'))).toBe(false)
@@ -120,9 +123,9 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     const s = await directSession(a, fetch, shared, 'sess_a', '10')
     chain.send(1n) // 0.000001 USDC
     chain.send(units(9.9)) // 1% short
-    expect(await s.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(v(await s.status())).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     const ok = chain.send(units(9.96)) // 0.4% short: inside the tolerance
-    expect(await s.status()).toMatchObject({ state: 'COMPLETED', txHash: ok.transactionHash, output: { value: '9.96' } })
+    expect(v(await s.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: ok.transactionHash }, output: { value: '9.96' } })
   })
 
   it('a log used by one session is refused for a replay: by another session, and by a same-chain wallet payment', async () => {
@@ -132,19 +135,19 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     const a = relay()
     const s1 = await directSession(a, fetch, shared, 'sess_a', '10')
     const log = chain.send(units(10))
-    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash })
+    expect(v(await s1.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: log.transactionHash } })
     expect(shared.data.get(`txused:eip155:8453:${log.transactionHash}:0`)).toBe(`sess_a:${s1.ref}`)
     // a later session that started before the log (same start block) and expects the same amount
     chain.state.head = 100n
     const s2 = await directSession(a, fetch, shared, 'sess_b', '10')
-    expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     // the same tx hash, submitted to a same-chain wallet leg
     const walletLeg: PathwayLeg = { ...transferLeg, legId: 'wallet' }
     const wctx = makeCtx({ fetch: fakeFetch([wrpc(log)]).fetch, shared, session: { id: 'sess_w' } })
     const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, wctx)
     const ws = await a.start({ leg: walletLeg, quote: q }, wctx)
     await a.transition!({ leg: walletLeg, ref: ws.ref!, name: 'submit_tx', inputs: { txHash: log.transactionHash } }, wctx)
-    expect(await a.status!({ leg: walletLeg, ref: ws.ref! }, wctx)).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+    expect(v(await a.status!({ leg: walletLeg, ref: ws.ref! }, wctx))).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
   })
 
   it('reads logs in pages of `logBlockRange` blocks, a few pages per check, and goes on from there', async () => {
@@ -156,13 +159,13 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     chain.state.head = 100n
     const log = chain.send(units(10), 90n)
     chain.state.head = 100n
-    expect(await s.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await s.status())).toMatchObject({ state: 'PAYMENT' })
     expect(chain.getLogs).toHaveLength(5)
     expect(chain.getLogs.every((r) => r.to - r.from + 1n <= 10n)).toBe(true)
     expect(chain.getLogs[0]).toEqual({ from: 0n, to: 9n })
     expect(chain.getLogs[4]).toEqual({ from: 40n, to: 49n })
     expect(await s.ctx.store.get(`d:${s.ref}`)).toMatchObject({ scanFrom: '0x32' })
-    expect(await s.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash })
+    expect(v(await s.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: log.transactionHash } })
     expect(chain.getLogs[5]).toEqual({ from: 50n, to: 59n })
     expect(chain.getLogs.every((r) => r.to - r.from + 1n <= 10n)).toBe(true)
   })
@@ -236,8 +239,8 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     const a = relay({ apiKey: 'k', slippageBps: 150 })
     const s1 = await session(a, fetch, shared, 'sess_a', '10')
     const s2 = await session(a, fetch, shared, 'sess_b', '10')
-    expect(s1.step.surface).toMatchObject({ address: addrs[0] })
-    expect(s2.step.surface).toMatchObject({ address: addrs[1] })
+    expect(s1.step.action?.surface).toMatchObject({ address: addrs[0] })
+    expect(s2.step.action?.surface).toMatchObject({ address: addrs[1] })
     expect(s1.step.ref).not.toBe(s2.step.ref)
     // slippage goes to Relay. Relay prices an open deposit address when the deposit arrives, so the
     // quote's minimumAmount does not bind it: the quote is an estimate, with no minOutput.
@@ -246,8 +249,8 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     expect(s1.q.minOutput).toBeUndefined()
     expect(s1.q.slippageBps).toBeUndefined()
     byAddress[addrs[1]!] = [request('2', units(10))]
-    expect(await s1.status()).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
-    expect(await s2.status()).toMatchObject({ state: 'COMPLETED', txHash: '0xout2' })
+    expect(v(await s1.status())).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(v(await s2.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: '0xout2' } })
   })
 
   it('when Relay gives both sessions the same address: a request completes one session only, matched by amount; equal amounts are ambiguous', async () => {
@@ -261,25 +264,25 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     const a = relay({ apiKey: 'k' })
     const s10 = await session(a, fetch, shared, 'sess_10', '10')
     const s25 = await session(a, fetch, shared, 'sess_25', '25')
-    expect(s10.step.surface).toMatchObject({ address: SAME })
-    expect(s25.step.surface).toMatchObject({ address: SAME })
+    expect(s10.step.action?.surface).toMatchObject({ address: SAME })
+    expect(s25.step.action?.surface).toMatchObject({ address: SAME })
     expect(s10.step.ref).not.toBe(s25.step.ref)
     requests = [request('a', units(25))]
-    expect(await s10.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' }) // 25 is at least 10, but it is the exact amount of sess_25
-    expect(await s25.status()).toMatchObject({ state: 'COMPLETED', txHash: '0xouta' })
-    expect(await s10.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await s10.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } }) // 25 is at least 10, but it is the exact amount of sess_25
+    expect(v(await s25.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: '0xouta' } })
+    expect(v(await s10.status())).toMatchObject({ state: 'PAYMENT' })
     expect(shared.data.get(`relayreq:tx:0x${'a'.padStart(64, '0')}`)).toBe(`sess_25:${s25.step.ref}`)
     requests = [request('b', 1n), ...requests] // dust
-    expect(await s10.status()).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await s10.status())).toMatchObject({ state: 'PAYMENT' })
     requests = [request('c', units(10)), ...requests]
-    expect(await s10.status()).toMatchObject({ state: 'COMPLETED', txHash: '0xoutc' })
+    expect(v(await s10.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: '0xoutc' } })
 
     // two more sessions with the same amount on the same address: neither takes the request
     const t1 = await session(a, fetch, shared, 'sess_t1', '7')
     const t2 = await session(a, fetch, shared, 'sess_t2', '7')
     requests = [request('d', units(7))]
-    expect(await t1.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
-    expect(await t2.status()).toMatchObject({ state: 'PAYMENT', sub: 'ambiguous_deposit' })
+    expect(v(await t1.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(v(await t2.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
   })
 
   it('a bound request is followed by its key, also when Relay re-quotes it under a new id', async () => {
@@ -296,9 +299,9 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     expect(log.warnings.filter((w) => w.includes('2026-11-24'))).toHaveLength(1) // first call warns without a key
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     requests = [request('1', units(10), { status: 'pending' })]
-    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING' })
+    expect(v(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'PROCESSING' })
     requests = [request('1', units(10), { id: 'regenerated', status: 'success' })]
-    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: '0xout1' })
+    expect(v(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'COMPLETED', tx: { destination: '0xout1' } })
     expect(log.warnings.filter((w) => w.includes('2026-11-24'))).toHaveLength(1)
   })
 })

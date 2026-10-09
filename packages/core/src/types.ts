@@ -438,11 +438,11 @@ export type LegStatus =
   | 'reversed'
 
 /**
- * The closed list of sub-states that `Step.sub` can have: a finer label inside `Step.state` for the UI.
- * The values are i18n keys in `@openrampkit/web` (`messages.stepSub`). Adapters map provider statuses to
- * these values and put the raw provider status in `LegStep.providerStatus` (timeline and logs only).
+ * The closed list of `Step.detail.code` values: a finer label inside `Step.state` for the UI. The values
+ * are i18n keys in `@openrampkit/web` (`messages.stepDetail`). Adapters map provider statuses to these
+ * codes, and keep the raw provider status in `detail.providerStatus`.
  */
-export const STEP_SUBS = [
+export const STEP_DETAIL_CODES = [
   // KYC
   'kyc_details',
   'kyc_terms',
@@ -464,68 +464,191 @@ export const STEP_SUBS = [
   'processing',
 ] as const
 
-/** A value of `Step.sub` (see `STEP_SUBS`) */
-export type StepSub = (typeof STEP_SUBS)[number]
+/** A value of `StepDetail.code` (see `STEP_DETAIL_CODES`) */
+export type StepDetailCode = (typeof STEP_DETAIL_CODES)[number]
 
-const STEP_SUB_SET: ReadonlySet<string> = new Set(STEP_SUBS)
+const STEP_DETAIL_SET: ReadonlySet<string> = new Set(STEP_DETAIL_CODES)
 
-/** True when `v` is one of `STEP_SUBS` */
-export function isStepSub(v: unknown): v is StepSub {
-  return typeof v === 'string' && STEP_SUB_SET.has(v)
+/** True when `v` is one of `STEP_DETAIL_CODES` */
+export function isStepDetailCode(v: unknown): v is StepDetailCode {
+  return typeof v === 'string' && STEP_DETAIL_SET.has(v)
+}
+
+/** A finer label inside `Step.state` */
+export type StepDetail = {
+  /** From the closed list `STEP_DETAIL_CODES`. The server drops a step detail with another code. */
+  code: StepDetailCode
+  /**
+   * The provider's own status (for example Relay `pending`), for display and support. Free text: at
+   * most 64 characters of letters, digits, spaces and `_ - . :` (the server drops other values).
+   */
+  providerStatus?: string
+}
+
+/** What a transaction did for a leg */
+export type TransactionRole =
+  /** A token approval before the payment. It moves no funds. */
+  | 'approval'
+  /** The transaction that paid into the leg: the user's wallet transaction, a deposit, or a treasury send */
+  | 'source'
+  /** The delivery of a leg that is not the last one, to the next leg (the server sets it from `destination`) */
+  | 'hop'
+  /** The delivery of the last leg to the destination */
+  | 'destination'
+  /** The delivery through an OpenRampSettlement contract */
+  | 'settlement'
+  /** A refund to the user */
+  | 'refund'
+
+/** An onchain transaction of a payment */
+export type Transaction = {
+  role: TransactionRole
+  /** CAIP-2 chain id */
+  chain: string
+  hash: string
+  /** Index of the leg in the pathway */
+  legIndex: number
+  /** The amount that the transaction moved, when known */
+  amount?: Amount
+  /** A block explorer link, when the adapter gives one */
+  explorerUrl?: string
+}
+
+/**
+ * A transaction as an adapter reports it. The server adds `legIndex`, takes `chain` from the leg when
+ * the adapter leaves it out (the `to` chain for a delivery, else the `from` chain), and reports a
+ * `destination` of a leg that is not the last one as a `hop`. One transaction can have two roles (for
+ * example a same-chain transfer is both the `source` and the `destination`).
+ */
+export type LegTransaction = {
+  role: Exclude<TransactionRole, 'hop'>
+  chain?: string
+  hash: string
+  amount?: Amount
+  explorerUrl?: string
+}
+
+/** What the user must do in a step: the phase, the UI surface and the moves the UI may make */
+export type LegAction = {
+  /** The phase: `auth` (sign in to the provider), `kyc` (identity checks) or `payment` (pay or send) */
+  kind: 'auth' | 'kyc' | 'payment'
+  /**
+   * What the UI shows. Absent: the UI keeps the surface of the current action (for example a status
+   * poll while the user pays in a provider page).
+   */
+  surface?: Surface
+  transitions: Transition[]
+}
+
+/**
+ * What an adapter returns for one leg (`start()`, `transition()`, `status()`), and what a provider
+ * event carries (`LegEvent` in `@openrampkit/adapter`). The server derives `Step.state` from it with
+ * `stateFor()`. Rules (the conformance kit checks them):
+ * - `status: 'requires_action'` has an `action`. Other statuses have none.
+ * - `phase` is only for `pending` and `processing`.
+ */
+export type LegStep = {
+  status: LegStatus
+  /** Set when, and only when, `status` is `requires_action` */
+  action?: LegAction
+  /**
+   * For `pending` and `processing` only: the leg waits in a phase before the payment, for example a
+   * KYC review (`kyc`). The UI then shows that phase (`Step.state` KYC). Absent: the payment is in progress.
+   */
+  phase?: 'auth' | 'kyc'
+  /** For a step that is not final and has no action: how often the UI checks. Default: the server poll. */
+  poll?: PollSpec
+  detail?: StepDetail
+  error?: OpenRampError
+  /** Our reference for the leg, used to route webhooks and status checks. Set it on the first step. */
+  ref?: string
+  /**
+   * The provider's own id for the order (for example a MoonPay transaction id or a Transak order id),
+   * when the provider gives one. Apps show it to the user for provider support. When the provider's
+   * order id is our `ref` (for example a Stripe session id), set both.
+   */
+  providerRef?: string
+  /** The output that the provider or the chain reports */
+  output?: Amount
+  /**
+   * The transactions of the leg that the adapter knows. The server keeps every transaction that a
+   * leg reported, also when a later step leaves it out.
+   */
+  transactions?: LegTransaction[]
+}
+
+const ACTION_STATE: Record<LegAction['kind'], StateName> = { auth: 'AUTH', kyc: 'KYC', payment: 'PAYMENT' }
+
+const STATUS_STATE: Record<LegStatus, StateName> = {
+  pending: 'PROCESSING',
+  requires_action: 'PAYMENT',
+  processing: 'PROCESSING',
+  succeeded: 'COMPLETED',
+  failed: 'FAILED',
+  refunded: 'REFUNDED',
+  expired: 'EXPIRED',
+  reversed: 'REVERSED',
+}
+
+/**
+ * The UI phase (`Step.state`) of a leg step. The one rule for the server, the adapter test kit and
+ * adapters:
+ * - `requires_action`: the action kind (AUTH, KYC or PAYMENT; PAYMENT without an action).
+ * - `pending` and `processing`: the `phase` (AUTH or KYC), else PROCESSING.
+ * - `succeeded`: COMPLETED. `failed`, `refunded`, `expired`, `reversed`: the same name in upper case.
+ */
+export function stateFor(step: Pick<LegStep, 'status' | 'action' | 'phase'>): StateName {
+  if (step.status === 'requires_action') return ACTION_STATE[step.action?.kind ?? 'payment'] ?? 'PAYMENT'
+  if ((step.status === 'processing' || step.status === 'pending') && step.phase) return ACTION_STATE[step.phase] ?? 'PROCESSING'
+  return STATUS_STATE[step.status] ?? 'PROCESSING'
 }
 
 export type Step = {
   sessionId: string
   state: StateName
-  /** A finer label inside `state` (see `STEP_SUBS`). The server drops a value that is not in the list. */
-  sub?: StepSub
+  /** A finer label inside `state` (see `STEP_DETAIL_CODES`) */
+  detail?: StepDetail
   legIndex?: number
   surface?: Surface
   transitions: Transition[]
   error?: OpenRampError
-  progress?: {
-    legs: Array<{
-      adapterId: string
-      legId: string
-      provider?: string
-      status: LegStatus
-      /** The leg's main transaction: the delivery (fill) when the provider reports it, else the one the user sent */
-      txHash?: string
-      /** The transaction that paid into the leg (the user's wallet transaction or deposit), when the adapter knows it */
-      sourceTxHash?: string
-    }>
-  }
   expiresAt?: string
 }
 
-/** What an adapter returns for one leg; the server wraps it into a Step */
-export type LegStep = {
-  state: StateName
-  /** A finer label inside `state`, from the closed list `STEP_SUBS`. Map provider statuses to it. */
-  sub?: StepSub
-  /**
-   * The provider's own status for this step (for example Relay `pending`), for operators. The server
-   * keeps it in the session timeline. It never reaches the browser.
-   */
-  providerStatus?: string
-  surface?: Surface
-  transitions: Transition[]
-  status: LegStatus
-  error?: OpenRampError
-  /** Provider reference, used to route webhooks and status checks */
+/** One leg of a payment, for the app and the user (`PublicSession.payment.legs`) */
+export type PaymentLeg = {
+  /** Index of the leg in the pathway */
+  index: number
+  adapterId: string
+  legId: string
+  /** Display name of the provider */
+  provider: string
+  /** Our reference for the leg (it routes provider webhooks and status checks), once the leg started */
   ref?: string
-  output?: Amount
-  /**
-   * The leg's main transaction. For a bridge or swap it is the delivery (fill) on the destination chain
-   * once the provider reports it; before that, the transaction the user sent.
-   */
-  txHash?: string
-  /**
-   * The transaction that paid into the leg: the one the user's wallet (or the app treasury) sent on the
-   * origin chain, or the transfer into a deposit address. Equal to `txHash` for a same-chain transfer.
-   * The server keeps the last value when a later step leaves it out.
-   */
-  sourceTxHash?: string
+  /** The provider's own order id (see `LegStep.providerRef`). Show it to the user for provider support. */
+  providerRef?: string
+  /** `pending` until the leg starts */
+  status: LegStatus
+  /** The quoted input of the leg */
+  input: Amount
+  /** The reported output, else the quoted output */
+  output: Amount
+  /** True when `output` comes from the provider or the chain */
+  outputConfirmed: boolean
+  transactions: Transaction[]
+}
+
+/** The payment in progress (or the last one), for the app and the user */
+export type Payment = {
+  /** The attempt: 0 for the first payment, then 1, 2 ... after `restart` */
+  attempt: number
+  quoteId: string
+  method: string
+  /** Display name of the first leg's provider */
+  provider: string
+  /** Index of the active leg */
+  activeLeg: number
+  legs: PaymentLeg[]
 }
 
 // ---------- Sessions ----------
@@ -587,6 +710,8 @@ export type PublicSession = {
   locale?: string
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
+  /** The payment in progress, or the last one: its legs, provider references and transactions */
+  payment?: Payment
   /** What was paid and delivered, once a payment started. Final when `status` is `succeeded`. */
   result?: SessionResult
   /**
@@ -610,13 +735,8 @@ export type SessionResult = {
   /** True when `output` comes from the provider or chain, false when it is the quote */
   outputConfirmed: boolean
   fees: Fee[]
-  /** The main transaction of each leg (`LegStep.txHash`): for a bridge or swap, the delivery (fill) on the destination chain */
-  txHashes: string[]
-  /**
-   * The transaction that paid into each leg (`LegStep.sourceTxHash`), when the adapter reports it: for
-   * example the origin chain transaction that the user's wallet sent. Absent when no leg reports one.
-   */
-  sourceTxHashes?: string[]
+  /** Every transaction of the payment, in leg order (see `Transaction.role`) */
+  transactions: Transaction[]
   /**
    * Set when a provider reported less output than the quote, by more than the server's tolerance
    * (`policy.outputToleranceBps`), or an output that is not comparable with the quote (another asset,
@@ -693,7 +813,7 @@ export type WebhookEventFields = {
   'session.refunded': { resolution?: EventResolution }
   /** The provider took back a payment after it succeeded. `attempt` is set for an earlier attempt. */
   'session.reversed': EventLeg & { legStatus: 'refunded' | 'reversed'; previous: StateName }
-  'session.late_payment': EventLeg & { reason: LatePaymentReason; txHash?: string }
+  'session.late_payment': EventLeg & { reason: LatePaymentReason; transactions?: Transaction[] }
   'leg.succeeded': EventLeg
   'leg.failed': EventLeg & { error?: OpenRampError }
 }
@@ -746,7 +866,7 @@ export type ClientEventFields = {
   'method.selected': { method: string }
   'quotes.shown': { method: string; count: number }
   'quote.selected': { quoteId: string }
-  'step.changed': { state: StateName; sub?: StepSub }
+  'step.changed': { state: StateName; detail?: StepDetailCode }
   'surface.opened': { kind: SurfaceKind }
   'surface.message': { kind: 'completed' | 'failed' | 'closed'; detail?: unknown }
   'modal.closed': { screen: string; state?: StateName }

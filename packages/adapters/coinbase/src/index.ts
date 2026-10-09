@@ -18,10 +18,25 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, cachedJson, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, quoteExpiresAt, randomHex, requireDeliverAsset, resolveEnv, verifyTimestampedHmac } from '@openrampkit/adapter'
+import {
+  POLL as POLLS,
+  awaitPoll,
+  cachedJson,
+  createAdapter,
+  deliverableToAsset,
+  fetchJson,
+  httpErrorToOpenRamp,
+  legStepFromEvent,
+  quoteExpiresAt,
+  randomHex,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
+  verifyTimestampedHmac,
+} from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
-import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StepDetailCode } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
 import type { CdpKey } from './jwt.js'
 
@@ -167,6 +182,7 @@ type CbTransaction = {
   partnerUserRef?: string
   failure_reason?: string
   transaction_id?: string
+  transactionId?: string
   eventType?: string
 }
 /** `OnrampOrder` of the v2 order API */
@@ -183,8 +199,35 @@ type CbOrder = {
 }
 type CbOrderResponse = { order?: CbOrder; paymentLink?: { url?: string; paymentLinkType?: string }; userAuthToken?: string }
 
-/** Order statuses where the user still has to act (verify, then pay) */
-const ORDER_WAITING = ['ONRAMP_ORDER_STATUS_PENDING_AUTH', 'ONRAMP_ORDER_STATUS_PENDING_VERIFICATION', 'ONRAMP_ORDER_STATUS_PENDING_PAYMENT']
+type StatusEntry = { status: LegStatus; detail?: StepDetailCode }
+
+/**
+ * Coinbase statuses: the hosted onramp transactions (Transaction Status API,
+ * https://docs.cdp.coinbase.com/onramp/core-features/transaction-status) and the headless orders
+ * (`OnrampOrderStatus`, https://docs.cdp.coinbase.com/api-reference/v2/rest-api/onramp/get-an-onramp-order-by-id).
+ * An unknown status is no event: the leg keeps its current step (it never becomes `processing`).
+ */
+const STATUS = statusMap<StatusEntry>('Coinbase', {
+  ONRAMP_TRANSACTION_STATUS_IN_PROGRESS: { status: 'processing', detail: 'processing' },
+  ONRAMP_TRANSACTION_STATUS_SUCCESS: { status: 'succeeded' },
+  ONRAMP_TRANSACTION_STATUS_FAILED: { status: 'failed' },
+  // A headless order before payment: the user still verifies and pays in the frame
+  ONRAMP_ORDER_STATUS_PENDING_AUTH: { status: 'requires_action' },
+  ONRAMP_ORDER_STATUS_PENDING_VERIFICATION: { status: 'requires_action' },
+  ONRAMP_ORDER_STATUS_PENDING_PAYMENT: { status: 'requires_action' },
+  ONRAMP_ORDER_STATUS_PROCESSING: { status: 'processing', detail: 'processing' },
+  ONRAMP_ORDER_STATUS_COMPLETED: { status: 'succeeded' },
+  ONRAMP_ORDER_STATUS_FAILED: { status: 'failed' },
+})
+
+/**
+ * CDP webhook event types that are final by themselves. `onramp.transaction.created` and
+ * `onramp.transaction.updated` say nothing without a `status`.
+ */
+const FINAL_EVENT: Record<string, StatusEntry> = {
+  'onramp.transaction.success': { status: 'succeeded' },
+  'onramp.transaction.failed': { status: 'failed' },
+}
 
 /**
  * Create Onramp Order `errorType` values that are about the user, not our setup
@@ -390,24 +433,39 @@ export function coinbase(opts: CoinbaseOptions) {
     return a
   }
 
-  function eventFrom(tx: CbTransaction, refOverride?: string): LegEvent | undefined {
+  function eventFrom(tx: CbTransaction, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? tx.partnerUserRef ?? tx.partner_user_ref
     if (!ref) return undefined
-    const status = tx.status ?? ''
+    // A final event type decides by itself. Else the status decides; no status or an unknown one: no event.
+    const m = (tx.eventType ? FINAL_EVENT[tx.eventType] : undefined) ?? STATUS(tx.status, log)
+    if (!m) return undefined
     const hash = tx.txHash ?? tx.tx_hash
     const txHash = hash && hash !== '0x' ? hash : undefined
     const chain = chainForNetwork(tx.purchaseNetwork ?? tx.purchase_network ?? tx.destinationNetwork)
     const amount = amountValue(tx.purchaseAmount ?? tx.purchase_amount)
     const output = chain && amount ? { value: amount, asset: usdcOn(chain) } : undefined
-    if (status === 'ONRAMP_TRANSACTION_STATUS_SUCCESS' || status === 'ONRAMP_ORDER_STATUS_COMPLETED' || tx.eventType === 'onramp.transaction.success') {
-      return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
+    // The headless order id, or the hosted onramp transaction id
+    const providerRef = tx.orderId ?? tx.transactionId ?? tx.transaction_id
+    const base: LegEvent = {
+      ref,
+      status: m.status,
+      ...(providerRef ? { providerRef } : {}),
+      ...(m.detail && tx.status ? { detail: { code: m.detail, providerStatus: tx.status } } : {}),
     }
-    if (status.endsWith('_FAILED') || tx.eventType === 'onramp.transaction.failed') {
-      return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Coinbase purchase did not complete.', recovery: 'retry_payment' }) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(txHash ? { transactions: [{ role: 'destination' as const, hash: txHash, ...(chain ? { chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'failed':
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The Coinbase purchase did not complete.', recovery: 'retry_payment' }) }
+      default:
+        // requires_action: no action, so the UI keeps the frame. processing: the payment is under way.
+        return base
     }
-    // A headless order before payment: the user is still in the frame
-    if (ORDER_WAITING.includes(status)) return { ref, status: 'requires_action' }
-    return { ref, status: 'processing' }
   }
 
   // Coinbase states its fees in the payment currency, and paymentTotal (the quote input) is the
@@ -487,30 +545,33 @@ export function coinbase(opts: CoinbaseOptions) {
       // Keep the default origin. The server rejects a surface URL that is not https.
     }
     return {
-      state: 'PAYMENT',
-      surface: {
-        kind: 'IFRAME',
-        url,
-        origin,
-        // The iframe needs `allow=payment` and `referrerpolicy="no-referrer"` (Headless Onramp, web app requirements).
-        // The docs also ask for `sandbox="allow-scripts allow-same-origin"`. The modal sandbox has these tokens and
-        // more (forms, popups). TO VERIFY: that Coinbase accepts the extra sandbox tokens.
-        allow: 'payment',
-        referrerPolicy: 'no-referrer',
-        height: 600,
-        provider: 'Coinbase',
-        messages: {
-          typeField: 'eventName',
-          // commit_success: the payment started. polling_success: the crypto was sent.
-          completed: ['onramp_api.commit_success', 'onramp_api.polling_success'],
-          // Not load_error: on the web, ERROR_CODE_GUEST_APPLE_PAY_NOT_SUPPORTED falls back to a QR code.
-          failed: ['onramp_api.commit_error', 'onramp_api.polling_error', 'onramp_api.session_error'],
-          closed: ['onramp_api.cancel'],
-        },
-      },
-      transitions: [awaitPoll(POLL)],
       status: 'requires_action',
+      action: {
+        kind: 'payment',
+        surface: {
+          kind: 'IFRAME',
+          url,
+          origin,
+          // The iframe needs `allow=payment` and `referrerpolicy="no-referrer"` (Headless Onramp, web app requirements).
+          // The docs also ask for `sandbox="allow-scripts allow-same-origin"`. The modal sandbox has these tokens and
+          // more (forms, popups). TO VERIFY: that Coinbase accepts the extra sandbox tokens.
+          allow: 'payment',
+          referrerPolicy: 'no-referrer',
+          height: 600,
+          provider: 'Coinbase',
+          messages: {
+            typeField: 'eventName',
+            // commit_success: the payment started. polling_success: the crypto was sent.
+            completed: ['onramp_api.commit_success', 'onramp_api.polling_success'],
+            // Not load_error: on the web, ERROR_CODE_GUEST_APPLE_PAY_NOT_SUPPORTED falls back to a QR code.
+            failed: ['onramp_api.commit_error', 'onramp_api.polling_error', 'onramp_api.session_error'],
+            closed: ['onramp_api.cancel'],
+          },
+        },
+        transitions: [awaitPoll(POLL)],
+      },
       ref,
+      providerRef: orderId,
     }
   }
 
@@ -623,11 +684,10 @@ export function coinbase(opts: CoinbaseOptions) {
         }
         if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a checkout URL.' }), 502)
       }
+      // No Coinbase transaction exists before the user pays, so no providerRef yet.
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'REDIRECT', url, popup: true, provider: 'Coinbase' },
-        transitions: [awaitPoll(POLL)],
         status: 'requires_action',
+        action: { kind: 'payment', surface: { kind: 'REDIRECT', url, popup: true, provider: 'Coinbase' }, transitions: [awaitPoll(POLL)] },
         ref,
       }
     },
@@ -642,7 +702,9 @@ export function coinbase(opts: CoinbaseOptions) {
         } catch (e) {
           throw toOpenRamp(e, 'find this purchase', ctx.log)
         }
-        return legStepFromEvent(res.order ? eventFrom(res.order as CbTransaction, input.ref) : undefined, input.ref, POLL)
+        // No order or an unknown status: a status poll. The server never moves a leg back, so a leg
+        // that already moved on keeps its step.
+        return legStepFromEvent(res.order ? eventFrom(res.order as CbTransaction, ctx.log, input.ref) : undefined, input.ref, POLL)
       }
       // `pageSize` (camelCase) as in the Onramp API spec
       const path = `/onramp/v1/buy/user/${encodeURIComponent(input.ref)}/transactions`
@@ -653,7 +715,7 @@ export function coinbase(opts: CoinbaseOptions) {
         throw toOpenRamp(e, 'find this purchase', ctx.log)
       }
       const tx = res.transactions?.[0]
-      return legStepFromEvent(tx ? eventFrom(tx, input.ref) : undefined, input.ref, POLL)
+      return legStepFromEvent(tx ? eventFrom(tx, ctx.log, input.ref) : undefined, input.ref, POLL)
     },
 
     webhook: {
@@ -682,7 +744,7 @@ export function coinbase(opts: CoinbaseOptions) {
           return []
         }
         if (tx.eventType && !tx.eventType.startsWith('onramp.')) return []
-        const ev = eventFrom(tx)
+        const ev = eventFrom(tx, ctx.log)
         return ev ? [ev] : []
       },
     },

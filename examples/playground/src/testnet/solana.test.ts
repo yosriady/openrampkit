@@ -196,7 +196,7 @@ describe('Solana devnet in testnet mode', () => {
     expect(chain.sent).toEqual([expect.objectContaining({ signature: hash, amount: 5_000_000n, dest: await associatedTokenAddress(USER, MINT) })])
     const done = await client.transition(clientSecret, 'submit_tx', { txHash: hash })
     expect(done.step.state).toBe('COMPLETED')
-    expect(done.step.progress?.legs[0]).toMatchObject({ legId: 'solana-onchain', status: 'succeeded', txHash: hash })
+    expect(done.payment?.legs[0]).toMatchObject({ legId: 'solana-onchain', status: 'succeeded', transactions: [{ role: 'source', chain: cfg.chain, hash }, { role: 'destination', chain: cfg.chain, hash }] })
     expect(chain.methods).toEqual(expect.arrayContaining(['getSlot', 'getLatestBlockhash', 'sendTransaction', 'getSignatureStatuses', 'getTransaction']))
     // Only the devnet RPC left the page.
     expect([...chain.passed]).toEqual([new URL(cfg.rpcUrl).href])

@@ -34,11 +34,12 @@ import {
   quoteExpiresAt,
   randomHex,
   resolveEnv,
+  statusMap,
   verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, bps, cmp, fromScaled, isDecimal, openRampError, roundTo, sub, toScaled } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode, Surface } from '@openrampkit/core'
 
 export type PeerRail = 'venmo' | 'cashapp' | 'zelle' | 'chime' | 'paypal' | 'revolut' | 'wise'
 
@@ -97,6 +98,18 @@ const BASE = 'eip155:8453'
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: BASE, token: USDC[BASE]!, symbol: 'USDC', decimals: 6 }
 const POLL: PollSpec = POLLS.checkout
 const TOLERANCE_SEC = 5 * 60
+
+/**
+ * Peer order status -> leg status. `null`: CREATED, the user has not paid yet, or a payment attempt
+ * expired, failed or was cancelled and the user can still pay (a late settlement can still fulfil the
+ * order): no event. A status that is not in the table is logged once and gives no event either.
+ */
+const ORDER_STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode } | null>('Peer', {
+  CREATED: null,
+  PARTIALLY_FULFILLED: { status: 'processing', detail: 'processing' },
+  FULFILLED: { status: 'succeeded' },
+  CANCELLED: { status: 'failed' },
+})
 const ORDERBOOK_TTL_SEC = 5 * 60
 const ORDER_TTL_SEC = 7 * 24 * 60 * 60
 /** Platform minimum per order: 10 USDC (createCheckout errors: AMOUNT_BELOW_MIN) */
@@ -241,24 +254,27 @@ export function peer(opts: PeerOptions) {
     return best
   }
 
-  function eventFrom(order: PeerOrder, payment: PeerPayment | null | undefined): LegEvent | undefined {
+  /**
+   * The event for a Peer order, or undefined while the user can still pay (CREATED) and for an unknown
+   * order status (logged once; the leg keeps its current step). The Peer order id is both our ref and
+   * the `providerRef`.
+   */
+  function eventFrom(order: PeerOrder, payment: PeerPayment | null | undefined, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
     const ref = order.id
     if (!ref) return undefined
-    switch (order.status) {
-      case 'FULFILLED': {
-        const net = dec(payment?.netSettledUsdcAmount) ?? dec(order.netSettledUsdcAmount)
-        const txHash = payment?.fulfillTransaction ?? undefined
-        return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(net ? { output: { value: net, asset: BASE_USDC } } : {}) }
-      }
-      case 'PARTIALLY_FULFILLED':
-        return { ref, status: 'processing' }
-      case 'CANCELLED':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Peer order was cancelled.', recovery: 'choose_other' }) }
-      default:
-        // CREATED: the user has not paid yet, or a payment attempt expired / failed / was cancelled and
-        // the user can still pay (late settlement can still fulfil the order).
-        return undefined
+    const m = ORDER_STATUS(order.status, log)
+    if (!m) return undefined
+    const ev: LegEvent = { ref, providerRef: ref, status: m.status }
+    if (m.detail) ev.detail = { code: m.detail, providerStatus: order.status }
+    if (m.status === 'failed') ev.error = openRampError('PAYMENT_FAILED', { message: 'The Peer order was cancelled.', recovery: 'choose_other' })
+    if (m.status === 'succeeded') {
+      const net = dec(payment?.netSettledUsdcAmount) ?? dec(order.netSettledUsdcAmount)
+      // The release of the seller's escrowed USDC to the destination address on Base
+      const hash = payment?.fulfillTransaction
+      if (hash) ev.transactions = [{ role: 'destination', chain: BASE, hash }]
+      if (net) ev.output = { value: net, asset: BASE_USDC }
     }
+    return ev
   }
 
   return createAdapter({
@@ -418,7 +434,7 @@ export function peer(opts: PeerOptions) {
       } else {
         surface = { kind: 'REDIRECT', url, popup: true, provider: 'Peer' }
       }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'requires_action', ref }
+      return { status: 'requires_action', action: { kind: 'payment', surface, transitions: [awaitPoll(POLL)] }, ref, providerRef: ref }
     },
 
     async status(input, ctx) {
@@ -428,7 +444,9 @@ export function peer(opts: PeerOptions) {
       } catch (e) {
         throw toOpenRamp(e, 'find this order', ctx.log)
       }
-      return legStepFromEvent(res.order ? eventFrom({ ...res.order, id: input.ref }, res.currentPayment) : undefined, input.ref, POLL)
+      // CREATED and an unknown status give no event: a payment poll. The server ignores it when the leg is
+      // already further (it never moves a leg back), so the leg keeps its current step.
+      return legStepFromEvent(res.order ? eventFrom({ ...res.order, id: input.ref }, res.currentPayment, ctx.log) : undefined, input.ref, POLL)
     },
 
     webhook: {
@@ -457,7 +475,7 @@ export function peer(opts: PeerOptions) {
         switch (ev.type) {
           case 'ORDER_FULFILLED':
           case 'PAYMENT_SETTLED': {
-            const out = eventFrom(order, ev.data?.payment)
+            const out = eventFrom(order, ev.data?.payment, ctx.log)
             return out ? [out] : []
           }
           case 'ORDER_CANCELLED':

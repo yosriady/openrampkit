@@ -62,13 +62,15 @@ describe('Relay wallet payment through the server', () => {
     const pub = await pay(OUT_BASE)
     expect(pub.status).toBe('succeeded')
     expect(pub.result).toMatchObject({
-      txHashes: [FILL_TX],
-      sourceTxHashes: [ORIGIN_TX],
+      transactions: [
+        { role: 'source', chain: 'eip155:42161', hash: ORIGIN_TX, legIndex: 0 },
+        { role: 'destination', chain: 'eip155:8453', hash: FILL_TX, legIndex: 0 },
+      ],
       output: { value: '0.000491803942453585', asset: { kind: 'crypto', chain: 'eip155:8453', token: 'native' } },
       outputConfirmed: true,
     })
     expect(pub.result!.amountMismatch).toBeUndefined()
-    expect(pub.step.progress!.legs[0]).toMatchObject({ status: 'succeeded', txHash: FILL_TX, sourceTxHash: ORIGIN_TX })
+    expect(pub.payment!.legs[0]).toMatchObject({ status: 'succeeded', provider: 'Relay', ref: expect.any(String), transactions: pub.result!.transactions })
   })
 
   it('flags a short delivery that Relay reports', async () => {

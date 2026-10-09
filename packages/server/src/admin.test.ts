@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { USDC } from '@openrampkit/core'
-import type { LegSpec, LegStatus, LegStep } from '@openrampkit/core'
+import type { LegSpec } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
 import type { OpenRampConfig, SessionStore } from './index.js'
 import { amountOf, tokenMatches } from './admin.js'
@@ -22,10 +22,6 @@ const quiet = { debug() {}, info() {}, warn() {}, error() {} }
 const DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x000000000000000000000000000000000000beef' }
 const SRC = { chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6, custody: 'user_wallet' as const }
 const HOOKS = { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }
-const STATE: Record<LegStatus, LegStep['state']> = {
-  pending: 'PROCESSING', requires_action: 'PAYMENT', processing: 'PROCESSING', succeeded: 'COMPLETED', failed: 'FAILED', refunded: 'REFUNDED', expired: 'EXPIRED', reversed: 'REVERSED',
-}
-
 /** A card provider with webhooks. Each start makes a new order ref. */
 function hookedAdapter() {
   let n = 0
@@ -43,10 +39,10 @@ function hookedAdapter() {
     },
     async start() {
       const ref = `order-${++n}`
-      return { state: 'PAYMENT', status: 'requires_action', ref, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll }
+      return { status: 'requires_action', ref, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll } }
     },
     async status({ ref }) {
-      return { state: STATE.requires_action, status: 'requires_action', ref, transitions: poll }
+      return { status: 'requires_action', ref, action: { kind: 'payment', transitions: poll } }
     },
     webhook: {
       async verify(req) {
@@ -243,7 +239,13 @@ describe('admin get, find and stats', () => {
     const s = await t.pay()
     const tx = `0x${'ab'.repeat(32)}`
     const src = `0x${'cd'.repeat(32)}`
-    await t.hook([{ ref: s.ref, status: 'succeeded', txHash: tx, sourceTxHash: src }])
+    await t.hook([{ ref: s.ref, status: 'succeeded', transactions: [{ role: 'source', hash: src }, { role: 'destination', hash: tx }] }])
+    const v = (await t.ramp.admin.get(s.id))!
+    expect(v.transactions).toEqual([
+      { role: 'source', chain: 'eip155:8453', hash: src, legIndex: 0, attempt: 0 },
+      { role: 'destination', chain: 'eip155:8453', hash: tx, legIndex: 0, attempt: 0 },
+    ])
+    expect(v.payment!.legs[0]!.transactions.map((x) => x.role)).toEqual(['source', 'destination'])
     expect((await t.ramp.admin.findByRef('hooked', s.ref))!.id).toBe(s.id)
     expect(await t.ramp.admin.findByRef('hooked', 'nope')).toBeNull()
     expect((await t.ramp.admin.findByTx(undefined, tx.toUpperCase().replace('0X', '0x'))).map((x) => x.id)).toEqual([s.id])

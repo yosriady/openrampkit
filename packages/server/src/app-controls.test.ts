@@ -29,7 +29,7 @@ function provider(canceled: string[] = [], failCancel = false) {
     },
     async start() {
       n++
-      return { state: 'PAYMENT', status: 'requires_action', ref: `order-${n}`, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }
+      return { status: 'requires_action', ref: `order-${n}`, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] } }
     },
     async cancel({ ref }) {
       if (failCancel) throw new Error('provider down')
@@ -234,9 +234,9 @@ describe('cancel', () => {
     expect(r.body).toMatchObject({ status: 'canceled', canceled: { reason: 'requested_by_user' } })
     expect(canceled).toEqual(['order-1'])
     // A late payment on the canceled order: session.late_payment, never session.succeeded.
-    await t.event({ ref: 'order-1', status: 'succeeded', txHash: '0xlate' })
+    await t.event({ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xlate' }] })
     expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('canceled')
-    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'after_cancel', txHash: '0xlate' })
+    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'after_cancel', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xlate', legIndex: 0 }] })
     expect(t.types()).not.toContain('session.succeeded')
   })
 
@@ -254,7 +254,7 @@ describe('cancel', () => {
     const s = await t.ramp.sessions.create({ userId: 'u', destination: DEST })
     await t.pay(s)
     // The provider reports the user's transaction, but the leg still waits for the user.
-    await t.event({ ref: 'order-1', status: 'requires_action', sourceTxHash: '0xsent' } as LegEvent)
+    await t.event({ ref: 'order-1', status: 'requires_action', transactions: [{ role: 'source', hash: '0xsent' }] })
     expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('requires_action')
     await expect(t.ramp.sessions.cancel(s.id)).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/on its way/) } })
     expect((await t.call(`/sessions/${s.id}/cancel`, { secret: s.clientSecret, body: {} })).status).toBe(409)
@@ -267,11 +267,11 @@ describe('cancel', () => {
     const s = await t.ramp.sessions.create({ userId: 'u', destination: DEST })
     await t.pay(s)
     await t.ramp.sessions.cancel(s.id)
-    expect((await t.event({ ref: 'order-1', status: 'succeeded', txHash: '0xlate' })).status).toBe(200)
+    expect((await t.event({ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xlate' }] })).status).toBe(200)
     const v = (await t.ramp.admin.get(s.id))!
     expect(v.status).toBe('canceled')
     expect(v.timeline.map((e) => e.type)).toEqual(expect.arrayContaining(['session.canceled', 'leg.succeeded', 'session.late_payment']))
-    expect(v.payment!.legs[0]).toMatchObject({ ref: 'order-1', status: 'succeeded', txHash: '0xlate' })
+    expect(v.payment!.legs[0]).toMatchObject({ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xlate' }] })
     expect(await t.ramp.admin.findByRef('hooked', 'order-1')).toMatchObject({ id: s.id })
     expect(t.types()).not.toContain('session.succeeded')
   })
@@ -295,8 +295,8 @@ describe('cancel', () => {
       webhook: undefined,
       async status({ ref }) {
         return paid
-          ? { state: 'COMPLETED', status: 'succeeded', ref, txHash: '0xpolled', transitions: [] }
-          : { state: 'PAYMENT', status: 'requires_action', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }
+          ? { status: 'succeeded' as const, ref, transactions: [{ role: 'destination' as const, hash: '0xpolled' }] }
+          : { status: 'requires_action' as const, ref, action: { kind: 'payment' as const, transitions: [{ name: 'poll', kind: 'AWAIT' as const, poll: POLL }] } }
       },
     })
     const t = make({ admin: {} }, [polled])
@@ -307,7 +307,7 @@ describe('cancel', () => {
     vi.useFakeTimers({ now: Date.now() + 2 * 60_000, toFake: ['Date'] })
     expect(await t.ramp.sweep()).toMatchObject({ sessions: { grace: 1, changed: 1 } })
     expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('canceled')
-    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'after_cancel', txHash: '0xpolled' })
+    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'after_cancel', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xpolled', legIndex: 0 }] })
   })
 
   it('a pay link cannot cancel; the client secret can', async () => {

@@ -16,12 +16,14 @@ import type {
   Step,
   WithdrawSource,
 } from '@openrampkit/core'
-import { isStepSub } from '@openrampkit/core'
+import { isStepDetailCode } from '@openrampkit/core'
 import { migrateToV3 } from './migrate-v3.js'
 
 export type ActiveLeg = {
   adapterId: string
   legId: string
+  /** Display name of the leg's provider, when the payment began. Records from schema 2 have none. */
+  provider?: string
   quote: LegQuote
   deliverTo?: { address: string }
   ref?: string
@@ -259,11 +261,12 @@ export function migrateRecord<T>(rec: T): T {
       p.n ??= i
     })
     if (rec.active) rec.active.n ??= rec.attempts?.length ?? 0
-    // `sub` was free text (for example 'SETTLING'); now it is the closed list `STEP_SUBS`.
-    for (const step of [rec.step, ...[rec.active, ...(rec.attempts ?? [])].flatMap((p) => p?.legs.map((l) => l.step) ?? [])]) {
-      if (step?.sub === undefined || isStepSub(step.sub)) continue
+    // `sub` was free text (for example 'SETTLING'); in schema 1 it is a closed list (lower case).
+    const steps = [rec.step, ...[rec.active, ...(rec.attempts ?? [])].flatMap((p) => p?.legs.map((l) => l.step) ?? [])] as Array<{ sub?: string } | undefined>
+    for (const step of steps) {
+      if (step?.sub === undefined || isStepDetailCode(step.sub)) continue
       const lower = String(step.sub).toLowerCase()
-      if (isStepSub(lower)) step.sub = lower
+      if (isStepDetailCode(lower)) step.sub = lower
       else delete step.sub
     }
   }
@@ -308,7 +311,7 @@ function migrateToV2(rec: SessionRecord): void {
     if (step?.status === 'awaiting_user') step.status = 'requires_action'
   }
   for (const p of [rec.active, ...(rec.attempts ?? [])]) for (const l of p?.legs ?? []) legStatus(l.step)
-  for (const l of rec.step.progress?.legs ?? []) legStatus(l)
+  for (const l of (rec.step as { progress?: { legs?: Array<{ status?: string }> } }).progress?.legs ?? []) legStatus(l)
   // The withdraw names: `allowedTargets` is `allowedDestinations`, `targetLocked` is `destinationLocked`.
   const old = rec as SessionRecord & { allowedTargets?: SessionRecord['allowedDestinations']; targetLocked?: boolean }
   if (old.allowedTargets !== undefined) {

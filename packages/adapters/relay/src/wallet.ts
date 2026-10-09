@@ -7,7 +7,7 @@ import { OpenRampException, chainName, evmChainId, isSolanaTx, openRampError } f
 import type { LegStep, TxRequest } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEFAULT_RPC_URLS, DIRECT_TX_CLOCK_SKEW_MS, RECORD_TTL_SEC, USED_TTL_SEC, WALLET_QUOTE_REUSE_MS } from './config.js'
-import { POLL_TRANSITION, SUBMIT_TX, caip2FromRelay, cryptoAsset, fitsChain, isNative, isSolana, knownDecimals, requestIdOf, sameUser, settlementOf, toOpenRamp, usedKey } from './helpers.js'
+import { SUBMIT_TX, awaitingTx, caip2FromRelay, cryptoAsset, fitsChain, isNative, isSolana, knownDecimals, requestIdOf, sameChainTransactions, sameUser, settlementOf, toOpenRamp, usedKey } from './helpers.js'
 import { solanaReceived } from './solana.js'
 import type { SolStatus } from './solana.js'
 import type { RelayQuoteResponse, RelayStep, WalletRecord } from './types.js'
@@ -53,14 +53,23 @@ export function walletLeg(rt: RelayRuntime) {
     return { txs, ...(unsupported ? { unsupported } : {}) }
   }
 
-  function payStep(chain: string, txs: TxRequest[], ref: string): LegStep {
+  function payStep(chain: string, txs: TxRequest[], ref: string, providerRef?: string): LegStep {
     return {
-      state: 'PAYMENT',
-      surface: { kind: 'WALLET_TX', chain, txs },
-      transitions: [SUBMIT_TX],
       status: 'requires_action',
+      action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain, txs }, transitions: [SUBMIT_TX] },
       ref,
+      ...(providerRef ? { providerRef } : {}),
     }
+  }
+
+  /** A same-chain wallet transaction that is sent but not confirmed yet (the source only) */
+  function confirming(ref: string, rec: WalletRecord, hash: string): LegStep {
+    return { status: 'processing', detail: { code: 'confirming' }, ref, transactions: sameChainTransactions(hash, rec.chain) }
+  }
+
+  /** A same-chain wallet payment that failed. `hash` is the wallet's transaction, when there is one (the source only). */
+  function failed(ref: string, rec: WalletRecord, message: string, hash?: string): LegStep {
+    return { status: 'failed', error: openRampError('DELIVERY_FAILED', { message }), ref, ...(hash ? { transactions: sameChainTransactions(hash, rec.chain) } : {}) }
   }
 
   /** A same-chain wallet payment counts only when the receipt shows it paid the recipient at least the amount. */
@@ -68,15 +77,14 @@ export function walletLeg(rt: RelayRuntime) {
     const chain = rec.chain!
     if (isSolana(chain)) return verifySolanaWallet(ctx, ref, rec)
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
-    const extra = { ref, txHash: rec.txHash!, sourceTxHash: rec.txHash! }
-    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('DELIVERY_FAILED', { message }), ...extra })
+    if (!receipt) return confirming(ref, rec, rec.txHash!)
+    const fail = (message: string): LegStep => failed(ref, rec, message, rec.txHash)
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
     // The transaction must be newer than this payment: an older transfer to the same recipient (for
     // example a shared merchant address) must not complete a new session.
     if (rec.since !== undefined) {
       const block = receipt.blockNumber ? await rpc<{ timestamp?: string } | null>(ctx, chain, 'eth_getBlockByNumber', [receipt.blockNumber, false]) : null
-      if (!block?.timestamp) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+      if (!block?.timestamp) return confirming(ref, rec, rec.txHash!)
       if (Number(BigInt(block.timestamp)) * 1000 < rec.since - DIRECT_TX_CLOCK_SKEW_MS) return fail('The transaction was sent before this payment started.')
     }
     const recipient = (rec.recipient ?? '').toLowerCase()
@@ -92,15 +100,15 @@ export function walletLeg(rt: RelayRuntime) {
 
   /** Common end of a same-chain wallet check: the amount, then one transaction for one payment only. */
   async function settleDirect(ctx: AdapterContext, ref: string, rec: WalletRecord, paid: bigint): Promise<LegStep> {
-    const extra = { ref, txHash: rec.txHash!, sourceTxHash: rec.txHash! }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('DELIVERY_FAILED', { message }), ...extra })
+    const fail = (message: string): LegStep => failed(ref, rec, message, rec.txHash)
     if (paid < BigInt(rec.amountBase ?? '0')) return fail('The transaction does not pay the destination the quoted amount.')
     // One transaction can complete one payment only: an old hash must not be reused for a new session.
     const key = usedKey(rec.chain!, rec.txHash!)
     // A transfer leg on the same address may have taken a log of this transaction already.
     if (await ctx.shared.get<string>(`${key}:log`)) return fail('This transaction was already used for another payment.')
     if (!(await claimOnce(ctx.shared, key, ref, USED_TTL_SEC))) return fail('This transaction was already used for another payment.')
-    return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
+    // Confirmed: the one transaction paid into the leg and delivered it.
+    return { status: 'succeeded', ref, transactions: sameChainTransactions(rec.txHash!, rec.chain, 'destination'), ...(rec.output ? { output: rec.output } : {}) }
   }
 
   /**
@@ -110,9 +118,8 @@ export function walletLeg(rt: RelayRuntime) {
   async function verifySolanaWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
     const chain = rec.chain!
     const sig = rec.txHash!
-    const extra = { ref, txHash: sig, sourceTxHash: sig }
-    const waiting: LegStep = { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('DELIVERY_FAILED', { message }), ...extra })
+    const waiting = confirming(ref, rec, sig)
+    const fail = (message: string): LegStep => failed(ref, rec, message, sig)
     const st = await rpc<{ value?: SolStatus[] } | null>(ctx, chain, 'getSignatureStatuses', [[sig], { searchTransactionHistory: true }])
     const s = st?.value?.[0]
     if (!s) return waiting
@@ -190,21 +197,15 @@ export function walletLeg(rt: RelayRuntime) {
       fromBlock: s.fromBlock,
       expect: { token: rec.token!, recipient: rec.recipient!, minAmount: BigInt(rec.amountBase ?? '0'), callsHash: s.callsHash },
     })
-    const fail = (message: string, txHash?: string): LegStep => ({
-      state: 'FAILED',
-      status: 'failed',
-      transitions: [],
-      error: openRampError('DELIVERY_FAILED', { message }),
-      ref,
-      ...(txHash ? { txHash } : {}),
-    })
+    const fail = (message: string, txHash?: string): LegStep => failed(ref, rec, message, txHash)
     if (r.settled) {
       if (!r.ok) return fail(r.problem!, r.record.txHash)
-      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref, txHash: r.record.txHash, sourceTxHash: r.record.txHash, ...(rec.output ? { output: rec.output } : {}) }
+      // The settle call paid into the leg and delivered it through the settlement contract.
+      return { status: 'succeeded', ref, transactions: sameChainTransactions(r.record.txHash, chain, 'settlement'), ...(rec.output ? { output: rec.output } : {}) }
     }
-    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref }
+    if (!rec.txHash) return awaitingTx(ref)
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
-    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: rec.txHash, sourceTxHash: rec.txHash }
+    if (!receipt) return confirming(ref, rec, rec.txHash)
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.', rec.txHash)
     return fail('The transaction did not settle this session.', rec.txHash)
   }
@@ -260,10 +261,9 @@ export function walletLeg(rt: RelayRuntime) {
     const ref = requestId ?? `relay:${ctx.session.id}:${randomHex()}`
     if (unsupported || !txs.length) {
       return {
-        state: 'FAILED',
         status: 'failed',
-        transitions: [],
         ref,
+        ...(requestId ? { providerRef: requestId } : {}),
         error: openRampError('PROVIDER_DECLINED', {
           message: unsupported
             ? `This route needs a ${unsupported} step, which is not supported yet. Try another token or "Transfer crypto".`
@@ -272,9 +272,9 @@ export function walletLeg(rt: RelayRuntime) {
         }),
       }
     }
-    await ctx.store.put(`w:${ref}`, { mode: 'relay', requestId: ref, chain: origin.chain, output: input.quote.output } satisfies WalletRecord, RECORD_TTL_SEC)
+    await ctx.store.put(`w:${ref}`, { mode: 'relay', ...(requestId ? { requestId } : {}), chain: origin.chain, output: input.quote.output } satisfies WalletRecord, RECORD_TTL_SEC)
     const first = txs[0]!
-    return payStep(isSolanaTx(first) ? origin.chain : caip2FromRelay(first.chainId), txs, ref)
+    return payStep(isSolanaTx(first) ? origin.chain : caip2FromRelay(first.chainId), txs, ref, requestId)
   }
 
   return { startWallet, verifyDirectWallet, verifySettlementWallet }

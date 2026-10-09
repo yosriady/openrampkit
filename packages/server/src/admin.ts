@@ -7,11 +7,11 @@
 // every built-in store, so sessions made at the same time are never lost. Nothing claims these queues;
 // `StoreQueue.range` reads them, latest first. The sweep removes days older than `admin.indexDays`.
 
-import { add, isTerminal, OpenRampException, openRampError } from '@openrampkit/core'
-import type { Amount, AmountMismatch, Direction, Fee, OpenRampError, StateName } from '@openrampkit/core'
+import { add, isTerminal, OpenRampException, openRampError, stateFor } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Direction, Fee, OpenRampError, StateName, StepDetail, Transaction } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { json, readJson } from './http.js'
-import { sessionStatusFor } from './legs.js'
+import { legTransactions, sessionStatusFor } from './legs.js'
 import { notify } from './notify.js'
 import { replayDeadLetters, saveSession } from './outbox.js'
 import { adminPage } from './admin-page.js'
@@ -177,7 +177,12 @@ export type AdminLeg = {
   ref?: string
   status: string
   state?: StateName
-  txHash?: string
+  /** The provider's own order id (`LegStep.providerRef`) */
+  providerRef?: string
+  /** Every transaction of the leg (see `Transaction.role`) */
+  transactions: Transaction[]
+  /** The provider's own status, from the step detail */
+  providerStatus?: string
   error?: Pick<OpenRampError, 'code' | 'message'>
   input: Amount
   output: Amount
@@ -215,14 +220,13 @@ export type AdminSession = AdminSessionSummary & {
   amountBounds?: SessionRecord['amountBounds']
   allowedMethods?: string[]
   revokedPayLinks: number
-  step: { state: StateName; sub?: string; legIndex?: number; error?: Pick<OpenRampError, 'code' | 'message'> }
+  step: { state: StateName; detail?: StepDetail; legIndex?: number; error?: Pick<OpenRampError, 'code' | 'message'> }
   payment?: AdminPayment
   attempts: AdminPayment[]
   outbox: AdminOutboxEvent[]
   providerRefs: Array<{ adapterId: string; ref: string; attempt: number; active: boolean }>
-  txHashes: string[]
-  /** The transactions that paid into the legs (`LegStep.sourceTxHash`), for example the user's origin chain transaction */
-  sourceTxHashes: string[]
+  /** Every transaction of every payment attempt, oldest attempt first */
+  transactions: Array<Transaction & { attempt: number }>
   timeline: Array<Omit<TimelineEntry, 'at'> & { at: string }>
   resolution?: Omit<Resolution, 'at'> & { at: string }
   /** Set when the provider refunded or reversed a leg after it succeeded */
@@ -279,6 +283,7 @@ function isStuck(rt: Runtime, rec: SessionRecord, now: number): boolean {
 const errorView = (e?: OpenRampError) => (e ? { code: e.code, message: e.message } : undefined)
 
 function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
+  const txs = (i: number) => legTransactions(p, i)
   return {
     attempt: p.n ?? 0,
     method: p.pathway.method,
@@ -286,15 +291,17 @@ function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
     pathwayId: p.pathway.id,
     legIndex: p.index,
     ...('endedAt' in p ? { endedAt: iso(p.endedAt)! } : {}),
-    legs: p.legs.map((l) => {
+    legs: p.legs.map((l, i) => {
       const error = errorView(l.step?.error)
       return {
         adapterId: l.adapterId,
         legId: l.legId,
         ...(l.ref ? { ref: l.ref } : {}),
         status: l.step?.status ?? 'pending',
-        ...(l.step ? { state: l.step.state } : {}),
-        ...(l.step?.txHash ? { txHash: l.step.txHash } : {}),
+        ...(l.step ? { state: stateFor(l.step) } : {}),
+        ...(l.step?.providerRef ? { providerRef: l.step.providerRef } : {}),
+        transactions: txs(i),
+        ...(l.step?.detail?.providerStatus ? { providerStatus: l.step.detail.providerStatus } : {}),
         ...(error ? { error } : {}),
         input: l.quote.input,
         output: l.step?.output ?? l.quote.output,
@@ -333,7 +340,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     revokedPayLinks: rec.revokedPayLinks?.length ?? 0,
     step: {
       state: rec.step.state,
-      ...(rec.step.sub ? { sub: rec.step.sub } : {}),
+      ...(rec.step.detail ? { detail: rec.step.detail } : {}),
       ...(rec.step.legIndex !== undefined ? { legIndex: rec.step.legIndex } : {}),
       ...(stepError ? { error: stepError } : {}),
     },
@@ -341,8 +348,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     attempts: (rec.attempts ?? []).map(paymentView),
     outbox: (rec.outbox ?? []).map(outboxView),
     providerRefs: payments.flatMap(({ p, active }) => p.legs.filter((l) => l.ref).map((l) => ({ adapterId: l.adapterId, ref: l.ref!, attempt: p.n ?? 0, active }))),
-    txHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h)),
-    sourceTxHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.sourceTxHash).filter((h): h is string => !!h)),
+    transactions: payments.flatMap(({ p }) => p.legs.flatMap((_, i) => legTransactions(p, i).map((t) => ({ ...t, attempt: p.n ?? 0 })))),
     timeline: (rec.timeline ?? []).map((t) => ({ ...t, at: iso(t.at)! })),
     ...(rec.resolution ? { resolution: { ...rec.resolution, at: iso(rec.resolution.at)! } } : {}),
     ...(rec.reversal ? { reversal: { ...rec.reversal, at: iso(rec.reversal.at)! } } : {}),
@@ -400,9 +406,10 @@ export async function adminFindByRef(rt: Runtime, provider: string, ref: string)
 }
 
 /**
- * Sessions with a leg transaction `txHash` or source transaction `sourceTxHash`. No store index has transaction hashes, so this reads the
+ * Sessions with a leg transaction of any role (approval, source, hop, destination, settlement, refund)
+ * that has this hash, in any payment attempt. No store index has transaction hashes, so this reads the
  * time index (at most `MAX_SCAN` sessions of the last `admin.indexDays` days). `chain` (CAIP-2) is
- * optional; when set, the leg's input or output must be on that chain.
+ * optional; when set, the transaction must be on that chain.
  */
 export async function adminFindByTx(rt: Runtime, chain: string | undefined, txHash: string): Promise<AdminSessionSummary[]> {
   if (!txHash) throw bad('`tx` is required.')
@@ -410,12 +417,8 @@ export async function adminFindByTx(rt: Runtime, chain: string | undefined, txHa
   const now = Date.now()
   const out: AdminSessionSummary[] = []
   await visitSessions(rt, indexEntries(rt, now, now - indexDays(rt) * DAY_MS), MAX_SCAN, (rec) => {
-    const legs = [...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])].flatMap((p) => p.legs)
-    const hit = legs.some((l) => {
-      if (l.step?.txHash?.toLowerCase() !== want && l.step?.sourceTxHash?.toLowerCase() !== want) return false
-      if (!chain) return true
-      return [l.quote.input.asset, l.quote.output.asset].some((a) => a.kind === 'crypto' && a.chain === chain)
-    })
+    const payments = [...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])]
+    const hit = payments.some((p) => p.legs.some((_, i) => legTransactions(p, i).some((t) => t.hash.toLowerCase() === want && (!chain || t.chain === chain))))
     if (hit) out.push(summarize(rt, rec, now))
   })
   return out
@@ -537,7 +540,6 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
       sessionId: rec.id,
       state: target,
       transitions: [],
-      ...(rec.step.progress ? { progress: rec.step.progress } : {}),
       ...(rec.step.legIndex !== undefined ? { legIndex: rec.step.legIndex } : {}),
       ...(target === 'FAILED' ? { error: openRampError('PAYMENT_FAILED', { message: 'The operator closed this payment.', recovery: 'contact_support' }) } : {}),
       ...(target === 'EXPIRED' ? { error: openRampError('SESSION_EXPIRED') } : {}),

@@ -85,47 +85,54 @@ describe('mock adapter: solanaLocalChain', () => {
   it('asks for one SPL transfer to the destination owner, and completes when the chain shows it', async () => {
     const { a, c, start, leg, submit, rpc } = await begin({ tx: splTx({ amount: 5_000_000n }) })
     expect(checkLegStep(start)).toEqual([])
-    expect(start.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA_DEVNET, txs: [{ kind: 'solana', type: 'transfer', to: USER, mint: MINT, amount: '5000000', decimals: 6 }] })
+    expect(start.action?.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA_DEVNET, txs: [{ kind: 'solana', type: 'transfer', to: USER, mint: MINT, amount: '5000000', decimals: 6 }] })
+    // A plain chain transfer: no provider order, so no providerRef.
+    expect(start.providerRef).toBeUndefined()
     // The leg read the slot at start.
     expect(rpc.calls[0]!.body).toMatchObject({ method: 'getSlot' })
-    await expect(a.status!({ leg, ref: start.ref! }, c)).resolves.toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX' } })
+    await expect(a.status!({ leg, ref: start.ref! }, c)).resolves.toMatchObject({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'WALLET_TX' } } })
     await expect(submit('0xabc')).rejects.toMatchObject({ status: 400 })
     const done = await submit()
-    expect(done).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { value: '5' } })
+    // One transfer on one cluster pays into the leg and delivers it: both roles, one signature.
+    expect(done).toMatchObject({
+      status: 'succeeded',
+      output: { value: '5' },
+      transactions: [{ role: 'source', chain: SOLANA_DEVNET, hash: SIG }, { role: 'destination', chain: SOLANA_DEVNET, hash: SIG }],
+    })
     expect(rpc.calls.map((x) => (x.body as { method: string }).method)).toEqual(['getSlot', 'getSignatureStatuses', 'getTransaction'])
     expect(rpc.calls[2]!.body).toMatchObject({ params: [SIG, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }] })
-    await expect(a.status!({ leg, ref: start.ref! }, c)).resolves.toMatchObject({ state: 'COMPLETED' })
+    await expect(a.status!({ leg, ref: start.ref! }, c)).resolves.toMatchObject({ status: 'succeeded' })
   })
 
   it('counts a transfer in an inner instruction, and a self-transfer to the payer', async () => {
-    await expect((await begin({ tx: splTx({ amount: 5_000_000n, inner: true }) })).submit()).resolves.toMatchObject({ state: 'COMPLETED' })
+    await expect((await begin({ tx: splTx({ amount: 5_000_000n, inner: true }) })).submit()).resolves.toMatchObject({ status: 'succeeded' })
   })
 
   it('waits for an unknown or unconfirmed signature', async () => {
-    await expect((await begin({ status: null })).submit()).resolves.toMatchObject({ state: 'PROCESSING', txHash: SIG })
-    await expect((await begin({ status: { err: null, confirmationStatus: 'processed' } })).submit()).resolves.toMatchObject({ state: 'PROCESSING' })
-    await expect((await begin({ tx: null })).submit()).resolves.toMatchObject({ state: 'PROCESSING' })
+    await expect((await begin({ status: null })).submit()).resolves.toMatchObject({ status: 'processing', detail: { code: 'confirming' }, transactions: [{ role: 'source', hash: SIG }] })
+    await expect((await begin({ status: { err: null, confirmationStatus: 'processed' } })).submit()).resolves.toMatchObject({ status: 'processing' })
+    await expect((await begin({ tx: null })).submit()).resolves.toMatchObject({ status: 'processing' })
   })
 
   it('fails a failed, old, short, wrong-mint or wrong-recipient transfer', async () => {
     const run = async (p: Parameters<typeof begin>[0]) => (await begin(p)).submit()
-    await expect(run({ status: { err: { InstructionError: [0, 'x'] }, confirmationStatus: 'confirmed' } })).resolves.toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
-    await expect(run({ tx: splTx({ amount: 5_000_000n, err: { InstructionError: [0, 'x'] } }) })).resolves.toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
-    await expect(run({ tx: splTx({ amount: 5_000_000n, slot: START_SLOT - 1 }) })).resolves.toMatchObject({ state: 'FAILED', error: { message: /before this payment started/ } })
-    await expect(run({ tx: splTx({ amount: 4_999_999n }) })).resolves.toMatchObject({ state: 'FAILED', error: { message: /quoted amount/ } })
-    await expect(run({ tx: splTx({ amount: 5_000_000n, mint: 'So11111111111111111111111111111111111111112' }) })).resolves.toMatchObject({ state: 'FAILED', error: { message: /quoted amount/ } })
-    await expect(run({ tx: splTx({ amount: 5_000_000n, dest: OTHER_ATA, destOwner: OTHER }) })).resolves.toMatchObject({ state: 'FAILED', error: { message: /quoted amount/ } })
+    await expect(run({ status: { err: { InstructionError: [0, 'x'] }, confirmationStatus: 'confirmed' } })).resolves.toMatchObject({ status: 'failed', error: { message: 'The transaction failed on chain.' } })
+    await expect(run({ tx: splTx({ amount: 5_000_000n, err: { InstructionError: [0, 'x'] } }) })).resolves.toMatchObject({ status: 'failed', error: { message: 'The transaction failed on chain.' } })
+    await expect(run({ tx: splTx({ amount: 5_000_000n, slot: START_SLOT - 1 }) })).resolves.toMatchObject({ status: 'failed', error: { message: /before this payment started/ } })
+    await expect(run({ tx: splTx({ amount: 4_999_999n }) })).resolves.toMatchObject({ status: 'failed', error: { message: /quoted amount/ } })
+    await expect(run({ tx: splTx({ amount: 5_000_000n, mint: 'So11111111111111111111111111111111111111112' }) })).resolves.toMatchObject({ status: 'failed', error: { message: /quoted amount/ } })
+    await expect(run({ tx: splTx({ amount: 5_000_000n, dest: OTHER_ATA, destOwner: OTHER }) })).resolves.toMatchObject({ status: 'failed', error: { message: /quoted amount/ } })
   })
 
   it('one signature completes one payment only', async () => {
     const shared = memoryKV()
     const tx = splTx({ amount: 5_000_000n })
     const first = await begin({ tx, shared, sessionId: 'ors_one' })
-    await expect(first.submit()).resolves.toMatchObject({ state: 'COMPLETED' })
+    await expect(first.submit()).resolves.toMatchObject({ status: 'succeeded' })
     // The same session may check again.
-    await expect(first.a.status!({ leg: first.leg, ref: first.start.ref! }, first.c)).resolves.toMatchObject({ state: 'COMPLETED' })
+    await expect(first.a.status!({ leg: first.leg, ref: first.start.ref! }, first.c)).resolves.toMatchObject({ status: 'succeeded' })
     const second = await begin({ tx, shared, sessionId: 'ors_two' })
-    await expect(second.submit()).resolves.toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+    await expect(second.submit()).resolves.toMatchObject({ status: 'failed', error: { message: 'This transaction was already used for another payment.' } })
   })
 
   it('pays native SOL with a System Program transfer', async () => {
@@ -135,7 +142,7 @@ describe('mock adapter: solanaLocalChain', () => {
       transaction: { message: { accountKeys: [USER], instructions: [{ program: 'system', programId: '11111111111111111111111111111111', parsed: { type: 'transfer', info: { source: USER, destination: USER, lamports: 10_000_000 } } }] } },
     }
     const { start, submit } = await begin({ mint: 'native', amount: '0.01', tx })
-    expect(start.surface).toMatchObject({ txs: [{ kind: 'solana', type: 'transfer', to: USER, mint: 'native', amount: '10000000', decimals: 9 }] })
-    await expect(submit()).resolves.toMatchObject({ state: 'COMPLETED' })
+    expect(start.action?.surface).toMatchObject({ txs: [{ kind: 'solana', type: 'transfer', to: USER, mint: 'native', amount: '10000000', decimals: 9 }] })
+    await expect(submit()).resolves.toMatchObject({ status: 'succeeded' })
   })
 })

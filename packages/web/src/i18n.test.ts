@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { catalogFor, catalogs, en, mergeMessages, resolveLocale, resolveMessages } from './messages.js'
 import type { Messages } from './messages.js'
-import { STEP_SUBS } from '@openrampkit/core'
+import { STEP_DETAIL_CODES } from '@openrampkit/core'
 import type { Step } from '@openrampkit/core'
 import { stepLabel } from './view.js'
 import { formatAmount, formatEta, formatFees, formatFiat, formatLimit, formatToken } from './format.js'
@@ -70,12 +70,12 @@ describe('catalogs', () => {
     expect(formatEta({ min: 0, max: 30 }, m)).toBe(m.etaInstant)
   })
 
-  it.each(LOCALES)('%s has a label for every Step.sub in STEP_SUBS, and stepLabel uses it', (loc) => {
+  it.each(LOCALES)('%s has a label for every detail code in STEP_DETAIL_CODES, and stepLabel uses it', (loc) => {
     const m = catalogs[loc]
-    expect(Object.keys(m.stepSub).sort()).toEqual([...STEP_SUBS].sort())
-    const step = (sub?: string) => ({ sessionId: 's', state: 'PROCESSING' as const, transitions: [], ...(sub ? { sub } : {}) }) as Step
-    for (const sub of STEP_SUBS) expect(stepLabel(m, step(sub))).toBe(m.stepSub[sub])
-    // No sub, or a raw provider value from an older or newer server: the state title, never the raw value
+    expect(Object.keys(m.stepDetail).sort()).toEqual([...STEP_DETAIL_CODES].sort())
+    const step = (code?: string) => ({ sessionId: 's', state: 'PROCESSING' as const, transitions: [], ...(code ? { detail: { code } } : {}) }) as Step
+    for (const code of STEP_DETAIL_CODES) expect(stepLabel(m, step(code))).toBe(m.stepDetail[code])
+    // No detail, or a raw provider value from an older or newer server: the state title, never the raw value
     expect(stepLabel(m, step())).toBe(m.stepTitle.PROCESSING)
     expect(stepLabel(m, step('WAIT_DESTINATION_TRANSACTION'))).toBe(m.stepTitle.PROCESSING)
   })

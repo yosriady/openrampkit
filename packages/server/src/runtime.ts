@@ -1,12 +1,13 @@
 import { ADAPTER_API_VERSION, resultChannels } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
 import { OpenRampException, normalizeToken, openRampError } from '@openrampkit/core'
-import type { Destination, Pathway, PublicSession, Session, SessionResult } from '@openrampkit/core'
+import type { Destination, Pathway, Payment, PaymentLeg, PublicSession, Session, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
 import { webhookKey } from './crypto.js'
 import type { OpenRampConfig } from './config.js'
 import { memoryStore, migratingStore, scopedKV, VersionConflictError } from './store.js'
-import type { SessionRecord, SessionStore } from './store.js'
+import type { ActivePayment, SessionRecord, SessionStore } from './store.js'
+import { legTransactions } from './legs.js'
 
 /** Everything the server modules share. Built once per `createOpenRamp` call. */
 export type Runtime = {
@@ -183,7 +184,7 @@ export function publicSession(rec: SessionRecord): PublicSession {
     ...(rec.locale ? { locale: rec.locale } : {}),
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     step: rec.step,
-    ...(rec.active ? { result: sessionResult(rec) } : {}),
+    ...(rec.active ? { payment: paymentView(rec.active), result: sessionResult(rec) } : {}),
     ...(rec.lastError ? { lastError: rec.lastError } : {}),
     ...(rec.canceled ? { canceled: { at: new Date(rec.canceled.at).toISOString(), reason: rec.canceled.reason } } : {}),
     expiresAt: new Date(rec.expiresAt).toISOString(),
@@ -196,6 +197,33 @@ export function backendSession(rec: SessionRecord): Session {
   return { ...publicSession(rec), userId: rec.userId, ...(rec.externalId ? { externalId: rec.externalId } : {}), metadata: rec.metadata ?? {} }
 }
 
+/**
+ * The payment in progress, for the app and the user: each leg with its provider, our reference, the
+ * provider's order id, the amounts and the transactions.
+ */
+export function paymentView(act: ActivePayment): Payment {
+  return {
+    attempt: act.n ?? 0,
+    quoteId: act.quoteId,
+    method: act.pathway.method,
+    provider: act.pathway.provider,
+    activeLeg: act.index,
+    legs: act.legs.map((l, i): PaymentLeg => ({
+      index: i,
+      adapterId: l.adapterId,
+      legId: l.legId,
+      provider: l.provider ?? (i === 0 ? act.pathway.provider : l.adapterId),
+      ...(l.ref ? { ref: l.ref } : {}),
+      ...(l.step?.providerRef ? { providerRef: l.step.providerRef } : {}),
+      status: l.step?.status ?? 'pending',
+      input: l.quote.input,
+      output: l.step?.output ?? l.quote.output,
+      outputConfirmed: !!l.step?.output,
+      transactions: legTransactions(act, i),
+    })),
+  }
+}
+
 /** What was paid and delivered so far, from the active pathway's quotes and leg steps. */
 export function sessionResult(rec: SessionRecord): SessionResult {
   const act = rec.active!
@@ -206,7 +234,6 @@ export function sessionResult(rec: SessionRecord): SessionResult {
   let k = act.legs.length - 1
   while (k >= 0 && !act.legs[k]!.amountMismatch) k--
   const mismatch = k === -1 ? undefined : act.legs[k]!.amountMismatch!
-  const sourceTxHashes = act.legs.map((l) => l.step?.sourceTxHash).filter((h): h is string => !!h)
   return {
     method: act.pathway.method,
     provider: act.pathway.provider,
@@ -215,8 +242,7 @@ export function sessionResult(rec: SessionRecord): SessionResult {
     // An output in another asset (or not a number) is not a confirmed delivery of the quote.
     outputConfirmed: !!reported && (!last.amountMismatch || last.amountMismatch.reason === 'short'),
     fees: act.legs.flatMap((l) => l.quote.fees),
-    txHashes: act.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h),
-    ...(sourceTxHashes.length ? { sourceTxHashes } : {}),
+    transactions: act.legs.flatMap((_, i) => legTransactions(act, i)),
     ...(mismatch ? { amountMismatch: { legIndex: k, ...mismatch } } : {}),
   }
 }

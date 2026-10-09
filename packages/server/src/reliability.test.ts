@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { USDC } from '@openrampkit/core'
-import type { LegSpec, LegStatus, LegStep } from '@openrampkit/core'
+import type { LegSpec, LegStatus } from '@openrampkit/core'
 import { createOpenRamp, memoryStore, VersionConflictError } from './index.js'
 import type { OpenRampConfig, SessionRecord, SessionStore } from './index.js'
 import { eventId } from './notify.js'
@@ -16,17 +16,6 @@ const DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip15
 const HOOKS = { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }
 
 type Sent = { type: string; id: string; header: string; sessionId: string; ok: boolean }
-
-const STATE: Record<LegStatus, LegStep['state']> = {
-  pending: 'PROCESSING',
-  requires_action: 'PAYMENT',
-  processing: 'PROCESSING',
-  succeeded: 'COMPLETED',
-  failed: 'FAILED',
-  refunded: 'REFUNDED',
-  expired: 'EXPIRED',
-  reversed: 'REVERSED',
-}
 
 /** A card provider with webhooks. Each start makes a new order ref; `status` answers from `statusOf`. */
 function hookedAdapter() {
@@ -46,11 +35,11 @@ function hookedAdapter() {
     },
     async start() {
       const ref = `order-${++n}`
-      return { state: 'PAYMENT', status: 'requires_action', ref, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll }
+      return { status: 'requires_action', ref, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll } }
     },
     async status({ ref }) {
       const status = statusOf[ref] ?? 'requires_action'
-      return { state: STATE[status], status, ref, transitions: status === 'requires_action' ? poll : [] }
+      return { status, ref, ...(status === 'requires_action' ? { action: { kind: 'payment' as const, transitions: poll } } : {}) }
     },
     webhook: {
       async verify() {
@@ -207,7 +196,7 @@ describe('P0-2: events are saved with the change and delivered after the commit'
     }
     const { hook, toPayment, app, ramp } = make({ store })
     const s = await toPayment()
-    expect((await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0xabc' }])).status).toBe(200)
+    expect((await hook([{ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xabc' }] }])).status).toBe(200)
     expect(conflicts).toBe(0)
     expect((await ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
 
@@ -265,7 +254,7 @@ describe('session status while the user must act', () => {
     expect((await ramp.sessions.retrieve(s.id))!.status).toBe('requires_payment_method')
     await toPayment(s)
     let pub = await ramp.sessions.retrieve(s.id)
-    expect(pub).toMatchObject({ status: 'requires_action', step: { state: 'PAYMENT', progress: { legs: [{ status: 'requires_action' }] } } })
+    expect(pub).toMatchObject({ status: 'requires_action', step: { state: 'PAYMENT' }, payment: { legs: [{ status: 'requires_action' }] } })
     expect((await hook([{ ref: 'order-1', status: 'processing' }])).status).toBe(200)
     pub = await ramp.sessions.retrieve(s.id)
     expect(pub).toMatchObject({ status: 'processing', step: { state: 'PROCESSING' } })
@@ -278,33 +267,44 @@ describe('session status while the user must act', () => {
   })
 })
 
-describe('transaction hashes in the result', () => {
+describe('transactions in the result', () => {
   it('keeps the source transaction next to the fill, also when a later step leaves it out', async () => {
     const { hook, toPayment, ramp, statusOf } = make()
     const s = await toPayment()
-    expect((await hook([{ ref: 'order-1', status: 'processing', txHash: '0xsrc', sourceTxHash: '0xsrc' }])).status).toBe(200)
+    const src = { role: 'source', chain: 'eip155:8453', hash: '0xsrc', legIndex: 0 }
+    const fill = { role: 'destination', chain: 'eip155:8453', hash: '0xfill', legIndex: 0 }
+    expect((await hook([{ ref: 'order-1', status: 'processing', transactions: [{ role: 'source', hash: '0xsrc' }] }])).status).toBe(200)
     let pub = await ramp.sessions.retrieve(s.id)
-    expect(pub!.result).toMatchObject({ txHashes: ['0xsrc'], sourceTxHashes: ['0xsrc'] })
-    // The fill arrives by webhook: the main hash changes, the source stays.
-    expect((await hook([{ ref: 'order-1', status: 'processing', txHash: '0xfill' }])).status).toBe(200)
+    expect(pub!.result!.transactions).toEqual([src])
+    // The fill arrives by webhook, without the source: the leg keeps both.
+    expect((await hook([{ ref: 'order-1', status: 'processing', transactions: [{ role: 'destination', hash: '0xfill' }] }])).status).toBe(200)
     pub = await ramp.sessions.retrieve(s.id)
-    expect(pub!.result).toMatchObject({ txHashes: ['0xfill'], sourceTxHashes: ['0xsrc'] })
-    // A status check without hashes completes the leg: the server keeps the source hash.
+    expect(pub!.result!.transactions).toEqual([src, fill])
+    // A status check without transactions completes the leg: the server keeps them.
     statusOf['order-1'] = 'succeeded'
     await ramp.sessions.refresh(s.id)
     pub = await ramp.sessions.retrieve(s.id)
     expect(pub!.status).toBe('succeeded')
-    expect(pub!.result!.sourceTxHashes).toEqual(['0xsrc'])
-    expect(pub!.step.progress!.legs[0]).toMatchObject({ status: 'succeeded', sourceTxHash: '0xsrc' })
+    expect(pub!.result!.transactions).toEqual([src, fill])
+    expect(pub!.payment!.legs[0]).toMatchObject({ status: 'succeeded', transactions: [src, fill] })
   })
 
-  it('has no sourceTxHashes when no leg reports one', async () => {
+  it('a transaction reported again (same role and hash) is kept once', async () => {
     const { hook, toPayment, ramp } = make()
     const s = await toPayment()
-    await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0x1' }])
+    await hook([{ ref: 'order-1', status: 'processing', transactions: [{ role: 'source', hash: '0xAB' }] }])
+    await hook([{ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'source', hash: '0xab' }, { role: 'destination', hash: '0x1' }] }])
     const pub = await ramp.sessions.retrieve(s.id)
-    expect(pub!.result!.txHashes).toEqual(['0x1'])
-    expect(pub!.result!.sourceTxHashes).toBeUndefined()
+    expect(pub!.result!.transactions.map((t) => `${t.role}:${t.hash.toLowerCase()}`)).toEqual(['source:0xab', 'destination:0x1'])
+  })
+
+  it('lists only the transactions that a leg reports', async () => {
+    const { hook, toPayment, ramp } = make()
+    const s = await toPayment()
+    expect((await ramp.sessions.retrieve(s.id))!.result!.transactions).toEqual([])
+    await hook([{ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0x1' }] }])
+    const pub = await ramp.sessions.retrieve(s.id)
+    expect(pub!.result!.transactions).toEqual([{ role: 'destination', chain: 'eip155:8453', hash: '0x1', legIndex: 0 }])
   })
 })
 
@@ -317,10 +317,10 @@ describe('P0-5: restart while waiting for payment keeps the attempt', () => {
     // still on the open list, so the sweep polls it
     expect((await ramp.sweep()).sessions).toMatchObject({ checked: 1, open: 1 })
 
-    expect((await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0x1' }])).status).toBe(200)
+    expect((await hook([{ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0x1' }] }])).status).toBe(200)
     const pub = await ramp.sessions.retrieve(s.id)
     expect(pub!.status).toBe('succeeded')
-    expect(pub!.result!.txHashes).toEqual(['0x1'])
+    expect(pub!.result!.transactions.map((t) => t.hash)).toEqual(['0x1'])
     expect(app.delivered('session.succeeded')).toHaveLength(1)
   })
 
@@ -342,7 +342,7 @@ describe('P0-5: restart while waiting for payment keeps the attempt', () => {
     await post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
     await toPayment(s)
     expect((await hook([{ ref: 'order-2', status: 'processing' }])).status).toBe(200)
-    expect((await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0x9' }])).status).toBe(200)
+    expect((await hook([{ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0x9' }] }])).status).toBe(200)
     const late = app.delivered('session.late_payment')
     expect(late).toHaveLength(1)
     expect(app.sent.find((e) => e.type === 'session.late_payment')).toBeDefined()

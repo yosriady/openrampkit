@@ -617,10 +617,11 @@ export class RampController {
   private applySession(session: PublicSession) {
     this.sessionSeq++
     const prev = this.snap.session?.step
-    const sameStep = !!prev && prev.state === session.step.state && prev.sub === session.step.sub && prev.legIndex === session.step.legIndex
+    const detail = session.step.detail?.code
+    const sameStep = !!prev && prev.state === session.step.state && prev.detail?.code === detail && prev.legIndex === session.step.legIndex
     this.set({ session, error: session.step.error, ...(sameStep ? {} : { surfaceClosed: false }) })
-    if (!prev || prev.state !== session.step.state || prev.sub !== session.step.sub) {
-      this.emit('step.changed', { state: session.step.state, sub: session.step.sub })
+    if (!prev || prev.state !== session.step.state || prev.detail?.code !== detail) {
+      this.emit('step.changed', { state: session.step.state, ...(detail ? { detail } : {}) })
     }
     const step = session.step
     if (isTerminal(step.state)) {
@@ -671,8 +672,9 @@ export class RampController {
       if (this.destroyed) return
       // A transition answered while this poll was in flight: its session is newer, so keep it.
       if (seq !== this.sessionSeq) return
-      const changed = s.step.state !== this.snap.session?.step.state || s.step.sub !== this.snap.session?.step.sub ||
-        JSON.stringify(s.step.progress) !== JSON.stringify(this.snap.session?.step.progress)
+      const cur = this.snap.session
+      const changed = s.step.state !== cur?.step.state || JSON.stringify(s.step.detail) !== JSON.stringify(cur?.step.detail) ||
+        JSON.stringify(s.payment) !== JSON.stringify(cur?.payment)
       if (changed) this.applySession(s)
       else this.schedulePoll(step, attempt + 1, startedAt)
     } catch {

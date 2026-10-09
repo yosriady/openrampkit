@@ -16,10 +16,25 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, cachedJson, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOpenRamp, quoteExpiresAt, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
+import {
+  POLL as POLLS,
+  awaitPoll,
+  cachedJson,
+  createAdapter,
+  decimalFrom,
+  deliverableToAsset,
+  fetchJson,
+  httpErrorToOpenRamp,
+  quoteExpiresAt,
+  randomHex,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
+  timingSafeEqual,
+} from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, openRampError } from '@openrampkit/core'
-import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode } from '@openrampkit/core'
 
 export type TransakOptions = {
   apiKey: string
@@ -136,6 +151,24 @@ type WebhookOrder = {
 }
 
 const dec = decimalFrom
+
+/**
+ * Transak order statuses (https://docs.transak.com/docs/tracking-user-kyc-and-order-status).
+ * `null`: a known status that changes nothing (the user is still in the widget). An unknown status is
+ * no event either, and it is logged: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode } | null>('Transak', {
+  AWAITING_PAYMENT_FROM_USER: null,
+  PAYMENT_DONE_MARKED_BY_USER: { status: 'processing', detail: 'processing' },
+  PROCESSING: { status: 'processing', detail: 'processing' },
+  PENDING_DELIVERY_FROM_TRANSAK: { status: 'processing', detail: 'settling' },
+  ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK: { status: 'processing', detail: 'delayed' },
+  COMPLETED: { status: 'succeeded' },
+  FAILED: { status: 'failed' },
+  CANCELLED: { status: 'failed' },
+  EXPIRED: { status: 'expired' },
+  REFUNDED: { status: 'refunded' },
+})
 
 function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)
@@ -261,30 +294,28 @@ export function transak(opts: TransakOptions) {
     return { network: TRANSAK_NETWORKS[d.chain]!, asset: deliverableToAsset(d) }
   }
 
-  function eventFrom(claims: Record<string, unknown>): LegEvent | undefined {
+  function eventFrom(claims: Record<string, unknown>, log: Pick<Logger, 'warn'>): LegEvent | undefined {
     const o = (claims.webhookData ?? claims) as WebhookOrder
     const ref = o.partnerOrderId
     if (!ref) return undefined
+    // AWAITING_PAYMENT_FROM_USER (the user is still in the widget) or an unknown status: no state change.
+    const m = STATUS(o.status, log)
+    if (!m) return undefined
     const chain = Object.entries(TRANSAK_NETWORKS).find(([, n]) => n === o.network)?.[0]
     const output = chain && o.cryptoAmount !== undefined ? { value: dec(o.cryptoAmount, 6), asset: deliverableToAsset(deliverable.find((d) => d.chain === chain)!) } : undefined
-    switch (o.status) {
-      case 'COMPLETED':
-        return { ref, status: 'succeeded', ...(o.transactionHash ? { txHash: o.transactionHash } : {}), ...(output ? { output } : {}) }
-      case 'FAILED':
-      case 'CANCELLED':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Transak order did not complete.', recovery: 'retry_payment' }) }
-      case 'EXPIRED':
-        return { ref, status: 'expired' }
-      case 'REFUNDED':
-        return { ref, status: 'refunded' }
-      case 'PAYMENT_DONE_MARKED_BY_USER':
-      case 'PROCESSING':
-      case 'PENDING_DELIVERY_FROM_TRANSAK':
-      case 'ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK':
-        return { ref, status: 'processing' }
+    const base: LegEvent = { ref, status: m.status, ...(o.id ? { providerRef: o.id } : {}), ...(m.detail ? { detail: { code: m.detail, providerStatus: o.status! } } : {}) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(o.transactionHash ? { transactions: [{ role: 'destination' as const, hash: o.transactionHash, ...(chain ? { chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'failed':
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The Transak order did not complete.', recovery: 'retry_payment' }) }
       default:
-        // AWAITING_PAYMENT_FROM_USER: the user is still in the widget. No state change.
-        return undefined
+        return base
     }
   }
 
@@ -416,15 +447,18 @@ export function transak(opts: TransakOptions) {
       } catch {
         throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
       }
+      // No Transak order exists before the user pays in the widget, so no providerRef yet.
       return {
-        state: 'PAYMENT',
-        surface:
-          surfaceKind === 'IFRAME'
-            ? { kind: 'IFRAME', url: widgetUrl!, origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
-            : // Transak checks the Referer against the partner domain, so keep it on the start redirect.
-              { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak', keepReferrer: true },
-        transitions: [awaitPoll(POLL)],
         status: 'requires_action',
+        action: {
+          kind: 'payment',
+          surface:
+            surfaceKind === 'IFRAME'
+              ? { kind: 'IFRAME', url: widgetUrl!, origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
+              : // Transak checks the Referer against the partner domain, so keep it on the start redirect.
+                { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak', keepReferrer: true },
+          transitions: [awaitPoll(POLL)],
+        },
         ref,
       }
     },
@@ -462,7 +496,7 @@ export function transak(opts: TransakOptions) {
           return []
         }
         const claims = typeof body?.data === 'string' ? decodeClaims(body.data) : undefined
-        const ev = claims ? eventFrom(claims) : undefined
+        const ev = claims ? eventFrom(claims, ctx.log) : undefined
         return ev ? [ev] : []
       },
     },

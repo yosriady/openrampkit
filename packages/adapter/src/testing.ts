@@ -10,9 +10,9 @@
 import { checkAdapterShape, checkLegQuote, checkLegStep } from './testkit.js'
 import type { ConformanceProblem } from './testkit.js'
 import type { Adapter, AdapterContext, LegEvent, Logger, QuoteInput, ScopedKV, StartInput, WebhookContext } from './index.js'
-import type { Destination, LegQuote, LegStatus, LegStep, PathwayLeg, StateName } from '@openrampkit/core'
-
-const LEG_STATUSES: readonly LegStatus[] = ['pending', 'requires_action', 'processing', 'succeeded', 'failed', 'refunded', 'expired', 'reversed']
+import { stateFor } from '@openrampkit/core'
+import type { Destination, LegQuote, LegStep, PathwayLeg, StateName } from '@openrampkit/core'
+import { LEG_STATUSES } from './testkit.js'
 
 // ---------------- KV ----------------
 
@@ -208,10 +208,11 @@ function errText(e: unknown): string {
   return String((e as Error | undefined)?.message ?? e)
 }
 
-function checkStep(where: string, step: LegStep, expectRef: boolean): ConformanceProblem[] {
+function checkStep(where: string, step: LegStep, expectRef: boolean, first = false): ConformanceProblem[] {
   const out = checkLegStep(step).map((p) => ({ where, problem: `${p.where}: ${p.problem}` }))
-  if (!LEG_STATUSES.includes(step.status)) out.push({ where, problem: `unknown leg status ${step.status}` })
   if (expectRef && !step.ref && step.status !== 'failed') out.push({ where, problem: 'step has no ref, so webhooks and status checks cannot find it' })
+  // The first step of a leg has nothing to keep: when the user must act, it says how.
+  if (first && step.status === 'requires_action' && step.action && !step.action.surface) out.push({ where, problem: 'the first requires_action step has no surface' })
   return out
 }
 
@@ -261,8 +262,8 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
       continue
     }
     report.steps.push(step)
-    report.problems.push(...checkStep(`${name} start`, step, true))
-    if (f.expect?.start && step.state !== f.expect.start) problem(`${name} start`, `state ${step.state}, expected ${f.expect.start}`)
+    report.problems.push(...checkStep(`${name} start`, step, true, true))
+    if (f.expect?.start && stateFor(step) !== f.expect.start) problem(`${name} start`, `state ${stateFor(step)}, expected ${f.expect.start}`)
     const ref = step.ref
     if (!ref) continue
 
@@ -285,7 +286,7 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
         const s = await adapter.status({ leg: f.leg, ref }, ctx)
         report.steps.push(s)
         report.problems.push(...checkStep(`${name} status`, s, false))
-        if (f.expect?.status && s.state !== f.expect.status) problem(`${name} status`, `state ${s.state}, expected ${f.expect.status}`)
+        if (f.expect?.status && stateFor(s) !== f.expect.status) problem(`${name} status`, `state ${stateFor(s)}, expected ${f.expect.status}`)
       } catch (e) {
         problem(`${name} status`, `threw ${errText(e)}`)
       }
@@ -314,6 +315,7 @@ export async function runAdapterConformance(adapter: Adapter, opts: ConformanceO
       for (const ev of first) {
         if (!ev.ref) problem(name, 'event without ref')
         if (!LEG_STATUSES.includes(ev.status)) problem(name, `unknown leg status ${ev.status}`)
+        else for (const p of checkLegStep(ev)) if (!(ev.status === 'requires_action' && p.problem === 'requires_action without an action')) problem(name, `${p.where}: ${p.problem}`)
       }
     } catch (e) {
       problem(name, `threw ${errText(e)}`)

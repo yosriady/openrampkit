@@ -17,7 +17,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch), so it runs on Cloudflare Workers.
 
-import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, cachedJson, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOpenRamp, httpStatus, quoteExpiresAt, randomHex, topicAddress } from '@openrampkit/adapter'
+import { ERC20_TRANSFER_TOPIC, POLL, cachedJson, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOpenRamp, httpStatus, quoteExpiresAt, randomHex, statusMap, topicAddress } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
@@ -34,7 +34,7 @@ import {
   sameToken,
   toBaseUnits,
 } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, StepSub, TxRequest } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, LegTransaction, PollSpec, StepDetailCode, TxRequest } from '@openrampkit/core'
 
 export type LifiOptions = {
   /** LI.FI API key (`x-lifi-api-key`), from the Partner Portal. Optional, but the free quote limit is low. Keep it on the server. */
@@ -94,8 +94,8 @@ const USED_TTL_SEC = 90 * 24 * 60 * 60
 /** Allowed difference between our clock and the source tx time */
 const TX_CLOCK_SKEW_MS = 5 * 60_000
 
+/** The poll of a running LI.FI leg. It is the server's default poll, so the steps name none. */
 export const LIFI_POLL: PollSpec = POLL.onchain
-const POLL_TRANSITION = awaitPoll(LIFI_POLL)
 const SUBMIT_TX = { name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' } as const
 
 // ---------------- LI.FI API types (only the fields we read) ----------------
@@ -126,6 +126,8 @@ type DeliveryReceipt = Omit<EvmReceipt, 'logs'> & { logs?: Array<{ address: stri
 type LifiTransfer = { txHash?: string; chainId?: number; amount?: string; token?: LifiToken; timestamp?: number }
 /** `GET /v1/status` */
 export type LifiStatus = {
+  /** LI.FI's id of the transfer */
+  transactionId?: string
   status: 'NOT_FOUND' | 'INVALID' | 'PENDING' | 'DONE' | 'FAILED' | string
   substatus?: string
   substatusMessage?: string
@@ -280,27 +282,40 @@ function erc20AllowanceData(owner: string, spender: string): string {
 }
 
 /**
- * The `Step.sub` for a LI.FI status or substatus (https://docs.li.fi/introduction/user-flows-and-examples/status-tracking).
- * NOT_FOUND: LI.FI has not indexed the source transaction yet.
+ * LI.FI `GET /v1/status` statuses (https://docs.li.fi/introduction/user-flows-and-examples/status-tracking).
+ * NOT_FOUND: LI.FI has not indexed the source transaction yet. A status that is not in the table is
+ * logged once, and the leg keeps its last known status.
  */
-export function lifiSub(raw: string): StepSub {
-  switch (raw.toUpperCase()) {
-    case 'NOT_FOUND':
-    case 'WAIT_SOURCE_CONFIRMATIONS':
-      return 'confirming'
-    case 'WAIT_DESTINATION_TRANSACTION':
-    case 'PENDING':
-      return 'bridging'
-    case 'BRIDGE_NOT_AVAILABLE':
-    case 'CHAIN_NOT_AVAILABLE':
-    case 'NOT_PROCESSABLE_REFUND_NEEDED':
-      return 'delayed'
-    case 'REFUND_IN_PROGRESS':
-      return 'refunding'
-    default:
-      return 'processing'
-  }
-}
+export const LIFI_STATUS = statusMap<'running' | 'done' | 'failed' | 'invalid'>('LI.FI', {
+  NOT_FOUND: 'running',
+  PENDING: 'running',
+  DONE: 'done',
+  FAILED: 'failed',
+  INVALID: 'invalid',
+})
+
+/**
+ * The detail code of a running LI.FI status (NOT_FOUND, PENDING) or PENDING substatus, from the
+ * closed list. A substatus that is not in the table is logged once and gets the generic `processing`
+ * code (PENDING is documented as in progress).
+ */
+export const LIFI_RUNNING = statusMap<StepDetailCode>(
+  'LI.FI',
+  {
+    NOT_FOUND: 'confirming',
+    WAIT_SOURCE_CONFIRMATIONS: 'confirming',
+    PENDING: 'bridging',
+    WAIT_DESTINATION_TRANSACTION: 'bridging',
+    BRIDGE_NOT_AVAILABLE: 'delayed',
+    CHAIN_NOT_AVAILABLE: 'delayed',
+    UNKNOWN_ERROR: 'delayed',
+    REFUND_IN_PROGRESS: 'refunding',
+  },
+  { ignoreCase: true },
+)
+
+/** LI.FI substatuses of DONE */
+export const LIFI_DONE = statusMap<'completed' | 'partial' | 'refunded'>('LI.FI', { COMPLETED: 'completed', PARTIAL: 'partial', REFUNDED: 'refunded' })
 
 function toOpenRamp(e: unknown, log?: Pick<Logger, 'warn'>): OpenRampException {
   return httpErrorToOpenRamp(e, 'LI.FI', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
@@ -586,7 +601,7 @@ export function lifi(opts: LifiOptions = {}) {
       } satisfies WalletRecord,
       RECORD_TTL_SEC,
     )
-    return { state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: origin.chain, txs }, transitions: [SUBMIT_TX], status: 'requires_action', ref }
+    return { status: 'requires_action', action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: origin.chain, txs }, transitions: [SUBMIT_TX] }, ref }
   }
 
   // ---------- one transaction, one session ----------
@@ -601,12 +616,20 @@ export function lifi(opts: LifiOptions = {}) {
 
   // ---------- status ----------
 
-  const fail = (ref: string, message: string, txHash?: string, recovery?: 'contact_support'): LegStep => ({
-    state: 'FAILED',
+  /**
+   * The fields of every step after the wallet sent `source`: our ref, LI.FI's transfer id (else the
+   * source tx hash), the source transaction, and the delivery (`destination`) when there is one.
+   */
+  function sent(rec: WalletRecord, ref: string, source: string, s?: LifiStatus, delivery?: string): Pick<LegStep, 'ref' | 'providerRef' | 'transactions'> & { ref: string } {
+    const transactions: LegTransaction[] = [{ role: 'source', hash: source, chain: rec.fromChain }]
+    if (delivery) transactions.push({ role: 'destination', hash: delivery, chain: rec.toChain })
+    const providerRef = typeof s?.transactionId === 'string' && s.transactionId ? s.transactionId : source
+    return { ref, providerRef, transactions }
+  }
+
+  const fail = (base: Pick<LegStep, 'ref' | 'providerRef' | 'transactions'>, message: string, recovery?: 'contact_support'): LegStep => ({
     status: 'failed',
-    transitions: [],
-    ref,
-    ...(txHash ? { txHash } : {}),
+    ...base,
     error: openRampError('DELIVERY_FAILED', { message, ...(recovery ? { recovery } : {}) }),
   })
 
@@ -614,19 +637,20 @@ export function lifi(opts: LifiOptions = {}) {
    * LI.FI says DONE and COMPLETED. The leg completes only when the delivery is to our receiver, in our
    * token and chain, at least `minBase`, and (EVM tokens with an RPC) one unused Transfer log shows it.
    */
-  async function verifyDelivery(ctx: AdapterContext, ref: string, rec: WalletRecord, s: LifiStatus): Promise<LegStep> {
+  async function verifyDelivery(ctx: AdapterContext, ref: string, rec: WalletRecord, source: string, s: LifiStatus): Promise<LegStep> {
     const recv = s.receiving
     const outHash = recv?.txHash
     const amount = big(recv?.amount)
     const toChainId = lifiChainId(rec.toChain)
-    if (!recv || !outHash || amount === undefined) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: rec.txHash! }
-    if (recv.chainId !== toChainId) return fail(ref, `LI.FI delivered on another chain than ${chainName(rec.toChain)}.`, outHash, 'contact_support')
+    if (!recv || !outHash || amount === undefined) return { status: 'processing', detail: { code: 'confirming' }, ...sent(rec, ref, source, s) }
+    const base = sent(rec, ref, source, s, outHash)
+    if (recv.chainId !== toChainId) return fail(base, `LI.FI delivered on another chain than ${chainName(rec.toChain)}.`, 'contact_support')
     if (!recv.token || !sameAsset(rec.toChain, recv.token.address, rec.toChain, lifiToken(rec.toChain, rec.toToken))) {
-      return fail(ref, 'LI.FI delivered another token.', outHash, 'contact_support')
+      return fail(base, 'LI.FI delivered another token.', 'contact_support')
     }
-    if (!sameAddress(rec.toChain, s.toAddress, rec.recipient)) return fail(ref, 'LI.FI delivered to another address.', outHash, 'contact_support')
+    if (!sameAddress(rec.toChain, s.toAddress, rec.recipient)) return fail(base, 'LI.FI delivered to another address.', 'contact_support')
     const min = BigInt(rec.minBase)
-    if (amount < min) return fail(ref, 'The delivery is less than the quoted minimum.', outHash, 'contact_support')
+    if (amount < min) return fail(base, 'The delivery is less than the quoted minimum.', 'contact_support')
     const decimals = recv.token.decimals ?? rec.toDecimals
     let paid = amount
 
@@ -639,8 +663,8 @@ export function lifi(opts: LifiOptions = {}) {
         [outHash],
         { log: ctx.log },
       )
-      if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: outHash }
-      if (receipt.status !== '0x1') return fail(ref, 'The delivery transaction failed on chain.', outHash, 'contact_support')
+      if (!receipt) return { status: 'processing', detail: { code: 'confirming' }, ...base }
+      if (receipt.status !== '0x1') return fail(base, 'The delivery transaction failed on chain.', 'contact_support')
       const token = rec.toToken.toLowerCase()
       const to = topicAddress(rec.recipient)
       const logs = (receipt.logs ?? [])
@@ -662,71 +686,76 @@ export function lifi(opts: LifiOptions = {}) {
         break
       }
       if (found === undefined) {
-        return fail(ref, taken ? 'This delivery was already used for another payment.' : 'The delivery transaction does not pay the destination the quoted minimum.', outHash, 'contact_support')
+        return fail(base, taken ? 'This delivery was already used for another payment.' : 'The delivery transaction does not pay the destination the quoted minimum.', 'contact_support')
       }
       paid = found
     }
-    return {
-      state: 'COMPLETED',
-      status: 'succeeded',
-      transitions: [],
-      ref,
-      txHash: outHash,
-      output: { ...rec.output, value: fromBaseUnits(paid.toString(), decimals) },
-    }
+    return { status: 'succeeded', ...base, output: { ...rec.output, value: fromBaseUnits(paid.toString(), decimals) } }
   }
 
   async function statusWallet(ctx: AdapterContext, ref: string): Promise<LegStep> {
     const rec = await ctx.store.get<WalletRecord>(`w:${ref}`)
     if (!rec) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
-    if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref }
-    // `txHash` becomes the delivery once LI.FI reports it; `sourceTxHash` stays the transaction the wallet sent.
-    return { ...(await checkSource(ctx, ref, rec, rec.txHash)), sourceTxHash: rec.txHash }
+    // No transaction yet: the user still pays (no surface: the UI keeps the WALLET_TX surface).
+    if (!rec.txHash) return { status: 'requires_action', action: { kind: 'payment', transitions: [SUBMIT_TX] }, ref }
+    return checkSource(ctx, ref, rec, rec.txHash)
   }
 
   /** Status of a wallet leg whose source transaction `txHash` the wallet sent */
   async function checkSource(ctx: AdapterContext, ref: string, rec: WalletRecord, txHash: string): Promise<LegStep> {
-    // The UI gets a label from the closed list; the raw LI.FI status stays in `providerStatus` (timeline only).
-    const waiting = (raw: string): LegStep => ({ state: 'PROCESSING', sub: lifiSub(raw), providerStatus: raw, status: 'processing', transitions: [POLL_TRANSITION], ref, txHash })
+    // A running status or substatus: a detail code from the closed list; the raw LI.FI value stays
+    // in `detail.providerStatus` (timeline only).
+    const running = (raw: string, s?: LifiStatus): LegStep => ({
+      status: 'processing',
+      detail: { code: LIFI_RUNNING(raw, ctx.log) ?? 'processing', providerStatus: raw },
+      ...sent(rec, ref, txHash, s),
+    })
     // One source transaction pays one session only.
     const usedBy = await ctx.shared.get<string>(srcKey(rec.fromChain, txHash))
-    if (usedBy && usedBy !== ownerOf(ctx, ref)) return fail(ref, 'This transaction was already used for another payment.', txHash)
+    if (usedBy && usedBy !== ownerOf(ctx, ref)) return fail(sent(rec, ref, txHash), 'This transaction was already used for another payment.')
 
     let s: LifiStatus
     try {
       s = await api<LifiStatus>(ctx, '/status', { txHash, fromChain: String(lifiChainId(rec.fromChain)), toChain: String(lifiChainId(rec.toChain)) })
     } catch (e) {
       // 404 (code 1003): LI.FI has not indexed the hash yet. Normal for a minute or two.
-      if (httpStatus(e) === 404) return waiting('NOT_FOUND')
+      if (httpStatus(e) === 404) return running('NOT_FOUND')
       throw toOpenRamp(e, ctx.log)
     }
+    const base = sent(rec, ref, txHash, s)
     // LI.FI also finds a transfer by its delivery hash: the hash the wallet gave must be the source.
-    if (s.sending?.txHash && key(s.sending.txHash) !== key(txHash)) return fail(ref, 'The transaction is not the source of a LI.FI transfer.', txHash)
-    if (s.sending?.chainId !== undefined && s.sending.chainId !== lifiChainId(rec.fromChain)) return fail(ref, `The transaction is not on ${chainName(rec.fromChain)}.`, txHash)
+    if (s.sending?.txHash && key(s.sending.txHash) !== key(txHash)) return fail(base, 'The transaction is not the source of a LI.FI transfer.')
+    if (s.sending?.chainId !== undefined && s.sending.chainId !== lifiChainId(rec.fromChain)) return fail(base, `The transaction is not on ${chainName(rec.fromChain)}.`)
     // The source tx must be newer than this payment, and (when LI.FI stored the quote) be the one we built.
     if (typeof s.sending?.timestamp === 'number' && s.sending.timestamp * 1000 < rec.since - TX_CLOCK_SKEW_MS) {
-      return fail(ref, 'The transaction was sent before this payment started.', txHash)
+      return fail(base, 'The transaction was sent before this payment started.')
     }
     // TO VERIFY: `quote.stepId` equals the /quote `id` (LI.FI docs say so; not seen live yet).
-    if (s.quote?.stepId && rec.stepId && s.quote.stepId !== rec.stepId) return fail(ref, 'The transaction is not the one built for this payment.', txHash)
+    if (s.quote?.stepId && rec.stepId && s.quote.stepId !== rec.stepId) return fail(base, 'The transaction is not the one built for this payment.')
 
-    switch (s.status) {
-      case 'DONE':
-        if (s.substatus === 'REFUNDED') return { state: 'REFUNDED', status: 'refunded', transitions: [], ref, txHash }
+    switch (LIFI_STATUS(s.status, ctx.log)) {
+      case 'done': {
+        const done = s.substatus ? LIFI_DONE(s.substatus, ctx.log) : 'completed'
+        if (done === 'refunded') return { status: 'refunded', ...base }
         // PARTIAL: LI.FI delivered another token (the full value). The destination did not get its token.
-        if (s.substatus === 'PARTIAL') return fail(ref, 'LI.FI delivered another token than the quote. Contact support.', s.receiving?.txHash ?? txHash, 'contact_support')
-        if (s.substatus && s.substatus !== 'COMPLETED') return waiting(s.substatus)
-        return verifyDelivery(ctx, ref, rec, s)
-      case 'FAILED':
-        if (s.substatus === 'REFUNDED') return { state: 'REFUNDED', status: 'refunded', transitions: [], ref, txHash }
-        return fail(ref, 'LI.FI could not complete the transfer.', txHash, 'contact_support')
-      case 'INVALID':
+        if (done === 'partial') return fail(sent(rec, ref, txHash, s, s.receiving?.txHash), 'LI.FI delivered another token than the quote. Contact support.', 'contact_support')
+        if (done === 'completed') return verifyDelivery(ctx, ref, rec, txHash, s)
+        break
+      }
+      case 'failed':
+        if (s.substatus === 'REFUNDED') return { status: 'refunded', ...base }
+        return fail(base, 'LI.FI could not complete the transfer.', 'contact_support')
+      case 'invalid':
         // TO VERIFY: LI.FI gives INVALID when the hash is not tied to the `bridge` param, which we do not send.
-        return fail(ref, 'LI.FI does not know this transaction as a transfer.', txHash)
-      default:
+        return fail(base, 'LI.FI does not know this transaction as a transfer.')
+      case 'running':
         // NOT_FOUND, PENDING (WAIT_SOURCE_CONFIRMATIONS, WAIT_DESTINATION_TRANSACTION, REFUND_IN_PROGRESS, ...)
-        return waiting(s.substatus ?? s.status ?? 'PENDING')
+        return running(s.substatus || s.status, s)
     }
+    // A status, or a DONE substatus, that LI.FI added after this adapter (logged once by the table):
+    // the source transaction is sent, so the leg keeps its last known status (processing), with no
+    // detail code. It never completes or fails on a value we do not know.
+    return { status: 'processing', ...base }
   }
 
   return createAdapter({
@@ -762,7 +791,8 @@ export function lifi(opts: LifiOptions = {}) {
         throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This transaction was already used for another payment.' }), 409)
       }
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
-      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash, sourceTxHash: txHash }
+      // LI.FI has no transfer id yet: the source tx hash is the provider ref until the status gives one.
+      return { status: 'processing', ...sent(rec, input.ref, txHash) }
     },
 
     async status(input, ctx) {

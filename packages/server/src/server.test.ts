@@ -68,7 +68,7 @@ describe('server + controller, mock provider', () => {
     await waitFor(() => c.getSnapshot().screen === 'result')
     const done = await c.done
     expect(done.step.state).toBe('COMPLETED')
-    expect(done.step.progress!.legs.map((l) => l.status)).toEqual(['succeeded', 'succeeded'])
+    expect(done.payment!.legs.map((l) => l.status)).toEqual(['succeeded', 'succeeded'])
     c.destroy()
   })
 
@@ -152,7 +152,7 @@ describe('server + controller, mock provider', () => {
     await c.sendWalletTransactions()
     expect(wallet.sent).toHaveLength(1)
     await waitFor(() => c.getSnapshot().screen === 'result')
-    expect((await c.done).step.progress!.legs[0]!.txHash).toMatch(/^0x/)
+    expect((await c.done).payment!.legs[0]!.transactions.map((t) => t.hash)).toContainEqual(expect.stringMatching(/^0x/))
     c.destroy()
   })
 

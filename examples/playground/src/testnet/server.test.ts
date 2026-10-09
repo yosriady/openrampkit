@@ -97,7 +97,7 @@ describe('testnet server', () => {
     chain.settle({ amount: 5_000_000n, token: testToken.address, recipient: ME, destCalls: input.destination?.type === 'crypto' ? input.destination.calls : [] })
     const done = await client.transition(clientSecret, 'submit_tx', { txHash: HASH })
     expect(done.step.state).toBe('COMPLETED')
-    expect(done.step.progress?.legs[0]).toMatchObject({ legId: 'onchain', status: 'succeeded', txHash: HASH })
+    expect(done.payment?.legs[0]).toMatchObject({ legId: 'onchain', status: 'succeeded', transactions: [{ role: 'source', hash: HASH }, { role: 'settlement', hash: HASH }] })
     expect(chain.calls).toEqual(expect.arrayContaining(['eth_blockNumber', 'eth_call', 'eth_getLogs']))
     // Only the testnet RPC left the page.
     expect(new Set(chain.passed)).toEqual(new Set([arb.rpcUrl]))

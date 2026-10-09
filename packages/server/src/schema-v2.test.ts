@@ -40,10 +40,10 @@ function fx(statusOf: Record<string, LegStep>) {
       return { adapterId: 'fx', legId: leg.legId, input: amountIn!, output: { value: '20', asset: USDC_BASE }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate', expiresAt: new Date(Date.now() + 60_000).toISOString() }
     },
     async start() {
-      return { state: 'PAYMENT', status: 'requires_action', ref: 'fx-new', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] }
+      return { status: 'requires_action', ref: 'fx-new', action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] } }
     },
     async status({ ref }) {
-      return statusOf[ref] ?? { state: 'PROCESSING', status: 'processing', ref, transitions: [] }
+      return statusOf[ref] ?? { status: 'processing', ref }
     },
     webhook: {
       async verify() {
@@ -105,6 +105,29 @@ describe('migrateRecord: schema 2 to 3, quotes', () => {
     for (const s of Object.values(rec.quotes)) for (const f of s.quote.fees) expect(f).toHaveProperty('included')
   })
 
+  it('moves the leg steps to the v2 shape: action, phase, detail and transactions', () => {
+    const f = fresh()
+    const proc = migrateRecord(f.sessions.processing.record)
+    const SRC = '0x' + 'a1'.repeat(32)
+    const FILL = '0x' + 'b2'.repeat(32)
+    expect(proc.active!.legs[0]!.step).toEqual({
+      status: 'processing',
+      poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 },
+      detail: { code: 'confirming', providerStatus: 'pending' },
+      ref: 'fx-1',
+      transactions: [{ role: 'source', hash: SRC }],
+    })
+    expect(raw(proc.step)).not.toHaveProperty('progress')
+    expect(raw(proc.step)).not.toHaveProperty('sub')
+    expect(proc.step.detail).toEqual({ code: 'confirming' })
+    const short = migrateRecord(f.sessions.short.record)
+    expect(short.active!.legs[0]!.step!.transactions).toEqual([{ role: 'source', hash: SRC }, { role: 'destination', hash: FILL }])
+    expect(raw(short.active!.legs[0]!.step)).not.toHaveProperty('txHash')
+    const wait = migrateRecord(f.sessions.awaitingUser.record)
+    expect(wait.active!.legs[0]!.step).toMatchObject({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'QR' } } })
+    expect(raw(wait.active!.legs[0]!.step)).not.toHaveProperty('state')
+  })
+
   it('is idempotent', () => {
     for (const { record } of Object.values(fresh().sessions)) {
       const once = structuredClone(migrateRecord(record))
@@ -140,6 +163,43 @@ describe('schema 2 records load and work', () => {
     const done = await (await call(`/sessions/${record.id}/step`, clientSecret)).json()
     expect(done).toMatchObject({ status: 'succeeded', step: { state: 'COMPLETED' } })
     expect(sent.map((e) => e.type)).toContain('session.succeeded')
+  })
+
+  it('an in-flight payment with a source transaction completes, and keeps that transaction', async () => {
+    at(60_000)
+    const f = fresh()
+    const FILL = '0x' + 'c3'.repeat(32)
+    const SRC = '0x' + 'a1'.repeat(32)
+    const store = await loadedStore(f)
+    const { call, sent } = make(store, { 'fx-1': { status: 'succeeded', ref: 'fx-1', providerRef: 'FX-ORDER-1', output: { value: '20', asset: USDC_BASE }, transactions: [{ role: 'destination', hash: FILL }] } })
+    const { clientSecret, record } = f.sessions.processing
+    const pub = await (await call(`/sessions/${record.id}`, clientSecret)).json()
+    expect(pub).toMatchObject({ status: 'processing', step: { state: 'PROCESSING', detail: { code: 'confirming' } }, payment: { legs: [{ adapterId: 'fx', ref: 'fx-1', status: 'processing', transactions: [{ role: 'source', hash: SRC, chain: 'eip155:8453', legIndex: 0 }] }] } })
+    const done = await (await call(`/sessions/${record.id}/step`, clientSecret)).json()
+    expect(done).toMatchObject({ status: 'succeeded', step: { state: 'COMPLETED' }, payment: { legs: [{ providerRef: 'FX-ORDER-1' }] } })
+    expect(done.result.transactions).toEqual([
+      { role: 'source', chain: 'eip155:8453', hash: SRC, legIndex: 0 },
+      { role: 'destination', chain: 'eip155:8453', hash: FILL, legIndex: 0 },
+    ])
+    expect(sent.map((e) => e.type)).toContain('session.succeeded')
+  })
+
+  it('a schema 2 payment with a submitted transaction fails for good, not as a new attempt', async () => {
+    at(60_000)
+    const f = fresh()
+    const { call } = make(await loadedStore(f), { 'fx-1': { status: 'failed', ref: 'fx-1' } })
+    const { clientSecret, record } = f.sessions.processing
+    const done = await (await call(`/sessions/${record.id}/step`, clientSecret)).json()
+    expect(done.status).toBe('failed')
+  })
+
+  it('a completed short delivery keeps both transactions in the result', async () => {
+    at(60_000)
+    const f = fresh()
+    const { ramp } = make(await loadedStore(f))
+    const s = (await ramp.sessions.retrieve(f.sessions.short.record.id))!
+    expect(s.status).toBe('succeeded')
+    expect(s.result!.transactions.map((t) => t.role)).toEqual(['source', 'destination'])
   })
 
   it('a failed attempt can try again', async () => {

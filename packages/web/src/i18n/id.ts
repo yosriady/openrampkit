@@ -107,7 +107,7 @@ export const id: Messages = {
   checkingStatus: 'Memeriksa status',
   chooseOther: 'Pilih metode lain',
   progressLabel: 'Progres',
-  stepSub: {
+  stepDetail: {
     kyc_details: 'Isi data Anda',
     kyc_terms: 'Setujui ketentuan',
     kyc_verify: 'Verifikasi identitas Anda',

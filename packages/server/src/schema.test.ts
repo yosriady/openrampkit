@@ -71,15 +71,17 @@ describe('migrateRecord', () => {
     expect(rec.outbox).toEqual([])
   })
 
-  it('brings an old free-text Step.sub into the closed list (lower case), or removes it', () => {
+  it('brings an old free-text Step.sub into the closed list (lower case) as Step.detail, or removes it', () => {
     const rec = fresh().sessions.awaitingPayment.record
     ;(rec.step as { sub?: string }).sub = 'SETTLING'
     ;(rec.active!.legs[0]!.step as { sub?: string }).sub = 'WAIT_DESTINATION_TRANSACTION'
     ;(rec.attempts![0]!.legs[0]!.step as { sub?: string }).sub = 'CONFIRMING'
     migrateRecord(rec)
-    expect(rec.step.sub).toBe('settling')
-    expect(rec.active!.legs[0]!.step!.sub).toBeUndefined()
-    expect(rec.attempts![0]!.legs[0]!.step!.sub).toBe('confirming')
+    expect(rec.step.detail).toEqual({ code: 'settling' })
+    expect(rec.step).not.toHaveProperty('sub')
+    expect(rec.active!.legs[0]!.step!.detail).toBeUndefined()
+    expect(rec.active!.legs[0]!.step).not.toHaveProperty('sub')
+    expect(rec.attempts![0]!.legs[0]!.step!.detail).toEqual({ code: 'confirming' })
   })
 
   it('keeps the values a record has, and is idempotent', () => {

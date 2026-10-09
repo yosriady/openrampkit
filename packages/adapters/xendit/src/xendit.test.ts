@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
 import type { AdapterContext, ScopedKV } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
+import { stateFor } from '@openrampkit/core'
 import { createOpenRamp } from '@openrampkit/server'
 import { XENDIT_CHANNELS, xendit } from './index.js'
 
@@ -71,7 +72,8 @@ describe('xendit adapter', () => {
     const q = await a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, c)
     const step = await a.start({ leg: leg('id-qris', 'IDR'), quote: q }, c)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', ref: 'pr-1', surface: { kind: 'QR', payload: '00020101021226...', currency: 'IDR', amount: '150000' } })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', ref: 'pr-1', providerRef: 'pr-1', action: { kind: 'payment', surface: { kind: 'QR', payload: '00020101021226...', currency: 'IDR', amount: '150000' } } })
     const call = calls[0]!
     expect(call.url).toBe('https://api.xendit.co/v3/payment_requests')
     const h = new Headers(call.init.headers)
@@ -85,11 +87,11 @@ describe('xendit adapter', () => {
     const withSub = xendit({ secretKey: 'k', webhookToken: 't', forUserId: 'sub_1' })
     const web = fakeFetch(() => Response.json(pr({ channel_code: 'GCASH', currency: 'PHP', actions: [{ type: 'REDIRECT_CUSTOMER', descriptor: 'WEB_URL', value: 'https://gcash.test/pay' }] })))
     const s1 = await withSub.start({ leg: leg('ph-gcash', 'PHP'), quote: { adapterId: 'xendit', legId: 'ph-gcash', input: { value: '500', asset: { kind: 'fiat', currency: 'PHP' } }, output: { value: '500', asset: { kind: 'fiat', currency: 'PHP' } }, fees: [], guarantee: 'firm' as const, eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() } }, ctx(web.f))
-    expect(s1.surface).toMatchObject({ kind: 'REDIRECT', url: 'https://gcash.test/pay' })
+    expect(s1.action?.surface).toMatchObject({ kind: 'REDIRECT', url: 'https://gcash.test/pay' })
     expect(new Headers(web.calls[0]!.init.headers).get('for-user-id')).toBe('sub_1')
     const deep = fakeFetch(() => Response.json(pr({ actions: [{ type: 'REDIRECT_CUSTOMER', descriptor: 'DEEPLINK_URL', value: 'momo://pay' }] })))
     const s2 = await a.start({ leg: leg('vn-momo', 'VND'), quote: { adapterId: 'xendit', legId: 'vn-momo', input: { value: '50000', asset: { kind: 'fiat', currency: 'VND' } }, output: { value: '50000', asset: { kind: 'fiat', currency: 'VND' } }, fees: [], guarantee: 'firm' as const, eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() } }, ctx(deep.f))
-    expect(s2.surface).toMatchObject({ kind: 'DEEPLINK', url: 'momo://pay' })
+    expect(s2.action?.surface).toMatchObject({ kind: 'DEEPLINK', url: 'momo://pay' })
   })
 
   it('maps every payment request status', async () => {
@@ -100,10 +102,34 @@ describe('xendit adapter', () => {
     for (const [status, state, legStatus] of cases) {
       const { f, calls } = fakeFetch(() => Response.json(pr({ status, failure_code: 'INSUFFICIENT_BALANCE' })))
       const s = await a.status!({ leg: leg('id-qris', 'IDR'), ref: 'pr-1' }, ctx(f))
-      expect([s.state, s.status]).toEqual([state, legStatus])
+      expect([stateFor(s), s.status]).toEqual([state, legStatus])
+      expect(s.providerRef).toBe('pr-1')
       expect(checkLegStep(s)).toEqual([])
       expect(calls[0]!.url).toBe('https://api.xendit.co/v3/payment_requests/pr-1')
     }
+  })
+
+  it('an unknown payment request status is logged and keeps the last known status (never processing by default)', async () => {
+    const warnings: string[] = []
+    const log = { ...quiet, warn: (m: string) => void warnings.push(m) }
+    // No known status yet: the user is still paying, with no new surface (the UI keeps the QR).
+    const fresh = fakeFetch(() => Response.json(pr({ status: 'SOMETHING_NEW' })))
+    const s1 = await a.status!({ leg: leg('id-qris', 'IDR'), ref: 'pr-1' }, { ...ctx(fresh.f), log })
+    expect(s1.status).toBe('requires_action')
+    expect(s1.action).toMatchObject({ kind: 'payment' })
+    expect(s1.action?.surface).toBeUndefined()
+    expect(checkLegStep(s1)).toEqual([])
+    expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('Xendit')
+    // After AUTHORIZED, an unknown status stays processing.
+    let status = 'AUTHORIZED'
+    const later = fakeFetch(() => Response.json(pr({ status })))
+    const c = { ...ctx(later.f), log }
+    expect((await a.status!({ leg: leg('id-qris', 'IDR'), ref: 'pr-1' }, c)).status).toBe('processing')
+    status = 'ANOTHER_NEW'
+    const s2 = await a.status!({ leg: leg('id-qris', 'IDR'), ref: 'pr-1' }, c)
+    expect(s2).toMatchObject({ status: 'processing', ref: 'pr-1', providerRef: 'pr-1' })
+    expect(checkLegStep(s2)).toEqual([])
   })
 
   it('maps HTTP errors', async () => {
@@ -118,7 +144,7 @@ describe('xendit adapter', () => {
     const c = { ...ctx(f), destination: { type: 'merchant' as const, currency: 'SGD' } }
     const q = await a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { value: '12.5', asset: { kind: 'fiat', currency: 'SGD' } } }, c)
     const step = await a.start({ leg: leg('sg-paynow', 'SGD'), quote: q }, c)
-    expect(step.surface).toMatchObject({ kind: 'QR', currency: 'SGD', method: 'paynow' })
+    expect(step.action?.surface).toMatchObject({ kind: 'QR', currency: 'SGD', method: 'paynow' })
     expect(calls[0]!.url).toBe('https://api.xendit.co/v3/payment_requests')
     expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ type: 'PAY', country: 'SG', currency: 'SGD', request_amount: 12.5, channel_code: 'SGQR' })
     expect(a.legs.find((l) => l.id === 'sg-paynow')!.limits).toEqual({ min: '0.01', max: '200000', currency: 'SGD' })
@@ -186,7 +212,7 @@ describe('xendit adapter', () => {
     expect(await a.webhook!.verify(req(), '', wctx)).toBe(false)
     const cap = await a.webhook!.parse(JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED', request_amount: 150000, currency: 'IDR' } }), wctx)
     // no output: Xendit's request_amount is gross; the quote's net output stays the reported result
-    expect(cap).toMatchObject([{ ref: 'pr-1', status: 'succeeded' }])
+    expect(cap).toMatchObject([{ ref: 'pr-1', providerRef: 'pr-1', status: 'succeeded' }])
     expect(cap[0]!.eventId).toMatch(/^[0-9a-f]{32}$/)
     const fail = await a.webhook!.parse(JSON.stringify({ event: 'payment.failure', data: { payment_request_id: 'pr-1', status: 'FAILED', failure_code: 'X' } }), wctx)
     expect(fail[0]).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })

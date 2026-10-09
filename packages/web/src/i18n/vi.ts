@@ -107,7 +107,7 @@ export const vi: Messages = {
   checkingStatus: 'Đang kiểm tra trạng thái',
   chooseOther: 'Chọn phương thức khác',
   progressLabel: 'Tiến trình',
-  stepSub: {
+  stepDetail: {
     kyc_details: 'Nhập thông tin của bạn',
     kyc_terms: 'Chấp nhận điều khoản',
     kyc_verify: 'Xác minh danh tính',

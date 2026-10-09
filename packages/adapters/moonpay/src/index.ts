@@ -30,11 +30,12 @@ import {
   randomHex,
   requireDeliverAsset,
   resolveEnv,
+  statusMap,
   verifyTimestampedHmac,
 } from '@openrampkit/adapter'
-import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, openRampError, roundTo } from '@openrampkit/core'
-import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode, Surface } from '@openrampkit/core'
 
 export type MoonPayDeliverAsset = {
   /** CAIP-2 chain */
@@ -181,6 +182,18 @@ export const MOONPAY_METHODS: MethodDef[] = [
 
 const dec = decimalFrom
 
+/**
+ * MoonPay transaction statuses (https://dev.moonpay.com/api-reference/widget/gettransaction).
+ * An unknown status is no event: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('MoonPay', {
+  waitingPayment: { status: 'requires_action' },
+  waitingAuthorization: { status: 'requires_action' },
+  pending: { status: 'processing', detail: 'processing' },
+  completed: { status: 'succeeded' },
+  failed: { status: 'failed' },
+})
+
 export function moonpay(opts: MoonPayOptions) {
   const env = resolveEnv('moonpay', opts.env, undefined, 'production')
   const apiUrl = (opts.apiUrl ?? 'https://api.moonpay.com').replace(/\/+$/, '')
@@ -237,24 +250,30 @@ export function moonpay(opts: MoonPayOptions) {
     return `${widgetUrl}/${search}&signature=${encodeURIComponent(signature)}`
   }
 
-  function eventFrom(tx: MpTransaction, refOverride?: string): LegEvent | undefined {
+  function eventFrom(tx: MpTransaction, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? tx.externalTransactionId ?? undefined
     if (!ref) return undefined
+    const m = STATUS(tx.status, log)
+    if (!m) return undefined
     const code = tx.currency?.code ?? tx.currencyCode
     const d = deliver.find((x) => x.currencyCode === code)
     const output = d && tx.quoteCurrencyAmount !== undefined && tx.quoteCurrencyAmount !== null ? { value: dec(tx.quoteCurrencyAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
-    switch (tx.status) {
-      case 'completed':
-        return { ref, status: 'succeeded', ...(tx.cryptoTransactionId ? { txHash: tx.cryptoTransactionId } : {}), ...(output ? { output } : {}) }
+    const base: LegEvent = { ref, status: m.status, ...(tx.id ? { providerRef: tx.id } : {}), ...(m.detail ? { detail: { code: m.detail, providerStatus: tx.status! } } : {}) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet. Its chain is the chain of the MoonPay currency.
+          ...(tx.cryptoTransactionId ? { transactions: [{ role: 'destination' as const, hash: tx.cryptoTransactionId, ...(d ? { chain: d.chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
       case 'failed':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The MoonPay purchase did not complete.', recovery: 'retry_payment' }) }
-      case 'pending':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'waitingPayment':
-      case 'waitingAuthorization':
-        return { ref, status: 'requires_action' }
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The MoonPay purchase did not complete.', recovery: 'retry_payment' }) }
+      case 'processing':
+        return { ...base, ...(output ? { output } : {}) }
       default:
-        return undefined
+        // requires_action: the user still pays in the widget. No action: the UI keeps the widget.
+        return base
     }
   }
 
@@ -359,7 +378,7 @@ export function moonpay(opts: MoonPayOptions) {
         opts.surface === 'iframe'
           ? { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 640, provider: 'MoonPay' }
           : { kind: 'REDIRECT', url, popup: true, provider: 'MoonPay' }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'requires_action', ref }
+      return { status: 'requires_action', action: { kind: 'payment', surface, transitions: [awaitPoll(POLL)] }, ref }
     },
 
     async status(input, ctx) {
@@ -373,8 +392,10 @@ export function moonpay(opts: MoonPayOptions) {
       }
       const list = Array.isArray(res) ? res : [res]
       // Several transactions can share one external id (a retry in the widget): the newest decides.
+      // No transaction or an unknown status: a status poll. The server never moves a leg back, so a
+      // leg that already moved on keeps its step.
       const tx = list[list.length - 1]
-      return legStepFromEvent(tx ? eventFrom(tx, input.ref) : undefined, input.ref, POLL)
+      return legStepFromEvent(tx ? eventFrom(tx, ctx.log, input.ref) : undefined, input.ref, POLL)
     },
 
     webhook: {
@@ -404,7 +425,7 @@ export function moonpay(opts: MoonPayOptions) {
           return []
         }
         if (!body.type?.startsWith('transaction_') || !body.data) return []
-        const ev = eventFrom(body.data)
+        const ev = eventFrom(body.data, ctx.log)
         return ev ? [ev] : []
       },
     },

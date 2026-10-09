@@ -81,7 +81,7 @@ describe('migrateRecord: schema 1 to 2', () => {
     expect(done.notified).toContain('session.succeeded:{}')
     expect(done.notified).not.toContain('session.completed:{}')
     // The QR surface keeps its own `amount` field.
-    const surface = wait.active!.legs[0]!.step!.surface
+    const surface = wait.active!.legs[0]!.step!.action?.surface
     if (surface?.kind === 'QR') expect(surface.amount).toBeTruthy()
   })
 

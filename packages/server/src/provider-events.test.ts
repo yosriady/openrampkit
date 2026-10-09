@@ -14,16 +14,8 @@ const BASE = 'https://app.test/api/openramp'
 const quiet = { debug() {}, info() {}, warn() {}, error() {} }
 const DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x000000000000000000000000000000000000beef' }
 const HOOKS = { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }
-
-const STATE: Record<string, LegStep['state']> = {
-  pending: 'PROCESSING',
-  requires_action: 'PAYMENT',
-  processing: 'PROCESSING',
-  succeeded: 'COMPLETED',
-  failed: 'FAILED',
-  refunded: 'REFUNDED',
-  expired: 'EXPIRED',
-}
+/** The transitions of a provider event that asks the user to act: the UI checks the status */
+const AWAIT = [{ name: 'poll', kind: 'AWAIT' as const, poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }]
 
 /** A card provider with webhooks and status polling. `statusOf` sets what `status` answers. */
 function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
@@ -45,15 +37,15 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
     },
     async start() {
       const ref = `order-${++n}`
-      return { state: 'PAYMENT', status: 'requires_action', ref, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll }
+      return { status: 'requires_action', ref, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll } }
     },
     async status({ ref }) {
       const s = statusOf[ref] ?? { status: 'requires_action' as const }
-      return { state: STATE[s.status]!, ref, transitions: s.status === 'requires_action' ? poll : [], ...s }
+      return { ref, ...(s.status === 'requires_action' && !s.action ? { action: { kind: 'payment' as const, transitions: poll } } : {}), ...s }
     },
     async transition({ ref }) {
       const s = transitionOf[ref] ?? { status: 'processing' as const }
-      return { state: STATE[s.status]!, ref, transitions: [], ...s }
+      return { ref, ...s }
     },
     webhook: {
       async verify() {
@@ -92,7 +84,7 @@ function bridgeAdapter() {
       if (ctl.down) throw new Error('bridge API down')
       const ref = `bridge-${++n}`
       starts.push(ref)
-      return { state: 'PROCESSING', status: 'processing', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
+      return { status: 'processing', ref }
     },
     webhook: {
       async verify() {
@@ -146,7 +138,9 @@ function make(extra: Partial<OpenRampConfig> = {}, specExtra: Partial<LegSpec> =
     return rec.active!.legs[0]!.ref!
   }
   const record = async (id: string) => (await store.get(id))!
-  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts, bridge: bridge.ctl }
+  /** The hashes of the transactions that the first leg of session `id` reported */
+  const hashes = async (id: string) => (await record(id)).active!.legs[0]!.step!.transactions?.map((x) => x.hash)
+  return { ramp, store, call, post, hook, hookRes, toPayment, pay, record, hashes, app, statusOf: hooked.statusOf, transitionOf: hooked.transitionOf, bridgeStarts: bridge.starts, bridge: bridge.ctl }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -155,7 +149,7 @@ describe('P1-1: the leg moves only forward', () => {
   it('refuses an old pending event after processing, and answers 200', async () => {
     const t = make()
     const s = await t.toPayment()
-    expect(await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])).toBe(200)
+    expect(await t.hook([{ ref: s.ref, status: 'processing', transactions: [{ role: 'source', hash: '0xaa' }] }])).toBe(200)
     expect((await t.record(s.id)).active!.legs[0]!.step!.status).toBe('processing')
 
     expect(await t.hook([{ ref: s.ref, status: 'pending' }])).toBe(200)
@@ -163,7 +157,7 @@ describe('P1-1: the leg moves only forward', () => {
     const rec = await t.record(s.id)
     expect(rec.active!.legs[0]!.step!.status).toBe('processing')
     expect(rec.step.state).toBe('PROCESSING')
-    expect(rec.active!.legs[0]!.step!.txHash).toBe('0xaa')
+    expect(await t.hashes(s.id)).toEqual(['0xaa'])
   })
 
   it('refuses any move away from a final leg', async () => {
@@ -182,8 +176,8 @@ describe('P1-1: the leg moves only forward', () => {
     const s = await t.toPayment()
     await t.hook([{ ref: s.ref, status: 'pending' }])
     await t.hook([{ ref: s.ref, status: 'processing' }])
-    await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xbb' }])
-    expect((await t.record(s.id)).active!.legs[0]!.step!.txHash).toBe('0xbb')
+    await t.hook([{ ref: s.ref, status: 'processing', transactions: [{ role: 'source', hash: '0xbb' }] }])
+    expect(await t.hashes(s.id)).toEqual(['0xbb'])
     await t.hook([{ ref: s.ref, status: 'succeeded' }])
     expect((await t.record(s.id)).step.state).toBe('COMPLETED')
     expect(t.app.of('session.succeeded')).toHaveLength(1)
@@ -195,7 +189,7 @@ describe('P1-1: the leg moves only forward', () => {
     const t = make()
     const s = await t.toPayment()
     await t.hook([{ ref: s.ref, status: 'processing' }])
-    await t.hook([{ ref: s.ref, status: 'requires_action', surface: depositSurface('0x00000000000000000000000000000000000000aa') }])
+    await t.hook([{ ref: s.ref, status: 'requires_action', action: { kind: 'payment', surface: depositSurface('0x00000000000000000000000000000000000000aa'), transitions: AWAIT } }])
     const rec = await t.record(s.id)
     expect(rec.step.state).toBe('PROCESSING')
     expect(rec.step.surface?.kind).not.toBe('DEPOSIT_ADDRESS')
@@ -206,42 +200,42 @@ describe('P1-1: the leg moves only forward', () => {
     // A surface kind the leg does not declare is refused.
     const a = await t.toPayment()
     await t.hook([{ ref: a.ref, status: 'processing' }])
-    await t.hook([{ ref: a.ref, status: 'requires_action', surface: { kind: 'QR', payload: 'x', amount: '1', currency: 'SGD' } }])
+    await t.hook([{ ref: a.ref, status: 'requires_action', action: { kind: 'payment', surface: { kind: 'QR', payload: 'x', amount: '1', currency: 'SGD' }, transitions: AWAIT } }])
     expect((await t.record(a.id)).step.state).toBe('PROCESSING')
 
     const s = await t.toPayment()
     await t.hook([{ ref: s.ref, status: 'processing' }])
-    await t.hook([{ ref: s.ref, status: 'requires_action', surface: depositSurface('0x00000000000000000000000000000000000000aa') }])
+    await t.hook([{ ref: s.ref, status: 'requires_action', action: { kind: 'payment', surface: depositSurface('0x00000000000000000000000000000000000000aa'), transitions: AWAIT } }])
     let rec = await t.record(s.id)
     expect(rec.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'DEPOSIT_ADDRESS', address: '0x00000000000000000000000000000000000000aa' } })
     expect(rec.timeline!.some((e) => e.type === 'leg.surface_after_processing')).toBe(true)
     // Only once: a second move back with another address is refused.
     await t.hook([{ ref: s.ref, status: 'processing' }])
-    await t.hook([{ ref: s.ref, status: 'requires_action', surface: depositSurface('0x00000000000000000000000000000000000000bb') }])
+    await t.hook([{ ref: s.ref, status: 'requires_action', action: { kind: 'payment', surface: depositSurface('0x00000000000000000000000000000000000000bb'), transitions: AWAIT } }])
     rec = await t.record(s.id)
     expect(rec.step.state).toBe('PROCESSING')
     expect(JSON.stringify(rec.step)).not.toContain('00bb')
 
     // Never after the leg has a transaction.
     const b = await t.toPayment()
-    await t.hook([{ ref: b.ref, status: 'processing', txHash: '0xaa' }])
-    await t.hook([{ ref: b.ref, status: 'requires_action', surface: depositSurface('0x00000000000000000000000000000000000000aa') }])
+    await t.hook([{ ref: b.ref, status: 'processing', transactions: [{ role: 'source', hash: '0xaa' }] }])
+    await t.hook([{ ref: b.ref, status: 'requires_action', action: { kind: 'payment', surface: depositSurface('0x00000000000000000000000000000000000000aa'), transitions: AWAIT } }])
     expect((await t.record(b.id)).step.state).toBe('PROCESSING')
   })
 
   it('drops a provider event whose id the session already applied', async () => {
     const t = make()
     const s = await t.toPayment()
-    await t.hook([{ ref: s.ref, status: 'processing', eventId: 'evt-1', txHash: '0xaa' }])
+    await t.hook([{ ref: s.ref, status: 'processing', eventId: 'evt-1', transactions: [{ role: 'source', hash: '0xaa' }] }])
     // The same provider event again (here with other data, to show that it is not applied).
-    expect(await t.hook([{ ref: s.ref, status: 'processing', eventId: 'evt-1', txHash: '0xff' }])).toBe(200)
+    expect(await t.hook([{ ref: s.ref, status: 'processing', eventId: 'evt-1', transactions: [{ role: 'source', hash: '0xff' }] }])).toBe(200)
     let rec = await t.record(s.id)
-    expect(rec.active!.legs[0]!.step!.txHash).toBe('0xaa')
+    expect(await t.hashes(s.id)).toEqual(['0xaa'])
     expect(rec.providerEvents).toEqual([`hooked:${s.ref}:evt-1`])
     // A new event id applies.
-    await t.hook([{ ref: s.ref, status: 'processing', eventId: 'evt-2', txHash: '0xbb' }])
+    await t.hook([{ ref: s.ref, status: 'processing', eventId: 'evt-2', transactions: [{ role: 'source', hash: '0xbb' }] }])
     rec = await t.record(s.id)
-    expect(rec.active!.legs[0]!.step!.txHash).toBe('0xbb')
+    expect(await t.hashes(s.id)).toEqual(['0xaa', '0xbb'])
     expect(rec.providerEvents).toHaveLength(2)
   })
 })
@@ -256,7 +250,8 @@ describe('P1-2: a refund or a chargeback after success', () => {
     expect(await t.hook([{ ref: s.ref, status: 'refunded' }])).toBe(200)
     const rec = await t.record(s.id)
     expect(rec.status).toBe('reversed')
-    expect(rec.step).toMatchObject({ state: 'REVERSED', transitions: [], error: { code: 'PAYMENT_REVERSED' }, progress: { legs: [{ status: 'refunded' }] } })
+    expect(rec.step).toMatchObject({ state: 'REVERSED', transitions: [], error: { code: 'PAYMENT_REVERSED' } })
+    expect(rec.active!.legs.map((l) => l.step?.status)).toEqual(['refunded'])
     expect(rec.reversal).toMatchObject({ index: 0, adapterId: 'hooked', legId: 'hook', status: 'refunded', previous: 'COMPLETED' })
     expect(rec.timeline!.map((e) => e.type)).toEqual(expect.arrayContaining(['leg.refunded', 'session.reversed']))
 
@@ -449,19 +444,51 @@ describe('P1-3: the reported output is checked against the quote', () => {
   })
 })
 
+describe('transactions of a two-leg payment', () => {
+  it('the delivery of a leg before the last is a hop; the payment lists each leg with its provider', async () => {
+    const t = make()
+    const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
+    const s = await t.toPayment({ destination: ARB })
+    const output = { value: '9', asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } }
+    await t.hook([{ ref: s.ref, status: 'succeeded', output, transactions: [{ role: 'destination', hash: '0xd1' }] }])
+    expect(t.bridgeStarts).toEqual(['bridge-1'])
+    await t.hook([{ ref: 'bridge-1', status: 'succeeded', transactions: [{ role: 'source', hash: '0xs2' }, { role: 'destination', hash: '0xd2' }] }], 'bridger')
+    const pub = (await t.ramp.sessions.retrieve(s.id))!
+    expect(pub.status).toBe('succeeded')
+    expect(pub.result!.transactions).toEqual([
+      { role: 'hop', chain: 'eip155:8453', hash: '0xd1', legIndex: 0 },
+      { role: 'source', chain: 'eip155:8453', hash: '0xs2', legIndex: 1 },
+      { role: 'destination', chain: 'eip155:42161', hash: '0xd2', legIndex: 1 },
+    ])
+    expect(pub.payment).toMatchObject({ attempt: 0, activeLeg: 1, legs: [
+      { index: 0, adapterId: 'hooked', provider: 'Hooked', ref: s.ref, status: 'succeeded', outputConfirmed: true, transactions: [pub.result!.transactions[0]] },
+      { index: 1, adapterId: 'bridger', provider: 'Bridger', ref: 'bridge-1', status: 'succeeded', transactions: pub.result!.transactions.slice(1) },
+    ] })
+    // The timeline has one entry for each new transaction, with the role that the adapter reported.
+    const rec = await t.record(s.id)
+    expect(rec.timeline!.filter((e) => e.type === 'leg.transaction').map((e) => e.detail)).toEqual([
+      { index: 0, adapterId: 'hooked', role: 'destination', hash: '0xd1' },
+      { index: 1, adapterId: 'bridger', role: 'source', hash: '0xs2' },
+      { index: 1, adapterId: 'bridger', role: 'destination', hash: '0xd2' },
+    ])
+    expect(rec.timeline!.find((e) => e.type === 'leg.succeeded')!.detail).not.toHaveProperty('txHash')
+  })
+})
+
 describe('P1-4: replay protection for provider webhooks with a replayKey', () => {
   it('answers a replayed body with 200 and applies nothing; a new body applies', async () => {
     const metrics: string[] = []
     const t = make({ telemetry: { onMetric: (name) => void metrics.push(name) } }, {}, { replay: true })
     const s = await t.toPayment()
-    const first = await t.hookRes([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
+    const firstBody: LegEvent[] = [{ ref: s.ref, status: 'processing', detail: { code: 'confirming', providerStatus: 'first' } }]
+    const first = await t.hookRes(firstBody)
     expect(await first.json()).toEqual({ received: true })
     // Someone replays the same signed body later, after the leg moved on with another body.
-    await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xbb' }])
-    const replay = await t.hookRes([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
+    await t.hook([{ ref: s.ref, status: 'processing', detail: { code: 'confirming', providerStatus: 'second' } }])
+    const replay = await t.hookRes(firstBody)
     expect(replay.status).toBe(200)
     expect(await replay.json()).toEqual({ received: true, duplicate: true })
-    expect((await t.record(s.id)).active!.legs[0]!.step!.txHash).toBe('0xbb')
+    expect((await t.record(s.id)).active!.legs[0]!.step!.detail).toEqual({ code: 'confirming', providerStatus: 'second' })
     expect(metrics).toContain('webhook.replayed')
   })
 
@@ -602,15 +629,15 @@ describe('third review: who can move a session on, and how far', () => {
   it('(b) a status poll cannot move a leg back; a KYC review can end with a payment step', async () => {
     const t = make()
     const s = await t.toPayment()
-    await t.hook([{ ref: s.ref, status: 'processing', txHash: '0xaa' }])
+    await t.hook([{ ref: s.ref, status: 'processing', transactions: [{ role: 'source', hash: '0xaa' }] }])
     t.statusOf[s.ref] = { status: 'requires_action' }
     await t.ramp.sessions.refresh(s.id)
     expect((await t.record(s.id)).step.state).toBe('PROCESSING')
 
     const k = await t.toPayment()
-    t.statusOf[k.ref] = { status: 'processing', state: 'KYC', sub: 'kyc_review' }
+    t.statusOf[k.ref] = { status: 'processing', phase: 'kyc', detail: { code: 'kyc_review' } }
     await t.ramp.sessions.refresh(k.id)
-    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', sub: 'kyc_review' })
+    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', detail: { code: 'kyc_review' } })
     t.statusOf[k.ref] = { status: 'requires_action' }
     await t.ramp.sessions.refresh(k.id)
     expect((await t.record(k.id)).step.state).toBe('PAYMENT')
@@ -619,15 +646,28 @@ describe('third review: who can move a session on, and how far', () => {
   it('(b) a client transition cannot move a leg back', async () => {
     const t = make()
     const s = await t.toPayment()
-    t.statusOf[s.ref] = { status: 'processing', state: 'PROCESSING', transitions: [{ name: 'change', kind: 'SUBMIT', label: 'Change' }] }
+    // A processing step has no action: the server drops the transitions that a third-party adapter
+    // sends with it, so the browser cannot fire them.
+    t.statusOf[s.ref] = { status: 'processing', action: { kind: 'payment', transitions: [{ name: 'change', kind: 'SUBMIT', label: 'Change' }] } }
     await t.ramp.sessions.refresh(s.id)
-    expect((await t.record(s.id)).step.transitions).toEqual([expect.objectContaining({ name: 'change' })])
-    t.transitionOf[s.ref] = { status: 'requires_action', state: 'PAYMENT', surface: { kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x00000000000000000000000000000000000000cc' } }
+    expect((await t.record(s.id)).step.transitions).toEqual([expect.objectContaining({ name: 'poll', kind: 'AWAIT' })])
+    t.transitionOf[s.ref] = { status: 'requires_action', action: { kind: 'payment', surface: { kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x00000000000000000000000000000000000000cc' }, transitions: [] } }
     const res = await t.post(`/sessions/${s.id}/transitions/change`, s.clientSecret)
     expect(res.status).toBe(409)
     const rec = await t.record(s.id)
     expect(rec.step.state).toBe('PROCESSING')
     expect(JSON.stringify(rec.step)).not.toContain('00cc')
+
+    // A transition that the step offers, but whose answer moves the leg back (requires_action to pending)
+    const u = await t.toPayment()
+    t.statusOf[u.ref] = { status: 'requires_action', action: { kind: 'payment', transitions: [{ name: 'change', kind: 'SUBMIT', label: 'Change' }] } }
+    await t.ramp.sessions.refresh(u.id)
+    expect((await t.record(u.id)).step.transitions).toEqual([expect.objectContaining({ name: 'change' })])
+    t.transitionOf[u.ref] = { status: 'pending' }
+    const back = await t.post(`/sessions/${u.id}/transitions/change`, u.clientSecret)
+    expect(back.status).toBe(409)
+    expect((await back.json()).error.message).toMatch(/can no longer change/)
+    expect((await t.record(u.id)).active!.legs[0]!.step!.status).toBe('requires_action')
   })
 
   it('(c) a completed or reversed session refuses plan, quotes, target, select and transitions from the browser', async () => {

@@ -108,7 +108,7 @@ export const th: Messages = {
   checkingStatus: 'กำลังตรวจสอบสถานะ',
   chooseOther: 'เลือกวิธีอื่น',
   progressLabel: 'ความคืบหน้า',
-  stepSub: {
+  stepDetail: {
     kyc_details: 'กรอกข้อมูลของคุณ',
     kyc_terms: 'ยอมรับข้อกำหนด',
     kyc_verify: 'ยืนยันตัวตน',

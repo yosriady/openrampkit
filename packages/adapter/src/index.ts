@@ -7,16 +7,17 @@ import type {
   Direction,
   LegQuote,
   LegSpec,
-  LegStatus,
   LegStep,
-  OpenRampError,
   PathwayLeg,
-  Surface,
-  Transition,
 } from '@openrampkit/core'
 import { bytesToBase64, bytesToHex } from './util.js'
 
-export const ADAPTER_API_VERSION = 1
+/**
+ * The version of the adapter contract. Version 2: a `LegStep` has a `status` and, when the user must
+ * act, an `action` (no `state`, no loose surface fields); `detail` replaces `sub`; transactions are
+ * records with a role; quotes have a `guarantee` and an `expiresAt`; fees have a typed amount.
+ */
+export const ADAPTER_API_VERSION = 2
 
 export interface Logger {
   debug(msg: string, data?: Record<string, unknown>): void
@@ -94,27 +95,20 @@ export type TransitionInput = {
   inputs?: Record<string, unknown>
 }
 
-export type LegEvent = {
+/**
+ * A provider event for one leg (from a webhook, or an adapter route): a `LegStep` with the leg's
+ * `ref`. The server applies it with the same rules as a step from `status()` (see `stateFor` in
+ * `@openrampkit/core`). For example, an offramp `payment_pending` webhook that carries the deposit
+ * address is `{ ref, status: 'requires_action', action: { kind: 'payment', surface: { kind: 'WALLET_TX', ... }, transitions } }`,
+ * and a KYC review webhook is `{ ref, status: 'processing', phase: 'kyc' }`.
+ */
+export type LegEvent = LegStep & {
   ref: string
-  status: LegStatus
   /**
    * Optional provider event id (or another value that is the same for each delivery of one event).
    * The server keeps the recent ids of each session and drops an event whose id it already applied.
    */
   eventId?: string
-  output?: Amount
-  txHash?: string
-  /** The transaction that paid into the leg (see `LegStep.sourceTxHash`) */
-  sourceTxHash?: string
-  error?: OpenRampError
-  /**
-   * Optional new surface for a non-terminal event, e.g. an offramp `payment_pending` webhook that
-   * carries the deposit address: `{ kind: 'WALLET_TX', ... }` with status `requires_action`.
-   * The server shows it instead of the current surface.
-   */
-  surface?: Surface
-  /** Transitions that go with `surface`. Default: an AWAIT poll. */
-  transitions?: Transition[]
 }
 
 export type CatalogInput = { country?: string; currency: string; direction: Direction }
@@ -203,6 +197,13 @@ export type AdapterDefinition = Omit<Adapter, 'apiVersion'> & { apiVersion?: num
 
 export function createAdapter(def: AdapterDefinition): Adapter {
   if (!def.id || !/^[a-z0-9-]+$/.test(def.id)) throw new Error(`Adapter id must be lowercase letters, digits or dashes: ${def.id}`)
+  if (def.apiVersion !== undefined && def.apiVersion !== ADAPTER_API_VERSION) {
+    throw new Error(
+      `Adapter ${def.id} was built for adapter API version ${def.apiVersion}, but @openrampkit/adapter supports version ${ADAPTER_API_VERSION}. ` +
+        'Update the adapter: a LegStep has `status` and an `action` (no `state`), `detail` (no `sub`) and `transactions` (no `txHash`). ' +
+        'See docs/adapters/writing-an-adapter.md.',
+    )
+  }
   const ids = new Set<string>()
   for (const leg of def.legs) {
     if (ids.has(leg.id)) throw new Error(`Adapter ${def.id} has duplicate leg id ${leg.id}`)

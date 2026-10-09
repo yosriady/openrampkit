@@ -1,9 +1,9 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
-import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
+import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 import { meld, meldCode, meldMethodId } from './index.js'
 
 const KEY = 'W9kZTT7332okCEc1A9aqAq:3sYKoXQv6oHVHSts7G2agw9vTCXz'
@@ -183,9 +183,12 @@ describe('meld adapter', () => {
     const quote = await a.quote({ leg: leg('card'), amountIn: money('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     expect(step.ref).toMatch(/^ork_[0-9a-f]{24}$/)
-    expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://banxa.com/checkout?x=1', popup: true, provider: 'BANXA' })
+    // The widget session id is not the Meld transaction id: no providerRef yet
+    expect(step.providerRef).toBeUndefined()
+    expect(step.action?.surface).toEqual({ kind: 'REDIRECT', url: 'https://banxa.com/checkout?x=1', popup: true, provider: 'BANXA' })
     expect(calls[1]!.url).toBe('https://api-sb.meld.io/crypto/session/widget')
     expect(calls[1]!.body).toEqual({
       sessionType: 'BUY',
@@ -199,26 +202,50 @@ describe('meld adapter', () => {
 
     const only = fakeFetch([{ method: 'POST', match: '/crypto/session/widget', reply: () => ({ widgetUrl: 'https://meldcrypto.com/?token=t' }) }])
     const s2 = await a.start({ leg: leg('card'), quote }, makeCtx({ fetch: only.fetch }))
-    expect(s2.surface).toMatchObject({ kind: 'REDIRECT', url: 'https://meldcrypto.com/?token=t' })
+    expect(s2.action?.surface).toMatchObject({ kind: 'REDIRECT', url: 'https://meldcrypto.com/?token=t' })
     const none = fakeFetch([{ method: 'POST', match: '/crypto/session/widget', reply: () => ({}) }])
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: none.fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote: { ...quote, data: {} } }, makeCtx({ fetch: none.fetch }))).rejects.toMatchObject({ error: { code: 'QUOTE_EXPIRED' } })
   })
 
   it('status: search by externalSessionIds and map Meld statuses', async () => {
-    const run = async (transactions: unknown[]) => {
+    const run = async (transactions: unknown[], log = recordingLog()) => {
       const { fetch, calls } = fakeFetch([{ match: '/payments/transactions', reply: () => ({ transactions, count: transactions.length }) }])
-      const s = await meld(opts).status!({ leg: leg('card'), ref: 'ork_abc' }, makeCtx({ fetch }))
+      const s = await meld(opts).status!({ leg: leg('card'), ref: 'ork_abc' }, makeCtx({ fetch, log }))
       expect(calls[0]!.url).toBe('https://api-sb.meld.io/payments/transactions?externalSessionIds=ork_abc')
       expect(checkLegStep(s)).toEqual([])
       return s
     }
-    expect(await run([TX('SETTLED')])).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { value: '96.25' } })
-    for (const st of ['PENDING', 'SETTLING', 'ERROR', 'AUTHORIZED']) expect(await run([TX(st)])).toMatchObject({ state: 'PROCESSING' })
-    for (const st of ['PENDING_CREATED', 'TWO_FA_REQUIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
-    for (const st of ['FAILED', 'DECLINED', 'CANCELLED', 'AUTHORIZATION_EXPIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'FAILED', error: { code: 'PAYMENT_FAILED' } })
-    expect(await run([TX('REFUNDED')])).toMatchObject({ state: 'REFUNDED' })
-    expect(await run([])).toMatchObject({ state: 'PAYMENT', ref: 'ork_abc' })
+    const done = await run([TX('SETTLED')])
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({ status: 'succeeded', providerRef: 'mtx_1', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xhash' }], output: { value: '96.25' } })
+    for (const [st, code] of [['PENDING', 'processing'], ['SETTLING', 'settling'], ['ERROR', 'delayed'], ['AUTHORIZED', 'processing']] as const) {
+      const s = await run([TX(st)])
+      expect(stateFor(s)).toBe('PROCESSING')
+      expect(s).toMatchObject({ status: 'processing', providerRef: 'mtx_1', detail: { code, providerStatus: st } })
+      expect(s.transactions).toBeUndefined()
+    }
+    for (const st of ['PENDING_CREATED', 'TWO_FA_REQUIRED']) {
+      const s = await run([TX(st)])
+      expect(stateFor(s)).toBe('PAYMENT')
+      expect(s).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
+      expect(s.action?.surface).toBeUndefined()
+    }
+    for (const st of ['FAILED', 'DECLINED', 'CANCELLED', 'AUTHORIZATION_EXPIRED']) {
+      const s = await run([TX(st)])
+      expect(stateFor(s)).toBe('FAILED')
+      expect(s).toMatchObject({ error: { code: 'PAYMENT_FAILED' } })
+    }
+    expect(stateFor(await run([TX('REFUNDED')]))).toBe('REFUNDED')
+    const none = await run([])
+    expect(stateFor(none)).toBe('PAYMENT')
+    expect(none).toMatchObject({ ref: 'ork_abc' })
+    // An unknown status is logged and is not processing: a payment poll (the server never moves a leg back)
+    const log = recordingLog()
+    const unknown = await run([TX('SOMETHING_NEW')], log)
+    expect(unknown.status).toBe('requires_action')
+    expect(unknown.status).not.toBe('processing')
+    expect(log.warnings.join(' ')).toContain('unknown provider status')
   })
 
   it('webhook: base64url signature over timestamp.url.body (good, bad, missing, stale, proxy URL)', async () => {
@@ -250,18 +277,31 @@ describe('meld adapter', () => {
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
     const ev = (eventType: string, status?: string, extra: Record<string, unknown> = {}) => ({ eventType, payload: { externalSessionId: 'ork_abc', paymentTransactionId: 'mtx_1', ...(status ? { paymentTransactionStatus: status } : {}), ...extra } })
     expect(await parse(ev('TRANSACTION_CRYPTO_COMPLETE', 'SETTLED'))).toEqual([
-      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { value: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      {
+        ref: 'ork_abc',
+        providerRef: 'mtx_1',
+        status: 'succeeded',
+        transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xhash' }],
+        output: { value: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
     expect(calls[0]!.url).toBe('https://api-sb.meld.io/payments/transactions/mtx_1')
-    expect(await parse(ev('TRANSACTION_CRYPTO_PENDING', 'PENDING'))).toEqual([{ ref: 'ork_abc', status: 'processing' }])
-    expect(await parse(ev('TRANSACTION_CRYPTO_TRANSFERRING', 'SETTLING'))).toEqual([{ ref: 'ork_abc', status: 'processing' }])
+    expect(await parse(ev('TRANSACTION_CRYPTO_PENDING', 'PENDING'))).toEqual([{ ref: 'ork_abc', providerRef: 'mtx_1', status: 'processing', detail: { code: 'processing', providerStatus: 'PENDING' } }])
+    expect(await parse(ev('TRANSACTION_CRYPTO_TRANSFERRING', 'SETTLING'))).toEqual([{ ref: 'ork_abc', providerRef: 'mtx_1', status: 'processing', detail: { code: 'settling', providerStatus: 'SETTLING' } }])
+    expect(await parse(ev('TRANSACTION_CRYPTO_TRANSFERRING'))).toMatchObject([{ status: 'processing', detail: { code: 'settling' } }])
     expect(await parse(ev('TRANSACTION_CRYPTO_FAILED'))).toMatchObject([{ status: 'failed' }])
+    const [created] = await parse(ev('TRANSACTION_CRYPTO_PENDING', 'TWO_FA_REQUIRED'))
+    expect(created).toMatchObject({ ref: 'ork_abc', status: 'requires_action', action: { kind: 'payment' } })
+    expect(checkLegStep(created!)).toEqual([])
+    // Unknown statuses and unknown event types without a status give no event (never processing)
+    expect(await parse(ev('TRANSACTION_CRYPTO_PENDING', 'BRAND_NEW_STATUS'))).toEqual([])
+    expect(await parse(ev('TRANSACTION_CRYPTO_SOMETHING'))).toEqual([])
     expect(await parse({ eventType: 'TRANSACTION_CRYPTO_PENDING', payload: { paymentTransactionStatus: 'PENDING_CREATED' } })).toEqual([])
     expect(await parse({ eventType: 'CUSTOMER_KYC_STATUS_CHANGE', payload: {} })).toEqual([])
     expect(await a.webhook!.parse('nope', wctx)).toEqual([])
     // The transaction read fails: still succeeded, without output
     const down = makeWebhookCtx({ fetch: fakeFetch([{ match: '/payments/transactions/', status: 500, reply: () => ({}) }]).fetch })
-    expect(await a.webhook!.parse(JSON.stringify(ev('TRANSACTION_CRYPTO_COMPLETE', 'SETTLED')), down)).toEqual([{ ref: 'ork_abc', status: 'succeeded' }])
+    expect(await a.webhook!.parse(JSON.stringify(ev('TRANSACTION_CRYPTO_COMPLETE', 'SETTLED')), down)).toEqual([{ ref: 'ork_abc', providerRef: 'mtx_1', status: 'succeeded' }])
   })
 
   it('passes runAdapterConformance', async () => {

@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 import { MOONPAY_METHODS, moonpay } from './index.js'
@@ -75,7 +75,8 @@ describe('moonpay adapter', () => {
       expect(qp.get('paymentMethod')).toBe(pm)
       expect(qp.get('baseCurrencyCode')).toBe('gbp')
       const step = await a.start({ leg: leg(legId, BASE_USDC, 'GBP'), quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
-      const url = new URL(step.surface!.kind === 'REDIRECT' ? step.surface!.url.split('&signature=')[0]! : '')
+      const surface = step.action!.surface!
+      const url = new URL(surface.kind === 'REDIRECT' ? surface.url.split('&signature=')[0]! : '')
       expect(url.searchParams.get('paymentMethod')).toBe(pm)
       expect(url.searchParams.get('baseCurrencyCode')).toBe('gbp')
     }
@@ -146,9 +147,12 @@ describe('moonpay adapter', () => {
     const q = await a.quote({ leg: leg('card'), amountIn: usd('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     expect(step.ref).toMatch(/^ork_[0-9a-f]{24}$/)
-    const s = step.surface!
+    // No MoonPay transaction exists before the user pays in the widget.
+    expect(step.providerRef).toBeUndefined()
+    const s = step.action!.surface!
     if (s.kind !== 'REDIRECT') throw new Error('expected REDIRECT')
     expect(s.popup).toBe(true)
     const [unsigned, sigPart] = s.url.split('&signature=')
@@ -178,7 +182,7 @@ describe('moonpay adapter', () => {
     const ctx = makeCtx({ fetch })
     const q = await a.quote({ leg: leg('card'), amountIn: usd('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote: q }, ctx)
-    const s = step.surface!
+    const s = step.action!.surface!
     if (s.kind !== 'IFRAME') throw new Error('expected IFRAME')
     expect(s.origin).toBe('https://buy-sandbox.moonpay.com')
     expect(s.url.startsWith('https://buy-sandbox.moonpay.com/?apiKey=')).toBe(true)
@@ -204,15 +208,32 @@ describe('moonpay adapter', () => {
       expect(checkLegStep(s)).toEqual([])
       return s
     }
-    expect(await status([TX('completed', { cryptoTransactionId: '0xhash' })])).toMatchObject({
-      state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { value: '94.55', asset: { chain: 'eip155:8453' } },
+    const done = await status([TX('completed', { cryptoTransactionId: '0xhash' })])
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({
+      status: 'succeeded', providerRef: 'tx_1', transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }], output: { value: '94.55', asset: { chain: 'eip155:8453' } },
     })
-    expect(await status(TX('failed'))).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'PAYMENT_FAILED' } })
-    expect(await status([TX('failed'), TX('pending')])).toMatchObject({ state: 'PROCESSING', status: 'processing' })
-    expect(await status([TX('waitingPayment')])).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
-    expect(await status([TX('waitingAuthorization')])).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
-    expect(await status({ message: 'Transaction not found' }, 404)).toMatchObject({ state: 'PAYMENT', status: 'requires_action', ref: 'ork_abc' })
-    expect(await status([])).toMatchObject({ state: 'PAYMENT' })
+    const failed = await status(TX('failed'))
+    expect(stateFor(failed)).toBe('FAILED')
+    expect(failed).toMatchObject({ status: 'failed', providerRef: 'tx_1', error: { code: 'PAYMENT_FAILED' } })
+    const pending = await status([TX('failed'), TX('pending', { id: 'tx_2' })])
+    expect(stateFor(pending)).toBe('PROCESSING')
+    expect(pending).toMatchObject({ status: 'processing', providerRef: 'tx_2', detail: { code: 'processing', providerStatus: 'pending' } })
+    for (const st of ['waitingPayment', 'waitingAuthorization']) {
+      const s = await status([TX(st)])
+      expect(stateFor(s)).toBe('PAYMENT')
+      // A status poll: no surface, so the UI keeps the widget
+      expect(s).toMatchObject({ status: 'requires_action', providerRef: 'tx_1', action: { kind: 'payment', transitions: [{ kind: 'AWAIT' }] } })
+      expect(s.action!.surface).toBeUndefined()
+    }
+    const notFound = await status({ message: 'Transaction not found' }, 404)
+    expect(notFound).toMatchObject({ status: 'requires_action', ref: 'ork_abc' })
+    expect(notFound.providerRef).toBeUndefined()
+    expect(stateFor(await status([]))).toBe('PAYMENT')
+    // An unknown MoonPay status is never `processing`: a status poll that keeps the current step
+    const unknown = await status([TX('somethingNew')])
+    expect(unknown.status).not.toBe('processing')
+    expect(unknown).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     await expect(status({}, 500)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
   })
 
@@ -231,12 +252,23 @@ describe('moonpay adapter', () => {
     expect(await moonpay({ ...opts, webhookKey: undefined }).webhook!.verify(req(sig(t)), body, wctx)).toBe(false)
 
     expect(await a.webhook!.parse(body, wctx)).toEqual([
-      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { value: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      {
+        ref: 'ork_abc',
+        status: 'succeeded',
+        providerRef: 'tx_1',
+        transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }],
+        output: { value: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
     expect(await parse({ type: 'transaction_failed', data: TX('failed') })).toMatchObject([{ status: 'failed' }])
-    expect(await parse({ type: 'transaction_created', data: TX('waitingPayment') })).toEqual([{ ref: 'ork_abc', status: 'requires_action' }])
-    expect(await parse({ type: 'transaction_updated', data: TX('pending') })).toMatchObject([{ status: 'processing' }])
+    expect(await parse({ type: 'transaction_created', data: TX('waitingPayment') })).toEqual([{ ref: 'ork_abc', status: 'requires_action', providerRef: 'tx_1' }])
+    expect(await parse({ type: 'transaction_updated', data: TX('pending') })).toMatchObject([{ status: 'processing', detail: { code: 'processing', providerStatus: 'pending' } }])
+    // An unknown status: no event, and the unknown value is logged
+    const warnings: string[] = []
+    const log = { ...wctx.log, warn: (msg: string) => void warnings.push(msg) }
+    expect(await a.webhook!.parse(JSON.stringify({ type: 'transaction_updated', data: TX('brandNewStatus') }), { ...wctx, log })).toEqual([])
+    expect(warnings.some((w) => w.includes('unknown provider status'))).toBe(true)
     expect(await parse({ type: 'identity_check_updated', data: {} })).toEqual([])
     expect(await parse({ type: 'transaction_updated', data: TX('completed', { externalTransactionId: null }) })).toEqual([])
     expect(await a.webhook!.parse('not json', wctx)).toEqual([])

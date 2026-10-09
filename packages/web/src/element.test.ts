@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DepositController, createMockWallet } from '@openrampkit/client'
 import type { Destination, PublicSession, Surface, Transition, WalletAdapter } from '@openrampkit/core'
 import { USDC, openRampError } from '@openrampkit/core'
-import { BASE, BASE_DEST, fakeClient, quote, session, setupServer, sleep, step, waitFor } from '../../client/src/testctx.js'
+import { BASE, BASE_DEST, fakeClient, payment, quote, session, setupServer, sleep, step, waitFor } from '../../client/src/testctx.js'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import { OpenRampModal, TAG_NAME, createDepositController, darkColors, defineOpenRampModal, lightColors } from './index.js'
 
@@ -82,8 +82,8 @@ async function mount(opts: { country?: string; destination?: Destination; wallet
 }
 
 /** An element on a fake controller whose `select` returns the given step. */
-async function mountStep(surface: Surface | undefined, transitions: Transition[] = [], extra: Partial<PublicSession['step']> = {}) {
-  const client = fakeClient({ select: vi.fn(async () => session(step({ state: 'PAYMENT', transitions, ...(surface ? { surface } : {}), ...extra }))) })
+async function mountStep(surface: Surface | undefined, transitions: Transition[] = [], extra: Partial<PublicSession['step']> = {}, sessionExtra: Partial<PublicSession> = {}) {
+  const client = fakeClient({ select: vi.fn(async () => session(step({ state: 'PAYMENT', transitions, ...(surface ? { surface } : {}), ...extra }), sessionExtra)) })
   const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
   const el = document.createElement(TAG_NAME) as OpenRampModal
   mounted.push(el)
@@ -604,16 +604,15 @@ describe('other surfaces (fake client)', () => {
 
   it('a step without a surface shows processing, progress and extra buttons', async () => {
     const h = await mountStep(undefined, [{ name: 'cancel', kind: 'SUBMIT', label: 'Cancel order' }], {
-      sub: 'kyc_review',
-      progress: {
-        legs: [
-          { adapterId: 'mock', legId: 'a', provider: 'Mock', status: 'succeeded', txHash: '0x1234567890abcdef1234567890abcdef' },
-          { adapterId: 'relay_bridge', legId: 'b', status: 'processing' },
-        ],
-      },
+      detail: { code: 'kyc_review', providerStatus: 'UNDER_REVIEW' },
       error: openRampError('PAYMENT_FAILED'),
+    }, {
+      payment: payment([
+        { adapterId: 'mock', legId: 'a', provider: 'Mock', status: 'succeeded', transactions: [{ role: 'source', hash: '0xaaaa567890abcdef1234567890abbbbb' }, { role: 'hop', hash: '0x1234567890abcdef1234567890abcdef' }] },
+        { adapterId: 'relay_bridge', legId: 'b', status: 'processing' },
+      ]),
     })
-    // The sub is translated (en.stepSub), not the raw value title-cased
+    // The detail code is translated (en.stepDetail), not the raw value title-cased
     expect(h.text()).toContain('Checking your identity')
     expect(h.text()).not.toContain('Kyc Review')
     expect(h.$$('.progress li')).toHaveLength(2)
@@ -650,7 +649,7 @@ describe('result and error screens', () => {
   async function mountResult(state: 'FAILED' | 'EXPIRED' | 'COMPLETED' | 'REVERSED', err = openRampError('PAYMENT_FAILED')) {
     const client = fakeClient({
       getSession: vi.fn(async () =>
-        session(step({ state, ...(state === 'COMPLETED' ? {} : { error: err }), progress: { legs: [{ adapterId: 'a', legId: 'a', status: 'succeeded' }, { adapterId: 'b', legId: 'b', status: 'succeeded' }] } })),
+        session(step({ state, ...(state === 'COMPLETED' ? {} : { error: err }) }), { payment: payment([{ adapterId: 'a', legId: 'a', status: 'succeeded' }, { adapterId: 'b', legId: 'b', status: 'succeeded' }]) }),
       ),
     })
     client.transition.mockResolvedValue(session('SELECT_METHOD'))

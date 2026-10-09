@@ -28,11 +28,12 @@ import {
   randomHex,
   requireDeliverAsset,
   resolveEnv,
+  statusMap,
   verifyTimestampedHmac,
 } from '@openrampkit/adapter'
-import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, cmp, openRampError, roundTo } from '@openrampkit/core'
-import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Amount, Asset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode } from '@openrampkit/core'
 
 export type MeldDeliverAsset = { chain: string; token: string; currencyCode: string; symbol?: string; decimals?: number }
 
@@ -89,6 +90,39 @@ type MeldTransaction = {
 type MeldPaymentMethod = { paymentMethod: string; name?: string; paymentType?: string }
 
 const POLL: PollSpec = POLLS.checkout
+
+/**
+ * Meld transaction status -> leg status (and a step detail). A status that is not in the table is
+ * logged once and gives no event: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('Meld', {
+  // The user is still in the provider page (2FA too)
+  PENDING_CREATED: { status: 'requires_action' },
+  TWO_FA_REQUIRED: { status: 'requires_action' },
+  PENDING: { status: 'processing', detail: 'processing' },
+  TWO_FA_PROVIDED: { status: 'processing', detail: 'processing' },
+  ACCEPTED: { status: 'processing', detail: 'processing' },
+  AUTHORIZED: { status: 'processing', detail: 'processing' },
+  SETTLING: { status: 'processing', detail: 'settling' },
+  PARTIALLY_SETTLED: { status: 'processing', detail: 'settling' },
+  // ERROR is temporary at Meld: the provider may retry.
+  ERROR: { status: 'processing', detail: 'delayed' },
+  SETTLED: { status: 'succeeded' },
+  FAILED: { status: 'failed' },
+  DECLINED: { status: 'failed' },
+  CANCELLED: { status: 'failed' },
+  AUTHORIZATION_EXPIRED: { status: 'failed' },
+  REFUNDED: { status: 'refunded' },
+})
+
+/** Meld webhook event type -> the transaction status, for an event without `paymentTransactionStatus` */
+const EVENT_STATUS = statusMap<string>('Meld webhook', {
+  TRANSACTION_CRYPTO_PENDING: 'PENDING',
+  TRANSACTION_CRYPTO_TRANSFERRING: 'SETTLING',
+  TRANSACTION_CRYPTO_COMPLETE: 'SETTLED',
+  TRANSACTION_CRYPTO_FAILED: 'FAILED',
+})
+
 const CATALOG_TTL_SEC = 60 * 60
 const WEBHOOK_TOLERANCE_SEC = 5 * 60
 
@@ -231,35 +265,27 @@ export function meld(opts: MeldOptions) {
 
   const assetOf = deliverableToAsset
 
-  function eventFrom(ref: string, status: string | undefined, tx?: MeldTransaction): LegEvent | undefined {
+  /**
+   * The event for a Meld transaction status, or undefined for an unknown status (logged once; the leg
+   * keeps its current step). `providerRef` is the Meld transaction id, when known.
+   */
+  function eventFrom(ref: string, status: string | undefined, tx: MeldTransaction | undefined, providerRef: string | undefined, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
+    const m = STATUS(status, log)
+    if (!m) return undefined
+    const ev: LegEvent = { ref, status: m.status }
+    if (providerRef) ev.providerRef = providerRef
+    // A status poll while the user is in the provider page: no surface, the UI keeps the current one.
+    if (m.status === 'requires_action') ev.action = { kind: 'payment', transitions: [awaitPoll(POLL)] }
+    if (m.detail) ev.detail = { code: m.detail, providerStatus: status }
+    if (m.status === 'failed') ev.error = openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' })
     const d = deliver.find((x) => x.currencyCode === tx?.destinationCurrencyCode)
-    const output = d && tx?.destinationAmount !== undefined ? { value: dec(tx.destinationAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
-    const txHash = tx?.cryptoDetails?.blockchainTransactionId ?? undefined
-    switch (status) {
-      case 'SETTLED':
-        return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
-      case 'PENDING_CREATED':
-      case 'TWO_FA_REQUIRED':
-        return { ref, status: 'requires_action' }
-      // ERROR is temporary at Meld: the provider may retry.
-      case 'PENDING':
-      case 'SETTLING':
-      case 'TWO_FA_PROVIDED':
-      case 'ERROR':
-      case 'ACCEPTED':
-      case 'AUTHORIZED':
-      case 'PARTIALLY_SETTLED':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'FAILED':
-      case 'DECLINED':
-      case 'CANCELLED':
-      case 'AUTHORIZATION_EXPIRED':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
-      case 'REFUNDED':
-        return { ref, status: 'refunded' }
-      default:
-        return undefined
+    if ((m.status === 'succeeded' || m.status === 'processing') && d && tx?.destinationAmount !== undefined) {
+      ev.output = { value: dec(tx.destinationAmount, d.decimals ?? 8), asset: assetOf(d) }
     }
+    // The provider's on-chain delivery to the wallet
+    const hash = tx?.cryptoDetails?.blockchainTransactionId
+    if (m.status === 'succeeded' && hash) ev.transactions = [{ role: 'destination', ...(d ? { chain: d.chain } : {}), hash }]
+    return ev
   }
 
   return createAdapter({
@@ -391,11 +417,10 @@ export function meld(opts: MeldOptions) {
       }
       const url = res.serviceProviderWidgetUrl || res.widgetUrl
       if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld did not return a widget URL.' }), 502)
+      // No providerRef yet: Meld gives the transaction id once the user starts paying (`res.id` is the widget session).
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'REDIRECT', url, popup: true, provider: data.serviceProvider },
-        transitions: [awaitPoll(POLL)],
         status: 'requires_action',
+        action: { kind: 'payment', surface: { kind: 'REDIRECT', url, popup: true, provider: data.serviceProvider }, transitions: [awaitPoll(POLL)] },
         ref,
       }
     },
@@ -408,7 +433,9 @@ export function meld(opts: MeldOptions) {
         throw httpErrorToOpenRamp(e, 'Meld', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
       const tx = res.transactions?.[0]
-      return legStepFromEvent(tx ? eventFrom(input.ref, tx.status, tx) : undefined, input.ref, POLL)
+      // No transaction yet, or an unknown status: a payment poll. The server ignores it when the leg is
+      // already further (it never moves a leg back), so the leg keeps its current step.
+      return legStepFromEvent(tx ? eventFrom(input.ref, tx.status, tx, tx.id, ctx.log) : undefined, input.ref, POLL)
     },
 
     webhook: {
@@ -444,8 +471,7 @@ export function meld(opts: MeldOptions) {
         const p = ev.payload ?? {}
         // PENDING_CREATED events may come without the session ids; later events carry them.
         if (!p.externalSessionId) return []
-        let status = p.paymentTransactionStatus
-        if (!status) status = ev.eventType === 'TRANSACTION_CRYPTO_COMPLETE' ? 'SETTLED' : ev.eventType === 'TRANSACTION_CRYPTO_FAILED' ? 'FAILED' : 'PENDING'
+        const status = p.paymentTransactionStatus || EVENT_STATUS(ev.eventType, ctx.log)
         // The event has no amounts: read the transaction for the output and the tx hash (the docs advise it).
         let tx: MeldTransaction | undefined
         if (status === 'SETTLED' && p.paymentTransactionId) {
@@ -455,7 +481,7 @@ export function meld(opts: MeldOptions) {
             ctx.log.warn('meld: could not read the settled transaction', { error: String((e as Error)?.message ?? e).slice(0, 200) })
           }
         }
-        const out = eventFrom(p.externalSessionId, status, tx)
+        const out = eventFrom(p.externalSessionId, status, tx, p.paymentTransactionId ?? tx?.id, ctx.log)
         return out ? [out] : []
       },
     },

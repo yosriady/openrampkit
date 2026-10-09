@@ -21,7 +21,7 @@ import { RECORD_TTL_SEC } from './config.js'
 import type { RelayOptions } from './config.js'
 import { depositAddresses } from './deposit-address.js'
 import { directTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, relaySub, terminalStep, toOpenRamp } from './helpers.js'
+import { POLL_TRANSITION, addrKey, awaitingTx, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, relayStep, relayTransactions, requestIdFromRef, toOpenRamp } from './helpers.js'
 import { quotes, relayLegs } from './quotes.js'
 import type { DepositRecord, RelayIntentStatus, WalletRecord } from './types.js'
 import { walletLeg } from './wallet.js'
@@ -114,13 +114,15 @@ export function relay(opts: RelayOptions = {}) {
         throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
       }
       const txHash = String(input.inputs?.txHash ?? input.inputs?.hash ?? '').trim()
-      const rec = (await ctx.store.get<WalletRecord>(`w:${input.ref}`)) ?? { mode: 'relay' as const, requestId: input.ref }
+      const requestId = requestIdFromRef(input.ref)
+      const rec = (await ctx.store.get<WalletRecord>(`w:${input.ref}`)) ?? { mode: 'relay' as const, ...(requestId ? { requestId } : {}) }
       // EVM: a 32-byte hex hash. Solana: a base58 signature.
       const evmHash = /^0x[0-9a-fA-F]{64}$/.test(txHash)
       const ok = rec.chain ? (isSolana(rec.chain) ? isSolanaSignature(txHash) : evmHash) : evmHash || isSolanaSignature(txHash)
       if (!ok) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
-      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash, sourceTxHash: txHash }
+      const providerRef = rec.mode === 'relay' ? requestId : undefined
+      return { status: 'processing', ref: input.ref, ...(providerRef ? { providerRef } : {}), transactions: relayTransactions(txHash, undefined, rec.chain ? { sourceChain: rec.chain } : {}) }
     },
 
     async status(input, ctx) {
@@ -130,36 +132,38 @@ export function relay(opts: RelayOptions = {}) {
         if (rec?.mode === 'direct' && rec.settlement) return verifySettlementWallet(ctx, input.ref, rec)
         if (rec?.mode === 'direct') {
           // Same-chain transfer: the wallet's tx hash is checked on chain before the leg counts.
-          if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref: input.ref }
+          if (!rec.txHash) return awaitingTx(input.ref)
           return verifyDirectWallet(ctx, input.ref, rec)
         }
         const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
           throw toOpenRamp(e, ctx.log)
         })
-        // `txHash` is the fill on the destination chain once Relay reports it; `sourceTxHash` is the
-        // origin transaction that the user's wallet sent (`submit_tx`), else the one Relay saw.
-        const sourceTxHash = rec?.txHash ?? s.inTxHashes?.[0]
-        const txHash = s.txHashes?.[0] ?? sourceTxHash
-        const extra = { ref: input.ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}) }
+        // `source` is the origin transaction that the user's wallet sent (`submit_tx`), else the one
+        // Relay saw; `destination` is the fill on the destination chain once Relay reports it.
+        const source = rec?.txHash ?? s.inTxHashes?.[0]
+        const transactions = relayTransactions(source, s.txHashes?.[0], { ...(rec?.chain ? { sourceChain: rec.chain } : {}), status: s.status })
+        const providerRef = requestIdFromRef(input.ref)
+        const extra = { ref: input.ref, ...(providerRef ? { providerRef } : {}), ...(transactions.length ? { transactions } : {}) }
         if (s.status === 'success') {
           // Relay filled: report what arrived, so the server checks it against the quote.
           const output = await walletOutput(ctx, input.ref, rec?.output)
-          return terminalStep(s.status, { ...extra, ...(output ? { output } : {}) })!
+          return relayStep(s.status, { ...extra, ...(output ? { output } : {}) })!
         }
-        const done = terminalStep(s.status, extra)
-        if (done) return done
-        if (!rec?.txHash && !s.inTxHashes?.length) {
-          return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'requires_action', ref: input.ref }
-        }
-        return { state: 'PROCESSING', sub: relaySub(s.status), providerStatus: s.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+        const step = relayStep(s.status, extra, ctx.log)
+        if (step && step.status !== 'processing') return step
+        // The wallet has not sent the transaction yet: the user is still paying.
+        if (!source) return awaitingTx(input.ref)
+        // A running status, or a status that Relay added after this adapter (logged once by
+        // `RELAY_STATUS`): the source transaction is sent, so the last known status is `processing`.
+        return step ?? { status: 'processing', ...extra }
       }
 
       // transfer / bridge: look for deposits into the address
       const rec = await ctx.store.get<DepositRecord>(`d:${addrKey(input.ref)}`)
       const waiting: LegStep =
         legId === 'bridge'
-          ? { state: 'PROCESSING', sub: 'waiting_for_deposit', status: 'processing', transitions: [POLL_TRANSITION], ref: input.ref }
-          : { state: 'PAYMENT', status: 'requires_action', transitions: [POLL_TRANSITION], ref: input.ref }
+          ? { status: 'processing', detail: { code: 'waiting_for_deposit' }, ref: input.ref }
+          : { status: 'requires_action', action: { kind: 'payment', transitions: [POLL_TRANSITION] }, ref: input.ref }
       // Same chain and token: the address is the destination itself; look for Transfer logs to it.
       if (rec?.mode === 'direct') return (await findDirectDeposit(ctx, input.ref, rec, waiting)) ?? waiting
       return findRelayDeposit(ctx, input.ref, rec, waiting).catch((e) => {

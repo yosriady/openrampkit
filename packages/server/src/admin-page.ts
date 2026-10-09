@@ -207,7 +207,7 @@ function legsTable(p) {
       h('td', null, chip(l.status, l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
       h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.amountMismatch ? h('div', null, chip(l.amountMismatch.reason === 'short' ? 'short by ' + l.amountMismatch.shortfall : l.amountMismatch.reason.replace('_', ' '), 'failed')) : ''),
       h('td', null, feesText(l.fees)),
-      h('td', { class: 'mono' }, l.ref || '-'), h('td', { class: 'mono' }, l.txHash || '-'),
+      h('td', { class: 'mono' }, (l.ref || '-') + (l.providerRef && l.providerRef !== l.ref ? ' / ' + l.providerRef : '')), h('td', { class: 'mono' }, (l.transactions || []).map((t) => t.role + ': ' + t.hash).join(', ') || '-'),
     ))),
   ))
 }
@@ -235,14 +235,13 @@ function renderDetail(s) {
   )
   body.replaceChildren(
     dl([
-      ['Direction', s.direction], ['Status', s.status], ['State', s.state + (s.step.sub ? ' / ' + s.step.sub : '')],
+      ['Direction', s.direction], ['Status', s.status], ['State', s.state + (s.step.detail ? ' / ' + s.step.detail.code + (s.step.detail.providerStatus ? ' (' + s.step.detail.providerStatus + ')' : '') : '')],
       ['Error', s.step.error ? s.step.error.code + ': ' + s.step.error.message : undefined],
       ['Amount', s.amount ? s.amount + ' ' + (s.currency || '') : undefined], ['User', s.userId], ['Country', s.country],
       ['Created', time(s.createdAt)], ['Updated', time(s.updatedAt)], ['Expires', time(s.expiresAt)], ['Live', s.livemode ? 'yes' : 'no (test)'],
       ['Reversal', s.reversal ? 'Leg ' + s.reversal.index + ' (' + s.reversal.adapterId + ') ' + s.reversal.status + ' at ' + time(s.reversal.at) + ' (was ' + s.reversal.previous + ')' : undefined],
       ['Resolution', s.resolution ? s.resolution.state + ' at ' + time(s.resolution.at) + ' (was ' + s.resolution.previous + '): ' + s.resolution.note : undefined],
-      ['Tx hashes', s.txHashes.join(', ') || undefined],
-      ['Source tx hashes', (s.sourceTxHashes || []).join(', ') || undefined],
+      ['Transactions', (s.transactions || []).map((t) => t.role + ' ' + t.hash + ' (' + t.chain + ', leg ' + t.legIndex + ', attempt ' + t.attempt + ')').join(', ') || undefined],
     ]),
     resolveBox,
     h('h2', null, 'Payment'),

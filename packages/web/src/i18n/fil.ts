@@ -108,7 +108,7 @@ export const fil: Messages = {
   checkingStatus: 'Tinitingnan ang status',
   chooseOther: 'Pumili ng ibang paraan',
   progressLabel: 'Progreso',
-  stepSub: {
+  stepDetail: {
     kyc_details: 'Ilagay ang iyong detalye',
     kyc_terms: 'Tanggapin ang mga tuntunin',
     kyc_verify: 'I-verify ang iyong pagkakakilanlan',

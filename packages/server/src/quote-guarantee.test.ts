@@ -59,7 +59,7 @@ function minAdapter() {
       return { adapterId: 'minout', legId: leg.legId, input: amountIn!, output: usdc('100'), minOutput: usdc('95'), guarantee: 'min_output', slippageBps: 500, fees: [], eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() }
     },
     async start() {
-      return { state: 'PAYMENT', status: 'requires_action', ref: `m-${++n}`, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] }
+      return { status: 'requires_action', ref: `m-${++n}`, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] } }
     },
     webhook: {
       async verify() {

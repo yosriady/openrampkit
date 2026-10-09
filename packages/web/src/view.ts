@@ -1,8 +1,8 @@
 // Pure view logic for <openramp-modal>. No Lit and no DOM here, so it is easy to test.
 
 import type { Snapshot } from '@openrampkit/client'
-import { CHAINS, USDC, isStepSub, mulRatio } from '@openrampkit/core'
-import type { IframeMessages, MethodOption, OpenRampError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
+import { CHAINS, USDC, isStepDetailCode, mulRatio } from '@openrampkit/core'
+import type { IframeMessages, MethodOption, OpenRampError, PathwayGroup, PaymentLeg, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
 import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, hasUnstatedFee, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -16,18 +16,26 @@ export function resolveMode(theme: Theme | undefined, systemDark: boolean): 'lig
   return 'light'
 }
 
+/** The transaction to show for a leg: the delivery (destination, hop or settlement), else the one that paid into it */
+export function mainTx(l: PaymentLeg): string | undefined {
+  const delivery = l.transactions.find((t) => t.role === 'destination' || t.role === 'hop' || t.role === 'settlement')
+  return (delivery ?? l.transactions.find((t) => t.role === 'source'))?.hash
+}
+
 /** Identifies one step screen. Form inputs reset when it changes. */
 export function stepKey(step: Step | undefined): string {
-  return step ? `${step.state}|${step.sub ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
+  return step ? `${step.state}|${step.detail?.code ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
 }
 
 /**
- * The label of a step: the translated `sub` (an i18n key from the closed list `STEP_SUBS`), else the
- * state title. A `sub` that this version does not know (from a newer server) falls back to the state title.
+ * The label of a step: the translated `detail.code` (an i18n key from the closed list
+ * `STEP_DETAIL_CODES`), else the state title. A code that this version does not know (from a newer
+ * server) falls back to the state title.
  */
 export function stepLabel(m: Messages, step: Step): string {
-  const sub = isStepSub(step.sub) ? m.stepSub[step.sub] : undefined
-  return sub || m.stepTitle[step.state] || m.checkingStatus
+  const code = step.detail?.code
+  const detail = isStepDetailCode(code) ? m.stepDetail[code] : undefined
+  return detail || m.stepTitle[step.state] || m.checkingStatus
 }
 
 /** Screen shown for a snapshot, or for an element that has no controller yet. */
@@ -67,7 +75,7 @@ export function liveText(s: Snapshot | undefined, error: OpenRampError | undefin
   if (s.error) return s.error.message
   if (s.screen === 'step' && s.session) {
     const step = s.session.step
-    const legs = step.progress?.legs.map((l, i) => `${i + 1}. ${l.provider ?? titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
+    const legs = s.session.payment?.legs.map((l, i) => `${i + 1}. ${l.provider || titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
     return [m.stepTitle[step.state] ?? '', ...legs].join('. ')
   }
   if (s.screen === 'result' && s.session) {

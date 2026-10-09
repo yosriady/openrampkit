@@ -33,12 +33,13 @@ import {
   randomHex,
   requireDeliverAsset,
   resolveEnv,
+  statusMap,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, cmp, openRampError, roundTo, sub } from '@openrampkit/core'
-import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
 
 export { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, sha256Hex, signV2 } from './sign.js'
@@ -186,6 +187,24 @@ const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '
 
 const dec = decimalFrom
 
+/**
+ * Onramper transaction statuses (https://docs.onramper.com/docs/webhooks, compared without case).
+ * "Statuses might vary among providers": an unknown status is no event, and the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>(
+  'Onramper',
+  {
+    new: { status: 'requires_action' },
+    pending: { status: 'processing', detail: 'processing' },
+    paid: { status: 'processing', detail: 'processing' },
+    completed: { status: 'succeeded' },
+    failed: { status: 'failed' },
+    canceled: { status: 'failed' },
+    cancelled: { status: 'failed' },
+  },
+  { ignoreCase: true },
+)
+
 /** Symbols of stablecoins worth one USD: a USD amount and their payout are in comparable units. */
 const USD_STABLES = new Set(['USDC', 'USDT', 'USDG', 'PYUSD'])
 
@@ -250,26 +269,34 @@ export function onramper(opts: OnramperOptions) {
   const get = <T>(ctx: Pick<AdapterContext, 'fetch'>, pathAndQuery: string, extra: Record<string, string> = {}) =>
     fetchJson<T>(ctx.fetch, `${api}${pathAndQuery}`, { headers: { authorization: opts.apiKey, ...extra } })
 
-  function eventFrom(tx: OrTransaction, refOverride?: string): LegEvent | undefined {
+  function eventFrom(tx: OrTransaction, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? tx.partnerContext
     if (!ref) return undefined
+    const m = STATUS(tx.status, log)
+    if (!m) return undefined
     const d = deliver.find((x) => x.cryptoId === tx.targetCurrency?.toLowerCase())
     const output = d && tx.outAmount !== undefined ? { value: dec(tx.outAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
-    // "Statuses might vary among providers": map the documented ones, ignore the rest.
-    switch (tx.status?.toLowerCase()) {
-      case 'completed':
-        return { ref, status: 'succeeded', ...(tx.transactionHash ? { txHash: tx.transactionHash } : {}), ...(output ? { output } : {}) }
-      case 'paid':
-      case 'pending':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'new':
-        return { ref, status: 'requires_action' }
+    const base: LegEvent = {
+      ref,
+      status: m.status,
+      ...(tx.transactionId ? { providerRef: tx.transactionId } : {}),
+      ...(m.detail ? { detail: { code: m.detail, providerStatus: tx.status! } } : {}),
+    }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(tx.transactionHash ? { transactions: [{ role: 'destination' as const, hash: tx.transactionHash, ...(d ? { chain: d.chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'processing':
+        return { ...base, ...(output ? { output } : {}) }
       case 'failed':
-      case 'canceled':
-      case 'cancelled':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
       default:
-        return undefined
+        // requires_action: the user still pays in the onramp page. No action: the UI keeps that page.
+        return base
     }
   }
 
@@ -425,11 +452,10 @@ export function onramper(opts: OnramperOptions) {
       }
       if (!res.redirectUrl) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Onramper did not return a checkout URL.' }), 502)
       if (res.sessionId) await ctx.store.put(`s:${ref}`, { sessionId: res.sessionId }, TX_TTL_SEC)
+      // V2 checkout returns no transaction id, so no providerRef yet (the first webhook gives it).
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'REDIRECT', url: res.redirectUrl, popup: true, provider: data.onramp },
-        transitions: [awaitPoll(POLL)],
         status: 'requires_action',
+        action: { kind: 'payment', surface: { kind: 'REDIRECT', url: res.redirectUrl, popup: true, provider: data.onramp }, transitions: [awaitPoll(POLL)] },
         ref,
       }
     },
@@ -444,7 +470,9 @@ export function onramper(opts: OnramperOptions) {
       } catch (e) {
         throw httpErrorToOpenRamp(e, 'Onramper', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
-      return legStepFromEvent(eventFrom(tx, input.ref), input.ref, POLL)
+      // An unknown status: a status poll. The server never moves a leg back, so a leg that already
+      // moved on keeps its step.
+      return legStepFromEvent(eventFrom(tx, ctx.log, input.ref), input.ref, POLL)
     },
 
     webhook: {
@@ -474,7 +502,7 @@ export function onramper(opts: OnramperOptions) {
         if (!tx.partnerContext) return []
         // Keep the transaction id so status() can poll it.
         if (tx.transactionId) await ctx.shared.put(`tx:${tx.partnerContext}`, tx.transactionId, TX_TTL_SEC)
-        const ev = eventFrom(tx)
+        const ev = eventFrom(tx, ctx.log)
         return ev ? [{ ...ev, eventId: (await webhookBodyKey(rawBody)).slice(0, 32) }] : []
       },
     },

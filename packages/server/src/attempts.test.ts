@@ -29,7 +29,7 @@ function provider() {
     },
     async start() {
       n++
-      return { state: 'PAYMENT', status: 'requires_action', ref: `order-${n}`, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }
+      return { status: 'requires_action', ref: `order-${n}`, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] } }
     },
     webhook: {
       async verify() {
@@ -90,7 +90,7 @@ describe('a failed attempt', () => {
     const again = await t.pay(s)
     expect(again.body.status).toBe('requires_action')
     expect(again.body.lastError).toBeUndefined()
-    await t.event({ ref: 'order-2', status: 'succeeded', txHash: '0xabc' })
+    await t.event({ ref: 'order-2', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xabc' }] })
     expect((await t.call(`/sessions/${s.id}`, s.clientSecret)).body.status).toBe('succeeded')
     const order = t.types()
     expect(order.indexOf('session.payment_failed')).toBeLessThan(order.indexOf('session.succeeded'))
@@ -153,7 +153,7 @@ describe('a final failure', () => {
     expect((await t.call(`/sessions/${s.id}/plan`, s.clientSecret, {})).status).toBe(409)
 
     // The left attempt is paid after all: a late payment, never session.succeeded.
-    expect((await t.event({ ref: 'order-1', status: 'succeeded', txHash: '0xlate' })).status).toBe(200)
+    expect((await t.event({ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xlate' }] })).status).toBe(200)
     expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('failed')
     const late = t.hooks.find((h) => h.type === 'session.late_payment')!
     expect(late.data.object).toMatchObject({ reason: 'earlier_attempt', attempt: 0 })

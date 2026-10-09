@@ -1,6 +1,6 @@
 // Small helpers shared by the first-party adapters. Web-standard APIs only.
 
-import { OpenRampException, isDecimal, openRampError, sameToken } from '@openrampkit/core'
+import { OpenRampException, isDecimal, isLegTerminal, openRampError, sameToken } from '@openrampkit/core'
 import type { Asset, CryptoAsset, LegStep, PollSpec, Transition } from '@openrampkit/core'
 import type { LegEvent } from './index.js'
 
@@ -72,35 +72,26 @@ export function decimalFrom(n: number | string | undefined | null, digits = 8): 
 }
 
 /**
- * The LegStep for a provider order status that was mapped to a LegEvent (by a webhook parser
- * or a status poll). No event means the user is still paying: PAYMENT, requires_action.
+ * A `requires_action` step while the user pays in a provider page: an AWAIT poll and no surface, so
+ * the UI keeps the surface of the current action.
+ */
+export function awaitingPayment(ref: string, poll: PollSpec): LegStep {
+  return { status: 'requires_action', action: { kind: 'payment', transitions: [awaitPoll(poll)] }, ref }
+}
+
+/**
+ * The `status()` answer for a provider order that was mapped to a `LegEvent` (the same mapping as the
+ * webhook parser): the event without its `eventId`, with `poll` for a step that waits, and with an
+ * AWAIT poll action for a `requires_action` event with no action. No event means that the provider
+ * has no result yet and the user is still paying (`awaitingPayment`). It sets no state: the server
+ * derives `Step.state` with `stateFor()` from `@openrampkit/core`.
  */
 export function legStepFromEvent(ev: LegEvent | undefined, ref: string, poll: PollSpec): LegStep {
-  const extra = { ref, ...(ev?.txHash ? { txHash: ev.txHash } : {}), ...(ev?.output ? { output: ev.output } : {}) }
-  switch (ev?.status) {
-    case undefined:
-    case 'pending':
-    case 'requires_action':
-      return {
-        state: 'PAYMENT',
-        status: 'requires_action',
-        transitions: ev?.surface && ev.transitions ? ev.transitions : [awaitPoll(poll)],
-        ref,
-        ...(ev?.surface ? { surface: ev.surface } : {}),
-      }
-    case 'succeeded':
-      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra }
-    case 'failed':
-      return { state: 'FAILED', status: 'failed', transitions: [], ...extra, ...(ev.error ? { error: ev.error } : {}) }
-    case 'refunded':
-      return { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra }
-    case 'reversed':
-      return { state: 'REVERSED', status: 'reversed', transitions: [], ...extra }
-    case 'expired':
-      return { state: 'EXPIRED', status: 'expired', transitions: [], ...extra }
-    default:
-      return { state: 'PROCESSING', status: 'processing', transitions: [awaitPoll(poll)], ...extra }
-  }
+  if (!ev) return awaitingPayment(ref, poll)
+  const { eventId: _id, ...step } = ev
+  if (step.status === 'requires_action' && !step.action) return { ...step, action: { kind: 'payment', transitions: [awaitPoll(poll)] } }
+  if (!isLegTerminal(step.status) && step.status !== 'requires_action' && !step.poll) return { ...step, poll }
+  return step
 }
 
 /** A token that a provider delivers: a CAIP-2 chain and a token address (or `native`), with optional display data. */

@@ -9,7 +9,7 @@ import { fromBaseUnits } from '@openrampkit/core'
 import type { LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { HOP_TOLERANCE_BPS, LOG_PAGES_PER_CHECK, RECORD_TTL_SEC, USED_TTL_SEC, WATCH_TTL_SEC } from './config.js'
-import { addrKey, cmpBig, hexOr, isNative, isSolana, toHex, usedKey } from './helpers.js'
+import { addrKey, cmpBig, hexOr, isNative, isSolana, sameChainTransactions, toHex, usedKey } from './helpers.js'
 import { solanaReceived } from './solana.js'
 import type { DepositRecord, Watcher } from './types.js'
 
@@ -95,7 +95,7 @@ export function directTransfer(rt: RelayRuntime) {
     ctx.log.warn(
       `relay: a deposit to ${address} matches more than one open session (ref ${ref}). No session takes it. Use a unique address per session, or a wallet payment or a settlement contract.`,
     )
-    return { ...waiting, sub: 'ambiguous_deposit' }
+    return { ...waiting, detail: { code: 'ambiguous_deposit' } }
   }
 
   /**
@@ -153,13 +153,11 @@ export function directTransfer(rt: RelayRuntime) {
         if (!(await claimOnce(ctx.shared, usedKey(chain, s.signature), owner, USED_TTL_SEC))) continue
       }
       const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
+      // A transfer to the destination itself: the one transaction is the source and the delivery.
       return finish(ctx, ref, rec, {
-        state: 'COMPLETED',
         status: 'succeeded',
-        transitions: [],
         ref,
-        txHash: s.signature,
-        sourceTxHash: s.signature,
+        transactions: sameChainTransactions(s.signature, chain, 'destination'),
         ...(rec.output ? { output: { ...rec.output, value: fromBaseUnits(amount.toString(), decimals) } } : {}),
       })
     }
@@ -210,12 +208,9 @@ export function directTransfer(rt: RelayRuntime) {
         }
         const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
         return finish(ctx, ref, rec, {
-          state: 'COMPLETED',
           status: 'succeeded',
-          transitions: [],
           ref,
-          txHash: l.transactionHash,
-        sourceTxHash: l.transactionHash,
+          transactions: sameChainTransactions(l.transactionHash, chain, 'destination'),
           ...(rec.output ? { output: { ...rec.output, value: fromBaseUnits(amount.toString(), decimals) } } : {}),
         })
       }

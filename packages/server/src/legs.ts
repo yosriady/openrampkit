@@ -1,8 +1,8 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OpenRampException, bps, cmp, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, openRampError, sub } from '@openrampkit/core'
-import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
+import { OpenRampException, bps, cmp, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepDetailCode, isTerminal, isWebUrl, openRampError, stateFor, sub } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, LegTransaction, SessionStatus, StateName, Step, StepDetail, Transaction, TransactionRole } from '@openrampkit/core'
 import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_MAX_ATTEMPTS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS, isTreasuryRefused } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
@@ -14,58 +14,147 @@ import type { Runtime } from './runtime.js'
 import type { ActiveLeg, ActivePayment, SessionRecord, StoredQuote } from './store.js'
 import { withdrawSender } from './withdraw.js'
 
-const LEG_STATUS_TO_STATE: Record<LegStatus, StateName> = {
-  pending: 'PROCESSING',
-  requires_action: 'PAYMENT',
-  processing: 'PROCESSING',
-  succeeded: 'COMPLETED',
-  failed: 'FAILED',
-  refunded: 'REFUNDED',
-  expired: 'EXPIRED',
-  reversed: 'REVERSED',
-}
+/** The AWAIT transition of a step with no action: the client checks the status on this schedule */
+const pollTransitions = (ls: LegStep) => [{ name: 'poll', kind: 'AWAIT' as const, poll: ls.poll ?? DEFAULT_POLL }]
 
 /** Build the session step from the active leg. A finished leg that is not the last shows as PROCESSING. */
 export function composeStep(rt: Runtime, rec: SessionRecord): Step {
   const act = rec.active!
   const ls = act.legs[act.index]!.step!
-  const progress = {
-    legs: act.legs.map((l) => ({
-      adapterId: l.adapterId,
-      legId: l.legId,
-      provider: rt.adapters.get(l.adapterId)?.name ?? l.adapterId,
-      status: l.step?.status ?? ('pending' as const),
-      ...(l.step?.txHash ? { txHash: l.step.txHash } : {}),
-      ...(l.step?.sourceTxHash ? { sourceTxHash: l.step.sourceTxHash } : {}),
-    })),
-  }
   // A refund or a chargeback after success ends the session, whatever the other legs do.
   if (rec.reversal) {
-    return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: openRampError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), progress, legIndex: act.index }
+    return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: openRampError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), legIndex: act.index }
   }
   // A leg before the last delivered another asset (or no valid amount): the next leg cannot take it,
   // so it does not start. An operator checks the funds (`admin.resolve`).
   const cur = act.legs[act.index]!
   if (act.index < act.legs.length - 1 && cur.step?.status === 'succeeded' && deliveredWrongAsset(cur)) {
     const error = openRampError('DELIVERY_FAILED', { message: 'The provider delivered another asset than the quote. Contact support.', recovery: 'contact_support', legId: cur.legId })
-    return { sessionId: rec.id, state: 'FAILED', transitions: [], error, progress, legIndex: act.index }
+    return { sessionId: rec.id, state: 'FAILED', transitions: [], error, legIndex: act.index }
   }
   if (act.legs.every((l) => l.step?.status === 'succeeded')) {
-    return { sessionId: rec.id, state: 'COMPLETED', transitions: [], progress, legIndex: act.index }
+    return { sessionId: rec.id, state: 'COMPLETED', transitions: [], legIndex: act.index }
   }
-  const legDone = ls.state === 'COMPLETED'
+  const state = stateFor(ls)
+  const legDone = state === 'COMPLETED'
+  const action = ls.status === 'requires_action' ? ls.action : undefined
   return {
     sessionId: rec.id,
-    state: legDone ? 'PROCESSING' : ls.state,
-    // Only the closed list reaches the browser (a third-party adapter may send another value).
-    ...(isStepSub(ls.sub) ? { sub: ls.sub } : {}),
+    state: legDone ? 'PROCESSING' : state,
+    ...(ls.detail && !legDone ? { detail: ls.detail } : {}),
     legIndex: act.index,
-    ...(ls.surface ? { surface: ls.surface } : {}),
-    transitions: legDone ? [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }] : ls.transitions,
+    ...(action?.surface ? { surface: action.surface } : {}),
+    transitions: action ? action.transitions : legDone ? pollTransitions({ status: 'processing' }) : isLegTerminal(ls.status) ? [] : pollTransitions(ls),
     ...(ls.error ? { error: ls.error } : {}),
-    progress,
     expiresAt: new Date(rec.expiresAt).toISOString(),
   }
+}
+
+/** The roles that an adapter may report (`hop` is set by the server) */
+const LEG_ROLES: ReadonlySet<string> = new Set<TransactionRole>(['approval', 'source', 'destination', 'settlement', 'refund'])
+/** Free provider status text that may reach the browser */
+const PROVIDER_STATUS = /^[A-Za-z0-9_ .:-]{1,64}$/
+/** Most transactions kept per leg */
+const MAX_LEG_TRANSACTIONS = 20
+
+/**
+ * Check an adapter step before the server uses it (a third-party adapter may send anything): a step
+ * detail code from the closed list and a short provider status, an action only with
+ * `requires_action`, a phase only while pending or processing, and well formed transactions.
+ */
+export function sanitizeLegStep(rt: Runtime, adapterId: string, ls: LegStep): LegStep {
+  const out: LegStep = { ...ls }
+  // An adapter written for the version 1 contract: its `state`, `surface`, `transitions` and tx hash
+  // fields have no effect now. Say so, so that the operator updates the adapter.
+  const legacy = ['state', 'sub', 'surface', 'transitions', 'txHash', 'sourceTxHash'].filter((k) => k in ls)
+  if (legacy.length) rt.log.warn('adapter step has fields of the adapter API version 1; they are ignored. Update the adapter to version 2', { adapter: adapterId, fields: legacy.join(',') })
+  if (out.detail) {
+    const code = out.detail.code
+    if (!isStepDetailCode(code)) {
+      rt.log.warn('adapter step has a detail code that is not in STEP_DETAIL_CODES; dropped', { adapter: adapterId, code: String(code).slice(0, 64) })
+      delete out.detail
+    } else {
+      const ps = out.detail.providerStatus
+      out.detail = { code, ...(typeof ps === 'string' && PROVIDER_STATUS.test(ps) ? { providerStatus: ps } : {}) } satisfies StepDetail
+    }
+  }
+  if (out.action && out.status !== 'requires_action') {
+    rt.log.warn('adapter step has an action but its status is not requires_action; the action is dropped', { adapter: adapterId, status: out.status })
+    delete out.action
+  }
+  if (out.phase && out.status !== 'processing' && out.status !== 'pending') delete out.phase
+  if (out.transactions !== undefined) {
+    const ok = Array.isArray(out.transactions) ? out.transactions.filter((t) => !!t && LEG_ROLES.has(t.role) && typeof t.hash === 'string' && t.hash.length > 0 && t.hash.length <= 200) : []
+    if (ok.length !== (Array.isArray(out.transactions) ? out.transactions.length : -1)) rt.log.warn('adapter step has transactions that are not well formed; dropped', { adapter: adapterId })
+    out.transactions = ok
+  }
+  return out
+}
+
+const txKey = (t: LegTransaction) => `${t.role}:${t.hash.startsWith('0x') ? t.hash.toLowerCase() : t.hash}`
+
+/**
+ * The leg step after `next`, from the current one. The leg keeps what a later step leaves out: the
+ * refs, the reported output, every transaction (merged by role and hash), and, while the user must
+ * act, the surface of the current action. An action-less `requires_action` step (for example a status
+ * poll while the user pays) keeps the current action.
+ */
+export function mergeLegStep(prev: LegStep | undefined, next: LegStep): LegStep {
+  const out: LegStep = { status: next.status }
+  if (next.status === 'requires_action') {
+    const prevAction = prev?.status === 'requires_action' ? prev.action : undefined
+    const action = next.action ?? prevAction ?? { kind: 'payment' as const, transitions: pollTransitions(next) }
+    const surface = action.surface ?? prevAction?.surface
+    out.action = { ...action, ...(surface ? { surface } : {}) }
+  }
+  if (next.phase) out.phase = next.phase
+  if (next.poll) out.poll = next.poll
+  if (next.detail) out.detail = next.detail
+  if (next.error) out.error = next.error
+  const ref = next.ref ?? prev?.ref
+  if (ref) out.ref = ref
+  const providerRef = next.providerRef ?? prev?.providerRef
+  if (providerRef) out.providerRef = providerRef
+  const output = next.output ?? prev?.output
+  if (output) out.output = output
+  const txs = new Map<string, LegTransaction>()
+  for (const t of [...(prev?.transactions ?? []), ...(next.transactions ?? [])]) txs.set(txKey(t), { ...txs.get(txKey(t)), ...t })
+  if (txs.size) out.transactions = [...txs.values()].slice(-MAX_LEG_TRANSACTIONS)
+  return out
+}
+
+/** True when a leg reported a transaction that moves funds (any role but `approval`) */
+export function hasFundsTransaction(ls: LegStep | undefined): boolean {
+  return !!ls?.transactions?.some((t) => t.role !== 'approval')
+}
+
+/**
+ * The public transactions of leg `i`: with the leg index, the chain from the leg when the adapter
+ * left it out (the `to` chain for a delivery, else the `from` chain), and a `destination` of a leg
+ * that is not the last one as a `hop`.
+ */
+export function legTransactions(p: ActivePayment, i: number): Transaction[] {
+  const leg = p.legs[i]!
+  const pl = p.pathway.legs[i]
+  const last = i === p.legs.length - 1
+  const chainOf = (a: Asset | undefined) => (a?.kind === 'crypto' && a.chain !== '*' ? a.chain : undefined)
+  const toChain = chainOf(pl?.to.asset) ?? chainOf(leg.quote.output.asset)
+  const fromChain = chainOf(pl?.from.asset) ?? chainOf(leg.quote.input.asset)
+  const out: Transaction[] = []
+  for (const t of leg.step?.transactions ?? []) {
+    const delivery = t.role === 'destination' || t.role === 'settlement'
+    const chain = t.chain ?? (delivery ? toChain : fromChain ?? toChain)
+    if (!chain) continue
+    out.push({
+      role: t.role === 'destination' && !last ? 'hop' : t.role,
+      chain,
+      hash: t.hash,
+      legIndex: i,
+      ...(t.amount ? { amount: t.amount } : {}),
+      ...(t.explorerUrl ? { explorerUrl: t.explorerUrl } : {}),
+    })
+  }
+  return out
 }
 
 /**
@@ -74,7 +163,7 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
  * `javascript:`, `data:` and similar URLs never reach the client.
  */
 export function checkSurfaceUrls(rt: Runtime, rec: SessionRecord, ls: LegStep): LegStep {
-  const s = ls.surface
+  const s = ls.action?.surface
   if (!s) return ls
   const web = (u: unknown) => isWebUrl(u, { allowHttp: !rec.livemode }) || (typeof u === 'string' && u.startsWith(`${rt.base}/`))
   const ok =
@@ -89,19 +178,41 @@ export function checkSurfaceUrls(rt: Runtime, rec: SessionRecord, ls: LegStep): 
             : true
   if (ok) return ls
   rt.log.error('adapter returned a surface URL that is not safe; the leg fails', { sessionId: rec.id, kind: s.kind })
-  const { surface: _unsafe, ...rest } = ls
-  return { ...rest, state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PROVIDER_UNAVAILABLE', { recovery: 'choose_other' }) }
+  const { action: _unsafe, ...rest } = ls
+  return { ...rest, status: 'failed', error: openRampError('PROVIDER_UNAVAILABLE', { recovery: 'choose_other' }) }
 }
 
 /** Replace a provider REDIRECT with a signed, popup-safe start URL on our own origin. */
 export async function wrapSurface(rt: Runtime, rec: SessionRecord, ls: LegStep): Promise<LegStep> {
-  if (ls.surface?.kind !== 'REDIRECT') return ls
+  const action = ls.action
+  if (action?.surface?.kind !== 'REDIRECT') return ls
+  const surface = action.surface
   const now = Date.now()
   for (const [t, e] of Object.entries(rec.startUrls)) if (e.exp < now) delete rec.startUrls[t]
   const token = randomHex(12)
-  rec.startUrls[token] = { url: ls.surface.url, exp: now + START_URL_TTL_MS, ...(ls.surface.keepReferrer ? { keepReferrer: true } : {}) }
+  rec.startUrls[token] = { url: surface.url, exp: now + START_URL_TTL_MS, ...(surface.keepReferrer ? { keepReferrer: true } : {}) }
   const sig = await startSignature(rt, rec.id, token)
-  return { ...ls, surface: { ...ls.surface, url: `${rt.base}/start/${rec.id}.${token}.${sig}` } }
+  return { ...ls, action: { ...action, surface: { ...surface, url: `${rt.base}/start/${rec.id}.${token}.${sig}` } } }
+}
+
+/**
+ * The provider URL behind a REDIRECT surface that `wrapSurface` signed (`{base}/start/{id}.{token}.{sig}`),
+ * else the URL as it is. A status poll that repeats the provider's REDIRECT is then no change.
+ */
+function providerUrl(rt: Runtime, rec: SessionRecord, url: string): string {
+  const prefix = `${rt.base}/start/${rec.id}.`
+  if (!url.startsWith(prefix)) return url
+  const token = url.slice(prefix.length).split('.')[0] ?? ''
+  return rec.startUrls[token]?.url ?? url
+}
+
+/** True when two leg steps are the same, with each signed REDIRECT compared by its provider URL */
+export function sameLegStep(rt: Runtime, rec: SessionRecord, a: LegStep, b: LegStep | undefined): boolean {
+  const plain = (ls: LegStep | undefined) => {
+    const s = ls?.action?.surface
+    return JSON.stringify(s?.kind === 'REDIRECT' ? { ...ls, action: { ...ls!.action!, surface: { ...s, url: providerUrl(rt, rec, s.url) } } } : ls)
+  }
+  return plain(a) === plain(b)
 }
 
 export async function startSignature(rt: Runtime, sessionId: string, token: string): Promise<string> {
@@ -157,7 +268,7 @@ export function isFinalFailure(rt: Runtime, rec: SessionRecord): boolean {
   // A new attempt could send a second payout (or a second deposit) for the same session, so the
   // failure is final and an operator resolves it. A failure before any money moved (for example a
   // declined card) stays retryable.
-  if (act.index > 0 || act.legs.some((l) => !!l.treasurySent?.length || !!l.step?.txHash || !!l.step?.sourceTxHash)) return true
+  if (act.index > 0 || act.legs.some((l) => !!l.treasurySent?.length || hasFundsTransaction(l.step))) return true
   return (act.n ?? 0) + 1 >= maxAttempts(rt)
 }
 
@@ -236,21 +347,20 @@ function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
  */
 async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
   if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0 || rec.reversal) return undefined
-  if (ls.surface?.kind !== 'WALLET_TX' || ls.status !== 'requires_action') return undefined
+  const surface = ls.action?.surface
+  if (surface?.kind !== 'WALLET_TX' || ls.status !== 'requires_action') return undefined
   const act = rec.active!
   const leg = act.legs[i]!
-  const { chain, txs } = ls.surface
+  const { chain, txs } = surface
   const key = `${rec.id}:${i}:${(await sha256Hex(`${leg.ref ?? ''}|${chain}|${JSON.stringify(txs)}`)).slice(0, 24)}`
   // The funds of this step left (or may have left): no WALLET_TX for the user, wait for the provider.
-  const { surface: _sent, ...rest } = ls
-  const sending: LegStep = { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }] }
+  const { action: _sent, ...rest } = ls
+  const sending: LegStep = { ...rest, status: 'processing' }
   // Already sent, but its result was not saved (a failure or a conflict after the send): do not send
   // again, and do not show the step to the user.
   if (leg.treasurySent?.includes(key)) return sending
   const failed = (message: string): LegStep => ({
-    state: 'FAILED',
     status: 'failed',
-    transitions: [],
     ...(ls.ref ? { ref: ls.ref } : {}),
     error: openRampError('PAYMENT_FAILED', { message, recovery: 'contact_support', legId: leg.legId }),
   })
@@ -279,16 +389,19 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
     rt.log.error(refused ? 'treasury refused the payout' : 'treasury send failed; the funds may have left, the session needs an operator', { sessionId: rec.id, error: e instanceof Error ? e.message : String(e) })
     return failed('The withdrawal could not be sent. Contact support.')
   }
-  const t = ls.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'tx_hash')
+  // The treasury's transaction paid into the leg: keep it, also when the adapter does not report it.
+  const sent: LegTransaction = { role: 'source', chain, hash }
+  const t = ls.action?.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'tx_hash')
   const a = rt.adapter(leg.adapterId)
   if (t && a.transition) {
-    return a.transition(
+    const next = await a.transition(
       { leg: act.pathway.legs[i]!, ref: ls.ref ?? leg.ref ?? '', name: t.name, inputs: { txHash: hash } },
       adapterContext(rt, rec, a, act.pathway, i),
     )
+    return { ...next, transactions: [sent, ...(next.transactions ?? [])] }
   }
   // No transition to report the hash: wait for the provider to see the transfer.
-  return { ...sending, txHash: hash }
+  return { ...sending, transactions: [...(sending.transactions ?? []), sent] }
 }
 
 /** Same asset: the same currency, or the same chain and token. Provider data is not trusted to be well formed. */
@@ -351,23 +464,21 @@ export function inLateGrace(rt: Runtime, rec: SessionRecord): boolean {
 
 /**
  * True when an adapter step (a status poll or a transition) may replace the leg step `cur`. The leg
- * moves only forward (`isLegalLegMove`), with one exception: a review step (`processing` in `KYC` or
- * `AUTH`, for example Bridge's KYC review) can end with a step for the user, before any money moved.
+ * moves only forward (`isLegalLegMove`), with one exception: a review step (`processing` with phase
+ * `kyc` or `auth`, for example Bridge's KYC review) can end with a step for the user, before any money moved.
  */
 export function adapterMoveAllowed(cur: LegStep, next: LegStep): boolean {
   if (cur.status === next.status) return !isLegTerminal(cur.status)
   if (isLegalLegMove(cur.status, next.status)) return true
-  return cur.status === 'processing' && next.status === 'requires_action' && (cur.state === 'KYC' || cur.state === 'AUTH') && !cur.txHash
+  return cur.status === 'processing' && next.status === 'requires_action' && (cur.phase === 'kyc' || cur.phase === 'auth') && !hasFundsTransaction(cur)
 }
 
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
 export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<void> {
   const act = rec.active!
   const leg = act.legs[i]!
-  const checked = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
-  // Keep the transaction that paid into the leg when a later step (for example the fill) leaves it out.
-  const keptSource = !checked.sourceTxHash && leg.step?.sourceTxHash
-  const wrapped: LegStep = keptSource ? { ...checked, sourceTxHash: keptSource } : checked
+  // Keep what a later step leaves out: the refs, the output, the transactions and the action surface.
+  const wrapped = mergeLegStep(leg.step, await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, sanitizeLegStep(rt, leg.adapterId, ls))))
   const before = leg.step?.status
   const wasExpired = rec.step.state === 'EXPIRED'
   if (before !== wrapped.status) {
@@ -375,15 +486,17 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
       index: i,
       adapterId: leg.adapterId,
       ...(wrapped.ref ? { ref: wrapped.ref } : {}),
-      ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}),
       ...(wrapped.error ? { error: wrapped.error.code } : {}),
     })
   }
-  // The provider's own status is for operators: the timeline keeps each new value.
-  if (wrapped.providerStatus && wrapped.providerStatus !== leg.step?.providerStatus) {
-    addTimeline(rec, 'leg.provider_status', { index: i, adapterId: leg.adapterId, status: wrapped.providerStatus.slice(0, 64) })
+  // Each new transaction goes to the timeline once.
+  const known = new Set((leg.step?.transactions ?? []).map(txKey))
+  for (const t of wrapped.transactions ?? []) {
+    if (!known.has(txKey(t))) addTimeline(rec, 'leg.transaction', { index: i, adapterId: leg.adapterId, role: t.role, hash: t.hash.slice(0, 200) })
   }
-  if (ls.sub !== undefined && !isStepSub(ls.sub)) rt.log.warn('adapter step has a sub that is not in STEP_SUBS; dropped', { adapter: leg.adapterId, sub: String(ls.sub).slice(0, 64) })
+  // The provider's own status: the timeline keeps each new value.
+  const ps = wrapped.detail?.providerStatus
+  if (ps && ps !== leg.step?.detail?.providerStatus) addTimeline(rec, 'leg.provider_status', { index: i, adapterId: leg.adapterId, status: ps })
   const prevOutput = leg.step?.output
   leg.step = wrapped
   // Check again when the amount or the asset changes (the same amount in another asset is not the quote).
@@ -394,7 +507,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   }
   // A refund or a chargeback after success. This also applies to a session that an operator closed:
   // the app must learn that the money went back.
-  if (!rec.reversal && (isReversal(before, wrapped.status) || wrapped.state === 'REVERSED')) {
+  if (!rec.reversal && isReversal(before, wrapped.status)) {
     await reverse(rt, rec, i, wrapped.status === 'refunded' ? 'refunded' : 'reversed')
     return
   }
@@ -407,7 +520,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
     if (wrapped.status === 'succeeded' && before !== 'succeeded') {
       rt.log.warn('a payment arrived after the session was canceled; the session stays CANCELED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
       const scope = act.n ? `a${act.n}` : undefined
-      await notify(rt, rec, 'session.late_payment', { reason: 'after_cancel', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+      await notify(rt, rec, 'session.late_payment', { reason: 'after_cancel', index: i, adapterId: leg.adapterId, legId: leg.legId, ...txExtra(act, i) }, scope)
     }
     return
   }
@@ -423,7 +536,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
     if (wrapped.status === 'succeeded' && before !== 'succeeded') {
       rt.log.warn('a payment arrived after the grace window of an expired session; the session stays EXPIRED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
       const scope = act.n ? `a${act.n}` : undefined
-      await notify(rt, rec, 'session.late_payment', { reason: 'after_grace', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+      await notify(rt, rec, 'session.late_payment', { reason: 'after_grace', index: i, adapterId: leg.adapterId, legId: leg.legId, ...txExtra(act, i) }, scope)
     }
     return
   }
@@ -436,7 +549,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   // webhook, or the grace poll of the sweep). The session goes on and can complete.
   if (wasExpired && wrapped.status === 'succeeded') {
     rt.log.warn('a payment arrived after the session expired; the session goes on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
-    await notify(rt, rec, 'session.late_payment', { reason: 'after_expiry', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+    await notify(rt, rec, 'session.late_payment', { reason: 'after_expiry', index: i, adapterId: leg.adapterId, legId: leg.legId, ...txExtra(act, i) }, scope)
   }
   if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.error ? { error: wrapped.error } : {}) }, scope)
   if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1 && !deliveredWrongAsset(leg)) {
@@ -510,6 +623,7 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
       (l, i): ActiveLeg => ({
         adapterId: l.adapterId,
         legId: l.legId,
+        provider: rt.adapters.get(l.adapterId)?.name ?? l.adapterId,
         quote: stored.quote.legs[i]!,
         ...(stored.deliverTo[i] ? { deliverTo: stored.deliverTo[i]! } : {}),
         started: false,
@@ -550,7 +664,8 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
     rt.log.warn('status check failed', { adapter: a.id, error: String(e) })
     return false
   }
-  if (ls.status === leg.step.status && ls.state === leg.step.state && ls.sub === leg.step.sub) return false
+  // Nothing new: the same step after the merge (status, phase, action, detail, refs, output, transactions).
+  if (sameLegStep(rt, rec, mergeLegStep(leg.step, sanitizeLegStep(rt, leg.adapterId, ls)), leg.step)) return false
   if (!adapterMoveAllowed(leg.step, ls)) {
     rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
     rt.metric('event.out_of_order', 1, { adapter: a.id })
@@ -558,32 +673,14 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
   }
   // Not inside the catch: when this fails half way (for example the next leg cannot start), the error
   // goes to the caller, so the half-changed record is never saved.
-  await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
+  await setLegStep(rt, rec, act.index, ls)
   return true
 }
 
-/**
- * Build the leg step for a provider event, keeping the current surface until the leg ends.
- * A non-terminal event may carry a new `surface` (and its `transitions`), e.g. an offramp that
- * learns its deposit address from a webhook and now needs a WALLET_TX.
- */
-export function legStepFromEvent(cur: LegStep | undefined, ev: LegEvent): LegStep {
-  const terminal = isLegTerminal(ev.status)
-  const withSurface = !terminal && !!ev.surface
-  const ls: LegStep = {
-    ...(cur ?? { transitions: [] }),
-    status: ev.status,
-    state: LEG_STATUS_TO_STATE[ev.status],
-    transitions: terminal ? [] : withSurface && ev.transitions ? ev.transitions : [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }],
-    ...(withSurface ? { surface: ev.surface } : {}),
-    ...(ev.output ? { output: ev.output } : {}),
-    ...(ev.txHash ? { txHash: ev.txHash } : {}),
-    ...(ev.sourceTxHash ? { sourceTxHash: ev.sourceTxHash } : {}),
-    ...(ev.error ? { error: ev.error } : {}),
-    ref: ev.ref,
-  }
-  if (terminal) delete ls.surface
-  return ls
+/** The leg step that a provider event carries (a `LegEvent` is a `LegStep` with a `ref` and an `eventId`) */
+export function eventStep(ev: LegEvent): LegStep {
+  const { eventId: _id, ...step } = ev
+  return step
 }
 
 /**
@@ -615,9 +712,9 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   const att = rec.attempts![k]!
   const leg = att.legs[i]!
   const before = leg.step?.status
-  if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+  if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId })
   const prev = leg.step
-  leg.step = ls
+  leg.step = mergeLegStep(prev, sanitizeLegStep(rt, leg.adapterId, ls))
   if (isReversal(before, ls.status)) {
     // The session moved on from this attempt, so its state stays. The app may have credited this
     // payment by hand (`session.late_payment`), so it gets `session.reversed` with `attempt`.
@@ -637,7 +734,7 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   if (isFinalStatus(rec.status) || rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution || otherTarget) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
-      await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+      await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...txExtra(att, i) })
     }
     return
   }
@@ -685,10 +782,9 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
       }
       // Forward only, like a provider event (see `isLegalLegMove`).
       if (ls.status === leg.step.status || !isLegalLegMove(leg.step.status, ls.status)) continue
-      const { surface: _s, ...rest } = ls
       // Not inside the catch: when this fails half way (for example the attempt became the payment
       // again and its next leg cannot start), the error goes to the caller and nothing is saved.
-      await applyToAttempt(rt, rec, k, i, { ...rest, ref: ls.ref ?? leg.ref })
+      await applyToAttempt(rt, rec, k, i, { ...ls, ref: ls.ref ?? leg.ref })
       return true
     }
   }
@@ -702,10 +798,11 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
  * For example, an offramp learns its deposit address from a webhook and now needs a WALLET_TX.
  */
 export function surfaceMoveBack(rt: Runtime, leg: ActiveLeg, cur: LegStep, ev: LegEvent): boolean {
-  if (cur.status !== 'processing' || ev.status !== 'requires_action' || !ev.surface || cur.txHash || leg.surfaceReopened) return false
+  const surface = ev.action?.surface
+  if (cur.status !== 'processing' || ev.status !== 'requires_action' || !surface || hasFundsTransaction(cur) || leg.surfaceReopened) return false
   // Fail closed: a leg with no static spec (for example from a live catalog only) does not opt in.
   const spec = rt.adapters.get(leg.adapterId)?.legs.find((l) => l.id === leg.legId)
-  return !!spec?.capabilities?.includes('surface_after_processing') && spec.surfaces.includes(ev.surface.kind)
+  return !!spec?.capabilities?.includes('surface_after_processing') && spec.surfaces.includes(surface.kind)
 }
 
 /** Most provider event ids kept per session (see `SessionRecord.providerEvents`) */
@@ -741,7 +838,9 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
     const leg = found.act.legs[found.i]!
     const cur = leg.step
     const back = !!cur && surfaceMoveBack(rt, leg, cur, ev)
-    if (cur && !back && !isLegalLegMove(cur.status, ev.status)) {
+    // The same rule as a status poll (`adapterMoveAllowed`): forward only, or a review step (phase kyc
+    // or auth, no transaction) that ends with a step for the user.
+    if (cur && !back && !adapterMoveAllowed(cur, ev)) {
       // A repeat of a final status is normal (providers send events more than once). A move back is not.
       if (cur.status !== ev.status) {
         rt.log.warn('provider event would move the leg back; ignored', { adapterId, ref: ev.ref, sessionId: sid, from: cur.status, to: ev.status })
@@ -751,10 +850,10 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
     }
     if (back) {
       leg.surfaceReopened = true
-      addTimeline(rec, 'leg.surface_after_processing', { index: found.i, adapterId, surface: ev.surface!.kind })
+      addTimeline(rec, 'leg.surface_after_processing', { index: found.i, adapterId, surface: ev.action!.surface!.kind })
     }
     try {
-      const ls = legStepFromEvent(cur, ev)
+      const ls = eventStep(ev)
       if (found.k === -1) await setLegStep(rt, rec, found.i, ls)
       else await applyToAttempt(rt, rec, found.k, found.i, ls)
       if (seen) rec.providerEvents = [...(rec.providerEvents ?? []), seen].slice(-MAX_PROVIDER_EVENTS)
@@ -773,8 +872,8 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
 
 /**
  * True when money of the active payment may have moved or be on its way: a leg after the first
- * started, a leg went past `requires_action` (processing, succeeded, ...), a transaction was submitted
- * (a tx hash or a source tx hash), or the treasury sent. A leg that a provider event moved from
+ * started, a leg went past `requires_action` (processing, succeeded, ...), a transaction that moves
+ * funds was submitted (any role but `approval`), or the treasury sent. A leg that a provider event moved from
  * `processing` back to `requires_action` (`surface_after_processing`) has no transaction by rule, so it
  * counts as not moved. Cancel and restart refuse such a payment, so they never strand funds.
  */
@@ -783,8 +882,13 @@ export function moneyMayHaveMoved(act: ActivePayment): boolean {
   return act.legs.some(
     (l) =>
       !!l.treasurySent?.length ||
-      !!l.step?.txHash ||
-      !!l.step?.sourceTxHash ||
+      hasFundsTransaction(l.step) ||
       (l.step !== undefined && l.step.status !== 'pending' && l.step.status !== 'requires_action'),
   )
+}
+
+/** The `transactions` field of a late payment event: the public transactions of leg `i` */
+function txExtra(p: ActivePayment, i: number): { transactions?: Transaction[] } {
+  const transactions = legTransactions(p, i)
+  return transactions.length ? { transactions } : {}
 }

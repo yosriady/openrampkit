@@ -29,11 +29,12 @@ import {
   randomHex,
   requireDeliverAsset,
   resolveEnv,
+  statusMap,
   verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
-import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode, Surface } from '@openrampkit/core'
 
 export type StripeOptions = {
   /** Secret key (sk_live_... or sk_test_...). A restricted key with onramp access also works. */
@@ -143,6 +144,18 @@ export const STRIPE_METHODS: MethodDef[] = [
 /** "only available in the EU and the US (excluding Hawaii)" */
 const DENY = ['US-HI']
 
+/**
+ * Stripe onramp session statuses (https://docs.stripe.com/crypto/onramp/api-reference#session-object).
+ * An unknown status is no event: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('Stripe', {
+  initialized: { status: 'requires_action' },
+  requires_payment: { status: 'requires_action' },
+  fulfillment_processing: { status: 'processing', detail: 'processing' },
+  fulfillment_complete: { status: 'succeeded' },
+  rejected: { status: 'failed' },
+})
+
 function num(s: string | undefined | null): string | undefined {
   return s && isDecimal(s) ? s : undefined
 }
@@ -225,25 +238,32 @@ export function stripe(opts: StripeOptions) {
     })
   }
 
-  function eventFrom(s: OnrampSession, refOverride?: string): LegEvent | undefined {
+  function eventFrom(s: OnrampSession, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? s.id
     if (!ref) return undefined
+    const m = STATUS(s.status, log)
+    if (!m) return undefined
     const td = s.transaction_details ?? {}
     const d = STRIPE_DELIVER_ASSETS.find((x) => x.network === td.destination_network || (x.network === 'base' && td.destination_network === 'base_network'))
     const amount = num(td.destination_amount)
     const output = d && amount && (td.destination_currency ?? 'usdc').toLowerCase() === 'usdc' ? { value: amount, asset: assetOf(d) } : undefined
-    switch (s.status) {
-      case 'fulfillment_complete':
-        return { ref, status: 'succeeded', ...(td.transaction_id ? { txHash: td.transaction_id } : {}), ...(output ? { output } : {}) }
-      case 'fulfillment_processing':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'rejected':
-        return { ref, status: 'failed', error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
-      case 'initialized':
-      case 'requires_payment':
-        return { ref, status: 'requires_action' }
+    // The onramp session id is both our ref and Stripe's order id.
+    const base: LegEvent = { ref, status: m.status, ...(s.id ? { providerRef: s.id } : {}), ...(m.detail ? { detail: { code: m.detail, providerStatus: s.status! } } : {}) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(td.transaction_id ? { transactions: [{ role: 'destination' as const, hash: td.transaction_id, ...(d ? { chain: d.chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'processing':
+        return { ...base, ...(output ? { output } : {}) }
+      case 'failed':
+        return { ...base, error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       default:
-        return undefined
+        // requires_action: the user still pays in the onramp. No action: the UI keeps the onramp.
+        return base
     }
   }
 
@@ -341,7 +361,7 @@ export function stripe(opts: StripeOptions) {
       }
       if (!s.id || !s.client_secret) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Stripe did not return an onramp session.' }), 502)
       if (s.status === 'rejected') {
-        return { state: 'FAILED', status: 'failed', transitions: [], ref: s.id, error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
+        return { status: 'failed', ref: s.id, providerRef: s.id, error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       }
       let surface: Surface
       if (opts.surface === 'redirect' && s.redirect_url) {
@@ -354,7 +374,7 @@ export function stripe(opts: StripeOptions) {
           params: { clientSecret: s.client_secret, publishableKey: opts.publishableKey, sessionId: s.id, ...(s.redirect_url ? { redirectUrl: s.redirect_url } : {}) },
         }
       }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'requires_action', ref: s.id }
+      return { status: 'requires_action', action: { kind: 'payment', surface, transitions: [awaitPoll(POLL)] }, ref: s.id, providerRef: s.id }
     },
 
     async status(input, ctx) {
@@ -364,7 +384,9 @@ export function stripe(opts: StripeOptions) {
       } catch (e) {
         throw toOpenRamp(e, 'find this purchase', ctx.log)
       }
-      return legStepFromEvent(eventFrom(s, input.ref), input.ref, POLL)
+      // An unknown status: a status poll. The server never moves a leg back, so a leg that already
+      // moved on keeps its step.
+      return legStepFromEvent(eventFrom(s, ctx.log, input.ref), input.ref, POLL)
     },
 
     webhook: {
@@ -394,7 +416,7 @@ export function stripe(opts: StripeOptions) {
         if (ev.type !== 'crypto.onramp_session.updated' && ev.type !== 'crypto.onramp_session_updated') return []
         const s = ev.data?.object
         if (!s?.id) return []
-        const out = eventFrom(s)
+        const out = eventFrom(s, ctx.log)
         return out ? [out] : []
       },
     },

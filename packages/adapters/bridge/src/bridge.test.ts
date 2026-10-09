@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep, erc20TransferData } from '@openrampkit/adapter'
 import type { AdapterContext } from '@openrampkit/adapter'
-import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance } from '@openrampkit/adapter/testing'
+import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance } from '@openrampkit/adapter/testing'
 import type { FakeRoute } from '@openrampkit/adapter/testing'
-import { USDC } from '@openrampkit/core'
-import type { Amount, LegQuote, PathwayLeg } from '@openrampkit/core'
+import { USDC, stateFor } from '@openrampkit/core'
+import type { Amount, LegQuote, LegStep, PathwayLeg } from '@openrampkit/core'
 import { BRIDGE_DENY, bridge, importBridgePublicKey, parseBridgeSignature, verifyBridgeSignature } from './index.js'
 import type { BridgeOptions } from './index.js'
 
@@ -12,6 +12,9 @@ const BASE_USDC = USDC['eip155:8453']!
 const SOLANA = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'
 const WALLET = '0x000000000000000000000000000000000000beef'
 const API = 'https://api.bridge.xyz/v0'
+
+/** A step with its UI phase (`stateFor`), for assertions */
+const ui = (step: LegStep) => ({ ...step, state: stateFor(step) })
 
 // ---------- webhook keys ----------
 
@@ -196,30 +199,35 @@ describe('bridge adapter: deposits', () => {
     const leg = depositLeg('usd-ach', 'USD')
     const { s } = await quoteAndStart(a, leg, ctx)
     expect(checkLegStep(s)).toEqual([])
-    expect(s).toMatchObject({ state: 'KYC', sub: 'kyc_details', status: 'requires_action', surface: { kind: 'FORM' } })
-    expect((s.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['full_name', 'email'])
+    expect(ui(s)).toMatchObject({ state: 'KYC', detail: { code: 'kyc_details' }, status: 'requires_action', action: { kind: 'kyc', surface: { kind: 'FORM' } } })
+    expect((s.action?.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['full_name', 'email'])
     const ref = s.ref!
     expect(ref).toMatch(/^brg_/)
 
     await expect(a.transition!({ leg, ref, name: 'submit_kyc', inputs: { full_name: 'J', email: 'jane@example.com' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     await expect(a.transition!({ leg, ref, name: 'submit_kyc', inputs: { full_name: 'Jane Doe', email: 'nope' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const tos = await a.transition!({ leg, ref, name: 'submit_kyc', inputs: { full_name: 'Jane Doe', email: 'jane@example.com' } }, ctx)
-    expect(tos).toMatchObject({ state: 'KYC', sub: 'kyc_terms', surface: { kind: 'REDIRECT', url: 'https://bridge.test/tos', popup: true, provider: 'Bridge' } })
+    expect(ui(tos)).toMatchObject({ state: 'KYC', detail: { code: 'kyc_terms' }, action: { kind: 'kyc', surface: { kind: 'REDIRECT', url: 'https://bridge.test/tos', popup: true, provider: 'Bridge' } } })
+    expect(checkLegStep(tos)).toEqual([])
     const post = calls.find((c) => c.method === 'POST' && c.url.endsWith('/kyc_links'))!
     expect(post.url).toBe(`${API}/kyc_links`)
     expect(post.headers.get('idempotency-key')).toBe(`sess_1:bridge:kyc:${ref}`)
     expect(post.body).toEqual({ full_name: 'Jane Doe', email: 'jane@example.com', type: 'individual', endorsements: ['base'], redirect_uri: 'https://app.test/api/openramp/return' })
 
     link = { ...link, tos_status: 'approved' }
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'KYC', sub: 'kyc_verify', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } })
+    expect(ui(await a.status!({ leg, ref }, ctx))).toMatchObject({ state: 'KYC', detail: { code: 'kyc_verify' }, action: { kind: 'kyc', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } } })
     link = { ...link, kyc_status: 'under_review', customer_id: 'cust_1' }
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'KYC', sub: 'kyc_review', status: 'processing' })
+    // The review: processing in the KYC phase, with no action.
+    const review = await a.status!({ leg, ref }, ctx)
+    expect(ui(review)).toMatchObject({ state: 'KYC', status: 'processing', phase: 'kyc', detail: { code: 'kyc_review' } })
+    expect(review.action).toBeUndefined()
+    expect(checkLegStep(review)).toEqual([])
 
     link = { ...link, kyc_status: 'approved' }
     const pay = await a.status!({ leg, ref }, ctx)
     expect(checkLegStep(pay)).toEqual([])
-    expect(pay).toMatchObject({ state: 'PAYMENT', sub: 'bank_details', status: 'requires_action', ref })
-    const fields = (pay.surface as { kind: string; fields: Array<{ label: string; value: string; copy: boolean }> })
+    expect(ui(pay)).toMatchObject({ state: 'PAYMENT', detail: { code: 'bank_details' }, status: 'requires_action', action: { kind: 'payment' }, ref })
+    const fields = (pay.action?.surface as { kind: string; fields: Array<{ label: string; value: string; copy: boolean }> })
     expect(fields.kind).toBe('BANK_FIELDS')
     expect(fields.fields).toEqual(expect.arrayContaining([
       { label: 'Amount', value: '100.00 USD', copy: true },
@@ -234,12 +242,15 @@ describe('bridge adapter: deposits', () => {
 
     // No deposit yet: still the bank details. Old deposits (before the session) are ignored.
     history = [{ id: 'e0', type: 'payment_processed', deposit_id: 'dep_old', amount: '5', created_at: '2020-01-01T00:00:00.000Z' }]
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'PAYMENT', surface: { kind: 'BANK_FIELDS' } })
+    expect(ui(await a.status!({ leg, ref }, ctx))).toMatchObject({ state: 'PAYMENT', action: { surface: { kind: 'BANK_FIELDS' } } })
     history = [...history, { id: 'e1', type: 'funds_received', deposit_id: 'dep_1', amount: '100', created_at: now() }]
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
+    expect(ui(await a.status!({ leg, ref }, ctx))).toMatchObject({ state: 'PROCESSING', status: 'processing', providerRef: 'dep_1', detail: { code: 'settling', providerStatus: 'funds_received' }, poll: { intervalMs: 5000 } })
+    // A virtual account event type that is not in the table does not move the deposit (never processing by default).
+    history = [...history, { id: 'e1b', type: 'something_new', deposit_id: 'dep_1', created_at: now() }]
+    expect(ui(await a.status!({ leg, ref }, ctx))).toMatchObject({ state: 'PROCESSING', detail: { providerStatus: 'funds_received' } })
     history = [...history, { id: 'e2', type: 'payment_processed', deposit_id: 'dep_1', amount: '99.5', destination_tx_hash: '0xabc', created_at: now() }]
     const done = await a.status!({ leg, ref }, ctx)
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { value: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC } } })
+    expect(ui(done)).toMatchObject({ state: 'COMPLETED', status: 'succeeded', providerRef: 'dep_1', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc' }], output: { value: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC } } })
     expect(checkLegStep(done)).toEqual([])
     // The ids are stored, the email from the form is not.
     expect(JSON.stringify([...((ctx.shared as unknown as { data: Map<string, unknown> }).data.values())])).not.toContain('jane@example.com')
@@ -258,17 +269,17 @@ describe('bridge adapter: deposits', () => {
     const leg = depositLeg('usd-wire', 'USD')
     const one = ctxWith(routes, { shared, session: { email: 'jane@example.com' } })
     const s1 = (await quoteAndStart(a, leg, one.ctx)).s
-    expect(s1).toMatchObject({ state: 'PAYMENT', surface: { kind: 'BANK_FIELDS' } })
+    expect(ui(s1)).toMatchObject({ state: 'PAYMENT', action: { kind: 'payment', surface: { kind: 'BANK_FIELDS' } } })
     expect(seen[0]).toEqual({ userId: 'user_1', email: 'jane@example.com' })
     const two = ctxWith(routes, { shared, session: { id: 'sess_2' } })
     const s2 = (await quoteAndStart(a, leg, two.ctx)).s
-    expect(s2.state).toBe('PAYMENT')
+    expect(stateFor(s2)).toBe('PAYMENT')
     expect([...one.calls, ...two.calls].filter((c) => c.method === 'POST')).toHaveLength(1)
 
     history = [{ id: 'e1', type: 'payment_submitted', deposit_id: 'dep_1', amount: '10', created_at: now() }]
-    expect((await a.status!({ leg, ref: s1.ref! }, one.ctx)).state).toBe('PROCESSING')
+    expect(stateFor(await a.status!({ leg, ref: s1.ref! }, one.ctx))).toBe('PROCESSING')
     // The second session does not take the first session's deposit.
-    expect((await a.status!({ leg, ref: s2.ref! }, two.ctx)).state).toBe('PAYMENT')
+    expect(stateFor(await a.status!({ leg, ref: s2.ref! }, two.ctx))).toBe('PAYMENT')
   })
 
   it('shows a Pix QR for BRL and maps refunds', async () => {
@@ -282,11 +293,11 @@ describe('bridge adapter: deposits', () => {
     const a = bridge(opts({ customer: async () => ({ customerId: 'cust_1' }) }))
     const leg = depositLeg('brl-pix', 'BRL')
     const { s } = await quoteAndStart(a, leg, ctx, fiat('500', 'BRL'))
-    expect(s.surface).toEqual({ kind: 'QR', payload: '00020126580014br.gov.bcb.pix', amount: '500.00', currency: 'BRL', method: 'pix' })
+    expect(s.action?.surface).toEqual({ kind: 'QR', payload: '00020126580014br.gov.bcb.pix', amount: '500.00', currency: 'BRL', method: 'pix' })
     for (const [type, state] of [['refund_in_flight', 'PROCESSING'], ['refund', 'REFUNDED'], ['refunded', 'REFUNDED'], ['refund_failed', 'FAILED'], ['microdeposit', 'PAYMENT']] as const) {
       history = [{ id: `e-${type}`, type, deposit_id: 'dep_9', created_at: now() }]
       const st = await a.status!({ leg, ref: s.ref! }, ctx)
-      expect(st.state).toBe(state)
+      expect(stateFor(st)).toBe(state)
       expect(checkLegStep(st)).toEqual([])
     }
   })
@@ -300,20 +311,22 @@ describe('bridge adapter: deposits', () => {
       const a = bridge(opts({ customer: async () => (link ? undefined : { customerId: 'cust_1' }) }))
       return (await quoteAndStart(a, leg, ctx, fiat('100', 'EUR'))).s
     }
-    expect(await run({ id: 'cust_1', status: 'rejected' })).toMatchObject({ state: 'FAILED', error: { code: 'KYC_REJECTED' } })
-    expect(await run({ id: 'cust_1', status: 'paused' })).toMatchObject({ state: 'FAILED', error: { code: 'PROVIDER_DECLINED' } })
-    expect(await run({ id: 'cust_1', status: 'under_review' })).toMatchObject({ state: 'KYC', sub: 'kyc_review' })
-    expect(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'sepa', status: 'revoked' }] })).toMatchObject({ state: 'FAILED', error: { code: 'KYC_REJECTED' } })
+    expect(ui(await run({ id: 'cust_1', status: 'rejected' }))).toMatchObject({ state: 'FAILED', error: { code: 'KYC_REJECTED' } })
+    expect(ui(await run({ id: 'cust_1', status: 'paused' }))).toMatchObject({ state: 'FAILED', error: { code: 'PROVIDER_DECLINED' } })
+    expect(ui(await run({ id: 'cust_1', status: 'under_review' }))).toMatchObject({ state: 'KYC', status: 'processing', phase: 'kyc', detail: { code: 'kyc_review' } })
+    expect(ui(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'sepa', status: 'revoked' }] }))).toMatchObject({ state: 'FAILED', error: { code: 'KYC_REJECTED' } })
     const link = { id: 'kyc_1', customer_id: 'cust_1', kyc_link: 'https://bridge.test/kyc', tos_status: 'approved', kyc_status: 'approved' }
-    expect(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'base', status: 'approved' }, { name: 'sepa', status: 'incomplete' }] }, link)).toMatchObject({ state: 'KYC', sub: 'kyc_verify', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } })
-    expect(await run({ id: 'cust_1', status: 'active' }, { ...link, customer_id: null, kyc_status: 'rejected' })).toMatchObject({ state: 'FAILED' })
+    expect(ui(await run({ id: 'cust_1', status: 'active', endorsements: [{ name: 'base', status: 'approved' }, { name: 'sepa', status: 'incomplete' }] }, link))).toMatchObject({ state: 'KYC', detail: { code: 'kyc_verify' }, action: { kind: 'kyc', surface: { kind: 'REDIRECT', url: 'https://bridge.test/kyc' } } })
+    expect(ui(await run({ id: 'cust_1', status: 'active' }, { ...link, customer_id: null, kyc_status: 'rejected' }))).toMatchObject({ state: 'FAILED' })
+    // A KYC link status that is not in the table: the KYC page (Bridge shows what is left), not a review or processing.
+    expect(ui(await run({ id: 'cust_1', status: 'active' }, { ...link, customer_id: null, kyc_status: 'something_new' }))).toMatchObject({ state: 'KYC', status: 'requires_action', detail: { code: 'kyc_verify' } })
   })
 
   it('creates the KYC link at once when the hook gives name and email, and refuses unsafe links', async () => {
     const reply = (url: string) => () => ({ id: 'kyc_2', kyc_link: url, tos_link: url, kyc_status: 'not_started', tos_status: 'pending' })
     const a = bridge(opts({ customer: async () => ({ fullName: 'Jane Doe', email: 'jane@example.com' }) }))
     const ok = ctxWith([{ method: 'POST', match: '/kyc_links', reply: reply('https://bridge.test/tos') }])
-    expect((await quoteAndStart(a, depositLeg('usd-ach', 'USD'), ok.ctx)).s).toMatchObject({ state: 'KYC', surface: { kind: 'REDIRECT' } })
+    expect(ui((await quoteAndStart(a, depositLeg('usd-ach', 'USD'), ok.ctx)).s)).toMatchObject({ state: 'KYC', action: { kind: 'kyc', surface: { kind: 'REDIRECT' } } })
     expect(await ok.ctx.shared.get('user:user_1')).toEqual({ kycLinkId: 'kyc_2' })
     const bad = ctxWith([{ method: 'POST', match: '/kyc_links', reply: reply('javascript:alert(1)') }])
     await expect(quoteAndStart(a, depositLeg('usd-ach', 'USD'), bad.ctx)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
@@ -351,18 +364,18 @@ describe('bridge adapter: payouts', () => {
     const leg = payoutLeg('payout-usd-ach', 'USD')
     const { q, s } = await quoteAndStart(a, leg, ctx, usdc('50'), { source: { chain: 'eip155:8453', token: BASE_USDC, address: '0x00000000000000000000000000000000000000f0' } })
     expect(q.output).toEqual(fiat('49.50', 'USD'))
-    expect(s).toMatchObject({ state: 'PAYMENT', sub: 'payout_account', surface: { kind: 'FORM' }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] })
+    expect(ui(s)).toMatchObject({ state: 'PAYMENT', detail: { code: 'payout_account' }, action: { kind: 'payment', surface: { kind: 'FORM' }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] } })
     const ref = s.ref!
     // The status before the account is set shows the form again.
-    expect((await a.status!({ leg, ref }, ctx)).sub).toBe('payout_account')
+    expect((await a.status!({ leg, ref }, ctx)).detail?.code).toBe('payout_account')
     await expect(a.transition!({ leg, ref, name: 'submit_tx', inputs: { txHash: '0x1' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     await expect(a.transition!({ leg, ref, name: 'submit_details', inputs: { ...usInputs, routing_number: '12' } }, ctx)).rejects.toMatchObject({ error: { message: expect.stringContaining('routing') } })
     await expect(a.transition!({ leg, ref, name: 'submit_details', inputs: { ...usInputs, city: '' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
 
     const send = await a.transition!({ leg, ref, name: 'submit_details', inputs: usInputs }, ctx)
     expect(checkLegStep(send)).toEqual([])
-    expect(send).toMatchObject({ state: 'PAYMENT', sub: 'send_crypto', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
-    expect((send.surface as { txs: unknown[] }).txs).toEqual([{ to: BASE_USDC, data: erc20TransferData('0x00000000000000000000000000000000000000aa', '50000000'), value: '0', chainId: 8453 }])
+    expect(ui(send)).toMatchObject({ state: 'PAYMENT', detail: { code: 'send_crypto' }, providerRef: 'tr_1', action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] } })
+    expect((send.action?.surface as { txs: unknown[] }).txs).toEqual([{ to: BASE_USDC, data: erc20TransferData('0x00000000000000000000000000000000000000aa', '50000000'), value: '0', chainId: 8453 }])
     const ea = calls.find((c) => c.url.endsWith('/external_accounts'))!
     expect(ea.url).toBe(`${API}/customers/cust_1/external_accounts`)
     expect(ea.headers.get('idempotency-key')).toBe(`sess_1:bridge:ea:${ref}`)
@@ -378,12 +391,16 @@ describe('bridge adapter: payouts', () => {
     await a.transition!({ leg, ref, name: 'submit_details', inputs: usInputs }, ctx)
     expect(calls.filter((c) => c.url.endsWith('/external_accounts'))).toHaveLength(1)
 
-    expect((await a.status!({ leg, ref }, ctx)).sub).toBe('send_crypto')
+    expect((await a.status!({ leg, ref }, ctx)).detail?.code).toBe('send_crypto')
     const sent = await a.transition!({ leg, ref, name: 'submit_tx', inputs: { txHash: '0xfeed' } }, ctx)
-    expect(sent).toMatchObject({ state: 'PROCESSING', status: 'processing', txHash: '0xfeed' })
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
-    state.transfer = { ...state.transfer, state: 'payment_processed', receipt: { final_amount: '49.5', destination_tx_hash: '0xd' } }
-    expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'COMPLETED', status: 'succeeded', output: fiat('49.5', 'USD') })
+    expect(ui(sent)).toMatchObject({ state: 'PROCESSING', status: 'processing', providerRef: 'tr_1', transactions: [{ role: 'source', chain: 'eip155:8453', hash: '0xfeed' }] })
+    expect(checkLegStep(sent)).toEqual([])
+    expect(ui(await a.status!({ leg, ref }, ctx))).toMatchObject({ state: 'PROCESSING', detail: { code: 'confirming' } })
+    state.transfer = { ...state.transfer, state: 'payment_processed', receipt: { final_amount: '49.5', source_tx_hash: '0xfeed', destination_tx_hash: '0xd' } }
+    const paid = await a.status!({ leg, ref }, ctx)
+    expect(ui(paid)).toMatchObject({ state: 'COMPLETED', status: 'succeeded', providerRef: 'tr_1', output: fiat('49.5', 'USD') })
+    // The source is the user's USDC transfer. A payout delivers fiat: no destination transaction.
+    expect(paid.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: '0xfeed' }])
   })
 
   it('maps every transfer state', async () => {
@@ -396,14 +413,39 @@ describe('bridge adapter: payouts', () => {
     const cases: Array<[string, string]> = [
       ['in_review', 'PROCESSING'], ['funds_received', 'PROCESSING'], ['payment_submitted', 'PROCESSING'], ['refund_in_flight', 'PROCESSING'],
       ['refunded', 'REFUNDED'], ['canceled', 'FAILED'], ['error', 'FAILED'], ['undeliverable', 'FAILED'], ['returned', 'FAILED'],
-      ['refund_failed', 'FAILED'], ['missing_return_policy', 'FAILED'], ['something_new', 'PROCESSING'],
+      ['refund_failed', 'FAILED'], ['missing_return_policy', 'FAILED'],
     ]
     for (const [st, expected] of cases) {
       state.transfer = { ...state.transfer, state: st }
       const step = await a.status!({ leg, ref: s.ref! }, ctx)
-      expect([st, step.state]).toEqual([st, expected])
+      expect([st, stateFor(step)]).toEqual([st, expected])
+      expect(step.providerRef).toBe('tr_1')
       expect(checkLegStep(step)).toEqual([])
     }
+  })
+
+  it('a transfer state that is not in the table keeps the last known step (never processing by default)', async () => {
+    const state = { transfer: { id: 'tr_1', state: 'awaiting_funds', source_deposit_instructions: { to_address: '0x00000000000000000000000000000000000000aa' } } as Record<string, unknown> }
+    const log = recordingLog()
+    const { ctx } = ctxWith(payoutRoutes(state), { log })
+    const a = bridge(opts({ customer: async () => ({ customerId: 'cust_1' }) }))
+    const leg = payoutLeg('payout-usd-ach', 'USD')
+    const { s } = await quoteAndStart(a, leg, ctx, usdc('10'))
+    await a.transition!({ leg, ref: s.ref!, name: 'submit_details', inputs: usInputs }, ctx)
+    // Before any known state: the user still sends the USDC.
+    state.transfer = { ...state.transfer, state: 'brand_new_state' }
+    const first = await a.status!({ leg, ref: s.ref! }, ctx)
+    expect(ui(first)).toMatchObject({ state: 'PAYMENT', status: 'requires_action', detail: { code: 'send_crypto' } })
+    expect(log.warnings.filter((w) => w.includes('Bridge transfer: unknown provider status'))).toHaveLength(1)
+    // After a known state: that step.
+    state.transfer = { ...state.transfer, state: 'refunded' }
+    expect((await a.status!({ leg, ref: s.ref! }, ctx)).status).toBe('refunded')
+    state.transfer = { ...state.transfer, state: 'funds_received' }
+    expect((await a.status!({ leg, ref: s.ref! }, ctx)).status).toBe('processing')
+    state.transfer = { ...state.transfer, state: 'another_new_state' }
+    const kept = await a.status!({ leg, ref: s.ref! }, ctx)
+    expect(ui(kept)).toMatchObject({ state: 'PROCESSING', status: 'processing', providerRef: 'tr_1', detail: { code: 'settling', providerStatus: 'funds_received' } })
+    expect(checkLegStep(kept)).toEqual([])
   })
 
   it('pays out EUR to an IBAN, from Solana USDC, and lets any sender pay when the address is unknown', async () => {
@@ -412,12 +454,12 @@ describe('bridge adapter: payouts', () => {
     const a = bridge(opts({ customer: async () => ({ customerId: 'cust_1' }) }))
     const leg = payoutLeg('payout-eur-sepa', 'EUR', SOLANA, USDC[SOLANA]!)
     const { s } = await quoteAndStart(a, leg, ctx, usdc('20', SOLANA, USDC[SOLANA]!))
-    expect((s.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toContain('iban')
+    expect((s.action?.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toContain('iban')
     const inputs = { first_name: 'Jan', last_name: 'Mueller', iban: 'DE89 3704 0044 0532 0130 00', bic: 'COBADEFFXXX', street_line_1: 'Hauptstr. 1', city: 'Berlin', postal_code: '10115', country: 'deu' }
     await expect(a.transition!({ leg, ref: s.ref!, name: 'submit_details', inputs: { ...inputs, iban: 'nope' } }, ctx)).rejects.toMatchObject({ error: { message: 'Enter a valid IBAN.' } })
     await expect(a.transition!({ leg, ref: s.ref!, name: 'submit_details', inputs: { ...inputs, country: 'DE' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const send = await a.transition!({ leg, ref: s.ref!, name: 'submit_details', inputs }, ctx)
-    expect(send.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA, txs: [{ kind: 'solana', type: 'transfer', to: 'BridgeSoLDepositAddress1111111111111111111', mint: USDC[SOLANA], amount: '20000000', decimals: 6 }] })
+    expect(send.action?.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA, txs: [{ kind: 'solana', type: 'transfer', to: 'BridgeSoLDepositAddress1111111111111111111', mint: USDC[SOLANA], amount: '20000000', decimals: 6 }] })
     expect(calls.find((c) => c.url.endsWith('/external_accounts'))!.body).toMatchObject({ currency: 'eur', account_type: 'iban', iban: { account_number: 'DE89370400440532013000', bic: 'COBADEFFXXX', country: 'DEU' }, address: { country: 'DEU' } })
     expect(calls.find((c) => c.method === 'POST' && c.url.endsWith('/transfers'))!.body).toMatchObject({
       source: { payment_rail: 'solana', currency: 'usdc' },
@@ -430,9 +472,9 @@ describe('bridge adapter: payouts', () => {
     const { ctx } = ctxWith([])
     const a = bridge(opts())
     const { s } = await quoteAndStart(a, payoutLeg('payout-usd-ach', 'USD'), ctx, usdc('10'))
-    expect(s).toMatchObject({ state: 'KYC', sub: 'kyc_details' })
+    expect(ui(s)).toMatchObject({ state: 'KYC', detail: { code: 'kyc_details' }, action: { kind: 'kyc' } })
     // submit_details before KYC goes back to the KYC step
-    expect(await a.transition!({ leg: payoutLeg('payout-usd-ach', 'USD'), ref: s.ref!, name: 'submit_details', inputs: usInputs }, ctx)).toMatchObject({ state: 'KYC' })
+    expect(ui(await a.transition!({ leg: payoutLeg('payout-usd-ach', 'USD'), ref: s.ref!, name: 'submit_details', inputs: usInputs }, ctx))).toMatchObject({ state: 'KYC' })
   })
 })
 
@@ -478,11 +520,15 @@ describe('bridge adapter: webhooks', () => {
       api_version: 'v0', event_id: `wh_${type}`, event_category: 'virtual_account.activity', event_type: 'virtual_account.activity.created',
       event_object: { id: `e_${type}`, type, virtual_account_id: 'va_1', deposit_id: deposit, amount: '99.5', destination_tx_hash: '0xabc', created_at: now() },
     })
-    expect(await b.webhook!.parse(body('funds_received'), w)).toEqual([{ ref: s.ref, status: 'processing', txHash: '0xabc' }])
+    const tx = [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc' }]
+    expect(await b.webhook!.parse(body('funds_received'), w)).toEqual([{ ref: s.ref, providerRef: 'dep_1', status: 'processing', detail: { code: 'settling', providerStatus: 'funds_received' }, transactions: tx }])
     const done = await b.webhook!.parse(body('payment_processed'), w)
-    expect(done).toEqual([{ ref: s.ref, status: 'succeeded', txHash: '0xabc', output: { value: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
+    expect(done).toEqual([{ ref: s.ref, providerRef: 'dep_1', status: 'succeeded', transactions: tx, output: { value: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
+    for (const e of done) expect(checkLegStep(e)).toEqual([])
     expect(await b.webhook!.parse(body('payment_processed'), w)).toEqual(done) // idempotent
     expect(await b.webhook!.parse(body('account_update'), w)).toEqual([])
+    // A type that is not in the table: no event (never processing by default).
+    expect(await b.webhook!.parse(body('brand_new_type'), w)).toEqual([])
     // Another deposit id goes to the same session only while no other session claimed it; unknown accounts are ignored.
     expect(await b.webhook!.parse(JSON.stringify({ event_category: 'virtual_account.activity', event_object: { type: 'funds_received', virtual_account_id: 'va_x', deposit_id: 'd', created_at: now() } }), w)).toEqual([])
   })
@@ -491,7 +537,8 @@ describe('bridge adapter: webhooks', () => {
     const shared = memoryKV()
     const w = makeWebhookCtx({ shared })
     const ev = (obj: Record<string, unknown>) => JSON.stringify({ event_category: 'transfer', event_type: 'transfer.updated.status_transitioned', event_object: obj })
-    expect(await a.webhook!.parse(ev({ id: 'tr_1', client_reference_id: 'brg_1', state: 'payment_submitted' }), w)).toEqual([{ ref: 'brg_1', status: 'processing' }])
+    expect(await a.webhook!.parse(ev({ id: 'tr_1', client_reference_id: 'brg_1', state: 'payment_submitted' }), w)).toEqual([{ ref: 'brg_1', providerRef: 'tr_1', status: 'processing', detail: { code: 'settling', providerStatus: 'payment_submitted' } }])
+    expect(await a.webhook!.parse(ev({ id: 'tr_1', client_reference_id: 'brg_1', state: 'brand_new_state' }), w)).toEqual([])
     await shared.put('tr:tr_2', 'brg_2')
     expect(await a.webhook!.parse(ev({ id: 'tr_2', state: 'returned' }), w)).toMatchObject([{ ref: 'brg_2', status: 'failed', error: { code: 'DELIVERY_FAILED' } }])
     expect(await a.webhook!.parse(ev({ id: 'tr_3', state: 'payment_processed' }), w)).toEqual([])
@@ -535,7 +582,7 @@ describe('bridge adapter: conformance', () => {
       ],
     })
     expect(report.problems).toEqual([])
-    expect(report.steps[0]?.surface?.kind).toBe('BANK_FIELDS')
+    expect(report.steps[0]?.action?.surface?.kind).toBe('BANK_FIELDS')
     expect(report.quotes.every((q: LegQuote) => q.adapterId === 'bridge')).toBe(true)
   })
 })

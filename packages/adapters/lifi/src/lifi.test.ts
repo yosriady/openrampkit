@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { ERC20_TRANSFER_TOPIC, checkAdapterShape, checkLegQuote, checkLegStep, topicAddress } from '@openrampkit/adapter'
-import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, planPathways } from '@openrampkit/core'
-import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
-import { fakeFetch, makeCtx, memoryKV, runAdapterConformance } from '@openrampkit/adapter/testing'
+import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, planPathways, stateFor } from '@openrampkit/core'
+import type { CryptoAsset, LegQuote, LegStep, PathwayLeg } from '@openrampkit/core'
+import { fakeFetch, makeCtx, memoryKV, recordingLog, runAdapterConformance } from '@openrampkit/adapter/testing'
 import type { FakeCall } from '@openrampkit/adapter/testing'
 import { LIFI_SOLANA_CHAIN_ID, caip2FromLifi, erc20ApproveData, feesFrom, lifi, lifiChainId, lifiToken, slippageBpsOf } from './index.js'
 import type { LifiQuote, LifiStatus } from './index.js'
+
+/** A leg step with its UI state (`stateFor`) and its transaction hashes by role, for assertions */
+const v = (s: LegStep) => ({ ...s, state: stateFor(s), tx: Object.fromEntries((s.transactions ?? []).map((t) => [t.role, t.hash])) })
 
 const USER = '0x03508bB71268BBA25ECaCC8F620e01866650532c'
 const DEST = '0x000000000000000000000000000000000000beef'
@@ -56,6 +59,7 @@ function lifiStatus(o: Partial<LifiStatus> & { amount?: string; sendHash?: strin
     sending: { txHash: o.sendHash ?? HASH, chainId: 42161, amount: '10000000', token: tok(42161, ARB_USDC.token), timestamp: o.timestamp ?? Math.floor(Date.now() / 1000) },
     receiving: { txHash: OUT_HASH, chainId: 8453, amount: o.amount ?? '9970000', token: tok(8453, o.token ?? '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913') },
     ...(o.quote ? { quote: o.quote } : {}),
+    ...(o.transactionId ? { transactionId: o.transactionId } : {}),
   }
 }
 
@@ -236,8 +240,14 @@ describe('lifi start', () => {
   it('returns the approval and the LI.FI transaction for the user', async () => {
     const { step } = await started()
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'WALLET_TX', chain: 'eip155:42161' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
-    expect(step.surface?.kind === 'WALLET_TX' && step.surface.txs).toEqual([
+    expect(v(step)).toMatchObject({
+      state: 'PAYMENT',
+      status: 'requires_action',
+      action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: 'eip155:42161' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] },
+    })
+    // No LI.FI transfer exists before the wallet sends: no provider ref yet.
+    expect(step.providerRef).toBeUndefined()
+    expect(step.action?.surface?.kind === 'WALLET_TX' && step.action?.surface.txs).toEqual([
       { to: ARB_USDC.token, data: erc20ApproveData(DIAMOND, '10000000'), chainId: 42161 },
       { to: DIAMOND, data: '0x1794958f00', chainId: 42161, gas: String(0x2ae892) },
     ])
@@ -246,7 +256,7 @@ describe('lifi start', () => {
 
   it('skips the approval when the allowance is enough', async () => {
     const { step } = await started({ rpc: { allowance: 10_000_000n } })
-    expect(step.surface?.kind === 'WALLET_TX' && step.surface.txs.length).toBe(1)
+    expect(step.action?.surface?.kind === 'WALLET_TX' && step.action?.surface.txs.length).toBe(1)
   })
 
   it('sends native value without an approval', async () => {
@@ -259,7 +269,7 @@ describe('lifi start', () => {
     const s = { chain: eth.chain, token: 'native', address: USER }
     const q = await a.quote({ leg: walletLeg, amountIn: { value: '0.01', asset: eth }, source: s }, ctx)
     const step = await a.start({ leg: walletLeg, quote: q, source: s }, ctx)
-    expect(step.surface?.kind === 'WALLET_TX' && step.surface.txs).toEqual([{ to: DIAMOND, data: '0x1794958f00', value: '10000000000000000', chainId: 42161, gas: String(0x2ae892) }])
+    expect(step.action?.surface?.kind === 'WALLET_TX' && step.action?.surface.txs).toEqual([{ to: DIAMOND, data: '0x1794958f00', value: '10000000000000000', chainId: 42161, gas: String(0x2ae892) }])
   })
 
   it('quotes again for the real wallet when the quote used a placeholder', async () => {
@@ -290,10 +300,12 @@ describe('lifi start', () => {
     const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: sol }, source: s }, ctx)
     expect(new URL(calls[0]!.url).searchParams.get('fromChain')).toBe(String(LIFI_SOLANA_CHAIN_ID))
     const step = await a.start({ leg: walletLeg, quote: q, source: s }, ctx)
-    expect(step.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA_MAINNET, txs: [{ kind: 'solana', type: 'transaction', transaction: 'AQAAAAAAAAAAAAAA' }] })
+    expect(step.action?.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA_MAINNET, txs: [{ kind: 'solana', type: 'transaction', transaction: 'AQAAAAAAAAAAAAAA' }] })
     await expect(a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const t = await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SOL_SIG } }, ctx)
-    expect(t).toMatchObject({ state: 'PROCESSING', txHash: SOL_SIG })
+    expect(checkLegStep(t)).toEqual([])
+    expect(v(t)).toMatchObject({ state: 'PROCESSING', providerRef: SOL_SIG, tx: { source: SOL_SIG } })
+    expect(t.transactions).toEqual([{ role: 'source', hash: SOL_SIG, chain: SOLANA_MAINNET }])
   })
 })
 
@@ -305,20 +317,29 @@ describe('lifi status', () => {
   }
 
   it('waits for the tx hash, then completes with the on-chain delivery amount', async () => {
-    const s = await started()
-    expect(await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    const s = await started({ status: () => lifiStatus({ transactionId: '0xlifi-transfer' }) })
+    const paying = await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)
+    expect(v(paying)).toMatchObject({ state: 'PAYMENT', status: 'requires_action', action: { kind: 'payment', transitions: [{ name: 'submit_tx' }] } })
+    // No surface: the server keeps the WALLET_TX surface of the current action.
+    expect(paying.action!.surface).toBeUndefined()
     await s.a.transition!({ leg: walletLeg, ref: s.ref, name: 'submit_tx', inputs: { txHash: HASH } }, s.ctx)
     const done = await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)
     expect(checkLegStep(done)).toEqual([])
-    // txHash: the delivery. sourceTxHash: the source transaction the wallet sent.
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: OUT_HASH, sourceTxHash: HASH, output: { value: '9.97', asset: { chain: 'eip155:8453' } } })
+    // destination: the delivery. source: the source transaction the wallet sent. providerRef: LI.FI's transfer id.
+    expect(v(done)).toMatchObject({ state: 'COMPLETED', status: 'succeeded', providerRef: '0xlifi-transfer', output: { value: '9.97', asset: { chain: 'eip155:8453' } } })
+    expect(done.transactions).toEqual([
+      { role: 'source', hash: HASH, chain: 'eip155:42161' },
+      { role: 'destination', hash: OUT_HASH, chain: 'eip155:8453' },
+    ])
     const st = new URL(s.calls.find((c) => c.url.includes('/v1/status'))!.url)
     expect(Object.fromEntries(st.searchParams)).toEqual({ txHash: HASH, fromChain: '42161', toChain: '8453' })
   })
 
   it('maps LI.FI statuses', async () => {
-    // sub: a value from the closed list; the raw LI.FI status stays in providerStatus.
+    // detail.code: a value from the closed list; the raw LI.FI status stays in detail.providerStatus.
+    // A PENDING substatus that LI.FI added later keeps the generic code (PENDING is documented as running).
     const cases: Array<[Partial<LifiStatus>, string, string?, string?]> = [
+      [{ status: 'PENDING', substatus: 'UNKNOWN_ERROR' }, 'PROCESSING', 'delayed', 'UNKNOWN_ERROR'],
       [{ status: 'PENDING', substatus: 'WAIT_DESTINATION_TRANSACTION' }, 'PROCESSING', 'bridging', 'WAIT_DESTINATION_TRANSACTION'],
       [{ status: 'PENDING', substatus: 'WAIT_SOURCE_CONFIRMATIONS' }, 'PROCESSING', 'confirming', 'WAIT_SOURCE_CONFIRMATIONS'],
       [{ status: 'PENDING', substatus: 'REFUND_IN_PROGRESS' }, 'PROCESSING', 'refunding', 'REFUND_IN_PROGRESS'],
@@ -331,23 +352,40 @@ describe('lifi status', () => {
       [{ status: 'DONE', substatus: 'PARTIAL' }, 'FAILED'],
       [{ status: 'INVALID' }, 'FAILED'],
     ]
-    for (const [st, state, sub, raw] of cases) {
+    for (const [st, state, code, raw] of cases) {
       const { result } = await statusFor({ status: () => lifiStatus(st) })
       expect(checkLegStep(result)).toEqual([])
-      expect(result.state).toBe(state)
-      if (sub) expect(result.sub).toBe(sub)
-      if (raw) expect(result.providerStatus).toBe(raw)
+      expect(stateFor(result)).toBe(state)
+      if (code) expect(result.detail?.code).toBe(code)
+      if (raw) expect(result.detail?.providerStatus).toBe(raw)
+      // Without a LI.FI transfer id, the provider ref is the source tx hash.
+      expect(result.providerRef).toBe(HASH)
+    }
+  })
+
+  it('an unknown LI.FI status or DONE substatus keeps the last known step (processing), never completes', async () => {
+    for (const st of [{ status: 'SOMETHING_ELSE' }, { status: 'DONE', substatus: 'NEW_DONE_KIND' }]) {
+      const log = recordingLog()
+      const s = await started({ status: () => lifiStatus(st) })
+      await s.a.transition!({ leg: walletLeg, ref: s.ref, name: 'submit_tx', inputs: { txHash: HASH } }, s.ctx)
+      const result = await s.a.status!({ leg: walletLeg, ref: s.ref }, { ...s.ctx, log })
+      expect(checkLegStep(result)).toEqual([])
+      expect(result).toMatchObject({ status: 'processing', providerRef: HASH, transactions: [{ role: 'source', hash: HASH }] })
+      // No delivery was checked, and no detail code is made up for a value we do not know.
+      expect(result.detail).toBeUndefined()
+      expect(result.transactions).toHaveLength(1)
+      expect(log.warnings.some((w) => w.includes('unknown provider status'))).toBe(true)
     }
   })
 
   it('a 404 from LI.FI (not indexed yet) keeps the leg processing', async () => {
     const { result } = await statusFor({ statusCode: 404, status: () => ({ message: 'Transaction hash not found', code: 1003 }) })
-    expect(result).toMatchObject({ state: 'PROCESSING', sub: 'confirming', providerStatus: 'NOT_FOUND', txHash: HASH })
+    expect(v(result)).toMatchObject({ state: 'PROCESSING', detail: { code: 'confirming' }, tx: { source: HASH } })
   })
 
   it('waits while the delivery receipt is not on chain yet', async () => {
     const { result } = await statusFor({ rpc: { receipt: 'missing' } })
-    expect(result).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
+    expect(v(result)).toMatchObject({ state: 'PROCESSING', detail: { code: 'confirming' } })
   })
 })
 
@@ -357,11 +395,11 @@ describe('lifi money checks', () => {
     await s.a.transition!({ leg: walletLeg, ref: s.ref, name: 'submit_tx', inputs: { txHash: HASH } }, s.ctx)
     return await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)
   }
-  const failed = (msg: RegExp) => expect.objectContaining({ state: 'FAILED', status: 'failed', error: expect.objectContaining({ code: 'DELIVERY_FAILED', message: expect.stringMatching(msg) }) })
+  const failed = (msg: RegExp) => expect.objectContaining({ status: 'failed', error: expect.objectContaining({ code: 'DELIVERY_FAILED', message: expect.stringMatching(msg) }) })
 
   it('fails when LI.FI reports less than the quoted minimum (bigint compare)', async () => {
     expect(await statusFor({ status: () => lifiStatus({ amount: '9920366' }) })).toEqual(failed(/minimum/))
-    expect(await statusFor({ status: () => lifiStatus({ amount: '9920367' }), rpc: { logs: [transferLog(DEST, 9920367n)] } })).toMatchObject({ state: 'COMPLETED' })
+    expect(v(await statusFor({ status: () => lifiStatus({ amount: '9920367' }), rpc: { logs: [transferLog(DEST, 9920367n)] } }))).toMatchObject({ state: 'COMPLETED' })
   })
 
   it('does not add small Transfer logs together', async () => {
@@ -390,7 +428,7 @@ describe('lifi money checks', () => {
   })
 
   it('without an RPC check, trusts the LI.FI amount but still checks the minimum', async () => {
-    expect(await statusFor({ rpc: { logs: [] } }, { verifyOnChain: false })).toMatchObject({ state: 'COMPLETED', output: { value: '9.97' } })
+    expect(v(await statusFor({ rpc: { logs: [] } }, { verifyOnChain: false }))).toMatchObject({ state: 'COMPLETED', output: { value: '9.97' } })
   })
 
   it('refuses a source tx hash that another session used (replay)', async () => {
@@ -407,7 +445,7 @@ describe('lifi money checks', () => {
     // The same hash again for the same payment is fine; for another payment it is refused.
     await a.transition!({ leg: walletLeg, ref: s1.ref!, name: 'submit_tx', inputs: { txHash: HASH.toUpperCase().replace('0X', '0x') } }, ctx1)
     await expect(a.transition!({ leg: walletLeg, ref: s2.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx2)).rejects.toMatchObject({ status: 409 })
-    expect(await a.status!({ leg: walletLeg, ref: s1.ref! }, ctx1)).toMatchObject({ state: 'COMPLETED' })
+    expect(v(await a.status!({ leg: walletLeg, ref: s1.ref! }, ctx1))).toMatchObject({ state: 'COMPLETED' })
   })
 
   it('a delivery log completes one session only', async () => {
@@ -421,10 +459,10 @@ describe('lifi money checks', () => {
       await a.transition!({ leg: walletLeg, ref: s.ref!, name: 'submit_tx', inputs: { txHash: hash } }, ctx)
       return a.status!({ leg: walletLeg, ref: s.ref! }, ctx)
     }
-    expect(await run('sess_a', HASH)).toMatchObject({ state: 'COMPLETED' })
+    expect(v(await run('sess_a', HASH))).toMatchObject({ state: 'COMPLETED' })
     // A second session whose (other) source tx resolves to the same delivery log cannot take it.
     const r2 = await run('sess_b', HASH2)
-    expect(r2).toMatchObject({ state: 'FAILED', error: { message: expect.stringMatching(/already used/) } })
+    expect(v(r2)).toMatchObject({ state: 'FAILED', error: { message: expect.stringMatching(/already used/) } })
   })
 })
 

@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { transak, verifyHs256 } from './index.js'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
@@ -115,7 +115,13 @@ describe('transak adapter', () => {
 
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'IFRAME', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', origin: 'https://global-stg.transak.com', provider: 'Transak' } })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({
+      status: 'requires_action',
+      action: { kind: 'payment', surface: { kind: 'IFRAME', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', origin: 'https://global-stg.transak.com', provider: 'Transak' }, transitions: [{ kind: 'AWAIT' }] },
+    })
+    // No Transak order exists before the user pays in the widget
+    expect(step.providerRef).toBeUndefined()
     expect(step.ref).toMatch(/^ork_[0-9a-f]{20}$/)
     const tokenCall = calls.find((c) => c.url.includes('refresh-token'))!
     expect(tokenCall.headers.get('api-secret')).toBe('S')
@@ -145,22 +151,34 @@ describe('transak adapter', () => {
     const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
     await a.start({ leg: cardLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     const make = (webhookData: object, secret = 'ACCESS_TOKEN_1') => JSON.stringify({ data: hs256({ webhookData, eventID: 'X' }, secret) })
-    const ok = make({ partnerOrderId: 'ork_1', status: 'COMPLETED', cryptoAmount: 99.5, network: 'base', transactionHash: '0xtx' })
+    const ok = make({ id: 'tk_order_1', partnerOrderId: 'ork_1', status: 'COMPLETED', cryptoAmount: 99.5, network: 'base', transactionHash: '0xtx' })
     expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: ok }), ok, { log: silentLog, shared: memoryKV(), fetch })).toBe(true)
     const forged = make({ partnerOrderId: 'ork_1', status: 'COMPLETED' }, 'wrong')
     expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: forged }), forged, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
 
     expect(await a.webhook!.parse(ok, { log: silentLog, shared: memoryKV(), fetch })).toEqual([
-      { ref: 'ork_1', status: 'succeeded', txHash: '0xtx', output: { value: '99.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      {
+        ref: 'ork_1',
+        status: 'succeeded',
+        providerRef: 'tk_order_1',
+        transactions: [{ role: 'destination', hash: '0xtx', chain: 'eip155:8453' }],
+        output: { value: '99.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
-    const st = async (status: string) => (await a.webhook!.parse(make({ partnerOrderId: 'ork_1', status }), { log: silentLog, shared: memoryKV(), fetch }))[0]?.status
+    const ev = async (status: string, log = silentLog) => (await a.webhook!.parse(make({ id: 'tk_order_1', partnerOrderId: 'ork_1', status }), { log, shared: memoryKV(), fetch }))[0]
+    const st = async (status: string) => (await ev(status))?.status
     expect(await st('AWAITING_PAYMENT_FROM_USER')).toBeUndefined()
-    expect(await st('PROCESSING')).toBe('processing')
-    expect(await st('PENDING_DELIVERY_FROM_TRANSAK')).toBe('processing')
+    expect(await ev('PROCESSING')).toEqual({ ref: 'ork_1', status: 'processing', providerRef: 'tk_order_1', detail: { code: 'processing', providerStatus: 'PROCESSING' } })
+    expect(await ev('PENDING_DELIVERY_FROM_TRANSAK')).toMatchObject({ status: 'processing', detail: { code: 'settling' } })
+    expect(stateFor((await ev('PENDING_DELIVERY_FROM_TRANSAK'))!)).toBe('PROCESSING')
     expect(await st('FAILED')).toBe('failed')
     expect(await st('CANCELLED')).toBe('failed')
     expect(await st('EXPIRED')).toBe('expired')
     expect(await st('REFUNDED')).toBe('refunded')
+    // An unknown Transak status is no event (never `processing`), and it is logged
+    const log = recordingLog()
+    expect(await ev('SOMETHING_NEW', log)).toBeUndefined()
+    expect(log.warnings.some((w) => w.includes('unknown provider status'))).toBe(true)
   })
 
   it('verifyHs256 rejects other algorithms and bad signatures', async () => {
@@ -291,7 +309,7 @@ describe('transak errors and edge cases', () => {
     const ctx = makeCtx({ fetch, shared, session: { email: undefined, country: undefined, ip: '203.0.113.7' } })
     const step = await a.start({ leg: { ...cardLeg, legId: 'bank_transfer' }, quote: { ...QUOTE, input: { value: '100', asset: BASE_USDC } } }, ctx)
     // keepReferrer: Transak checks the Referer against the partner domain
-    expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', popup: true, provider: 'Transak', keepReferrer: true })
+    expect(step.action!.surface).toEqual({ kind: 'REDIRECT', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', popup: true, provider: 'Transak', keepReferrer: true })
     const session = calls.find((c) => c.url.includes('/auth/session'))!
     expect(session.headers.get('access-token')).toBe('STORED')
     expect(session.headers.get('x-user-ip')).toBe('203.0.113.7')
@@ -361,7 +379,7 @@ describe('transak errors and edge cases', () => {
     const ok = body({ partnerOrderId: 'ork_9', status: 'ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK', network: 'unknown-net', cryptoAmount: 1 })
     expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: ok }), ok, ctx)).toBe(true)
     // flat claims (no webhookData), unknown network: no output
-    expect(await a.webhook!.parse(ok, ctx)).toEqual([{ ref: 'ork_9', status: 'processing' }])
+    expect(await a.webhook!.parse(ok, ctx)).toEqual([{ ref: 'ork_9', status: 'processing', detail: { code: 'delayed', providerStatus: 'ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK' } }])
     const expired = body({ webhookData: { partnerOrderId: 'x' }, exp: Math.floor(Date.now() / 1000) - 3600 })
     expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: expired }), expired, ctx)).toBe(false)
     // no token anywhere: rejected and logged
@@ -375,7 +393,7 @@ describe('transak errors and edge cases', () => {
     expect(await a.webhook!.parse('{"data":5}', ctx)).toEqual([])
     expect(await a.webhook!.parse(body({ webhookData: { status: 'COMPLETED' } }), ctx)).toEqual([])
     expect(await a.webhook!.parse(JSON.stringify({ data: 'a.!!!.c' }), ctx)).toEqual([])
-    expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'PAYMENT_DONE_MARKED_BY_USER' } }), ctx)).toEqual([{ ref: 'o', status: 'processing' }])
+    expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'PAYMENT_DONE_MARKED_BY_USER' } }), ctx)).toEqual([{ ref: 'o', status: 'processing', detail: { code: 'processing', providerStatus: 'PAYMENT_DONE_MARKED_BY_USER' } }])
     expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'COMPLETED', network: 'polygon', cryptoAmount: '7.25' } }), ctx)).toMatchObject([{ status: 'succeeded', output: { value: '7.25', asset: { chain: 'eip155:137' } } }])
   })
 

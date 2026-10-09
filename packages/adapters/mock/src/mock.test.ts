@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildSettlementTxs, checkLegQuote, checkLegStep, hashSettlementCalls } from '@openrampkit/adapter'
 import type { LegEvent, RouteContext } from '@openrampkit/adapter'
-import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, isSolanaAddress, planPathways } from '@openrampkit/core'
+import { SOLANA_MAINNET, SOLANA_USDC_MINT, USDC, isSolanaAddress, planPathways, stateFor } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, memoryKV, runAdapterConformance } from '@openrampkit/adapter/testing'
 import { mockAdapter, SIMULATED_DEPOSIT } from './index.js'
@@ -48,7 +48,17 @@ describe('mock adapter', () => {
       ],
     })
     expect(report.problems).toEqual([])
-    expect(report.steps.find((s) => s.txHash === '0xabc')).toBeDefined()
+    // The wallet transaction that the user sent is the source of the leg.
+    expect(report.steps.find((s) => s.transactions?.some((t) => t.role === 'source' && t.hash === '0xabc'))).toBeDefined()
+    // The mock is its own provider: its order id is our ref.
+    for (const s of report.steps) expect(s.providerRef).toBe(s.ref)
+    // A completed crypto leg reports its (fake) delivery; a fiat payin has no onchain delivery.
+    const done = report.steps.filter((s) => s.status === 'succeeded')
+    expect(done).toHaveLength(5)
+    for (const s of done) {
+      if (s.output?.asset.kind === 'crypto') expect(s.transactions).toEqual([{ role: 'destination', chain: s.output.asset.chain, hash: expect.stringMatching(/^0x[0-9a-f]{64}$/) }])
+      else expect(s.transactions).toBeUndefined()
+    }
   })
 
   it('refuses live sessions, and escapes the provider name on the checkout page', async () => {
@@ -114,30 +124,30 @@ describe('mock adapter', () => {
     const a = mockAdapter({ crypto: true })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, urls: { webhookUrl: 'https://app.test/api/openramp/webhooks/mock' } })
     const card = await a.start({ leg: cardLeg, quote: await a.quote({ leg: cardLeg, amountIn: fiat('USD', '25') }, ctx), deliverTo: { address: DEST } }, ctx)
-    expect(card.surface).toMatchObject({ kind: 'REDIRECT', popup: true, provider: 'Test provider' })
-    const url = new URL((card.surface as { url: string }).url)
+    expect(card.action?.surface).toMatchObject({ kind: 'REDIRECT', popup: true, provider: 'Test provider' })
+    const url = new URL((card.action?.surface as { url: string }).url)
     expect(url.origin + url.pathname).toBe('https://app.test/api/openramp/adapters/mock/checkout')
     expect(Object.fromEntries(url.searchParams)).toEqual({ ref: card.ref, amount: '25', currency: 'USD', to: DEST })
 
     const qr = await a.start({ leg: localLeg, quote: await a.quote({ leg: localLeg, amountIn: fiat('VND', '500000') }, ctx) }, ctx)
-    expect(qr.surface).toMatchObject({ kind: 'QR', payload: `MOCKQR|${qr.ref}|500000|VND`, amount: '500000', currency: 'VND', reference: qr.ref!.slice(-10).toUpperCase() })
+    expect(qr.action?.surface).toMatchObject({ kind: 'QR', payload: `MOCKQR|${qr.ref}|500000|VND`, amount: '500000', currency: 'VND', reference: qr.ref!.slice(-10).toUpperCase() })
 
     const walletQuote: LegQuote = { adapterId: 'mock', legId: 'wallet', input: fiat('USD', '5'), output: { value: '5', asset: BASE_USDC }, fees: [], guarantee: 'firm', eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() }
     const w = await a.start({ leg: walletLeg, quote: walletQuote }, ctx)
-    expect(w.surface).toMatchObject({ kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ chainId: 8453, value: '0', data: '0x' }] })
-    expect((w.surface as { txs: Array<{ to: string }> }).txs[0]!.to).toMatch(/^0x[0-9a-f]{40}$/)
+    expect(w.action?.surface).toMatchObject({ kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ chainId: 8453, value: '0', data: '0x' }] })
+    expect((w.action?.surface as { txs: Array<{ to: string }> }).txs[0]!.to).toMatch(/^0x[0-9a-f]{40}$/)
     const w2 = await a.start({ leg: walletLeg, quote: { ...walletQuote, input: { value: '5', asset: ARB_USDC } }, deliverTo: { address: DEST } }, ctx)
-    expect(w2.surface).toMatchObject({ chain: 'eip155:42161', txs: [{ to: DEST, chainId: 42161 }] })
+    expect(w2.action?.surface).toMatchObject({ chain: 'eip155:42161', txs: [{ to: DEST, chainId: 42161 }] })
 
     const t = await a.start({ leg: transferLeg, quote: { ...walletQuote, legId: 'transfer' } }, ctx)
-    expect(t.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', chainName: 'Base', symbol: 'USDC', min: '1' })
+    expect(t.action?.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', chainName: 'Base', symbol: 'USDC', min: '1' })
     const t2 = await a.start({ leg: transferLeg, quote: { ...walletQuote, legId: 'transfer', input: { value: '1', asset: { ...ARB_USDC, symbol: 'USDT' } } } }, ctx)
-    expect(t2.surface).toMatchObject({ chain: 'eip155:42161', symbol: 'USDT', warning: 'Send only USDT on Arbitrum. This is a test address.' })
+    expect(t2.action?.surface).toMatchObject({ chain: 'eip155:42161', symbol: 'USDT', warning: 'Send only USDT on Arbitrum. This is a test address.' })
     // payin with a crypto input falls back to USD
     const p = await a.start({ leg: payinLeg, quote: { ...walletQuote, legId: 'payin' } }, ctx)
-    expect(p.surface).toMatchObject({ kind: 'QR', currency: 'USD' })
+    expect(p.action?.surface).toMatchObject({ kind: 'QR', currency: 'USD' })
     const c2 = await a.start({ leg: cardLeg, quote: { ...walletQuote, input: { value: '5', asset: BASE_USDC } } }, ctx)
-    expect(new URL((c2.surface as { url: string }).url).searchParams.get('currency')).toBe('')
+    expect(new URL((c2.action?.surface as { url: string }).url).searchParams.get('currency')).toBe('')
     for (const s of [card, qr, w, w2, t, t2, p, c2]) expect(checkLegStep(s)).toEqual([])
   })
 
@@ -155,14 +165,25 @@ describe('mock adapter', () => {
     const a = mockAdapter({ settleMs: 1000 })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const step = await a.start({ leg: localLeg, quote: await a.quote({ leg: localLeg, amountIn: fiat('VND', '100000') }, ctx) }, ctx)
-    expect(await a.status!({ leg: localLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(step.providerRef).toBe(step.ref)
+    // Not paid yet: a status poll keeps the QR (an action without a surface).
+    const waiting = await a.status!({ leg: localLeg, ref: step.ref! }, ctx)
+    expect(waiting).toMatchObject({ status: 'requires_action', action: { kind: 'payment', transitions: [{ kind: 'AWAIT' }] } })
+    expect(waiting.action!.surface).toBeUndefined()
+    expect(stateFor(waiting)).toBe('PAYMENT')
     await a.transition!({ leg: localLeg, ref: step.ref!, name: 'simulate_payment' }, ctx)
-    expect(await a.status!({ leg: localLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'settling' })
+    const settling = await a.status!({ leg: localLeg, ref: step.ref! }, ctx)
+    expect(settling).toMatchObject({ status: 'processing', detail: { code: 'settling' }, poll: { intervalMs: 1500 }, providerRef: step.ref })
+    expect(stateFor(settling)).toBe('PROCESSING')
     vi.advanceTimersByTime(1000)
     const done = await a.status!({ leg: localLeg, ref: step.ref! }, ctx)
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', output: { value: '3.910500' } })
-    expect(done.txHash).toMatch(/^0x[0-9a-f]{64}$/)
-    expect(await a.status!({ leg: localLeg, ref: 'unknown' }, ctx)).toMatchObject({ state: 'PAYMENT' })
+    expect(done).toMatchObject({ status: 'succeeded', output: { value: '3.910500' }, providerRef: step.ref })
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done.transactions).toEqual([{ role: 'destination', chain: 'eip155:8453', hash: expect.stringMatching(/^0x[0-9a-f]{64}$/) }])
+    // An unknown order is not processing: it keeps the current surface and polls.
+    const unknown = await a.status!({ leg: localLeg, ref: 'unknown' }, ctx)
+    expect(unknown).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
+    expect(unknown.providerRef).toBeUndefined()
   })
 
   it('routes: hosted checkout page (escaped), pay success and decline, unknown orders and paths', async () => {
@@ -188,11 +209,18 @@ describe('mock adapter', () => {
     }
     expect((await post({ ref: 'nope' }))!.status).toBe(404)
     expect(await (await post({ ref }))!.text()).toContain('Payment received')
-    expect(r.events).toEqual([{ ref, status: 'processing' }])
+    expect(r.events).toEqual([{ ref, providerRef: ref, status: 'processing', detail: { code: 'settling' } }])
     const declined = await a.start({ leg: cardLeg, quote: await a.quote({ leg: cardLeg, amountIn: fiat('USD', '10') }, ctx) }, ctx)
     expect(await (await post({ ref: declined.ref!, outcome: 'fail' }))!.text()).toContain('Payment declined')
-    expect(r.events[1]).toMatchObject({ ref: declined.ref, status: 'failed', error: { code: 'PAYMENT_FAILED' } })
-    expect(await a.status!({ leg: cardLeg, ref: declined.ref! }, ctx)).toMatchObject({ state: 'FAILED', status: 'failed' })
+    expect(r.events[1]).toMatchObject({ ref: declined.ref, providerRef: declined.ref, status: 'failed', error: { code: 'PAYMENT_FAILED' } })
+    expect(await a.status!({ leg: cardLeg, ref: declined.ref! }, ctx)).toMatchObject({ status: 'failed', providerRef: declined.ref })
+    // An unknown checkout outcome is refused: the order is not paid, and no event goes out.
+    const other = await a.start({ leg: cardLeg, quote: await a.quote({ leg: cardLeg, amountIn: fiat('USD', '10') }, ctx) }, ctx)
+    expect((await post({ ref: other.ref!, outcome: 'chargeback' }))!.status).toBe(400)
+    expect(r.events).toHaveLength(2)
+    const still = await a.status!({ leg: cardLeg, ref: other.ref! }, ctx)
+    expect(still.status).toBe('requires_action')
+    expect(still.status).not.toBe('processing')
     expect(await a.routes!(new Request('https://app.test/other'), 'other', r.ctx)).toBeUndefined()
     expect(await a.routes!(new Request('https://app.test/pay'), 'pay', r.ctx)).toBeUndefined()
   })
@@ -218,10 +246,12 @@ describe('mock offramp (withdraw to cash)', () => {
     })
     expect(report.problems).toEqual([])
     const [start, details, sent, done] = report.steps
-    expect(start).toMatchObject({ sub: 'payout_account', surface: { kind: 'FORM', fields: [{ id: 'account_name' }, { id: 'phone', label: 'GCash phone number' }] } })
-    expect(details).toMatchObject({ sub: 'send_crypto', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: BASE_USDC.token, chainId: 8453 }] } })
-    expect(sent).toMatchObject({ state: 'PROCESSING', txHash: TX })
-    expect(done).toMatchObject({ state: 'COMPLETED', output: { asset: { kind: 'fiat', currency: 'PHP' } } })
+    expect(start).toMatchObject({ detail: { code: 'payout_account' }, providerRef: start!.ref, action: { kind: 'payment', surface: { kind: 'FORM', fields: [{ id: 'account_name' }, { id: 'phone', label: 'GCash phone number' }] } } })
+    expect(details).toMatchObject({ detail: { code: 'send_crypto' }, action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: BASE_USDC.token, chainId: 8453 }] } } })
+    expect(sent).toMatchObject({ status: 'processing', transactions: [{ role: 'source', hash: TX }] })
+    expect(done).toMatchObject({ status: 'succeeded', output: { asset: { kind: 'fiat', currency: 'PHP' } } })
+    // A fiat payout has no onchain delivery.
+    expect(done!.transactions).toBeUndefined()
     expect(report.quotes[0]).toMatchObject({ input: { value: '50' }, output: { value: '2828.57', asset: { currency: 'PHP' } }, fees: [{ amount: { value: '0.500000', asset: { symbol: 'USDC', decimals: 6 } } }], guarantee: 'firm' })
   })
 
@@ -235,7 +265,7 @@ describe('mock offramp (withdraw to cash)', () => {
     const fields = async (method?: string) => {
       const q = await a.quote({ leg: offrampLeg(method), amountIn: { value: '10', asset: BASE_USDC } }, ctx)
       const s = await a.start({ leg: offrampLeg(method), quote: q }, ctx)
-      return (s.surface as { fields: Array<{ id: string; label: string }> }).fields
+      return (s.action?.surface as { fields: Array<{ id: string; label: string }> }).fields
     }
     expect((await fields()).map((f) => f.id)).toEqual(['account_name', 'bank_name', 'account_number'])
     expect((await fields('promptpay'))[1]!.label).toMatch(/PromptPay/)
@@ -250,13 +280,13 @@ describe('mock offramp (withdraw to cash)', () => {
     const q = await a.quote({ leg: l, amountIn: { value: '10', asset: BASE_USDC } }, ctx)
     const { ref } = await a.start({ leg: l, quote: q }, ctx)
     const t = (name: string, inputs?: Record<string, unknown>) => a.transition!({ leg: l, ref: ref!, name, ...(inputs ? { inputs } : {}) }, ctx)
-    expect((await a.status!({ leg: l, ref: ref! }, ctx)).surface?.kind).toBe('FORM')
+    expect((await a.status!({ leg: l, ref: ref! }, ctx)).action?.surface?.kind).toBe('FORM')
     await expect(t('submit_tx', { txHash: TX })).rejects.toMatchObject({ status: 409 })
     await expect(t('submit_details', { account_name: 'A', bank_name: 'B' })).rejects.toMatchObject({ error: { message: 'Enter the account number.' } })
     await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '1!' })).rejects.toMatchObject({ error: { message: 'Enter a valid account number.' } })
     await t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })
-    expect((await a.status!({ leg: l, ref: ref! }, ctx)).surface?.kind).toBe('WALLET_TX')
-    await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })).resolves.toMatchObject({ surface: { kind: 'WALLET_TX' } })
+    expect((await a.status!({ leg: l, ref: ref! }, ctx)).action?.surface?.kind).toBe('WALLET_TX')
+    await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })).resolves.toMatchObject({ action: { surface: { kind: 'WALLET_TX' } } })
     await t('submit_tx', { txHash: TX })
     await expect(t('submit_details', { account_name: 'A', bank_name: 'B', account_number: '12345678' })).rejects.toMatchObject({ status: 409 })
   })
@@ -295,17 +325,24 @@ describe('mock offramp (withdraw to cash)', () => {
       const q = await a.quote({ leg: onchainLeg, amountIn: { value: '25', asset: ANVIL_USDC } }, ctx)
       const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, ctx)
       expect(checkLegStep(start)).toEqual([])
-      expect(start.surface).toEqual({
+      // A plain chain transfer: no provider order, so no providerRef.
+      expect(start.providerRef).toBeUndefined()
+      expect(start.action?.surface).toEqual({
         kind: 'WALLET_TX',
         chain: 'eip155:31337',
         txs: [{ to: TOKEN, data: `0xa9059cbb${DEST.slice(2).padStart(64, '0')}${(25_000_000).toString(16).padStart(64, '0')}`, value: '0', chainId: 31337 }],
       })
-      await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX' } })
+      await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'WALLET_TX' } } })
       await expect(a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: '0xabc' } }, ctx)).rejects.toMatchObject({ status: 400 })
       const done = await a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
-      expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { value: '25' } })
+      // One same-chain transfer pays into the leg and delivers it: both roles, one hash.
+      expect(done).toMatchObject({
+        status: 'succeeded',
+        output: { value: '25' },
+        transactions: [{ role: 'source', chain: 'eip155:31337', hash: HASH }, { role: 'destination', chain: 'eip155:31337', hash: HASH }],
+      })
       expect(rpc.calls.at(-1)!.body).toMatchObject({ method: 'eth_getTransactionReceipt', params: [HASH] })
-      await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED' })
+      await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ status: 'succeeded' })
     })
 
     it('stays PROCESSING without a receipt and fails a reverted, short, reused or unrelated transaction', async () => {
@@ -316,14 +353,14 @@ describe('mock offramp (withdraw to cash)', () => {
         const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, c)
         return a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, c)
       }
-      await expect(run(null)).resolves.toMatchObject({ state: 'PROCESSING', txHash: HASH })
-      await expect(run({ status: '0x0', logs: [] })).resolves.toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
-      await expect(run({ status: '0x1', logs: [transferLog(DEST, 24_999_999n)] })).resolves.toMatchObject({ state: 'FAILED', error: { message: /quoted amount/ } })
-      await expect(run({ status: '0x1', logs: [transferLog(DEST, 25_000_000n, `0x${'22'.repeat(20)}`)] })).resolves.toMatchObject({ state: 'FAILED' })
+      await expect(run(null)).resolves.toMatchObject({ status: 'processing', detail: { code: 'confirming' }, transactions: [{ role: 'source', hash: HASH }] })
+      await expect(run({ status: '0x0', logs: [] })).resolves.toMatchObject({ status: 'failed', error: { message: 'The transaction failed on chain.' } })
+      await expect(run({ status: '0x1', logs: [transferLog(DEST, 24_999_999n)] })).resolves.toMatchObject({ status: 'failed', error: { message: /quoted amount/ } })
+      await expect(run({ status: '0x1', logs: [transferLog(DEST, 25_000_000n, `0x${'22'.repeat(20)}`)] })).resolves.toMatchObject({ status: 'failed' })
       const shared = memoryKV()
       const ok = { status: '0x1', logs: [transferLog(DEST, 25_000_000n)] }
-      await expect(run(ok, shared)).resolves.toMatchObject({ state: 'COMPLETED' })
-      await expect(run(ok, shared, 'sess_2')).resolves.toMatchObject({ state: 'FAILED', error: { message: /already used/ } })
+      await expect(run(ok, shared)).resolves.toMatchObject({ status: 'succeeded' })
+      await expect(run(ok, shared, 'sess_2')).resolves.toMatchObject({ status: 'failed', error: { message: /already used/ } })
     })
 
     describe('with a destination settlement contract', () => {
@@ -375,16 +412,18 @@ describe('mock offramp (withdraw to cash)', () => {
           chainId: 31337, contract: CONTRACT, sessionId: ctx.session.id, token: TOKEN, amount: 25_000_000n, recipient: DEST,
           calls: [{ target: VAULT, data: depositCall.data }],
         })
-        expect(start.surface).toEqual({ kind: 'WALLET_TX', chain: 'eip155:31337', txs: expected })
-        expect(start.transitions.map((t) => t.name)).toContain('submit_tx')
+        expect(start.action?.surface).toEqual({ kind: 'WALLET_TX', chain: 'eip155:31337', txs: expected })
+        expect(start.action!.transitions.map((t) => t.name)).toEqual(['submit_tx', 'poll'])
       })
 
       it('completes by session id when the contract has a matching receipt, even before a hash arrives', async () => {
         const { a, ctx, start } = await begin({ settled: { amount: 25_000_000n } })
-        await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { value: '25' } })
+        // The settle transaction delivers through the contract: role settlement (and it paid in: source).
+        const settled = [{ role: 'source', chain: 'eip155:31337', hash: HASH }, { role: 'settlement', chain: 'eip155:31337', hash: HASH }]
+        await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ status: 'succeeded', transactions: settled, output: { value: '25' } })
         const done = await a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: `0x${'cd'.repeat(32)}` } }, ctx)
         // The hash comes from the Settled log, not from the browser.
-        expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH })
+        expect(done).toMatchObject({ status: 'succeeded', transactions: settled })
       })
 
       it('waits without a receipt, and fails a reverted tx, a tx that did not settle, or a wrong settlement', async () => {
@@ -392,12 +431,12 @@ describe('mock offramp (withdraw to cash)', () => {
           const { a, ctx, start } = await begin(p)
           return a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
         }
-        await expect(submit({})).resolves.toMatchObject({ state: 'PROCESSING', txHash: HASH })
-        await expect(submit({ receipt: { status: '0x0', logs: [] } })).resolves.toMatchObject({ state: 'FAILED', error: { message: 'The transaction failed on chain.' } })
-        await expect(submit({ receipt: { status: '0x1', logs: [] } })).resolves.toMatchObject({ state: 'FAILED', error: { message: /did not settle this session/ } })
-        await expect(submit({ settled: { amount: 24_000_000n } })).resolves.toMatchObject({ state: 'FAILED', error: { message: /less than the quoted amount/ } })
-        await expect(submit({ settled: { amount: 25_000_000n, recipient: `0x${'22'.repeat(20)}` } })).resolves.toMatchObject({ state: 'FAILED', error: { message: /different recipient/ } })
-        await expect(submit({ settled: { amount: 25_000_000n, callsHash: `0x${'33'.repeat(32)}` }, calls: [depositCall] })).resolves.toMatchObject({ state: 'FAILED', error: { message: /different destination calls/ } })
+        await expect(submit({})).resolves.toMatchObject({ status: 'processing', detail: { code: 'confirming' }, transactions: [{ role: 'source', hash: HASH }] })
+        await expect(submit({ receipt: { status: '0x0', logs: [] } })).resolves.toMatchObject({ status: 'failed', error: { message: 'The transaction failed on chain.' } })
+        await expect(submit({ receipt: { status: '0x1', logs: [] } })).resolves.toMatchObject({ status: 'failed', error: { message: /did not settle this session/ } })
+        await expect(submit({ settled: { amount: 24_000_000n } })).resolves.toMatchObject({ status: 'failed', error: { message: /less than the quoted amount/ } })
+        await expect(submit({ settled: { amount: 25_000_000n, recipient: `0x${'22'.repeat(20)}` } })).resolves.toMatchObject({ status: 'failed', error: { message: /different recipient/ } })
+        await expect(submit({ settled: { amount: 25_000_000n, callsHash: `0x${'33'.repeat(32)}` }, calls: [depositCall] })).resolves.toMatchObject({ status: 'failed', error: { message: /different destination calls/ } })
       })
 
       it('searches the Settled log from the block at which the leg started', async () => {
@@ -435,13 +474,13 @@ describe('mock adapter: Solana', () => {
     const solWallet = leg('wallet', { asset: SOL_USDC, location: { kind: 'user_wallet' } }, to)
     const q = await a.quote({ leg: solWallet, amountIn: { value: '2.5', asset: { ...SOL_USDC, decimals: 6 } } }, ctx)
     const w = await a.start({ leg: solWallet, quote: q, deliverTo: { address: SOL_DEST } }, ctx)
-    expect(w.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '2500000', decimals: 6 }] })
+    expect(w.action?.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '2500000', decimals: 6 }] })
     const native = { kind: 'crypto' as const, chain: SOL, token: 'native' }
     const nq = await a.quote({ leg: solWallet, amountIn: { value: '1', asset: native } }, ctx)
     expect(nq.input.asset).toMatchObject({ symbol: 'SOL', decimals: 9 })
     const t = await a.start({ leg: leg('transfer', { asset: SOL_USDC, location: { kind: 'user_wallet' } }, to), quote: { ...q, legId: 'transfer' } }, ctx)
-    expect(t.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, chainName: 'Solana', symbol: 'USDC' })
-    expect(isSolanaAddress((t.surface as { address: string }).address)).toBe(true)
+    expect(t.action?.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, chainName: 'Solana', symbol: 'USDC' })
+    expect(isSolanaAddress((t.action?.surface as { address: string }).address)).toBe(true)
     for (const s of [w, t]) expect(checkLegStep(s)).toEqual([])
   })
 
@@ -506,7 +545,7 @@ describe('mock adapter: several instances (demo options)', () => {
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, urls: { webhookUrl: 'https://app.test/api/openramp/webhooks/mock-b' } })
     const q = await a.quote({ leg: { ...cardLeg, adapterId: 'mock-b' }, amountIn: fiat('USD', '25') }, ctx)
     const step = await a.start({ leg: { ...cardLeg, adapterId: 'mock-b' }, quote: q }, ctx)
-    const url = new URL((step.surface as { url: string }).url)
+    const url = new URL((step.action?.surface as { url: string }).url)
     expect(url.origin + url.pathname).toBe('https://app.test/api/openramp/adapters/mock-b/checkout')
     const { ctx: rctx } = routeCtx()
     const page = await (await a.routes!(new Request(`https://app.test/api/openramp/adapters/mock-b/checkout?ref=${step.ref}`), 'checkout', rctx))!.text()
@@ -520,22 +559,22 @@ describe('mock adapter: several instances (demo options)', () => {
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const q = await a.quote({ leg: cardLeg, amountIn: fiat('USD', '50') }, ctx)
     const step = await a.start({ leg: cardLeg, quote: q }, ctx)
-    expect(step).toMatchObject({ state: 'PAYMENT', sub: 'card_details', surface: { kind: 'FORM' }, transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }] })
-    expect((step.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['card_number', 'expiry', 'cvc'])
+    expect(step).toMatchObject({ status: 'requires_action', detail: { code: 'card_details' }, providerRef: step.ref, action: { kind: 'payment', surface: { kind: 'FORM' }, transitions: [{ name: 'pay_card', kind: 'SUBMIT', label: 'Pay (test mode)' }] } })
+    expect((step.action?.surface as { fields: Array<{ id: string }> }).fields.map((f) => f.id)).toEqual(['card_number', 'expiry', 'cvc'])
     expect(checkLegStep(step)).toEqual([])
     // A status poll keeps the form on screen
-    expect(await a.status!({ leg: cardLeg, ref: step.ref! }, ctx)).toMatchObject({ surface: { kind: 'FORM' } })
+    expect(await a.status!({ leg: cardLeg, ref: step.ref! }, ctx)).toMatchObject({ action: { surface: { kind: 'FORM' } } })
     const pay = (inputs: Record<string, string>, ref = step.ref!) => a.transition!({ leg: cardLeg, ref, name: 'pay_card', inputs }, ctx)
     await expect(pay({ card_number: '42', expiry: '12/30', cvc: '123' })).rejects.toMatchObject({ status: 400, error: { message: 'Enter a valid card number.' } })
     await expect(pay({ card_number: '4242 4242 4242 4242', expiry: '13/30', cvc: '123' })).rejects.toMatchObject({ error: { message: 'Enter the expiry as MM/YY.' } })
     await expect(pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '1' })).rejects.toMatchObject({ error: { message: 'Enter a valid CVC.' } })
-    expect(await pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '123' })).toMatchObject({ state: 'PROCESSING', sub: 'settling' })
+    expect(await pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '123' })).toMatchObject({ status: 'processing', detail: { code: 'settling' } })
     await expect(pay({ card_number: '4242 4242 4242 4242', expiry: '12/30', cvc: '123' })).rejects.toMatchObject({ status: 409 })
     vi.advanceTimersByTime(1000)
-    expect(await a.status!({ leg: cardLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED' })
+    expect(await a.status!({ leg: cardLeg, ref: step.ref! }, ctx)).toMatchObject({ status: 'succeeded' })
     // The decline test card fails the payment
     const s2 = await a.start({ leg: cardLeg, quote: q }, ctx)
-    expect(await pay({ card_number: '4000 0000 0000 0002', expiry: '12/30', cvc: '123' }, s2.ref!)).toMatchObject({ state: 'FAILED', error: { code: 'PAYMENT_FAILED' } })
+    expect(await pay({ card_number: '4000 0000 0000 0002', expiry: '12/30', cvc: '123' }, s2.ref!)).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
     // Without the form option the transition is refused
     const r = mockAdapter()
     const s3 = await r.start({ leg: cardLeg, quote: q }, ctx)
@@ -549,8 +588,8 @@ describe('mock adapter: several instances (demo options)', () => {
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const q = await a.quote({ leg: transferLeg, amountIn: { value: '1', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
-    expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', warning: 'In your exchange, withdraw USDC and choose the Arbitrum network. This is a test address.' })
-    expect(await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)).toMatchObject({ state: 'PROCESSING' })
+    expect(step.action?.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', warning: 'In your exchange, withdraw USDC and choose the Arbitrum network. This is a test address.' })
+    expect(await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)).toMatchObject({ status: 'processing' })
   })
 
   it('exchange: a deposit with no amount up front reports the simulated amount that arrived', async () => {
@@ -559,7 +598,7 @@ describe('mock adapter: several instances (demo options)', () => {
     const q = await a.quote({ leg: transferLeg, amountIn: { value: '0', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
     await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)
-    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', output: { value: SIMULATED_DEPOSIT } })
+    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ status: 'succeeded', output: { value: SIMULATED_DEPOSIT } })
     // A quote with an amount keeps that amount.
     const q2 = await a.quote({ leg: transferLeg, amountIn: { value: '10', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const s2 = await a.start({ leg: transferLeg, quote: q2 }, ctx)

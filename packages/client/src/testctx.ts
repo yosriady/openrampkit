@@ -5,7 +5,7 @@ import { vi } from 'vitest'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import { USDC } from '@openrampkit/core'
-import type { Destination, MethodOption, OpenRampError, PlanResult, PublicSession, Quote, Step } from '@openrampkit/core'
+import type { Destination, MethodOption, OpenRampError, Payment, PaymentLeg, PlanResult, PublicSession, Quote, Step, Transaction } from '@openrampkit/core'
 import { createOpenRamp } from '@openrampkit/server'
 import type { OpenRampConfig } from '@openrampkit/server'
 import { createOpenRampClient } from './client.js'
@@ -46,6 +46,28 @@ const STATUS_FOR: Partial<Record<Step['state'], PublicSession['status']>> = {
   REVERSED: 'reversed',
   BLOCKED: 'failed',
   CANCELED: 'canceled',
+}
+
+/** A `PublicSession.payment` with test defaults for each leg */
+export function payment(legs: Array<Partial<Omit<PaymentLeg, 'transactions'>> & Pick<PaymentLeg, 'adapterId' | 'status'> & { transactions?: Array<Partial<Transaction> & { hash: string }> }>): Payment {
+  const usd = { value: '100', asset: { kind: 'fiat' as const, currency: 'USD' } }
+  return {
+    attempt: 0,
+    quoteId: 'q_1',
+    method: 'card',
+    provider: 'Test provider',
+    activeLeg: 0,
+    legs: legs.map((l, index) => ({
+      index,
+      legId: l.adapterId,
+      provider: '',
+      input: usd,
+      output: usd,
+      outputConfirmed: false,
+      ...l,
+      transactions: (l.transactions ?? []).map((t) => ({ role: 'destination' as const, chain: 'eip155:8453', legIndex: index, ...t })),
+    })),
+  }
 }
 
 export function session(s: Step | Step['state'], extra: Partial<PublicSession> = {}): PublicSession {

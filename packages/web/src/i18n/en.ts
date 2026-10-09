@@ -1,7 +1,7 @@
 // English catalog: the source of truth for every key of `Messages`.
 // Keep copy short and plain. Do not use em dashes or en dashes.
 
-import type { StepSub } from '@openrampkit/core'
+import type { StepDetailCode } from '@openrampkit/core'
 
 export const en = {
   /** BCP 47 tag used for number and currency formatting */
@@ -119,8 +119,8 @@ export const en = {
   checkingStatus: 'Checking status',
   chooseOther: 'Choose another method',
   progressLabel: 'Progress',
-  /** Labels for `Step.sub` (the closed list `STEP_SUBS` in core) */
-  stepSub: {
+  /** Labels for `Step.detail.code` (the closed list `STEP_DETAIL_CODES` in core) */
+  stepDetail: {
     kyc_details: 'Enter your details',
     kyc_terms: 'Accept the terms',
     kyc_verify: 'Verify your identity',
@@ -137,7 +137,7 @@ export const en = {
     delayed: 'Taking longer than usual',
     refunding: 'Refunding',
     processing: 'Processing',
-  } satisfies Record<StepSub, string>,
+  } satisfies Record<StepDetailCode, string>,
   legStatus: {
     pending: 'waiting',
     requires_action: 'needs your action',

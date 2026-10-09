@@ -19,10 +19,10 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, POLL as POLLS, quoteExpiresAt, randomHex, requireDeliverAsset } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, POLL as POLLS, quoteExpiresAt, randomHex, requireDeliverAsset, statusMap } from '@openrampkit/adapter'
+import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
 import { OpenRampException, SOLANA_MAINNET, USDC, isDecimal, isWebUrl, openRampError } from '@openrampkit/core'
-import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, RegionPolicy } from '@openrampkit/core'
+import type { Asset, Fee, LegSpec, LegStatus, OpenRampError, PollSpec, RegionPolicy, StepDetailCode } from '@openrampkit/core'
 import { importRsaPrivateKey, importRsaPublicKey, rsaSign, rsaVerify } from './rsa.js'
 
 export { importRsaPrivateKey, importRsaPublicKey, rsaSign, rsaVerify } from './rsa.js'
@@ -94,6 +94,42 @@ export const BINANCE_ORDER_STATUS = {
   WITHDRAW_FAILED: 98,
   FAILED: 99,
 } as const
+
+type StatusEntry = { status: LegStatus; detail?: StepDetailCode; error?: () => OpenRampError }
+
+const cancelled = () =>
+  openRampError('PAYMENT_FAILED', { message: 'The transfer was cancelled in Binance. Your crypto stays in your Binance account.', recovery: 'retry_payment' })
+const paymentFailed = () => openRampError('PAYMENT_FAILED', { recovery: 'retry_payment' })
+
+/**
+ * Binance order status code (as a string) to the leg status. `null`: INIT, the user has not paid yet
+ * (no event; the leg keeps its payment step). A code that is not in the table is logged and gives no event.
+ */
+const STATUS = statusMap<StatusEntry | null>('Binance', {
+  [BINANCE_ORDER_STATUS.INIT]: null,
+  [BINANCE_ORDER_STATUS.ON_RAMP_PROCESSING]: { status: 'processing', detail: 'processing' },
+  [BINANCE_ORDER_STATUS.ON_RAMP_COMPLETED]: { status: 'processing', detail: 'processing' },
+  [BINANCE_ORDER_STATUS.CONVERT_PROCESSING]: { status: 'processing', detail: 'processing' },
+  [BINANCE_ORDER_STATUS.CONVERT_COMPLETED]: { status: 'processing', detail: 'processing' },
+  [BINANCE_ORDER_STATUS.OFF_RAMP_PROCESSING]: { status: 'processing', detail: 'processing' },
+  [BINANCE_ORDER_STATUS.SWAP_PROCESSING]: { status: 'processing', detail: 'processing' },
+  [BINANCE_ORDER_STATUS.WITHDRAW_INIT]: { status: 'processing', detail: 'settling' },
+  [BINANCE_ORDER_STATUS.WITHDRAW_PROCESSING]: { status: 'processing', detail: 'settling' },
+  [BINANCE_ORDER_STATUS.COMPLETED]: { status: 'succeeded' },
+  [BINANCE_ORDER_STATUS.SWAP_ABANDONED]: { status: 'failed', error: cancelled },
+  [BINANCE_ORDER_STATUS.WITHDRAW_ABANDONED]: { status: 'failed', error: cancelled },
+  [BINANCE_ORDER_STATUS.WITHDRAW_FAILED]: {
+    status: 'failed',
+    error: () => openRampError('DELIVERY_FAILED', { message: 'Binance could not send the crypto. It stays in your Binance account.', recovery: 'contact_support' }),
+  },
+  [BINANCE_ORDER_STATUS.SWAP_FAILED]: { status: 'failed', error: paymentFailed },
+  [BINANCE_ORDER_STATUS.OFF_RAMP_FAILED]: { status: 'failed', error: paymentFailed },
+  [BINANCE_ORDER_STATUS.ON_RAMP_FAILED]: { status: 'failed', error: paymentFailed },
+  [BINANCE_ORDER_STATUS.FAILED]: { status: 'failed', error: paymentFailed },
+})
+
+/** The name of a Binance status code (for `detail.providerStatus`) */
+const STATUS_NAME: Record<string, string> = Object.fromEntries(Object.entries(BINANCE_ORDER_STATUS).map(([k, v]) => [String(v), k]))
 
 /**
  * Default region policy. Binance does not serve the US (Binance.US is a separate company), Canada,
@@ -229,47 +265,25 @@ export function binance(opts: BinanceOptions) {
     return res.data
   }
 
-  function eventFrom(o: BinanceOrder): LegEvent | undefined {
+  /**
+   * The event for a Binance order, or undefined for INIT (not paid yet) and for an unknown status code
+   * (logged once; the leg keeps its current step). Binance has no order id of its own: the order is
+   * known by our `externalOrderId`, so `providerRef` is the ref.
+   */
+  function eventFrom(o: BinanceOrder, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
     const ref = o.externalOrderId
     if (!ref) return undefined
+    const code = o.status === undefined || o.status === null ? undefined : String(o.status)
+    const m = STATUS(code, log)
+    if (!m) return undefined
     const d = deliver.find((x) => x.network === o.withdrawNetwork && x.cryptoCurrency === o.cryptoCurrency)
-    const output = d && o.cryptoAmount && isDecimal(o.cryptoAmount) ? { output: { value: o.cryptoAmount, asset: assetOf(d) } } : {}
-    const txHash = o.withdrawTxHash ? { txHash: o.withdrawTxHash } : {}
-    const S = BINANCE_ORDER_STATUS
-    switch (o.status) {
-      case S.COMPLETED:
-        return { ref, status: 'succeeded', ...txHash, ...output }
-      case S.ON_RAMP_PROCESSING:
-      case S.ON_RAMP_COMPLETED:
-      case S.CONVERT_PROCESSING:
-      case S.CONVERT_COMPLETED:
-      case S.OFF_RAMP_PROCESSING:
-      case S.WITHDRAW_INIT:
-      case S.WITHDRAW_PROCESSING:
-      case S.SWAP_PROCESSING:
-        return { ref, status: 'processing', ...txHash }
-      case S.SWAP_ABANDONED:
-      case S.WITHDRAW_ABANDONED:
-        return {
-          ref,
-          status: 'failed',
-          error: openRampError('PAYMENT_FAILED', { message: 'The transfer was cancelled in Binance. Your crypto stays in your Binance account.', recovery: 'retry_payment' }),
-        }
-      case S.WITHDRAW_FAILED:
-        return {
-          ref,
-          status: 'failed',
-          error: openRampError('DELIVERY_FAILED', { message: 'Binance could not send the crypto. It stays in your Binance account.', recovery: 'contact_support' }),
-        }
-      case S.SWAP_FAILED:
-      case S.OFF_RAMP_FAILED:
-      case S.ON_RAMP_FAILED:
-      case S.FAILED:
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { recovery: 'retry_payment' }) }
-      default:
-        // INIT (0) and unknown codes: the user has not paid yet. No state change.
-        return undefined
-    }
+    const ev: LegEvent = { ref, providerRef: ref, status: m.status }
+    if (m.detail) ev.detail = { code: m.detail, providerStatus: STATUS_NAME[code!] ?? code! }
+    if (m.error) ev.error = m.error()
+    // The withdrawal from Binance to the address is the delivery of the leg.
+    if (o.withdrawTxHash) ev.transactions = [{ role: 'destination', ...(d ? { chain: d.chain } : {}), hash: o.withdrawTxHash }]
+    if (m.status === 'succeeded' && d && o.cryptoAmount && isDecimal(o.cryptoAmount)) ev.output = { value: o.cryptoAmount, asset: assetOf(d) }
+    return ev
   }
 
   return createAdapter({
@@ -372,17 +386,18 @@ export function binance(opts: BinanceOptions) {
       }
       await ctx.store.put(`o:${ref}`, { since: Date.now() }, ORDER_TTL_SEC)
       return {
-        state: 'PAYMENT',
         status: 'requires_action',
         ref,
-        surface: { kind: 'REDIRECT', url: order.link, popup: true, provider: NAME },
-        transitions: [awaitPoll(POLL)],
+        providerRef: ref,
+        action: { kind: 'payment', surface: { kind: 'REDIRECT', url: order.link, popup: true, provider: NAME }, transitions: [awaitPoll(POLL)] },
       }
     },
 
     async status({ ref }, ctx) {
       const o = await call<BinanceOrder>(ctx, '/papi/v1/ramp/connect/order', { externalOrderId: ref }, 'find this order')
-      return legStepFromEvent(eventFrom({ ...o, externalOrderId: ref }), ref, POLL)
+      // INIT and an unknown status give no event: a payment poll. The server ignores it when the leg is
+      // already further (it never moves a leg back), so the leg keeps its current step.
+      return legStepFromEvent(eventFrom({ ...o, externalOrderId: ref }, ctx.log), ref, POLL)
     },
 
     webhook: {
@@ -420,7 +435,7 @@ export function binance(opts: BinanceOptions) {
           return []
         }
         if (o.webhookEventType && o.webhookEventType !== 'connect_order_event') return []
-        const ev = eventFrom(o)
+        const ev = eventFrom(o, ctx.log)
         if (!ev && !o.externalOrderId) ctx.log.warn('binance: webhook without externalOrderId')
         return ev ? [ev] : []
       },

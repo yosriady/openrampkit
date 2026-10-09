@@ -29,12 +29,13 @@ import {
   randomHex,
   requireDeliverAsset,
   resolveEnv,
+  statusMap,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, AdapterEnv, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OpenRampException, USDC, evmChainId, openRampError, roundTo, toBaseUnits } from '@openrampkit/core'
-import type { Amount, Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, Surface, Transition, TxRequest } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegAction, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type SwappedDeliverAsset = {
   /** CAIP-2 chain */
@@ -119,6 +120,29 @@ type SwappedNotification = {
 }
 
 const POLL: PollSpec = POLLS.checkout
+
+/**
+ * Buy order status (order notifications and get_transactions). `paying`: the user is still in the
+ * widget, so the leg keeps its step. An unknown status is not in the table: no event, and `status()`
+ * keeps the last known step.
+ */
+const BUY_STATUS = statusMap<'paying' | 'processing' | 'succeeded' | 'failed'>('Swapped', {
+  payment_pending: 'paying',
+  // Paid and bought, but not yet sent on chain.
+  order_completed: 'processing',
+  order_broadcasted: 'succeeded',
+  order_cancelled: 'failed',
+})
+
+/** Sell order status. `send_funds`: Swapped waits for the crypto at `order_crypto_address`. */
+const SELL_STATUS = statusMap<'send_funds' | 'processing' | 'succeeded' | 'failed'>('Swapped sell', {
+  payment_pending: 'send_funds',
+  payout_pending: 'processing',
+  order_completed: 'succeeded',
+  // Status polling reports a completed order with a transaction id this way.
+  order_broadcasted: 'succeeded',
+  order_cancelled: 'failed',
+})
 const ORDER_TTL_SEC = 7 * 24 * 60 * 60
 const METHODS_TTL_SEC = 60 * 60
 const IFRAME_ALLOW = 'accelerometer; autoplay; camera; encrypted-media; gyroscope; payment; clipboard-read; clipboard-write'
@@ -179,6 +203,9 @@ export const SWAPPED_PAYOUT_METHODS: Array<{ slug: string; currencies: string[];
 ]
 
 const SELL_PREFIX = 'sell-'
+
+/** What the adapter keeps for an order in the session store. `last`: the last step from a known status. */
+type OrderRecord = { since: number; sell?: boolean; currencyCode?: string; last?: LegStep }
 
 export function swappedMethodId(group: string): string {
   return SWAPPED_METHOD_IDS[group] ?? group
@@ -292,14 +319,15 @@ export function swapped(opts: SwappedOptions) {
     return `0xa9059cbb${to.toLowerCase().replace(/^0x/, '').padStart(64, '0')}${BigInt(amountBase).toString(16).padStart(64, '0')}`
   }
 
-  /** The step that asks the sender to pay Swapped's deposit address (from a sell `payment_pending`). */
-  function sendFundsStep(ref: string, n: SwappedNotification): { surface: Surface; transitions: Transition[] } | undefined {
+  /** The action that asks the sender to pay Swapped's deposit address (from a sell `payment_pending`). */
+  function sendFundsAction(n: SwappedNotification): LegAction | undefined {
     const d = deliver.find((x) => x.currencyCode === n.order_crypto)
     const chainId = d ? evmChainId(d.chain) : undefined
     if (!d || !chainId || !n.order_crypto_address || n.order_crypto_amount === undefined) return undefined
     const amount = toBaseUnits(dec(n.order_crypto_amount, d.decimals ?? 6), d.decimals ?? 6)
     const tx: TxRequest = { to: d.token, data: erc20Transfer(n.order_crypto_address, amount), value: '0', chainId }
     return {
+      kind: 'payment',
       surface: { kind: 'WALLET_TX', chain: d.chain, txs: [tx] },
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
     }
@@ -310,40 +338,54 @@ export function swapped(opts: SwappedOptions) {
     return d ? assetOf(d) : undefined
   }
 
-  function eventFrom(n: SwappedNotification): LegEvent | undefined {
+  /** True when the order status is in the buy or sell table (an unknown one is logged with `log`) */
+  function knownStatus(n: SwappedNotification, log?: Pick<Logger, 'warn'>): boolean {
+    return (n.order_type === 'sell' ? SELL_STATUS(n.order_status, log) : BUY_STATUS(n.order_status, log)) !== undefined
+  }
+
+  /** The event of an order notification. Undefined: no change (still paying, an unknown status, or no ref). */
+  function eventFrom(n: SwappedNotification, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
     const ref = n.external_customer_id ?? undefined
     if (!ref) return undefined
-    if (n.order_type === 'sell') return sellEventFrom(ref, n)
+    const ids = { ref, ...(n.order_id ? { providerRef: n.order_id } : {}) }
+    if (n.order_type === 'sell') return sellEventFrom(ids, n, log)
     const asset = assetByCode(n.order_crypto)
     const output = asset && n.order_crypto_amount !== undefined ? { value: dec(n.order_crypto_amount, 8), asset } : undefined
-    switch (n.order_status) {
-      case 'order_broadcasted':
-        return { ref, status: 'succeeded', ...(n.transaction_id ? { txHash: n.transaction_id } : {}), ...(output ? { output } : {}) }
-      case 'order_completed':
-        // Paid and bought, but not yet sent on chain.
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'order_cancelled':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The order was cancelled or the payment failed.', recovery: 'retry_payment' }) }
+    switch (BUY_STATUS(n.order_status, log)) {
+      case 'succeeded':
+        // The broadcast transaction delivers the crypto to the user.
+        return { ...ids, status: 'succeeded', ...(n.transaction_id ? { transactions: [{ role: 'destination', hash: n.transaction_id, ...chainOf(n) }] } : {}), ...(output ? { output } : {}) }
+      case 'processing':
+        return { ...ids, status: 'processing', detail: { code: 'settling', providerStatus: 'order_completed' }, ...(output ? { output } : {}) }
+      case 'failed':
+        return { ...ids, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The order was cancelled or the payment failed.', recovery: 'retry_payment' }) }
       default:
-        // payment_pending: the user is still paying inside the widget. No state change.
+        // paying: the user is still paying inside the widget. No state change. Unknown: logged, no change.
         return undefined
     }
   }
 
-  function sellEventFrom(ref: string, n: SwappedNotification): LegEvent | undefined {
-    switch (n.order_status) {
-      case 'payment_pending': {
+  /** `{ chain }` of the order's crypto, when it is one of the deliver assets */
+  function chainOf(n: SwappedNotification): { chain?: string } {
+    const chain = deliver.find((x) => x.currencyCode === n.order_crypto)?.chain
+    return chain ? { chain } : {}
+  }
+
+  function sellEventFrom(ids: { ref: string; providerRef?: string }, n: SwappedNotification, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
+    // The transaction id of a sell is the user's crypto transfer to Swapped.
+    const transactions = n.transaction_id ? { transactions: [{ role: 'source' as const, hash: n.transaction_id, ...chainOf(n) }] } : {}
+    switch (SELL_STATUS(n.order_status, log)) {
+      case 'send_funds': {
         // The user finished the widget; Swapped waits for the crypto at `order_crypto_address`.
-        const send = sendFundsStep(ref, n)
-        return send ? { ref, status: 'requires_action', ...send } : undefined
+        const action = sendFundsAction(n)
+        return action ? { ...ids, status: 'requires_action', action } : undefined
       }
-      case 'payout_pending':
-        return { ref, status: 'processing', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
-      case 'order_completed':
-      case 'order_broadcasted': // status polling reports a completed order with a transaction id this way
-        return { ref, status: 'succeeded', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
-      case 'order_cancelled':
-        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The payout was cancelled.', recovery: 'contact_support' }) }
+      case 'processing':
+        return { ...ids, status: 'processing', detail: { code: 'settling', providerStatus: 'payout_pending' }, ...transactions }
+      case 'succeeded':
+        return { ...ids, status: 'succeeded', ...transactions }
+      case 'failed':
+        return { ...ids, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The payout was cancelled.', recovery: 'contact_support' }) }
       default:
         return undefined
     }
@@ -414,12 +456,14 @@ export function swapped(opts: SwappedOptions) {
       ],
       '/sell',
     )
-    await ctx.store.put(`o:${ref}`, { since: Date.now(), sell: true }, ORDER_TTL_SEC)
+    await ctx.store.put(`o:${ref}`, { since: Date.now(), sell: true } satisfies OrderRecord, ORDER_TTL_SEC)
     return {
-      state: 'PAYMENT',
-      surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 600, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
-      transitions: [awaitPoll(POLL)],
       status: 'requires_action',
+      action: {
+        kind: 'payment',
+        surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 600, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
+        transitions: [awaitPoll(POLL)],
+      },
       ref,
     }
   }
@@ -526,12 +570,14 @@ export function swapped(opts: SwappedOptions) {
         ['responseUrl', ctx.urls.webhookUrl],
         ['markup', opts.markup !== undefined ? String(opts.markup) : undefined],
       ])
-      await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode }, ORDER_TTL_SEC)
+      await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode } satisfies OrderRecord, ORDER_TTL_SEC)
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
-        transitions: [awaitPoll(POLL)],
         status: 'requires_action',
+        action: {
+          kind: 'payment',
+          surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
+          transitions: [awaitPoll(POLL)],
+        },
         ref,
       }
     },
@@ -541,7 +587,8 @@ export function swapped(opts: SwappedOptions) {
           // TO VERIFY: get_transactions signature = base64 HMAC-SHA256(secretKey, JSON body without `signature`),
           // per the docs assistant. Not tested against the live API (the sandbox key was rejected).
           async status(input: { ref: string }, ctx: AdapterContext): Promise<LegStep> {
-            const rec = await ctx.store.get<{ since: number }>(`o:${input.ref}`)
+            const key = `o:${input.ref}`
+            const rec = await ctx.store.get<OrderRecord>(key)
             const body: Record<string, unknown> = {
               apiKey: opts.publicKey,
               timestamp: new Date().toISOString(),
@@ -559,7 +606,12 @@ export function swapped(opts: SwappedOptions) {
             if (!order) return legStepFromEvent(undefined, input.ref, POLL)
             // get_transactions has no `order_broadcasted`; a set transaction_id means it was broadcast.
             const status = order.order_status === 'order_completed' && order.transaction_id ? 'order_broadcasted' : order.order_status
-            return legStepFromEvent(eventFrom({ ...order, order_status: status, external_customer_id: input.ref }), input.ref, POLL)
+            const n: SwappedNotification = { ...order, order_status: status, external_customer_id: input.ref }
+            // An unknown status (logged): keep the last known step. Never `processing` by default.
+            if (!knownStatus(n, ctx.log)) return rec?.last ?? legStepFromEvent(undefined, input.ref, POLL)
+            const step = legStepFromEvent(eventFrom(n), input.ref, POLL)
+            if (rec) await ctx.store.put(key, { ...rec, last: step } satisfies OrderRecord, ORDER_TTL_SEC)
+            return step
           },
         }
       : {}),
@@ -568,7 +620,7 @@ export function swapped(opts: SwappedOptions) {
     async transition(input) {
       if (input.name !== 'submit_tx') throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown transition ${input.name}.` }), 409)
       const txHash = typeof input.inputs?.txHash === 'string' ? input.inputs.txHash : undefined
-      return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref: input.ref, transitions: [awaitPoll(POLL)], ...(txHash ? { txHash } : {}) }
+      return { status: 'processing', detail: { code: 'confirming' }, ref: input.ref, poll: POLL, ...(txHash ? { transactions: [{ role: 'source', hash: txHash }] } : {}) }
     },
 
     webhook: {
@@ -593,7 +645,7 @@ export function swapped(opts: SwappedOptions) {
           ctx.log.warn('swapped: webhook body is not JSON')
           return []
         }
-        const ev = eventFrom(n)
+        const ev = eventFrom(n, ctx.log)
         if (!ev && !n.external_customer_id) ctx.log.warn('swapped: notification without external_customer_id', { orderId: n.order_id })
         return ev ? [{ ...ev, eventId: (await webhookBodyKey(rawBody)).slice(0, 32) }] : []
       },

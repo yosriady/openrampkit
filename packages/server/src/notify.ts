@@ -35,7 +35,7 @@ export async function notify(rt: Runtime, rec: SessionRecord, type: WebhookEvent
 function timelineDetail(extra?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!extra) return undefined
   const out: Record<string, unknown> = {}
-  for (const k of ['index', 'adapterId', 'legId', 'attempt', 'txHash']) if (extra[k] !== undefined) out[k] = extra[k]
+  for (const k of ['index', 'adapterId', 'legId', 'attempt']) if (extra[k] !== undefined) out[k] = extra[k]
   const err = extra.error as { code?: unknown } | undefined
   if (err && typeof err.code === 'string') out.error = err.code
   const res = extra.resolution as { note?: unknown } | undefined

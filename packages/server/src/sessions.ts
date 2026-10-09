@@ -302,7 +302,7 @@ export async function cancelSession(rt: Runtime, rec: SessionRecord, reason: Can
   const now = Date.now()
   rec.canceled = { at: now, reason }
   rec.status = 'canceled'
-  rec.step = { sessionId: rec.id, state: 'CANCELED', transitions: [], error: openRampError('CANCELED'), ...(rec.step.progress ? { progress: rec.step.progress } : {}) }
+  rec.step = { sessionId: rec.id, state: 'CANCELED', transitions: [], error: openRampError('CANCELED'), ...(rec.step.legIndex !== undefined ? { legIndex: rec.step.legIndex } : {}) }
   addTimeline(rec, 'session.cancel_requested', { reason })
   await notify(rt, rec, 'session.canceled', { reason })
   // The provider may still report a payment for the open leg: poll it like an expired session.

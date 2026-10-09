@@ -4,11 +4,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
-import { USDC } from '@openrampkit/core'
-import type { PlanResult, PublicSession, Quote, WithdrawSource } from '@openrampkit/core'
+import { USDC, stateFor } from '@openrampkit/core'
+import type { LegStep, PlanResult, PublicSession, Quote, WithdrawSource } from '@openrampkit/core'
 import { TreasuryRefusedError, createOpenRamp, isValidAddress } from './index.js'
 import type { CreateSessionInput, OpenRampConfig, TreasurySendInput } from './index.js'
-import { legStepFromEvent } from './legs.js'
+import { eventStep, mergeLegStep } from './legs.js'
 
 const BASE = 'https://app.test/api/openramp'
 const HOOK = 'https://app.test/hooks'
@@ -224,7 +224,7 @@ describe('withdraw to cash with the mock offramp', () => {
     expect((await tr('submit_details', { account_name: 'Juan', phone: 'call me' })).body.error?.message).toBe('Enter a valid phone number.')
     expect((await tr('submit_tx', { txHash: TX })).status).toBe(409) // not offered yet
     const pay = await tr('submit_details', { account_name: 'Juan Dela Cruz', phone: '+63 917 123 4567' })
-    expect(pay.body.step).toMatchObject({ state: 'PAYMENT', sub: 'send_crypto', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'], chainId: 8453 }] } })
+    expect(pay.body.step).toMatchObject({ state: 'PAYMENT', detail: { code: 'send_crypto' }, surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'], chainId: 8453 }] } })
     const tx = (pay.body.step.surface as { txs: Array<{ data: string }> }).txs[0]!
     expect(tx.data.startsWith('0xa9059cbb')).toBe(true)
     expect(BigInt(`0x${tx.data.slice(-64)}`)).toBe(20_000_000n)
@@ -271,7 +271,7 @@ describe('withdraw with custody: app (treasury)', () => {
     expect(plan.pathways[0]!.legs[0]!.from.location).toEqual({ kind: 'address', address: 'app' })
     expect(session.step.state).toBe('PROCESSING')
     expect(session.step.surface).toBeUndefined()
-    expect(session.step.progress!.legs[0]).toMatchObject({ status: 'processing', txHash: TX })
+    expect(session.payment!.legs[0]).toMatchObject({ status: 'processing', transactions: [{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }] })
     expect(sends).toEqual([{ sessionId: s.id, userId: 'u1', chain: 'eip155:8453', txs: [expect.objectContaining({ to: ARB_ADDR })], idempotencyKey: expect.stringMatching(new RegExp(`^${s.id}:0:`)) }])
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
@@ -331,10 +331,10 @@ function eventOfframp() {
       return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { value: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
-      return { state: 'PROCESSING', status: 'processing', ref: 'order_1', transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] }
+      return { status: 'processing', ref: 'order_1' }
     },
     async transition({ ref, inputs }) {
-      return { state: 'PROCESSING', status: 'processing', ref, transitions: [], txHash: String(inputs?.txHash) }
+      return { status: 'processing', ref, transactions: [{ role: 'source', hash: String(inputs?.txHash) }] }
     },
     webhook: {
       verify: async () => true,
@@ -346,23 +346,36 @@ function eventOfframp() {
 const PENDING: LegEvent = {
   ref: 'order_1',
   status: 'requires_action',
-  surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453']!, data: '0xa9059cbb', chainId: 8453 }] },
-  transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+  action: {
+    kind: 'payment',
+    surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453']!, data: '0xa9059cbb', chainId: 8453 }] },
+    transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+  },
 }
+const AWAIT = [{ name: 'poll', kind: 'AWAIT' as const, poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }]
+/** PENDING with no transition to report the hash: the UI only checks the status */
+const PENDING_NO_REPORT: LegEvent = { ...PENDING, action: { ...PENDING.action!, transitions: AWAIT } }
 
 describe('provider events that carry a surface', () => {
-  it('legStepFromEvent uses the event surface and transitions; default AWAIT; terminal events drop surfaces', () => {
-    const cur = { state: 'PROCESSING' as const, status: 'processing' as const, transitions: [], ref: 'r', surface: { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'PHP' } }
-    const a = legStepFromEvent(cur, PENDING)
-    expect(a).toMatchObject({ state: 'PAYMENT', status: 'requires_action', surface: { kind: 'WALLET_TX' }, transitions: [{ name: 'submit_tx' }] })
-    const b = legStepFromEvent(cur, { ...PENDING, transitions: undefined } as LegEvent)
-    expect(b.transitions).toEqual([expect.objectContaining({ kind: 'AWAIT' })])
-    expect(b.surface?.kind).toBe('WALLET_TX')
-    const c = legStepFromEvent(cur, { ref: 'r', status: 'processing' })
-    expect(c.surface?.kind).toBe('QR') // no event surface: keep the current one
-    const d = legStepFromEvent(cur, { ...PENDING, status: 'succeeded' })
-    expect(d.surface).toBeUndefined()
-    expect(d.transitions).toEqual([])
+  it('an event action replaces the current one; an action-less event keeps it, or waits with AWAIT; other statuses drop it', () => {
+    const qr = { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'PHP' }
+    const cur: LegStep = { status: 'requires_action', ref: 'r', action: { kind: 'payment', surface: qr, transitions: AWAIT } }
+    const a = mergeLegStep(cur, eventStep(PENDING))
+    expect(stateFor(a)).toBe('PAYMENT')
+    expect(a).toMatchObject({ status: 'requires_action', action: { surface: { kind: 'WALLET_TX' }, transitions: [{ name: 'submit_tx' }] } })
+    // No action in the event: keep the current surface while the user must act.
+    const b = mergeLegStep(cur, eventStep({ ref: 'r', status: 'requires_action' }))
+    expect(b.action?.surface).toEqual(qr)
+    // No action and no current one (the leg was processing): an AWAIT poll and no surface.
+    const b2 = mergeLegStep({ status: 'processing', ref: 'r' }, eventStep({ ref: 'r', status: 'requires_action' }))
+    expect(b2.action).toMatchObject({ kind: 'payment', transitions: [expect.objectContaining({ kind: 'AWAIT' })] })
+    expect(b2.action?.surface).toBeUndefined()
+    const c = mergeLegStep(cur, eventStep({ ref: 'r', status: 'processing' }))
+    expect(c.action).toBeUndefined()
+    expect(stateFor(c)).toBe('PROCESSING')
+    const d = mergeLegStep(a, eventStep({ ref: 'r', status: 'succeeded' }))
+    expect(d.action).toBeUndefined()
+    expect(stateFor(d)).toBe('COMPLETED')
   })
 
   it('a webhook with a WALLET_TX surface switches the step; the user then submits the hash', async () => {
@@ -375,7 +388,8 @@ describe('provider events that carry a surface', () => {
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
     expect(now.body.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT' }] })
     const sent = await t.call<PublicSession>(`/sessions/${s.id}/transitions/submit_tx`, s.clientSecret, { inputs: { txHash: TX } })
-    expect(sent.body.step).toMatchObject({ state: 'PROCESSING', progress: { legs: [{ txHash: TX }] } })
+    expect(sent.body.step.state).toBe('PROCESSING')
+    expect(sent.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }])
   })
 
   it('with custody app, the treasury sends a WALLET_TX that arrives by webhook, once per step', async () => {
@@ -386,7 +400,8 @@ describe('provider events that carry a surface', () => {
     const post = () => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(PENDING) }))
     await post()
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
-    expect(now.body.step).toMatchObject({ state: 'PROCESSING', progress: { legs: [{ txHash: TX }] } })
+    expect(now.body.step.state).toBe('PROCESSING')
+    expect(now.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }])
     expect(treasury.send).toHaveBeenCalledTimes(1)
     // A replayed webhook for the same step does not send twice.
     await post()
@@ -540,9 +555,10 @@ describe('provider events that carry a surface', () => {
     const t = make({ treasury }, [eventOfframp()])
     const s = await t.create({ source: SRC_APP })
     await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10', false)
-    await t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify({ ...PENDING, transitions: undefined }) }))
+    await t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(PENDING_NO_REPORT) }))
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
-    expect(now.body.step).toMatchObject({ state: 'PROCESSING', transitions: [{ kind: 'AWAIT' }], progress: { legs: [{ status: 'processing', txHash: TX }] } })
+    expect(now.body.step).toMatchObject({ state: 'PROCESSING', transitions: [{ kind: 'AWAIT' }] })
+    expect(now.body.payment!.legs[0]).toMatchObject({ status: 'processing', transactions: [{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }] })
     expect(now.body.step.surface).toBeUndefined()
   })
 })

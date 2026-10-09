@@ -8,7 +8,7 @@ import type { Amount, CryptoAsset, LegQuote, LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEPOSIT_ADDRESS_TTL_SEC, RECORD_TTL_SEC, USED_TTL_SEC } from './config.js'
 import type { DirectTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, relaySub, requestIdOf, sameAsset, terminalStep, toOpenRamp } from './helpers.js'
+import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, relayStep, relayTransactions, requestIdOf, sameAsset, toOpenRamp } from './helpers.js'
 import type { DepositRecord, RelayQuoteResponse, RelayRequest } from './types.js'
 
 export type DepositAddresses = ReturnType<typeof depositAddresses>
@@ -98,7 +98,8 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     if (rec?.bound) {
       const bound = rec.bound
       const r = list.find((x) => requestKey(x) === bound.key) ?? (await listRequests(ctx, `id=${encodeURIComponent(bound.id)}`))[0]
-      return r ? finish(ctx, ref, rec, mapRequest(r, ref, rec?.output)) : { state: 'PROCESSING', sub: 'processing', status: 'processing', transitions: [POLL_TRANSITION], ref }
+      // The bound request is missing from the list for now: the deposit was made, so the leg is processing.
+      return r ? finish(ctx, ref, rec, mapRequest(ctx, r, ref, rec?.output)) : { status: 'processing', detail: { code: 'processing' }, ref, providerRef: bound.id }
     }
     const since = rec?.since ?? 0
     const min = rec?.minBase ? BigInt(rec.minBase) : undefined
@@ -124,7 +125,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
         rec.bound = { key, id: r.id }
         await ctx.store.put(`d:${addrKey(ref)}`, rec, RECORD_TTL_SEC)
       }
-      return finish(ctx, ref, rec, mapRequest(r, ref, rec?.output))
+      return finish(ctx, ref, rec, mapRequest(ctx, r, ref, rec?.output))
     }
     if (ambiguous) return ambiguousStep(ctx, ref, address, waiting)
     return waiting
@@ -147,12 +148,16 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     return r.depositAddress?.depositTxHash ?? t?.txHash ?? t?.hash
   }
 
-  function mapRequest(r: RelayRequest, ref: string, expected?: Amount): LegStep {
-    const txHash = requestTxHash(r)
-    const sourceTxHash = requestSourceTxHash(r)
+  /**
+   * The step of the Relay request bound to a deposit leg. `source` is the transfer into the address and
+   * `destination` is Relay's fill (a refund's `outTxs` is the refund). A status that Relay added after
+   * this adapter is logged once: the deposit is made, so the last known status is `processing`.
+   */
+  function mapRequest(ctx: Pick<AdapterContext, 'log'>, r: RelayRequest, ref: string, expected?: Amount): LegStep {
     const output = requestOutput(r, expected)
-    const extra = { ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}), ...(output ? { output } : {}) }
-    return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: relaySub(r.status), providerStatus: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+    const transactions = relayTransactions(requestSourceTxHash(r), requestTxHash(r), { status: r.status })
+    const extra = { ref, ...(typeof r.id === 'string' && r.id ? { providerRef: r.id } : {}), ...(transactions.length ? { transactions } : {}), ...(output ? { output } : {}) }
+    return relayStep(r.status, extra, ctx.log) ?? { status: 'processing', ...extra }
   }
 
   async function startDeposit(legId: 'transfer' | 'bridge', input: StartInput, ctx: AdapterContext): Promise<LegStep> {
@@ -190,23 +195,25 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     await addWatcher(ctx, rec, ownerOf(ctx, ref))
 
     if (legId === 'bridge') {
-      return { state: 'PROCESSING', sub: 'waiting_for_deposit', transitions: [POLL_TRANSITION], status: 'processing', ref }
+      return { status: 'processing', detail: { code: 'waiting_for_deposit' }, ref }
     }
     const symbol = origin.symbol ?? knownSymbol(origin.chain, origin.token) ?? 'the token'
     const name = chainName(origin.chain)
     return {
-      state: 'PAYMENT',
-      surface: {
-        kind: 'DEPOSIT_ADDRESS',
-        chain: origin.chain,
-        chainName: name,
-        token: origin.token,
-        symbol,
-        address,
-        warning: `Send only ${symbol} on ${name}. Other tokens or chains may be lost.`,
-      },
-      transitions: [POLL_TRANSITION],
       status: 'requires_action',
+      action: {
+        kind: 'payment',
+        surface: {
+          kind: 'DEPOSIT_ADDRESS',
+          chain: origin.chain,
+          chainName: name,
+          token: origin.token,
+          symbol,
+          address,
+          warning: `Send only ${symbol} on ${name}. Other tokens or chains may be lost.`,
+        },
+        transitions: [POLL_TRANSITION],
+      },
       ref,
     }
   }

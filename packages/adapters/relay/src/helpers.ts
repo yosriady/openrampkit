@@ -1,9 +1,9 @@
 // Pure helpers: chain and token ids, assets, fees, and leg steps. No options and no I/O.
 
-import { awaitPoll, httpErrorToOpenRamp, httpStatus } from '@openrampkit/adapter'
+import { awaitPoll, httpErrorToOpenRamp, httpStatus, statusMap } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { CHAINS, OpenRampException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, openRampError, sameToken } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegQuote, LegStep, StepSub } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegQuote, LegStep, LegTransaction, StepDetailCode } from '@openrampkit/core'
 import { EVM_NATIVE, PLACEHOLDER_SOLANA_USER, PLACEHOLDER_USER, RELAY_POLL, RELAY_SOLANA_CHAIN_ID, SOLANA_CAIP2, SOLANA_NATIVE } from './config.js'
 import type { RelayAmount, RelayQuoteResponse, RelayRequest } from './types.js'
 
@@ -177,43 +177,70 @@ export function toOpenRamp(e: unknown, log?: Pick<Logger, 'warn'> & Partial<Pick
 export const POLL_TRANSITION = awaitPoll(RELAY_POLL)
 export const SUBMIT_TX = { name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' } as const
 
-/**
- * The `Step.sub` for a Relay request or intent status that is not final. The raw status goes into
- * `LegStep.providerStatus` (timeline only), not to the browser.
- */
-export function relaySub(status: string): StepSub {
-  switch (status) {
-    case 'waiting':
-      return 'waiting_for_deposit'
-    case 'pending':
-      return 'bridging'
-    case 'submitted':
-      return 'confirming'
-    case 'delayed':
-      return 'delayed'
-    default:
-      return 'processing'
-  }
+/** The wallet has not sent its transaction yet: the user still pays (no surface: the UI keeps the WALLET_TX surface) */
+export function awaitingTx(ref: string): LegStep {
+  return { status: 'requires_action', action: { kind: 'payment', transitions: [SUBMIT_TX] }, ref }
 }
 
-/** Terminal LegStep for a Relay request or intent status, or undefined while it is still running */
-export function terminalStep(status: string, extra: { ref: string; txHash?: string; output?: Amount }): LegStep | undefined {
-  switch (status) {
-    case 'success':
-      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra }
-    case 'failure':
-      return {
-        state: 'FAILED',
-        status: 'failed',
-        transitions: [],
-        error: openRampError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }),
-        ...extra,
-      }
-    case 'refund':
-      return { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra }
-    default:
-      return undefined
+/**
+ * Relay request and intent statuses (`GET /intents/status/v3`, `GET /requests/v3`), from the Relay API
+ * reference. A status that is not in the table is logged once, and the leg keeps its last known status.
+ */
+export const RELAY_STATUS = statusMap<{ status: 'processing'; detail: StepDetailCode } | { status: 'succeeded' | 'failed' | 'refunded' }>('Relay', {
+  waiting: { status: 'processing', detail: 'waiting_for_deposit' },
+  depositing: { status: 'processing', detail: 'confirming' },
+  pending: { status: 'processing', detail: 'bridging' },
+  submitted: { status: 'processing', detail: 'confirming' },
+  delayed: { status: 'processing', detail: 'delayed' },
+  success: { status: 'succeeded' },
+  failure: { status: 'failed' },
+  refund: { status: 'refunded' },
+})
+
+/** The fields of a Relay leg step that do not come from the Relay status */
+export type RelayStepExtra = Pick<LegStep, 'providerRef' | 'output' | 'transactions'> & { ref: string }
+
+/**
+ * The LegStep for a Relay request or intent status, or undefined for a status that is not in
+ * `RELAY_STATUS` (the caller keeps the last known status). A running status gets a detail code from
+ * the closed list; the raw status goes into `detail.providerStatus` (timeline only).
+ */
+export function relayStep(status: string, extra: RelayStepExtra, log?: Pick<Logger, 'warn'>): LegStep | undefined {
+  const m = RELAY_STATUS(status, log)
+  if (!m) return undefined
+  if (m.status === 'processing') return { status: 'processing', detail: { code: m.detail, providerStatus: status }, ...extra }
+  if (m.status === 'failed') {
+    return { status: 'failed', error: openRampError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }), ...extra }
   }
+  return { status: m.status, ...extra }
+}
+
+/**
+ * The transactions of a Relay leg: `source` is the transaction into Relay (the wallet's origin
+ * transaction, or the deposit into the address) and `out` is Relay's transaction out: the fill
+ * (`destination`), or the refund when the Relay status is `refund`.
+ */
+export function relayTransactions(source: string | undefined, out: string | undefined, opts: { sourceChain?: string; status?: string } = {}): LegTransaction[] {
+  const txs: LegTransaction[] = []
+  if (source) txs.push({ role: 'source', hash: source, ...(opts.sourceChain ? { chain: opts.sourceChain } : {}) })
+  if (out) txs.push({ role: RELAY_STATUS(opts.status)?.status === 'refunded' ? 'refund' : 'destination', hash: out })
+  return txs
+}
+
+/**
+ * The transactions of a same-chain transfer, where one transaction pays into the leg and delivers it:
+ * the `source`, and once it is confirmed also the `destination` (or the `settlement`, through an
+ * OpenRampSettlement contract), with the same hash.
+ */
+export function sameChainTransactions(hash: string, chain: string | undefined, delivered?: 'destination' | 'settlement'): LegTransaction[] {
+  const c = chain ? { chain } : {}
+  const source: LegTransaction = { role: 'source', hash, ...c }
+  return delivered ? [source, { role: delivered, hash, ...c }] : [source]
+}
+
+/** Relay's request id from a wallet ref: the ref is the request id, except our own `relay:`, `direct:` and `settle:` refs */
+export function requestIdFromRef(ref: string): string | undefined {
+  return /^(relay|direct|settle):/.test(ref) ? undefined : ref
 }
 
 /** Relay's request id from a quote response (top level or on a step) */

@@ -3,10 +3,10 @@
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
-import { createAdapter, fetchJson, httpErrorToOpenRamp, quoteExpiresAt, resolveEnv, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
+import { awaitPoll, createAdapter, fetchJson, httpErrorToOpenRamp, quoteExpiresAt, resolveEnv, statusMap, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, add, bps as applyBps, cmp, minorUnits, openRampError, roundTo, sub } from '@openrampkit/core'
-import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
+import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, Surface } from '@openrampkit/core'
 
 export type XenditOptions = {
   /** Secret API key (xnd_development_... or xnd_production_...) */
@@ -71,7 +71,8 @@ type XenditAction = { type: string; descriptor: string; value: string }
 type XenditPaymentRequest = {
   payment_request_id: string
   reference_id: string
-  status: 'ACCEPTING_PAYMENTS' | 'REQUIRES_ACTION' | 'AUTHORIZED' | 'CANCELED' | 'EXPIRED' | 'SUCCEEDED' | 'FAILED'
+  /** ACCEPTING_PAYMENTS, REQUIRES_ACTION, AUTHORIZED, CANCELED, EXPIRED, SUCCEEDED or FAILED (see `STATUS`) */
+  status: string
   currency: string
   request_amount: number
   channel_code: string
@@ -79,15 +80,16 @@ type XenditPaymentRequest = {
   failure_code?: string
 }
 
-const STATUS: Record<XenditPaymentRequest['status'], { status: LegStatus; state: StateName }> = {
-  ACCEPTING_PAYMENTS: { status: 'requires_action', state: 'PAYMENT' },
-  REQUIRES_ACTION: { status: 'requires_action', state: 'PAYMENT' },
-  AUTHORIZED: { status: 'processing', state: 'PROCESSING' },
-  SUCCEEDED: { status: 'succeeded', state: 'COMPLETED' },
-  FAILED: { status: 'failed', state: 'FAILED' },
-  CANCELED: { status: 'failed', state: 'FAILED' },
-  EXPIRED: { status: 'expired', state: 'EXPIRED' },
-}
+/** Xendit payment request status to leg status. An unknown status is not in the table (see `toStep`). */
+const STATUS = statusMap<LegStatus>('Xendit', {
+  ACCEPTING_PAYMENTS: 'requires_action',
+  REQUIRES_ACTION: 'requires_action',
+  AUTHORIZED: 'processing',
+  SUCCEEDED: 'succeeded',
+  FAILED: 'failed',
+  CANCELED: 'failed',
+  EXPIRED: 'expired',
+})
 
 const legId = (c: Channel) => `${c.country.toLowerCase()}-${c.method}`
 
@@ -206,18 +208,35 @@ export function xendit(opts: XenditOptions) {
     return undefined
   }
 
-  function toStep(pr: XenditPaymentRequest, c: Channel, amount: string): LegStep {
-    const m = STATUS[pr.status] ?? { status: 'processing' as const, state: 'PROCESSING' as const }
-    const surface = m.status === 'requires_action' ? surfaceFor(pr, c, amount) : undefined
-    return {
-      state: m.state,
-      status: m.status,
-      ref: pr.payment_request_id,
-      ...(surface ? { surface } : {}),
-      transitions: m.status === 'requires_action' || m.status === 'processing' ? [{ name: 'poll', kind: 'AWAIT', poll: POLL }] : [],
-      ...(m.status === 'failed' ? { error: openRampError('PAYMENT_FAILED', { ...(pr.failure_code ? { message: `The payment failed (${pr.failure_code}).` } : {}) }) } : {}),
-      ...(m.status === 'expired' ? { error: openRampError('QUOTE_EXPIRED', { message: 'The payment expired. Start again.' }) } : {}),
+  /**
+   * The leg step for a payment request. A status that is not in `STATUS` keeps the last known one
+   * (`last`, from the session store): it never becomes `processing` by default. With no known status
+   * yet, the user is still paying.
+   */
+  function toStep(pr: XenditPaymentRequest, c: Channel, amount: string, ctx: Pick<AdapterContext, 'log'>, last?: LegStatus): LegStep {
+    const known = STATUS(pr.status, ctx.log)
+    const status = known ?? (last === 'processing' ? 'processing' : 'requires_action')
+    const ids = { ref: pr.payment_request_id, providerRef: pr.payment_request_id }
+    if (status === 'requires_action') {
+      // An unknown status shows no new surface: the UI keeps the current one.
+      const surface = known ? surfaceFor(pr, c, amount) : undefined
+      return { status, action: { kind: 'payment', ...(surface ? { surface } : {}), transitions: [awaitPoll(POLL)] }, ...ids }
     }
+    return {
+      status,
+      ...ids,
+      ...(status === 'failed' ? { error: openRampError('PAYMENT_FAILED', { ...(pr.failure_code ? { message: `The payment failed (${pr.failure_code}).` } : {}) }) } : {}),
+      ...(status === 'expired' ? { error: openRampError('QUOTE_EXPIRED', { message: 'The payment expired. Start again.' }) } : {}),
+    }
+  }
+
+  /** `toStep`, and keep a known status in the session store for the next unknown one */
+  async function stepAndKeep(pr: XenditPaymentRequest, c: Channel, amount: string, ctx: Pick<AdapterContext, 'log' | 'store'>): Promise<LegStep> {
+    const known = STATUS(pr.status)
+    const last = known ? undefined : await ctx.store.get<LegStatus>('last-status')
+    const step = toStep(pr, c, amount, ctx, last)
+    if (known) await ctx.store.put('last-status', known)
+    return step
   }
 
   return createAdapter({
@@ -275,13 +294,13 @@ export function xendit(opts: XenditOptions) {
         c,
       )
       await ctx.store.put('pr', { id: pr.payment_request_id, leg: leg.legId, amount })
-      return toStep(pr, c, amount)
+      return stepAndKeep(pr, c, amount, ctx)
     },
 
     async status({ leg, ref }, ctx): Promise<LegStep> {
       const c = channelFor(leg.legId)
       const pr = await call<XenditPaymentRequest>(ctx, 'GET', `/v3/payment_requests/${encodeURIComponent(ref)}`, undefined, undefined, c)
-      return toStep(pr, c, String(pr.request_amount))
+      return stepAndKeep(pr, c, String(pr.request_amount), ctx)
     },
 
     webhook: {
@@ -306,10 +325,10 @@ export function xendit(opts: XenditOptions) {
         const eventId = (await webhookBodyKey(raw)).slice(0, 32)
         if (body.event === 'payment.capture' || d.status === 'SUCCEEDED') {
           // No output: Xendit reports the gross request amount, while the quote's output is net of fees.
-          return [{ ref: d.payment_request_id, status: 'succeeded', eventId }]
+          return [{ ref: d.payment_request_id, providerRef: d.payment_request_id, status: 'succeeded', eventId }]
         }
         if (body.event === 'payment.failure' || d.status === 'FAILED') {
-          return [{ ref: d.payment_request_id, status: 'failed', eventId, error: openRampError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]
+          return [{ ref: d.payment_request_id, providerRef: d.payment_request_id, status: 'failed', eventId, error: openRampError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]
         }
         return []
       },
