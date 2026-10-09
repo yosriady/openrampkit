@@ -16,16 +16,16 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, fetchJson, httpErrorToOrk, randomHex, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOrk, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, orkError } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type TransakOptions = {
   apiKey: string
   apiSecret: string
-  /** Default 'production' */
-  env?: 'staging' | 'production'
+  /** Default 'production'. 'sandbox' uses the Transak staging hosts. 'staging' is a deprecated alias of 'sandbox'. */
+  env?: AdapterEnv | 'staging'
   /** Your web domain (or mobile package name), registered with Transak. Required by the widget session API. */
   referrerDomain: string
   /** Default 'IFRAME' */
@@ -185,7 +185,8 @@ function decodeClaims(token: string): Record<string, unknown> | undefined {
 type TokenRecord = { token: string; expiresAt: number }
 
 export function transak(opts: TransakOptions) {
-  const urls = URLS[opts.env ?? 'production']
+  const env = resolveEnv('transak', opts.env === 'staging' ? undefined : opts.env, { value: opts.env === 'staging' ? 'sandbox' : undefined, option: "env: 'staging'" }, 'production')
+  const urls = URLS[env === 'sandbox' ? 'staging' : 'production']
   const surfaceKind = opts.surface ?? 'IFRAME'
   /** In-memory copy for webhook verification (webhook handlers get no KV today) */
   let memToken: TokenRecord | undefined
@@ -231,7 +232,6 @@ export function transak(opts: TransakOptions) {
     eta: { min: 120, max: 1800 },
     surfaces: [surfaceKind],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks'],
     ...extra,
   })
 
@@ -252,9 +252,13 @@ export function transak(opts: TransakOptions) {
     return LEG_PAYMENT_METHOD[legId] ?? legId
   }
 
-  function target(asset: CryptoAsset | undefined): { network: string; asset: CryptoAsset } {
-    const chain = asset && asset.chain !== '*' && TRANSAK_NETWORKS[asset.chain] ? asset.chain : 'eip155:8453'
-    return { network: TRANSAK_NETWORKS[chain]!, asset: { kind: 'crypto', chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 } }
+  /** The tokens Transak delivers here: USDC on each supported network */
+  const deliverable = Object.keys(TRANSAK_NETWORKS).map((chain) => ({ chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 }))
+
+  /** What Transak delivers for `asset`: USDC on a supported chain. NO_QUOTES for another token or chain (never USDC on Base instead). */
+  function target(asset: Asset | undefined): { network: string; asset: CryptoAsset } {
+    const d = requireDeliverAsset(deliverable, asset, 'Transak')
+    return { network: TRANSAK_NETWORKS[d.chain]!, asset: deliverableToAsset(d) }
   }
 
   function eventFrom(claims: Record<string, unknown>): LegEvent | undefined {
@@ -262,7 +266,7 @@ export function transak(opts: TransakOptions) {
     const ref = o.partnerOrderId
     if (!ref) return undefined
     const chain = Object.entries(TRANSAK_NETWORKS).find(([, n]) => n === o.network)?.[0]
-    const output = chain && o.cryptoAmount !== undefined ? { amount: dec(o.cryptoAmount, 6), asset: target({ kind: 'crypto', chain, token: '' }).asset } : undefined
+    const output = chain && o.cryptoAmount !== undefined ? { amount: dec(o.cryptoAmount, 6), asset: deliverableToAsset(deliverable.find((d) => d.chain === chain)!) } : undefined
     switch (o.status) {
       case 'COMPLETED':
         return { ref, status: 'succeeded', ...(o.transactionHash ? { txHash: o.transactionHash } : {}), ...(output ? { output } : {}) }
@@ -286,6 +290,7 @@ export function transak(opts: TransakOptions) {
 
   return createAdapter({
     id: 'transak',
+    env,
     name: 'Transak',
     legs,
 

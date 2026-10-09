@@ -1,7 +1,7 @@
 // Small helpers shared by the first-party adapters. Web-standard APIs only.
 
-import { isDecimal } from '@openrampkit/core'
-import type { LegStep, PollSpec, Transition } from '@openrampkit/core'
+import { OrkException, isDecimal, orkError, sameToken } from '@openrampkit/core'
+import type { Asset, CryptoAsset, LegStep, PollSpec, Transition } from '@openrampkit/core'
 import type { LegEvent } from './index.js'
 
 /**
@@ -101,4 +101,36 @@ export function legStepFromEvent(ev: LegEvent | undefined, ref: string, poll: Po
     default:
       return { state: 'PROCESSING', status: 'processing', transitions: [awaitPoll(poll)], ...extra }
   }
+}
+
+/** A token that a provider delivers: a CAIP-2 chain and a token address (or `native`), with optional display data. */
+export type DeliverableAsset = { chain: string; token: string; symbol?: string; decimals?: number }
+
+/**
+ * The entry of `list` that delivers `asset`: the same chain and the same token (EVM addresses compare
+ * without case). Undefined when no entry matches, or when `asset` is not a concrete crypto asset.
+ * Never falls back to another entry: an adapter that gets undefined must not quote (throw NO_QUOTES),
+ * because a quote for another token would deliver the wrong asset.
+ */
+export function findDeliverAsset<T extends DeliverableAsset>(list: readonly T[], asset: Asset | undefined): T | undefined {
+  if (asset?.kind !== 'crypto' || asset.chain === '*' || asset.token === '*') return undefined
+  return list.find((d) => d.chain === asset.chain && sameToken(d.chain, d.token, asset.token))
+}
+
+/**
+ * `findDeliverAsset`, or a NO_QUOTES error (422) when the provider does not deliver `asset`.
+ * Use it in `quote()` and `start()`: the planner then shows "no quote" for this method, not a quote for another token.
+ */
+export function requireDeliverAsset<T extends DeliverableAsset>(list: readonly T[], asset: Asset | undefined, provider: string): T {
+  const found = findDeliverAsset(list, asset)
+  if (!found) {
+    const what = asset?.kind === 'crypto' ? `${asset.symbol ?? asset.token} on ${asset.chain}` : 'this asset'
+    throw new OrkException(orkError('NO_QUOTES', { message: `${provider} does not deliver ${what}.`, recovery: 'choose_other' }), 422)
+  }
+  return found
+}
+
+/** The `CryptoAsset` of a deliverable asset, with `symbol` and `decimals` when known. */
+export function deliverableToAsset(d: DeliverableAsset): CryptoAsset {
+  return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
 }

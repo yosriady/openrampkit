@@ -34,7 +34,7 @@ import {
   sameToken,
   toBaseUnits,
 } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, StepSub, TxRequest } from '@openrampkit/core'
 
 export type LifiOptions = {
   /** LI.FI API key (`x-lifi-api-key`), from the Partner Portal. Optional, but the free quote limit is low. Keep it on the server. */
@@ -258,6 +258,29 @@ function erc20AllowanceData(owner: string, spender: string): string {
   return `0xdd62ed3e${pad(owner)}${pad(spender)}`
 }
 
+/**
+ * The `Step.sub` for a LI.FI status or substatus (https://docs.li.fi/introduction/user-flows-and-examples/status-tracking).
+ * NOT_FOUND: LI.FI has not indexed the source transaction yet.
+ */
+export function lifiSub(raw: string): StepSub {
+  switch (raw.toUpperCase()) {
+    case 'NOT_FOUND':
+    case 'WAIT_SOURCE_CONFIRMATIONS':
+      return 'confirming'
+    case 'WAIT_DESTINATION_TRANSACTION':
+    case 'PENDING':
+      return 'bridging'
+    case 'BRIDGE_NOT_AVAILABLE':
+    case 'CHAIN_NOT_AVAILABLE':
+    case 'NOT_PROCESSABLE_REFUND_NEEDED':
+      return 'delayed'
+    case 'REFUND_IN_PROGRESS':
+      return 'refunding'
+    default:
+      return 'processing'
+  }
+}
+
 function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
   return httpErrorToOrk(e, 'LI.FI', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
 }
@@ -363,7 +386,6 @@ export function lifi(opts: LifiOptions = {}) {
       surfaces: ['WALLET_TX'],
       requires: ['wallet'],
       // TO VERIFY: withdraw sessions (the same leg shape as Relay `wallet`) are not tested with LI.FI.
-      capabilities: ['polling'],
     },
   ]
 
@@ -632,7 +654,8 @@ export function lifi(opts: LifiOptions = {}) {
 
   /** Status of a wallet leg whose source transaction `txHash` the wallet sent */
   async function checkSource(ctx: AdapterContext, ref: string, rec: WalletRecord, txHash: string): Promise<LegStep> {
-    const waiting = (sub: string): LegStep => ({ state: 'PROCESSING', sub, status: 'processing', transitions: [POLL_TRANSITION], ref, txHash })
+    // The UI gets a label from the closed list; the raw LI.FI status stays in `providerStatus` (timeline only).
+    const waiting = (raw: string): LegStep => ({ state: 'PROCESSING', sub: lifiSub(raw), providerStatus: raw, status: 'processing', transitions: [POLL_TRANSITION], ref, txHash })
     // One source transaction pays one session only.
     const usedBy = await ctx.shared.get<string>(srcKey(rec.fromChain, txHash))
     if (usedBy && usedBy !== ownerOf(ctx, ref)) return fail(ref, 'This transaction was already used for another payment.', txHash)
@@ -642,7 +665,7 @@ export function lifi(opts: LifiOptions = {}) {
       s = await api<LifiStatus>(ctx, '/status', { txHash, fromChain: String(lifiChainId(rec.fromChain)), toChain: String(lifiChainId(rec.toChain)) })
     } catch (e) {
       // 404 (code 1003): LI.FI has not indexed the hash yet. Normal for a minute or two.
-      if (httpStatus(e) === 404) return waiting('not_found')
+      if (httpStatus(e) === 404) return waiting('NOT_FOUND')
       throw toOrk(e, ctx.log)
     }
     // LI.FI also finds a transfer by its delivery hash: the hash the wallet gave must be the source.
@@ -660,7 +683,7 @@ export function lifi(opts: LifiOptions = {}) {
         if (s.substatus === 'REFUNDED') return { state: 'REFUNDED', status: 'refunded', transitions: [], ref, txHash }
         // PARTIAL: LI.FI delivered another token (the full value). The destination did not get its token.
         if (s.substatus === 'PARTIAL') return fail(ref, 'LI.FI delivered another token than the quote. Contact support.', s.receiving?.txHash ?? txHash, 'contact_support')
-        if (s.substatus && s.substatus !== 'COMPLETED') return waiting(s.substatus.toLowerCase())
+        if (s.substatus && s.substatus !== 'COMPLETED') return waiting(s.substatus)
         return verifyDelivery(ctx, ref, rec, s)
       case 'FAILED':
         if (s.substatus === 'REFUNDED') return { state: 'REFUNDED', status: 'refunded', transitions: [], ref, txHash }
@@ -670,12 +693,14 @@ export function lifi(opts: LifiOptions = {}) {
         return fail(ref, 'LI.FI does not know this transaction as a transfer.', txHash)
       default:
         // NOT_FOUND, PENDING (WAIT_SOURCE_CONFIRMATIONS, WAIT_DESTINATION_TRANSACTION, REFUND_IN_PROGRESS, ...)
-        return waiting((s.substatus ?? s.status ?? 'pending').toLowerCase())
+        return waiting(s.substatus ?? s.status ?? 'PENDING')
     }
   }
 
   return createAdapter({
     id: 'lifi',
+    // LI.FI has no sandbox host: quotes and routes are for mainnet.
+    env: 'production',
     name: 'LI.FI',
     legs,
 

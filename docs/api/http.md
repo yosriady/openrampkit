@@ -191,7 +191,7 @@ The server plans first if needed. It quotes up to 5 available pathways for the m
 
 For a withdraw session, the source is the session's `source`, and `body.source` is ignored.
 
-Response `200`: `{ "quotes": Quote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`, or when a field is not valid; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
+Response `200`: `{ "quotes": PublicQuote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`, or when a field is not valid; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
 
 ## POST /sessions/:id/select
 

@@ -25,11 +25,11 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#moonpay).
 |---|---|---|---|
 | `publishableKey` | `string` | required | Publishable key |
 | `secretKey` | `string` | required | Secret key. Signs widget URLs. |
-| `env` | `'sandbox' \| 'production'` | required | Sandbox uses `https://buy-sandbox.moonpay.com` |
+| `env` | `'sandbox' \| 'production'` | required | Sandbox uses `https://buy-sandbox.moonpay.com`. The server checks `env` against `livemode`. |
 | `webhookKey` | `string` | none | Webhook API key from the dashboard. Without it, webhooks are rejected. |
 | `surface` | `'redirect' \| 'iframe'` | `'redirect'` | How the widget opens |
 | `methods` | `string[]` | all | Leg ids to offer |
-| `deliverAssets` | `MoonPayDeliverAsset[]` | USDC on Base, Ethereum, Arbitrum, Optimism, Polygon | Assets MoonPay may deliver, most preferred first |
+| `deliverAssets` | `MoonPayDeliverAsset[]` | USDC on Base, Ethereum, Arbitrum, Optimism, Polygon | Assets MoonPay may deliver, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `baseCurrencyDefault` | `string` | `'USD'` | Fiat currency when the quote has none |
 | `extraFeePercentage` | `number` | none | Your fee in percent (set it up with MoonPay first) |
 | `theme` | `'dark' \| 'light'` | none | Widget theme |

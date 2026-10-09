@@ -1,7 +1,7 @@
 // HTTP client for the app's OpenRampKit server handler.
 
 import { orkError } from '@openrampkit/core'
-import type { OrkError, PlanResult, PublicSession, Quote } from '@openrampkit/core'
+import type { OrkError, PlanResult, PublicQuote, PublicSession } from '@openrampkit/core'
 
 export type ClientOptions = {
   /** Base URL of the OpenRampKit server handler, e.g. `/api/openramp` or `https://ramp.example.workers.dev` */
@@ -83,7 +83,7 @@ export function createOpenRampClient(opts: ClientOptions) {
       },
     ) => call<PlanResult>(secret, 'POST', `/sessions/${sessionId(secret)}/target`, body),
     quotes: (secret: string, body: { method: string; amount: string; amountSide: 'source' | 'destination'; source?: { chain: string; token: string } }) =>
-      call<{ quotes: Quote[]; errors: OrkError[] }>(secret, 'POST', `/sessions/${sessionId(secret)}/quotes`, body),
+      call<{ quotes: PublicQuote[]; errors: OrkError[] }>(secret, 'POST', `/sessions/${sessionId(secret)}/quotes`, body),
     select: (secret: string, body: { quoteId: string; walletAddress?: string }) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/select`, body, idemKey()),
     transition: (secret: string, name: string, inputs?: Record<string, unknown>) =>

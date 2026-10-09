@@ -18,10 +18,10 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
 import type { CdpKey } from './jwt.js'
 
@@ -47,7 +47,12 @@ export type CoinbaseOptions = {
    * Used only when the session has no region (ISO 3166-2, from `CreateSessionInput.region` or geo headers).
    */
   defaultSubdivision?: string
-  /** Use sandbox transactions (partnerUserRef prefixed with "sandbox-"). Default: !session.livemode */
+  /**
+   * 'sandbox': sandbox transactions (partnerUserRef prefixed with "sandbox-"). 'production': real ones.
+   * Default: each session's `livemode` decides.
+   */
+  env?: AdapterEnv
+  /** @deprecated Use `env`. `true` is `env: 'sandbox'`, `false` is `env: 'production'`. */
   sandbox?: boolean
   /**
    * Coinbase `paymentMethod` of the `coinbase_account` leg: the user's fiat balance (`FIAT_WALLET`, default)
@@ -114,6 +119,9 @@ export const COINBASE_NETWORKS: Record<string, string> = {
 }
 
 const USDC_TOKENS: Record<string, string> = { ...USDC, [SOLANA]: SOLANA_USDC }
+
+/** The tokens Coinbase delivers: USDC on each supported network */
+const DELIVERABLE = Object.keys(COINBASE_NETWORKS).map((chain) => ({ chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 }))
 
 /** Fiat currencies for the hosted onramp. TO VERIFY per country with the Buy Options API. */
 const FIATS = ['USD', 'EUR', 'GBP', 'CAD', 'AUD', 'SGD', 'CHF']
@@ -213,6 +221,7 @@ export function coinbase(opts: CoinbaseOptions) {
   const cdpApi = new URL(opts.cdpApiUrl ?? 'https://api.cdp.coinbase.com')
   const onrampApi = new URL(opts.onrampApiUrl ?? 'https://api.developer.coinbase.com')
   let keyPromise: Promise<CdpKey> | undefined
+  const env = resolveEnv('coinbase', opts.env, { value: opts.sandbox === undefined ? undefined : opts.sandbox ? 'sandbox' : 'production', option: 'sandbox' }, undefined)
   const key = () => (keyPromise ??= importCdpKey(opts.apiKeySecret))
 
   async function cdp<T>(ctx: Pick<AdapterContext, 'fetch'>, base: URL, method: 'GET' | 'POST', path: string, query = '', body?: unknown): Promise<T> {
@@ -246,7 +255,6 @@ export function coinbase(opts: CoinbaseOptions) {
     eta: { min: 60, max: 900 },
     surfaces: ['REDIRECT'],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const legs: LegSpec[] = [
@@ -275,13 +283,18 @@ export function coinbase(opts: CoinbaseOptions) {
       limits: GUEST_LIMITS,
       eta: { min: 30, max: 900 },
       surfaces: ['IFRAME'],
-      capabilities: ['webhooks', 'polling'],
     })
   }
 
-  function target(asset: CryptoAsset | undefined): { chain: string; network: string; asset: CryptoAsset } {
-    const chain = asset && asset.chain !== '*' && COINBASE_NETWORKS[asset.chain] ? asset.chain : 'eip155:8453'
-    return { chain, network: COINBASE_NETWORKS[chain]!, asset: { kind: 'crypto', chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 } }
+  /** USDC on a chain that Coinbase delivers to */
+  function usdcOn(chain: string): CryptoAsset {
+    return deliverableToAsset(DELIVERABLE.find((d) => d.chain === chain)!)
+  }
+
+  /** What Coinbase delivers for `asset`: USDC on a supported chain. NO_QUOTES for another token or chain (never USDC on Base instead). */
+  function target(asset: Asset | undefined): { chain: string; network: string; asset: CryptoAsset } {
+    const d = requireDeliverAsset(DELIVERABLE, asset, 'Coinbase')
+    return { chain: d.chain, network: COINBASE_NETWORKS[d.chain]!, asset: deliverableToAsset(d) }
   }
 
   function chainForNetwork(network: string | undefined): string | undefined {
@@ -295,7 +308,7 @@ export function coinbase(opts: CoinbaseOptions) {
   }
 
   function partnerUserRef(ctx: AdapterContext): string {
-    const sandbox = opts.sandbox ?? !ctx.session.livemode
+    const sandbox = env ? env === 'sandbox' : !ctx.session.livemode
     // Must be under 50 characters
     return `${sandbox ? 'sandbox-' : ''}ork-${randomHex(10)}`
   }
@@ -385,7 +398,7 @@ export function coinbase(opts: CoinbaseOptions) {
     const txHash = hash && hash !== '0x' ? hash : undefined
     const chain = chainForNetwork(tx.purchaseNetwork ?? tx.purchase_network ?? tx.destinationNetwork)
     const amount = amountValue(tx.purchaseAmount ?? tx.purchase_amount)
-    const output = chain && amount ? { amount, asset: target({ kind: 'crypto', chain, token: '' }).asset } : undefined
+    const output = chain && amount ? { amount, asset: usdcOn(chain) } : undefined
     if (status === 'ONRAMP_TRANSACTION_STATUS_SUCCESS' || status === 'ONRAMP_ORDER_STATUS_COMPLETED' || tx.eventType === 'onramp.transaction.success') {
       return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
     }
@@ -498,6 +511,7 @@ export function coinbase(opts: CoinbaseOptions) {
 
   return createAdapter({
     id: 'coinbase',
+    ...(env ? { env } : {}),
     name: 'Coinbase',
     legs,
 
@@ -636,6 +650,8 @@ export function coinbase(opts: CoinbaseOptions) {
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('coinbase: webhookSecret is not set; rejecting webhook')

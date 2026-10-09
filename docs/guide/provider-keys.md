@@ -50,7 +50,19 @@ A provider cannot send a webhook to `localhost`. To test webhooks on your comput
 
 ### Sandbox and production
 
-Each adapter has its own sandbox switch: an option (`env`, `sandbox` or `apiUrl`), or the key prefix. The sections below give the switch for each adapter. Also set `livemode: true` on `createOpenRamp` in production. Events then carry `livemode`, and adapters such as Coinbase leave sandbox mode.
+Every adapter takes the same option: `env: 'sandbox' | 'production'`. For Stripe and Xendit, the key prefix gives the default. Binance, LI.FI and Relay have no sandbox switch: their `env` comes from the host. The sections below give the details for each adapter. Each adapter shows its environment as the read-only `adapter.env`.
+
+Also set `livemode: true` on `createOpenRamp` in production. Events then carry `livemode`. The server checks each `adapter.env` against `livemode` when it starts:
+
+| `livemode` | Adapter `env` | Result |
+|---|---|---|
+| `true` | `sandbox` | The server does not start. A test payment must never complete a live session. |
+| `false` | `production` | One warning: test sessions call a provider that moves real money. |
+| Any | not set (Coinbase without `env`) | No check. The adapter follows each session's `livemode`. |
+
+The mock adapter is `sandbox`, so a server with `livemode: true` does not start with it.
+
+Old options still work, with a one-time deprecation warning: `env: 'staging'` (Transak) is `env: 'sandbox'`, `env: 'live'` (Peer) is `env: 'production'`, and `sandbox: true` or `false` (Coinbase) is `env: 'sandbox'` or `'production'`.
 
 Sandboxes do not have all the assets and methods of production. Known limits (Checked on 9 Oct 2026.):
 
@@ -93,7 +105,7 @@ relay({ apiKey: process.env.RELAY_API_KEY })
 
 The adapter sends the key in the `x-api-key` header.
 
-**Sandbox and production:** the default API is `https://api.relay.link` (mainnets). For testnets, set `baseUrl: 'https://api.testnets.relay.link'`. Make one key for each environment. Check in the dashboard if a testnet key is different from a mainnet key.
+**Sandbox and production:** the default API is `https://api.relay.link` (mainnets). For testnets, set `baseUrl: 'https://api.testnets.relay.link'`. The adapter `env` is then `sandbox`; else it is `production`. Make one key for each environment. Check in the dashboard if a testnet key is different from a mainnet key.
 
 **Sandbox limits:** The testnets host (`https://api.testnets.relay.link`) knows ETH on Base Sepolia and on Sepolia. It does not know USDC on Base Sepolia. To test on testnets, quote ETH, not USDC. Checked on 9 Oct 2026.
 
@@ -129,7 +141,7 @@ lifi({ apiKey: process.env.LIFI_API_KEY, integrator: process.env.LIFI_INTEGRATOR
 
 The adapter sends the key in the `x-lifi-api-key` header.
 
-**Sandbox and production:** the adapter has no sandbox switch. The API is `https://li.quest/v1` (`baseUrl`). Quotes move no money. A wallet transaction moves real funds, so test with small amounts.
+**Sandbox and production:** the adapter has no sandbox switch, and its `env` is always `production`. The API is `https://li.quest/v1` (`baseUrl`). Quotes move no money. A wallet transaction moves real funds, so test with small amounts.
 
 **Sandbox limits:** LI.FI has no sandbox host: `staging.li.quest` returns `403`. Test with small quotes on the mainnet host only. Quotes move no money. Never send the transaction in a test. Checked on 9 Oct 2026.
 
@@ -201,13 +213,13 @@ transak({
   apiKey: process.env.TRANSAK_API_KEY!,
   apiSecret: process.env.TRANSAK_API_SECRET!,
   referrerDomain: process.env.TRANSAK_REFERRER_DOMAIN!,
-  env: 'staging',
+  env: 'sandbox',
 })
 ```
 
 The adapter uses the secret to get an access token: `POST https://api-stg.transak.com/partners/api/v2/refresh-token` with the header `api-secret` and the body `{ apiKey }`. It does this for you.
 
-**Sandbox and production:** set `env: 'staging'` with Staging keys. The default is `'production'`. To go live, click **Complete your business profile** in the dashboard. Then copy the Production keys.
+**Sandbox and production:** set `env: 'sandbox'` with Staging keys. The adapter then uses the Transak staging hosts. The default is `'production'`. The old value `'staging'` still works, with a deprecation warning. To go live, click **Complete your business profile** in the dashboard. Then copy the Production keys.
 
 **Sandbox limits:** Transak staging has 26 fiat currencies. INR is not one of them, so you cannot test UPI on staging. Checked on 9 Oct 2026.
 
@@ -215,7 +227,7 @@ The adapter uses the secret to get an access token: `POST https://api-stg.transa
 
 **Gotchas:**
 
-- If you forget `env: 'staging'`, the adapter sends Staging keys to the production API, and every call fails.
+- If you forget `env: 'sandbox'`, the adapter sends Staging keys to the production API, and every call fails.
 - Partners must make widget URLs on the server (Secure Widget URL). The adapter does this in `start()`.
 - A new access token cancels the old token. Do not share one API key between two deployments (for example your computer and staging). Each deployment refreshes the token and stops the other one.
 - The adapter verifies a webhook with the cached access token. Before webhooks arrive, run at least one quote or start on the instance, or use a shared store.
@@ -243,7 +255,7 @@ The adapter uses the secret to get an access token: `POST https://api-stg.transa
 xendit({ secretKey: process.env.XENDIT_SECRET_KEY!, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN! })
 ```
 
-**Sandbox and production:** the key prefix sets the mode. `xnd_development_` keys use test mode. `xnd_production_` keys move real money. The API URL is the same (`apiUrl`, default `https://api.xendit.co`). Copy the webhook token of the same mode as the key (check in the dashboard).
+**Sandbox and production:** the key prefix sets the mode. `xnd_development_` keys use test mode (`env` is `sandbox`). `xnd_production_` keys move real money (`env` is `production`). You can also set `env`. A value that does not agree with the key throws when you build the adapter. The API URL is the same (`apiUrl`, default `https://api.xendit.co`). Copy the webhook token of the same mode as the key (check in the dashboard).
 
 **Webhooks:** in **Settings**, then **Webhooks**, set the payment webhook URL to `{baseUrl}/webhooks/xendit`. The adapter compares the `x-callback-token` header with `webhookToken`.
 
@@ -333,7 +345,7 @@ coinbase({
 })
 ```
 
-**Sandbox and production:** the `sandbox` option sets sandbox mode. Its default is `!livemode`: with `livemode: true` on `createOpenRamp`, the adapter leaves sandbox mode. A new project has limited test access: 25 test transactions, at most 5 USD each.
+**Sandbox and production:** set `env: 'sandbox'` or `env: 'production'`. Without `env`, each session's `livemode` decides: with `livemode: true` on `createOpenRamp`, the adapter leaves sandbox mode. The old `sandbox` option still works, with a deprecation warning. A new project has limited test access: 25 test transactions, at most 5 USD each.
 
 **Webhooks:** subscribe to `onramp.transaction.created`, `onramp.transaction.updated`, `onramp.transaction.success` and `onramp.transaction.failed` with the URL `{baseUrl}/webhooks/coinbase`. Copy the subscription secret to `webhookSecret`. Without it, the adapter rejects every webhook.
 
@@ -371,7 +383,7 @@ stripe({
 })
 ```
 
-**Sandbox and production:** the key prefix sets the mode. `sk_test_` and `pk_test_` keys use test mode. Live keys start with `sk_live_` and `pk_live_`. There is no `env` option.
+**Sandbox and production:** the key prefix sets the mode. `sk_test_` and `pk_test_` keys use test mode. Live keys start with `sk_live_` and `pk_live_`. The adapter reads `env` from the key prefix (`sk_test_` or `rk_test_` is `sandbox`). You can also set `env`. A value that does not agree with the key throws when you build the adapter.
 
 **Webhooks:** open **Developers**, then **Webhooks**. Add an endpoint with the URL `{baseUrl}/webhooks/stripe` and the event `crypto.onramp_session.updated`. Copy its signing secret to `webhookSecret`. Test mode and live mode have different endpoints and secrets.
 
@@ -502,7 +514,7 @@ binance({
 })
 ```
 
-**Sandbox and production:** there is no sandbox. Each call goes to the live API.
+**Sandbox and production:** there is no sandbox. Each call goes to the live API, and the adapter `env` is always `production`.
 
 **Webhooks:** you give Binance the webhook URL during onboarding. The adapter verifies webhooks with `binancePublicKey`.
 
@@ -531,7 +543,7 @@ peer({
 })
 ```
 
-**Sandbox and production:** set `env: 'sandbox'` with the sandbox key, or `env: 'live'` with the live key. `env` is required.
+**Sandbox and production:** set `env: 'sandbox'` with the sandbox key, or `env: 'production'` with the live key. `env` is required. The old value `'live'` still works, with a deprecation warning.
 
 **Webhooks:** register `{baseUrl}/webhooks/peer` with `POST /api/v1/webhooks`. Copy `responseObject.secret` from the answer to `webhookSecret`. Peer reports settlement only by webhook.
 

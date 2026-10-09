@@ -2,7 +2,7 @@
 
 `@openrampkit/adapter-bridge` connects [Bridge](https://apidocs.bridge.xyz) (a Stripe company).
 
-- **Deposits:** Bridge opens a virtual bank account for the user. The user sends ACH, wire, SEPA, SPEI, Pix or Faster Payments to it. Bridge converts the money to USDC and sends it on chain to the destination address.
+- **Deposits:** Bridge opens a virtual bank account for the user. The user sends ACH, wire, SEPA, SPEI, Pix or Faster Payments to it. Bridge converts the money to USDC and sends it on chain to the destination address. A destination that is not USDC on a Bridge network gets no quote (`NO_QUOTES`).
 - **Withdrawals:** the user sends USDC to Bridge. Bridge pays out to the user's US bank account (ACH or wire) or IBAN (SEPA).
 
 Bridge needs KYC for each user. The adapter sends the user to the Bridge hosted pages for the terms of service and for KYC. Then it shows the bank details.
@@ -36,7 +36,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#bridge).
 |---|---|---|---|
 | `apiKey` | `string` | required | Bridge API key. Sent as the `Api-Key` header. |
 | `webhookPublicKey` | `string` | required | The public key (PEM) of your webhook endpoint. `\n` escapes are accepted. |
-| `env` | `'sandbox' \| 'production'` | `'production'` | `production` is `https://api.bridge.xyz`. `sandbox` is `https://api.sandbox.bridge.xyz`. |
+| `env` | `'sandbox' \| 'production'` | `'production'` | `production` is `https://api.bridge.xyz`. `sandbox` is `https://api.sandbox.bridge.xyz`. The server checks `env` against `livemode`. |
 | `apiUrl` | `string` | from `env` | API base URL without `/v0` |
 | `developerFeePercent` | `string` | none | Your fee in percent, for example `'0.5'`. Sent as `developer_fee_percent` on virtual accounts and transfers. Shown as the "App fee" in quotes. |
 | `bridgeFeeBps` | `number` | `0` | Bridge's fee in basis points, for quotes only. Bridge pricing is per contract and the API has no fee quote. Set your contract rate. |

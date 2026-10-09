@@ -29,6 +29,7 @@ The browser gets one client secret per session. The secret acts only on its own 
 - Browser routes: the server checks amounts (decimal strings), wallet addresses, chains (CAIP-2), tokens, withdraw targets and `Idempotency-Key`.
 - Body size: at most 64 KiB for a JSON body and 1 MiB for a provider webhook. A larger body gets `413`.
 - Quote ids are looked up as own keys only. A value such as `__proto__` finds nothing.
+- The quotes route sends a `PublicQuote` to the browser. It does not send the adapter `data` of each leg (provider URLs, request bodies, idempotency nonces). That data stays in the server store.
 
 ### Idempotency and rate limits
 

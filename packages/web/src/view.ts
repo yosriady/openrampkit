@@ -1,8 +1,8 @@
 // Pure view logic for <openramp-modal>. No Lit and no DOM here, so it is easy to test.
 
 import type { Snapshot } from '@openrampkit/client'
-import { CHAINS, USDC, mulRatio } from '@openrampkit/core'
-import type { IframeMessages, MethodOption, OrkError, PathwayGroup, Quote, Step, Surface, WalletBalance } from '@openrampkit/core'
+import { CHAINS, USDC, isStepSub, mulRatio } from '@openrampkit/core'
+import type { IframeMessages, MethodOption, OrkError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
 import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -19,6 +19,15 @@ export function resolveMode(theme: Theme | undefined, systemDark: boolean): 'lig
 /** Identifies one step screen. Form inputs reset when it changes. */
 export function stepKey(step: Step | undefined): string {
   return step ? `${step.state}|${step.sub ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
+}
+
+/**
+ * The label of a step: the translated `sub` (an i18n key from the closed list `STEP_SUBS`), else the
+ * state title. A `sub` that this version does not know (from a newer server) falls back to the state title.
+ */
+export function stepLabel(m: Messages, step: Step): string {
+  const sub = isStepSub(step.sub) ? m.stepSub[step.sub] : undefined
+  return sub || m.stepTitle[step.state] || m.checkingStatus
 }
 
 /** Screen shown for a snapshot, or for an element that has no controller yet. */
@@ -158,7 +167,7 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
 }
 
 /** Second line of a quote row: what the user pays and the fees. */
-export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
+export function quoteSubtitle(q: PublicQuote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
   if (Number(q.input.amount) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
@@ -169,7 +178,7 @@ export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'wit
 }
 
 /** The quote after (dir 1) or before (dir -1) the selected one, wrapping around. */
-export function nextQuoteId(quotes: Quote[], selectedId: string | undefined, dir: 1 | -1): string | undefined {
+export function nextQuoteId(quotes: PublicQuote[], selectedId: string | undefined, dir: 1 | -1): string | undefined {
   if (!quotes.length) return undefined
   const i = quotes.findIndex((q) => q.id === selectedId)
   return quotes[(i + dir + quotes.length) % quotes.length]?.id

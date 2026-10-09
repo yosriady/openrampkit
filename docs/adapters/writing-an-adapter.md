@@ -50,12 +50,13 @@ const legs: LegSpec[] = [
     eta: { min: 60, max: 900 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
   },
 ]
 ```
 
 Tips:
+
+- `capabilities` has two values only, and the server checks both: `settlement` (the leg can pay into a settlement contract) and `surface_after_processing` (see [webhook](#webhook)). Leave it out for a normal leg. How the server learns a leg result is not a capability: it comes from `status()` (polling) and `webhook`. `checkAdapterShape` reports any other value.
 
 - Use method ids from the built-in vocabulary (`METHODS` in `@openrampkit/core`) so the modal shows the right name and icon. Unknown ids work too; they are title-cased.
 - List concrete delivery assets (chain and lowercase token). The planner can only build a hop from concrete assets, not from `'*'`.
@@ -123,10 +124,15 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 - `transition({ leg, ref, name, inputs })` handles SUBMIT and SURFACE_RESULT transitions that your steps offer, for example an OTP form or `submit_tx` with `{ txHash }`.
 - Transaction hashes: set `txHash` to the leg's main transaction. For a bridge or swap, this is the delivery (fill) on the destination chain when the provider reports it. Set `sourceTxHash` to the transaction that paid into the leg, for example the hash from `submit_tx`. The server keeps the last `sourceTxHash` when a later step leaves it out. The session shows them in `result.txHashes` and `result.sourceTxHashes`.
 
+A `LegStep` can carry `sub`, a finer label from the closed list `STEP_SUBS` (see [Sub-states](../concepts/flow.md#sub-states)). Map your provider's statuses to it. Put the raw provider status in `providerStatus`: the server keeps it in the timeline for operators, and the browser never gets it. The server drops a `sub` that is not in the list.
+
+The server learns a leg result from `status()` (polling), from the `webhook`, or from both. `resultChannels(adapter)` in `@openrampkit/adapter` tells which: `{ polling: !!status, webhooks: webhook configured }`. When an adapter with legs has neither, the server writes a warning at start: its payments cannot complete. An adapter without `status()` (for example Transak) relies on its webhook only.
+
 ## webhook
 
 ```ts
 webhook: {
+  configured?: boolean       // false when the options have no webhook secret, so nothing can verify
   verify(req: Request, rawBody: string, ctx): Promise<boolean>
   parse(rawBody: string, ctx): Promise<LegEvent[]>
   replayKey?(req: Request, rawBody: string, ctx): Promise<string | undefined>
@@ -183,8 +189,9 @@ From the project's design notes:
 | Helper | Description |
 |---|---|
 | `fetchJson(fetch, url, init)` | JSON fetch with a timeout (default 8000 ms). Errors carry `status`, `body` and `timeout`. |
-| `httpErrorToOrk(e, provider, opts)` | 429 to `RATE_LIMITED`; 400, 404, 409, 422 to `NO_QUOTES` with the provider's message; timeouts and other errors to `PROVIDER_UNAVAILABLE` |
+| `httpErrorToOrk(e, provider, opts)` | 429 to `RATE_LIMITED`; 400, 404, 409, 422 to `NO_QUOTES` with the provider's message; 401 and 403 to a setup error (not retryable, recovery `choose_other`, one error log); timeouts and other errors to `PROVIDER_UNAVAILABLE` |
 | `httpStatus(e)`, `providerMessage(e)` | Read the HTTP status or the provider's message from an error |
+| `findDeliverAsset(list, asset)`, `requireDeliverAsset(list, asset, provider)` | Find the token you deliver for the requested destination. No match gives `undefined` (or `NO_QUOTES`). Never quote another token in its place. |
 | `POLL.onchain`, `POLL.checkout`, `POLL.dev` | Poll schedules for AWAIT transitions |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
 | `legStepFromEvent(event, ref, poll)` | The `LegStep` for a mapped provider status (no event means `PAYMENT`, `awaiting_user`) |
@@ -224,7 +231,6 @@ export function acme(opts: AcmeOptions) {
       regions: { allow: ['US'], deny: [] },
       eta: { min: 60, max: 900 },
       surfaces: ['REDIRECT'],
-      capabilities: ['webhooks', 'polling'],
     },
   ]
 

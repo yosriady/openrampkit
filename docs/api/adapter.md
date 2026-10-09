@@ -19,6 +19,7 @@ interface Adapter {
   id: string
   name: string
   apiVersion: number
+  readonly env?: 'sandbox' | 'production'   // AdapterEnv. Undefined: follows each session's livemode
   legs: LegSpec[]
   catalog?(input: CatalogInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<LegSpec[]>
   quote(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote>
@@ -28,6 +29,8 @@ interface Adapter {
   transition?(input: TransitionInput, ctx: AdapterContext): Promise<LegStep>
   status?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<LegStep>
   webhook?: {
+    // Optional: false when the options have no webhook secret, so no event can verify. Default true.
+    configured?: boolean
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
     // Optional: the same key for every delivery of one provider event. The server ignores a repeat for 7 days.
@@ -40,6 +43,7 @@ interface Adapter {
 
 | Member | Called by the server |
 |---|---|
+| `env` | At start: checked against `livemode` (a `sandbox` adapter stops a live server; a `production` adapter in a test server gets a warning) |
 | `legs` | At plan time, when there is no `catalog` or it fails |
 | `catalog` | At plan time, with `{ country?, currency, direction }` |
 | `quote` | `POST /quotes`, once per leg of each quoted pathway |
@@ -50,6 +54,8 @@ interface Adapter {
 | `webhook` | `POST /webhooks/:adapterId` |
 | `health` | `GET /health?deep=1` with the tasks token (plain `GET /health` does not call adapters) |
 | `routes` | Any request to `/adapters/:adapterId/*` |
+
+`resultChannels(adapter)` returns `{ polling, webhooks }`: `polling` is true when the adapter has `status()`, and `webhooks` is true when it has a `webhook` whose `configured` is not `false`. The server uses it at start. It writes one warning for each adapter with legs that has neither, because the payments of that adapter cannot complete. Leg capabilities do not say how results arrive: `LegSpec.capabilities` has only `settlement` and `surface_after_processing`.
 
 ## Inputs
 
@@ -151,11 +157,17 @@ The server uses these with `webhook.replayKey`. `claimWebhook` returns a token f
 | Export | Description |
 |---|---|
 | `fetchJson<T>(fetch, url, init?)` | JSON request with `accept: application/json`, `content-type` when there is a body, and a timeout (`init.timeoutMs`, default `DEFAULT_TIMEOUT_MS` = 8000). Throws an `HttpError` with `status` and parsed `body` on non-2xx, `timeout: true` on timeout, and a clear error for non-JSON bodies. |
-| `httpErrorToOrk(e, provider, { what?, noQuoteStatuses?, log? })` | `OrkException` passes through; 429 gives `RATE_LIMITED` (429); `noQuoteStatuses` (default 400, 404, 409, 422) give `NO_QUOTES` (422) with the provider's message; a timeout gives `PROVIDER_UNAVAILABLE` (504); anything else gives `PROVIDER_UNAVAILABLE` (502) and a warning log |
+| `httpErrorToOrk(e, provider, { what?, noQuoteStatuses?, log?, setupHint? })` | `OrkException` passes through; 429 gives `RATE_LIMITED` (429); `noQuoteStatuses` (default 400, 404, 409, 422) give `NO_QUOTES` (422) with the provider's message; 401 and 403 give a setup error (see below); a timeout gives `PROVIDER_UNAVAILABLE` (504); anything else gives `PROVIDER_UNAVAILABLE` (502) and a warning log |
+| `findDeliverAsset(list, asset)` | The entry of `list` (`{ chain, token, symbol?, decimals? }`) that delivers `asset`: same chain and token (EVM addresses without case). `undefined` on no match. It never falls back to another entry. |
+| `requireDeliverAsset(list, asset, provider)` | `findDeliverAsset`, or `NO_QUOTES` (422, recovery `choose_other`) "{provider} does not deliver {token} on {chain}." Use it in `quote()`, so the user never gets a quote for another token. |
+| `deliverableToAsset(d)` | The `CryptoAsset` of a list entry, with `symbol` and `decimals` when known |
+| `providerSetupError(provider)` | The setup error: `PROVIDER_UNAVAILABLE` (502), `retryable: false`, recovery `choose_other`, message "{provider} is not set up for this app yet. Try another method." Use it in an adapter with its own error mapping. |
 | `httpStatus(e)` | The numeric `status` of an error, or `undefined` |
 | `providerMessage(e)` | The provider's message from `body.message`, `body.errorMessage` or `body.error(.message)` |
 
 Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
+
+A 401 or 403 from a provider means that the provider refused our credentials or setup (API key, environment, IP allowlist). A retry cannot fix it. `httpErrorToOrk` returns `providerSetupError(provider)`, so the user sees a neutral message and can choose another method. It also writes one `error` log for the operator. The log names the provider and the HTTP status, and tells the operator what to check. Give `setupHint` to add a provider-specific fix to the log, for example "Set relay({ apiKey })".
 
 ## Step helpers
 
@@ -236,7 +248,7 @@ Types: `SettlementCall`, `SettlementIntent`, `SettlementParams`, `SettlementInte
 
 | Export | Description |
 |---|---|
-| `checkAdapterShape(adapter)` | API version, legs, ETAs, surfaces, region policy, decimal limits |
+| `checkAdapterShape(adapter)` | API version, legs, ETAs, surfaces, region policy, decimal limits, known capabilities |
 | `checkLegQuote(quote)` | Decimal strings and an ISO `expiresAt` |
 | `checkLegStep(step)` | A legal step, and a terminal state only with a terminal leg status (except `PROCESSING`) |
 
@@ -274,6 +286,14 @@ import {
 | `webhookCtx` | Default `makeWebhookCtx({ fetch })` |
 
 Per fixture, `quote` is the `QuoteInput` without `leg`; `start` is `true` (default), `false`, or extra `StartInput` fields; `transitions` is a list of `{ name, inputs? }`; `status` defaults to true when the adapter has `status()`; `expect` is `{ start?: StateName; status?: StateName }`.
+
+## Environment helpers
+
+| Export | Description |
+|---|---|
+| `AdapterEnv` | `'sandbox' \| 'production'`: the type of the `env` option and of `adapter.env` |
+| `resolveEnv(adapter, env, legacy, fallback)` | The `env` of an adapter: `env` when set; else the value of a deprecated option (`legacy`), with a one-time warning; else `fallback`. Throws on a value that is not `sandbox` or `production`. |
+| `warnDeprecatedOnce(key, message)` | Writes a deprecation warning once per process. Returns true the first time. |
 
 ## Other exports
 

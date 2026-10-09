@@ -32,7 +32,8 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#coinbase).
 | `onrampApiUrl` | `string` | `https://api.developer.coinbase.com` | Onramp API (config, status) |
 | `defaultCountry` | `string` | `'US'` | Country when the session has none |
 | `defaultSubdivision` | `string` | none | US state for quotes when the session has no region (Coinbase needs `subdivision` for US quotes) |
-| `sandbox` | `boolean` | `!session.livemode` | Prefix `partnerUserRef` with `sandbox-` |
+| `env` | `'sandbox' \| 'production'` | none: each session's `livemode` decides | `'sandbox'` prefixes `partnerUserRef` with `sandbox-`. The server checks it against `livemode`. |
+| `sandbox` | `boolean` | none | Deprecated. `true` is `env: 'sandbox'`, `false` is `env: 'production'`. |
 | `accountBalance` | `'FIAT_WALLET' \| 'CRYPTO_WALLET'` | `'FIAT_WALLET'` | The balance that the `coinbase_account` leg selects first. The user can pick another balance on the Coinbase page. |
 | `guestCheckout` | `{ domain, verifiedContact? }` | none | Turns on the `guest_apple_pay` leg. See [Guest Apple Pay](#guest-apple-pay). |
 
@@ -94,6 +95,7 @@ If the user leaves the frame before paying, Coinbase sends no webhook and the or
 
 ## Quotes and start (hosted legs)
 
+- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana. Another token or chain gets no quote (`NO_QUOTES`). The adapter does not quote USDC on Base in its place.
 - Quote: `POST /platform/v2/onramp/sessions` with the payment amount, currency and method, the country, the US subdivision (from `session.region` such as `US-CA`, else `defaultSubdivision`), the destination network and address, and `partnerUserRef`. It returns a quote and a single-use one-click URL.
 - Start: reuses the quote's URL when it is less than 4 minutes old (session tokens last 5 minutes). Otherwise it makes a new session with the same method and location.
 - Reference: `partnerUserRef`, `ork-{random}` (with `sandbox-` in front in sandbox mode). Guest orders use the same reference.

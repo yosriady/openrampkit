@@ -221,7 +221,7 @@ describe('withdraw to cash with the mock offramp', () => {
     expect((await tr('submit_details', { account_name: 'Juan', phone: 'call me' })).body.error?.message).toBe('Enter a valid phone number.')
     expect((await tr('submit_tx', { txHash: TX })).status).toBe(409) // not offered yet
     const pay = await tr('submit_details', { account_name: 'Juan Dela Cruz', phone: '+63 917 123 4567' })
-    expect(pay.body.step).toMatchObject({ state: 'PAYMENT', sub: 'SEND_CRYPTO', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'], chainId: 8453 }] } })
+    expect(pay.body.step).toMatchObject({ state: 'PAYMENT', sub: 'send_crypto', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'], chainId: 8453 }] } })
     const tx = (pay.body.step.surface as { txs: Array<{ data: string }> }).txs[0]!
     expect(tx.data.startsWith('0xa9059cbb')).toBe(true)
     expect(BigInt(`0x${tx.data.slice(-64)}`)).toBe(20_000_000n)
@@ -316,7 +316,7 @@ function eventOfframp() {
         eta: { min: 60, max: 600 },
         surfaces: ['WALLET_TX'],
         // It learns the deposit address from a webhook after the leg started.
-        capabilities: ['webhooks', 'surface_after_processing'],
+        capabilities: ['surface_after_processing'],
       },
     ],
     async quote({ leg, amountIn }) {

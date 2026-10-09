@@ -119,10 +119,22 @@ export type LegEvent = {
 
 export type CatalogInput = { country?: string; currency: string; direction: Direction }
 
+/**
+ * The provider environment that an adapter calls: test keys and no real money (`sandbox`), or real
+ * money (`production`). Every first-party adapter takes it as the `env` option.
+ */
+export type AdapterEnv = 'sandbox' | 'production'
+
 export interface Adapter {
   id: string
   name: string
   apiVersion: number
+  /**
+   * The provider environment this adapter calls, from its options (or its keys). Undefined when the
+   * adapter follows each session's `livemode`. The server refuses to start with `livemode: true` and an
+   * adapter in `sandbox`, and warns for an adapter in `production` when `livemode` is false.
+   */
+  readonly env?: AdapterEnv
   /** Static leg declarations */
   legs: LegSpec[]
   /** Optional live catalog: returns legs refined for this user (methods, limits, assets) */
@@ -137,6 +149,12 @@ export interface Adapter {
   transition?(input: TransitionInput, ctx: AdapterContext): Promise<LegStep>
   status?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<LegStep>
   webhook?: {
+    /**
+     * False when the adapter cannot verify webhooks with its options (for example no webhook secret),
+     * so no provider event can arrive. Default true. The server warns at start when an adapter with
+     * legs has neither `status()` nor a configured webhook (see `resultChannels`).
+     */
+    configured?: boolean
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
     /**
@@ -159,6 +177,16 @@ export interface Adapter {
 
 export type WebhookContext = Pick<AdapterContext, 'log' | 'shared' | 'fetch'>
 
+/**
+ * How the server learns the result of this adapter's legs:
+ * - `polling`: the adapter has `status()`, so the server and the client can check a leg.
+ * - `webhooks`: the adapter has a `webhook` that can verify events (`configured` is not false).
+ * An adapter with neither cannot move a leg past the provider step by itself.
+ */
+export function resultChannels(a: Pick<Adapter, 'status' | 'webhook'>): { polling: boolean; webhooks: boolean } {
+  return { polling: typeof a.status === 'function', webhooks: !!a.webhook && a.webhook.configured !== false }
+}
+
 export type RouteContext = Pick<AdapterContext, 'fetch' | 'log' | 'shared'> & {
   baseUrl: string
   /** Apply a provider event to the session that owns `ref` (same effect as a webhook) */
@@ -178,6 +206,39 @@ export function createAdapter(def: AdapterDefinition): Adapter {
 }
 
 // ---------- helpers for adapter authors ----------
+
+const deprecationsShown = new Set<string>()
+
+/**
+ * Write a deprecation warning once per process (adapters have no logger when they are built).
+ * Returns true the first time for `key`.
+ */
+export function warnDeprecatedOnce(key: string, message: string): boolean {
+  if (deprecationsShown.has(key)) return false
+  deprecationsShown.add(key)
+  console.warn(`[openrampkit] Deprecated: ${message}`)
+  return true
+}
+
+/**
+ * The `env` of an adapter from its options. `legacy` is the value of an older option (for example
+ * peer's `env: 'live'` or coinbase's `sandbox: true`), already mapped to an `AdapterEnv`; it is used only
+ * when `env` is not set, with a one-time warning. Returns `fallback` when neither is set.
+ */
+export function resolveEnv<F extends AdapterEnv | undefined>(
+  adapter: string,
+  env: AdapterEnv | undefined,
+  legacy: { value: AdapterEnv | undefined; option: string } | undefined,
+  fallback: F,
+): AdapterEnv | F {
+  if (env !== undefined && env !== 'sandbox' && env !== 'production') throw new Error(`${adapter}: env must be 'sandbox' or 'production', not ${JSON.stringify(env)}`)
+  if (env) return env
+  if (legacy?.value) {
+    warnDeprecatedOnce(`${adapter}:${legacy.option}`, `${adapter}: the option ${legacy.option} is deprecated. Use env: '${legacy.value}'.`)
+    return legacy.value
+  }
+  return fallback
+}
 
 export async function hmacSha256(secret: string, message: string, encoding: 'hex' | 'base64' = 'hex'): Promise<string> {
   const enc = new TextEncoder()

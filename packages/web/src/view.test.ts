@@ -36,7 +36,7 @@ describe('mode, keys and screens', () => {
 
   it('stepKey', () => {
     expect(stepKey(undefined)).toBe('')
-    expect(stepKey(step({ state: 'PAYMENT', sub: 'X', legIndex: 1, surface: { kind: 'OTP', channel: 'sms', to: '1' } }))).toBe('PAYMENT|X|1|OTP')
+    expect(stepKey(step({ state: 'PAYMENT', sub: 'confirming', legIndex: 1, surface: { kind: 'OTP', channel: 'sms', to: '1' } }))).toBe('PAYMENT|confirming|1|OTP')
     expect(stepKey(step({ state: 'PROCESSING' }))).toBe('PROCESSING|||')
   })
 

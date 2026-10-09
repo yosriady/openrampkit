@@ -15,6 +15,7 @@ import {
   httpStatus,
   legStepFromEvent,
   providerMessage,
+  providerSetupError,
   randomHex,
   timingSafeEqual,
 } from './index.js'
@@ -141,13 +142,38 @@ describe('httpErrorToOrk', () => {
     expect(httpErrorToOrk(httpErr(400), 'P').error.message).toBe('P could not handle this request.')
     expect(httpErrorToOrk(httpErr(400, { message: 'x'.repeat(500) }), 'P').error.message).toHaveLength(200)
     const log = recordingLog()
-    for (const s of [401, 403, 500, 503]) {
-      expect(httpErrorToOrk(httpErr(s, { message: 'Invalid API key' }), 'P', { log })).toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', message: 'P is not available right now.' } })
+    for (const s of [500, 503]) {
+      expect(httpErrorToOrk(httpErr(s, { message: 'Invalid API key' }), 'P', { log })).toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', message: 'P is not available right now.', retryable: true } })
     }
-    expect(log.warnings).toHaveLength(4)
+    expect(log.warnings).toHaveLength(2)
+    expect(log.errors).toHaveLength(0)
     expect(httpErrorToOrk(httpErr(404), 'P', { noQuoteStatuses: [400] }).error.code).toBe('PROVIDER_UNAVAILABLE')
     expect(httpErrorToOrk('weird', 'P').error.code).toBe('PROVIDER_UNAVAILABLE')
     expect(httpErrorToOrk(undefined, 'P').error.code).toBe('PROVIDER_UNAVAILABLE')
+  })
+
+  it('maps 401 and 403 to a setup error: not retryable, choose_other, neutral message, one error log that names the provider', () => {
+    for (const s of [401, 403]) {
+      const log = recordingLog()
+      const ex = httpErrorToOrk(httpErr(s, { message: 'Invalid API key' }), 'Acme', { what: 'price this amount', log })
+      expect(ex.status).toBe(502)
+      expect(ex.error).toEqual({ code: 'PROVIDER_UNAVAILABLE', message: 'Acme is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' })
+      // The provider text stays out of the user message.
+      expect(ex.error.message).not.toContain('Invalid API key')
+      expect(log.errors).toHaveLength(1)
+      expect(log.warnings).toHaveLength(0)
+      expect(log.errors[0]).toMatch(new RegExp(`^Acme: cannot price this amount: .*HTTP ${s}.*setup error`))
+    }
+    // A setup hint goes into the operator log.
+    const log = recordingLog()
+    httpErrorToOrk(httpErr(401), 'Acme', { log, setupHint: 'Set acme({ apiKey }).' })
+    expect(log.errors[0]).toContain('Set acme({ apiKey }).')
+    // A logger with only `warn` still gets the line.
+    const warnOnly = { warnings: [] as string[], warn(m: string) { this.warnings.push(m) } }
+    httpErrorToOrk(httpErr(403), 'Acme', { log: warnOnly })
+    expect(warnOnly.warnings).toHaveLength(1)
+    // providerSetupError is the same error, for adapters with their own mapping.
+    expect(providerSetupError('Acme').error).toEqual(httpErrorToOrk(httpErr(401), 'Acme').error)
   })
 
   it('reads the provider message from common body shapes', () => {
@@ -223,6 +249,9 @@ describe('testkit checks', () => {
       'limits.max is not a decimal string',
     ])
     expect(checkAdapterShape({ ...base, legs: [] })).toEqual([{ where: 'legs', problem: 'Adapter declares no legs' }])
+    // Capabilities: only the two that the server reads. 'polling' and 'webhooks' come from status() and webhook.
+    const caps = { ...base, legs: [spec({ capabilities: ['settlement', 'surface_after_processing', 'polling'] as never })] } as Adapter
+    expect(checkAdapterShape(caps).map((p) => p.problem)).toEqual([expect.stringContaining('Unknown capability polling')])
   })
 
   it('checkLegQuote checks money strings and expiry', () => {

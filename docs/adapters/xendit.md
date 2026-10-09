@@ -21,6 +21,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#xendit).
 | `webhookToken` | `string` | required | Webhook verification token from Dashboard > Settings > Webhooks |
 | `forUserId` | `string` | none | Sub-account id for xenPlatform (sent as `for-user-id`) |
 | `apiUrl` | `string` | `https://api.xendit.co` | API base URL |
+| `env` | `'sandbox' \| 'production'` | from the key prefix | `xnd_development_` is `sandbox`; `xnd_production_` is `production`. A value that does not agree with the key throws. The server checks `env` against `livemode`. |
 | `fees` | `Record<method, { bps?: number; fixed?: string }>` | none | Fee model for quotes (Xendit does not return fees) |
 | `expiryMinutes` | `number` | `15` | Countdown shown on QR codes |
 | `methods` | `string[]` | all | Offer only these methods |
@@ -73,6 +74,7 @@ Errors:
 | `429` | `RATE_LIMITED` | yes |
 | `403 INVALID_MERCHANT_SETTINGS` ("payment channel has not been activated") | `PROVIDER_UNAVAILABLE`, recovery `choose_other` | no |
 | `400 API_VALIDATION_ERROR` that names the channel ("... not supported for 'X' channel code") | `PROVIDER_UNAVAILABLE`, recovery `choose_other` | no |
+| Other `401` and `403` (for example `INVALID_API_KEY`, `REQUEST_FORBIDDEN_ERROR`) | `PROVIDER_UNAVAILABLE`, recovery `choose_other` (the shared setup error) | no |
 | Other 4xx | `PROVIDER_DECLINED` with Xendit's message | no |
 | 5xx, network errors | `PROVIDER_UNAVAILABLE` | yes |
 
@@ -80,6 +82,8 @@ The two setup errors show the user "This payment method is not set up for this a
 
 - `INVALID_MERCHANT_SETTINGS`: the channel is not active on your Xendit account. Activate the payment channel in the Xendit Dashboard. Do this in test mode for `xnd_development_` keys and again in live mode. A test mode check on 2026-10-09 gave this error for QRIS and QR Ph.
 - `API_VALIDATION_ERROR` for a channel: the channel code or the request body does not agree with the Xendit API for that channel. Compare them with the [create payment request reference](https://docs.xendit.co/apidocs/create-payment-request) and the channel page.
+
+Any other `401` or `403` refuses the key or its permissions. It is not a payment decline. The user sees "Xendit is not set up for this app yet. Try another method." The error log gives the Xendit error code and tells you to check `secretKey` (`xnd_development_` for test mode, `xnd_production_` for live mode) and the key permissions.
 
 ## Webhooks
 

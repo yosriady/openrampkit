@@ -1,10 +1,10 @@
-import { ADAPTER_API_VERSION } from '@openrampkit/adapter'
+import { ADAPTER_API_VERSION, resultChannels } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
 import { OrkException, normalizeToken, orkError } from '@openrampkit/core'
 import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
 import type { OpenRampConfig } from './config.js'
-import { memoryStore, scopedKV, VersionConflictError } from './store.js'
+import { memoryStore, migratingStore, scopedKV, VersionConflictError } from './store.js'
 import type { SessionRecord, SessionStore } from './store.js'
 
 /** Everything the server modules share. Built once per `createOpenRamp` call. */
@@ -45,11 +45,14 @@ export function createRuntime(config: OpenRampConfig): Runtime {
   if (config.treasury && !config.treasury.address) {
     ;(config.logger ?? consoleLogger).warn('treasury has no `address`: quotes for app-custody withdrawals use a placeholder sender. Set treasury.address.')
   }
+  warnNoResultChannel(config.adapters, config.logger ?? consoleLogger)
+  checkAdapterEnvs(config.adapters, config.livemode ?? false, config.logger ?? consoleLogger)
   const base = config.baseUrl.replace(/\/$/, '')
   const adapters = new Map(config.adapters.map((a) => [a.id, a]))
   return {
     config,
-    store: config.store ?? memoryStore(),
+    // Every read brings an older record up to the current schema (see `migrateRecord`).
+    store: migratingStore(config.store ?? memoryStore()),
     log: config.logger ?? consoleLogger,
     fetch: config.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args)),
     base,
@@ -70,6 +73,45 @@ export function createRuntime(config: OpenRampConfig): Runtime {
         // A metrics failure must never break a payment.
       }
     },
+  }
+}
+
+/**
+ * Check each adapter's provider environment (`adapter.env`) against `livemode`:
+ * - `livemode: true` with an adapter in `sandbox`: throw. Live sessions must never use test providers
+ *   (a test payment would complete a live session).
+ * - `livemode: false` with an adapter in `production`: warn. Test sessions then call providers that move real money.
+ * An adapter with no `env` follows each session's `livemode` and is not checked.
+ */
+function checkAdapterEnvs(adapters: Adapter[], livemode: boolean, log: Logger): void {
+  if (livemode) {
+    const sandbox = adapters.filter((a) => a.env === 'sandbox').map((a) => a.id)
+    if (sandbox.length) {
+      throw new Error(`OpenRamp: livemode is true, but these adapters use their sandbox environment: ${sandbox.join(', ')}. Set env: 'production' with live keys, or remove them.`)
+    }
+    return
+  }
+  const production = adapters.filter((a) => a.env === 'production').map((a) => a.id)
+  if (production.length) {
+    log.warn(`OpenRamp: livemode is false, but these adapters use their production environment and can move real money: ${production.join(', ')}. Set env: 'sandbox' for tests, or livemode: true in production.`, { adapters: production })
+  }
+}
+
+/**
+ * Warn once at start for each adapter with legs that has no way to learn a leg's result: no `status()`
+ * to poll and no webhook that can verify (for example Transak with no `status()`, or an adapter whose
+ * webhook secret is not set). Its payments would wait in PAYMENT or PROCESSING until they expire.
+ */
+function warnNoResultChannel(adapters: Adapter[], log: Logger): void {
+  for (const a of adapters) {
+    if (!a.legs.length) continue
+    const { polling, webhooks } = resultChannels(a)
+    if (polling || webhooks) continue
+    const why = a.webhook ? 'its webhook is not configured (set the webhook secret in its options)' : 'it has no webhook'
+    log.warn(
+      `OpenRamp: adapter ${a.id} cannot learn the result of its legs (${a.legs.map((l) => l.id).join(', ')}): it has no status() polling, and ${why}. Its payments will not complete.`,
+      { adapter: a.id },
+    )
   }
 }
 

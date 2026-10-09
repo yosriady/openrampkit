@@ -5,6 +5,7 @@ import { USDC, planPathways } from '@openrampkit/core'
 import type { CryptoAsset, LegQuote, PathwayLeg } from '@openrampkit/core'
 import { RELAY_POLL, RELAY_SOLANA_CHAIN_ID, caip2FromRelay, erc20TransferData, relay, relayChainId, relayCurrency } from './index.js'
 import type { RelayQuoteResponse } from './index.js'
+import { relaySub } from './helpers.js'
 import { fakeFetch, makeCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 
 const USER = '0x03508bB71268BBA25ECaCC8F620e01866650532c'
@@ -489,18 +490,22 @@ describe('relay errors', () => {
     await expect(walletQuote(a, makeCtx({ fetch }))).rejects.toMatchObject({ status: 422, error: { code: 'NO_QUOTES', message: 'Relay could not find a route for this pair right now.' } })
   })
 
-  it('401 UNAUTHORIZED_QUOTE (quote/v2 without a valid API key) is a setup error that names RELAY_API_KEY', async () => {
+  it('401 UNAUTHORIZED_QUOTE (quote/v2 without a valid API key) is a setup error; the operator log names RELAY_API_KEY', async () => {
     const log = recordingLog()
     const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', status: 401, reply: () => ({ message: 'Unauthorized', errorCode: 'UNAUTHORIZED_QUOTE' }) }])
     const err = await walletQuote(relay(), makeCtx({ fetch, log })).catch((e) => e)
-    expect(err).toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', retryable: false } })
-    expect(err.error.message).toContain('RELAY_API_KEY')
-    expect(log.warnings.some((w) => w.includes('UNAUTHORIZED_QUOTE') && w.includes('RELAY_API_KEY'))).toBe(true)
+    // The user gets a neutral message; the operator gets the fix.
+    expect(err).toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', retryable: false, recovery: 'choose_other', message: 'Relay is not set up for this app yet. Try another method.' } })
+    expect(log.errors).toHaveLength(1)
+    expect(log.errors[0]).toContain('UNAUTHORIZED_QUOTE')
+    expect(log.errors[0]).toContain('RELAY_API_KEY')
     // the deposit-address quote path too
+    const log2 = recordingLog()
     const { fetch: f2 } = fakeFetch([{ method: 'POST', match: '/quote/v2', status: 401, reply: () => ({ errorCode: 'UNAUTHORIZED_QUOTE' }) }])
-    await expect(relay().quote({ leg: transferLeg, amountIn: { amount: '5', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, makeCtx({ fetch: f2 }))).rejects.toMatchObject({
-      error: { code: 'PROVIDER_UNAVAILABLE', message: expect.stringContaining('RELAY_API_KEY') },
+    await expect(relay().quote({ leg: transferLeg, amountIn: { amount: '5', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, makeCtx({ fetch: f2, log: log2 }))).rejects.toMatchObject({
+      error: { code: 'PROVIDER_UNAVAILABLE', retryable: false, recovery: 'choose_other' },
     })
+    expect(log2.errors.some((e) => e.includes('RELAY_API_KEY'))).toBe(true)
   })
 
   it('without apiKey, the first call warns that Relay requires a key for quotes and that /requests/v2 retires', async () => {
@@ -708,6 +713,10 @@ describe('relay errors', () => {
     expect(await ctx.store.get('w:0xunknown')).toEqual({ mode: 'relay', requestId: '0xunknown', txHash: HASH })
   })
 
+  it('maps a running Relay status to a Step.sub from the closed list', () => {
+    expect(['waiting', 'pending', 'submitted', 'delayed', 'something_new'].map(relaySub)).toEqual(['waiting_for_deposit', 'bridging', 'confirming', 'delayed', 'processing'])
+  })
+
   it('wallet status: waiting before the tx, processing after (tx hash from our record)', async () => {
     let s: unknown = { status: 'waiting' }
     const { fetch } = fakeFetch([{ method: 'GET', match: '/intents/status/v3', reply: () => s }])
@@ -716,7 +725,7 @@ describe('relay errors', () => {
     expect(await a.status!({ leg: walletLeg, ref: '0xr' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', transitions: [{ kind: 'SURFACE_RESULT' }] })
     await a.transition!({ leg: walletLeg, ref: '0xr', name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
     const p = await a.status!({ leg: walletLeg, ref: '0xr' }, ctx)
-    expect(p).toMatchObject({ state: 'PROCESSING', sub: 'waiting', txHash: HASH })
+    expect(p).toMatchObject({ state: 'PROCESSING', sub: 'waiting_for_deposit', providerStatus: 'waiting', txHash: HASH })
     expect(checkLegStep(p)).toEqual([])
     s = { status: 'success' }
     expect(await a.status!({ leg: walletLeg, ref: '0xr' }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: HASH })

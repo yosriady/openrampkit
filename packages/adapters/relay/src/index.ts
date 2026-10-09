@@ -21,7 +21,7 @@ import { RECORD_TTL_SEC } from './config.js'
 import type { RelayOptions } from './config.js'
 import { depositAddresses } from './deposit-address.js'
 import { directTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, relaySub, terminalStep, toOrk } from './helpers.js'
 import { quotes, relayLegs } from './quotes.js'
 import type { DepositRecord, RelayIntentStatus, WalletRecord } from './types.js'
 import { walletLeg } from './wallet.js'
@@ -63,6 +63,8 @@ export function relay(opts: RelayOptions = {}) {
   return createAdapter({
     id: 'relay',
     name: 'Relay',
+    // Relay has no sandbox: the testnets API (api.testnets.relay.link) is the test environment.
+    env: /testnets/.test(opts.baseUrl ?? '') ? 'sandbox' : 'production',
     legs,
 
     async quote(input, ctx) {
@@ -149,7 +151,7 @@ export function relay(opts: RelayOptions = {}) {
         if (!rec?.txHash && !s.inTxHashes?.length) {
           return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref: input.ref }
         }
-        return { state: 'PROCESSING', sub: s.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+        return { state: 'PROCESSING', sub: relaySub(s.status), providerStatus: s.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
       }
 
       // transfer / bridge: look for deposits into the address

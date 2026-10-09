@@ -1,6 +1,6 @@
 // Compact, agent-friendly views of server objects. No secrets, no provider internals.
 
-import type { Amount, MethodOption, OrkError, PublicSession, Quote, Surface } from '@openrampkit/core'
+import type { Amount, MethodOption, OrkError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
 
 export const TERMINAL = new Set(['completed', 'failed', 'expired', 'refunded', 'reversed'])
 
@@ -31,7 +31,7 @@ export function methodView(m: MethodOption) {
   }
 }
 
-export function quoteView(q: Quote) {
+export function quoteView(q: PublicQuote) {
   return {
     method: q.method,
     provider: q.provider,

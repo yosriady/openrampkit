@@ -141,14 +141,21 @@ export type LegSpec = {
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
   /**
-   * `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
-   * `surface_after_processing`: a provider event may move the leg from `processing` back to
-   * `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
-   * learns where the user must pay after it started (for example an offramp that gets its deposit
-   * address in a webhook). The surface kind must be one of `surfaces`.
+   * What the server must allow for this leg. Only these two values have a meaning, and the server checks both:
+   * - `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
+   *   The planner offers a settlement destination only through a pathway whose last leg has it.
+   * - `surface_after_processing`: a provider event may move the leg from `processing` back to
+   *   `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
+   *   learns where the user must pay after it started (for example an offramp that gets its deposit
+   *   address in a webhook). The surface kind must be one of `surfaces`.
+   * How the server learns a leg's result is not a capability: it comes from the adapter's `status()`
+   * (polling) and `webhook` (see `resultChannels` in `@openrampkit/adapter`).
    */
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement' | 'surface_after_processing'>
+  capabilities?: LegCapability[]
 }
+
+/** A leg capability (see `LegSpec.capabilities`) */
+export type LegCapability = 'settlement' | 'surface_after_processing'
 
 export type Fee = {
   kind: 'provider' | 'network' | 'app' | 'swap' | 'other'
@@ -215,6 +222,15 @@ export type Quote = {
   expiresAt?: string
   badges?: Array<'best_price' | 'fastest'>
 }
+
+/** A leg quote as the browser sees it: no adapter `data` (provider URLs, request bodies, idempotency nonces). */
+export type PublicLegQuote = Omit<LegQuote, 'data'>
+
+/**
+ * A quote as the browser sees it (`POST /sessions/:id/quotes`). The server keeps the full `Quote`,
+ * with each leg's adapter `data`, in its store, and never sends it to the browser.
+ */
+export type PublicQuote = Omit<Quote, 'legs'> & { legs: PublicLegQuote[] }
 
 export type OrkErrorCode =
   | 'REGION_UNSUPPORTED'
@@ -379,10 +395,48 @@ export type LegStatus =
   /** The provider took back a payment (a chargeback or a reversal) */
   | 'reversed'
 
+/**
+ * The closed list of sub-states that `Step.sub` can have: a finer label inside `Step.state` for the UI.
+ * The values are i18n keys in `@openrampkit/web` (`messages.stepSub`). Adapters map provider statuses to
+ * these values and put the raw provider status in `LegStep.providerStatus` (timeline and logs only).
+ */
+export const STEP_SUBS = [
+  // KYC
+  'kyc_details',
+  'kyc_terms',
+  'kyc_verify',
+  'kyc_review',
+  // PAYMENT: what the user does
+  'card_details',
+  'bank_details',
+  'payout_account',
+  'send_crypto',
+  // PROCESSING: what the provider or the chain does
+  'waiting_for_deposit',
+  'ambiguous_deposit',
+  'confirming',
+  'bridging',
+  'settling',
+  'delayed',
+  'refunding',
+  'processing',
+] as const
+
+/** A value of `Step.sub` (see `STEP_SUBS`) */
+export type StepSub = (typeof STEP_SUBS)[number]
+
+const STEP_SUB_SET: ReadonlySet<string> = new Set(STEP_SUBS)
+
+/** True when `v` is one of `STEP_SUBS` */
+export function isStepSub(v: unknown): v is StepSub {
+  return typeof v === 'string' && STEP_SUB_SET.has(v)
+}
+
 export type Step = {
   sessionId: string
   state: StateName
-  sub?: string
+  /** A finer label inside `state` (see `STEP_SUBS`). The server drops a value that is not in the list. */
+  sub?: StepSub
   legIndex?: number
   surface?: Surface
   transitions: Transition[]
@@ -405,7 +459,13 @@ export type Step = {
 /** What an adapter returns for one leg; the server wraps it into a Step */
 export type LegStep = {
   state: StateName
-  sub?: string
+  /** A finer label inside `state`, from the closed list `STEP_SUBS`. Map provider statuses to it. */
+  sub?: StepSub
+  /**
+   * The provider's own status for this step (for example Relay `pending`), for operators. The server
+   * keeps it in the session timeline. It never reaches the browser.
+   */
+  providerStatus?: string
   surface?: Surface
   transitions: Transition[]
   status: LegStatus

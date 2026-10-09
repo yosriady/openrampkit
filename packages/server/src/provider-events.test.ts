@@ -202,7 +202,7 @@ describe('P1-1: the leg moves only forward', () => {
   })
 
   it('with surface_after_processing: allows it once, with a declared surface kind, before the leg has a transaction', async () => {
-    const t = make({}, { capabilities: ['webhooks', 'surface_after_processing'], surfaces: ['REDIRECT', 'DEPOSIT_ADDRESS'] })
+    const t = make({}, { capabilities: ['surface_after_processing'], surfaces: ['REDIRECT', 'DEPOSIT_ADDRESS'] })
     // A surface kind the leg does not declare is refused.
     const a = await t.toPayment()
     await t.hook([{ ref: a.ref, status: 'processing' }])
@@ -608,9 +608,9 @@ describe('third review: who can move a session on, and how far', () => {
     expect((await t.record(s.id)).step.state).toBe('PROCESSING')
 
     const k = await t.toPayment()
-    t.statusOf[k.ref] = { status: 'processing', state: 'KYC', sub: 'KYC_REVIEW' }
+    t.statusOf[k.ref] = { status: 'processing', state: 'KYC', sub: 'kyc_review' }
     await t.ramp.sessions.refresh(k.id)
-    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', sub: 'KYC_REVIEW' })
+    expect((await t.record(k.id)).step).toMatchObject({ state: 'KYC', sub: 'kyc_review' })
     t.statusOf[k.ref] = { status: 'awaiting_user' }
     await t.ramp.sessions.refresh(k.id)
     expect((await t.record(k.id)).step.state).toBe('PAYMENT')

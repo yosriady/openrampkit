@@ -8,7 +8,7 @@ import type { Amount, CryptoAsset, LegQuote, LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEPOSIT_ADDRESS_TTL_SEC, RECORD_TTL_SEC, USED_TTL_SEC } from './config.js'
 import type { DirectTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, relaySub, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
 import type { DepositRecord, RelayQuoteResponse, RelayRequest } from './types.js'
 
 export type DepositAddresses = ReturnType<typeof depositAddresses>
@@ -31,7 +31,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
    * gives the address of one session to another session.
    */
   async function depositQuote(
-    ctx: Pick<AdapterContext, 'fetch' | 'store'>,
+    ctx: Pick<AdapterContext, 'fetch' | 'store'> & Partial<Pick<AdapterContext, 'log'>>,
     p: { origin: CryptoAsset; dest: CryptoAsset; recipient: string; amountBase: string },
   ): Promise<{ q: RelayQuoteResponse; address: string; requestId?: string }> {
     const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', {
@@ -44,7 +44,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
       useDepositAddress: true,
       refundTo: refundTo(p.origin.chain),
     }).catch((e) => {
-      throw toOrk(e)
+      throw toOrk(e, ctx.log)
     })
     const key = depositKey(p.recipient, p.origin, p.dest)
     const cached = await ctx.store.get<string>(key)
@@ -152,7 +152,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     const sourceTxHash = requestSourceTxHash(r)
     const output = requestOutput(r, expected)
     const extra = { ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}), ...(output ? { output } : {}) }
-    return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
+    return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: relaySub(r.status), providerStatus: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
   }
 
   async function startDeposit(legId: 'transfer' | 'bridge', input: StartInput, ctx: AdapterContext): Promise<LegStep> {

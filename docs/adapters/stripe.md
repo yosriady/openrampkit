@@ -37,6 +37,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#stripe).
 | `surface` | `'sdk' \| 'redirect'` | `'sdk'` | `PROVIDER_SDK` or a `REDIRECT` to the Stripe-hosted onramp |
 | `methods` | `string[]` | all | Leg ids: `card`, `apple_pay`, `google_pay`, `ach` |
 | `apiUrl` | `string` | `https://api.stripe.com` | API base URL |
+| `env` | `'sandbox' \| 'production'` | from the key prefix | `sk_test_` or `rk_test_` is `sandbox`; `sk_live_` or `rk_live_` is `production`. A value that does not agree with the key throws. The server checks `env` against `livemode`. |
 
 ## Legs
 
@@ -48,7 +49,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#stripe).
 | `ach` | USD | US |
 
 - Every leg denies `US-HI`.
-- Delivers USDC on Base, Ethereum, Polygon, Solana and Avalanche. Some networks are not sold everywhere: USDC on Base, Polygon, Solana and Avalanche is not sold in the EU, and USDC on Polygon and Avalanche is not sold in New York. The quote then fails with `REGION_UNSUPPORTED`.
+- Delivers USDC on Base, Ethereum, Polygon, Solana and Avalanche. Another token or chain gets no quote (`NO_QUOTES`). Some networks are not sold everywhere: USDC on Base, Polygon, Solana and Avalanche is not sold in the EU, and USDC on Polygon and Avalanche is not sold in New York. The quote then fails with `REGION_UNSUPPORTED`.
 - The Stripe onramp UI picks the payment method itself. The legs only tell the planner what to show.
 
 ## Quotes and start

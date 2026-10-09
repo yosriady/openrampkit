@@ -19,23 +19,27 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type MeldDeliverAsset = { chain: string; token: string; currencyCode: string; symbol?: string; decimals?: number }
 
 export type MeldOptions = {
   /** Meld API key (sent as `Authorization: BASIC <apiKey>`) */
   apiKey: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Only quote these service providers (e.g. ['TRANSAK', 'BANXA']). Default: every provider on your account. */
   serviceProviders?: string[]
   /** Webhook profile secret (GET /notifications/webhooks). Needed to accept webhooks. */
@@ -198,7 +202,8 @@ function base64url(b64: string): string {
 }
 
 export function meld(opts: MeldOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
+  const env = resolveEnv('meld', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
   const headers = { authorization: `BASIC ${opts.apiKey}`, 'meld-version': opts.version ?? '2026-02-03' }
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
   const toChains: Record<string, string[]> = {}
@@ -214,7 +219,6 @@ export function meld(opts: MeldOptions) {
     eta: { min: 60, max: 1800 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const staticLegs = STATIC.map((s) => leg(s.id, { from: { asset: { kind: 'fiat', currencies: s.currencies }, location: ['user_account'] }, regions: { allow: s.countries ?? ['*'], deny: [] }, eta: s.eta }))
@@ -223,17 +227,12 @@ export function meld(opts: MeldOptions) {
     return fetchJson<T>(ctx.fetch, `${api}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
   }
 
-  function deliverFor(asset: CryptoAsset | undefined): MeldDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return deliver[0]!
+  /** The asset Meld delivers for `asset`. NO_QUOTES when Meld does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): MeldDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Meld')
   }
 
-  function assetOf(d: MeldDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   function eventFrom(ref: string, status: string | undefined, tx?: MeldTransaction): LegEvent | undefined {
     const d = deliver.find((x) => x.currencyCode === tx?.destinationCurrencyCode)
@@ -268,6 +267,7 @@ export function meld(opts: MeldOptions) {
 
   return createAdapter({
     id: 'meld',
+    env,
     name: 'Meld',
     legs: staticLegs,
 
@@ -406,6 +406,8 @@ export function meld(opts: MeldOptions) {
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('meld: webhookSecret is not set; rejecting webhook')

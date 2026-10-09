@@ -76,19 +76,38 @@ export type HttpErrorOptions = {
   what?: string
   /** 4xx statuses that mean "no quote for this request". Default 400, 404, 409 and 422. Other 4xx are PROVIDER_UNAVAILABLE. */
   noQuoteStatuses?: number[]
-  /** Log for unexpected failures (5xx, network, timeouts, auth errors) */
-  log?: Pick<Logger, 'warn'>
+  /**
+   * Log for unexpected failures. 5xx, network errors and timeouts go to `warn`. A 401 or 403 (a setup
+   * error) goes to `error`, or to `warn` when the logger has no `error`.
+   */
+  log?: Pick<Logger, 'warn'> & Partial<Pick<Logger, 'error'>>
+  /** For a 401 or 403: what the operator must check, added to the error log (for example which key or allowlist) */
+  setupHint?: string
 }
 
 const NO_QUOTE_STATUSES = [400, 404, 409, 422]
+const SETUP_STATUSES = [401, 403]
+
+/**
+ * The error for a provider that refused our credentials or setup (401, 403). A retry cannot fix it, so it is
+ * not retryable, and the user can choose another method. The user message is neutral: the operator gets the details.
+ */
+export function providerSetupError(provider: string): OrkException {
+  return new OrkException(
+    orkError('PROVIDER_UNAVAILABLE', { message: `${provider} is not set up for this app yet. Try another method.`, retryable: false, recovery: 'choose_other' }),
+    502,
+  )
+}
 
 /**
  * Map a failed provider call to an OrkException with a message that is safe to show:
  * - OrkException: returned as is
  * - 429: RATE_LIMITED (429)
  * - 400, 404, 409, 422: NO_QUOTES (422) with the provider's message when it gives one
+ * - 401, 403 (our credentials or setup): PROVIDER_UNAVAILABLE (502), not retryable, recovery `choose_other`,
+ *   with one error log for the operator that names the provider
  * - timeout: PROVIDER_UNAVAILABLE (504)
- * - other 4xx (401, 403: our credentials), 5xx, network errors: PROVIDER_UNAVAILABLE (502)
+ * - other 4xx, 5xx, network errors: PROVIDER_UNAVAILABLE (502)
  */
 export function httpErrorToOrk(e: unknown, provider: string, opts: HttpErrorOptions = {}): OrkException {
   if (e instanceof OrkException) return e
@@ -100,6 +119,12 @@ export function httpErrorToOrk(e: unknown, provider: string, opts: HttpErrorOpti
     return new OrkException(orkError('NO_QUOTES', { message }), 422)
   }
   const detail = String((e as Error | undefined)?.message ?? e).slice(0, 300)
+  if (status !== undefined && SETUP_STATUSES.includes(status)) {
+    const log = opts.log?.error ?? opts.log?.warn
+    const hint = opts.setupHint ?? 'Check the API key and secret, the environment (sandbox or production) and any IP or domain allowlist.'
+    log?.call(opts.log, `${provider}: cannot ${opts.what ?? 'handle this request'}: the provider refused our credentials or setup (HTTP ${status}). This is a setup error, and a retry cannot fix it. ${hint}`, { status, error: detail })
+    return providerSetupError(provider)
+  }
   if ((e as HttpError | undefined)?.timeout) {
     opts.log?.warn(`${provider}: request timed out`, { error: detail })
     return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `${provider} did not answer in time.` }), 504)

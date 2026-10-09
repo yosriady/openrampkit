@@ -25,7 +25,7 @@ export function relayLegs(): LegSpec[] {
       surfaces: ['WALLET_TX'],
       requires: ['wallet'],
       // `settlement`: same chain and token only (approve + settle on the destination chain)
-      capabilities: ['polling', 'settlement'],
+      capabilities: ['settlement'],
     },
     {
       id: 'transfer',
@@ -36,7 +36,6 @@ export function relayLegs(): LegSpec[] {
       regions: { allow: ['*'], deny: [] },
       eta: { min: 10, max: 120 },
       surfaces: ['DEPOSIT_ADDRESS'],
-      capabilities: ['polling', 'refunds'],
     },
     {
       id: 'bridge',
@@ -47,7 +46,6 @@ export function relayLegs(): LegSpec[] {
       eta: { min: 5, max: 60 },
       // Not shown to the user: the previous leg delivers into the address.
       surfaces: ['DEPOSIT_ADDRESS'],
-      capabilities: ['polling', 'refunds'],
     },
   ]
 }

@@ -20,7 +20,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | `string` | none | Sent as `x-api-key`. Needed for `GET /requests/v3` (status of deposit-address legs, and the delivered amount of a `wallet` leg) and higher rate limits. |
-| `baseUrl` | `string` | `https://api.relay.link` | Use `https://api.testnets.relay.link` for testnets |
+| `baseUrl` | `string` | `https://api.relay.link` | Use `https://api.testnets.relay.link` for testnets. `adapter.env` is `sandbox` for the testnets host, else `production`. |
 | `appFee` | `{ bps: number; recipient: string }` | none | Your fee in basis points. It accrues as a claimable balance at Relay. |
 | `referrer` | `string` | none | Relay `referrer`, for attribution |
 | `refundTo` | `'origin' \| string` | `'origin'` | Where Relay refunds failed deposit-address requests. `'origin'` turns on automatic refund to the original sender. |
@@ -131,7 +131,13 @@ A shared destination (one treasury or vault address for all users) cannot tell t
 | `success` | `succeeded` (`COMPLETED`) |
 | `failure` | `failed` with `DELIVERY_FAILED` |
 | `refund` | `refunded` (`REFUNDED`) |
-| other | `processing` (the Relay status is the `sub` state) |
+| `waiting` | `processing`, sub-state `waiting_for_deposit` |
+| `pending` | `processing`, sub-state `bridging` |
+| `submitted` | `processing`, sub-state `confirming` |
+| `delayed` | `processing`, sub-state `delayed` |
+| other | `processing`, sub-state `processing` |
+
+The raw Relay status goes to `providerStatus`, which the session timeline keeps. The browser does not get it.
 
 The output of a completed leg:
 

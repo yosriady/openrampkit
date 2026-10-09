@@ -19,17 +19,20 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
   httpStatus,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type MoonPayDeliverAsset = {
   /** CAIP-2 chain */
@@ -53,7 +56,8 @@ export type MoonPayOptions = {
   secretKey: string
   /** Webhook API key from the dashboard (Developers page). Needed to accept webhooks. */
   webhookKey?: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Fiat currency when the quote has none. Default 'USD'. */
   baseCurrencyDefault?: string
   /** How the widget opens. Default 'redirect' (a popup). */
@@ -185,7 +189,7 @@ function parseSigHeader(header: string): Record<string, string> {
 }
 
 export function moonpay(opts: MoonPayOptions) {
-  const env = opts.env
+  const env = resolveEnv('moonpay', opts.env, undefined, 'production')
   const apiUrl = (opts.apiUrl ?? 'https://api.moonpay.com').replace(/\/+$/, '')
   const widgetUrl = (opts.widgetUrl ?? (env === 'sandbox' ? 'https://buy-sandbox.moonpay.com' : 'https://buy.moonpay.com')).replace(/\/+$/, '')
   const widgetOrigin = new URL(widgetUrl).origin
@@ -206,7 +210,6 @@ export function moonpay(opts: MoonPayOptions) {
     eta: d.eta,
     surfaces: [opts.surface === 'iframe' ? 'IFRAME' : 'REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling', 'exact_output'],
   })
   const legs = defs.map((d) => legFor(d))
 
@@ -216,17 +219,12 @@ export function moonpay(opts: MoonPayOptions) {
     return d
   }
 
-  function deliverAssetFor(asset: CryptoAsset | undefined): MoonPayDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const found = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (found) return found
-    }
-    return deliver[0]!
+  /** The asset MoonPay delivers for `asset`. NO_QUOTES when MoonPay does not deliver that token on that chain (never another token). */
+  function deliverAssetFor(asset: Asset | undefined): MoonPayDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'MoonPay')
   }
 
-  function assetOf(d: MoonPayDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   /** Per-asset restrictions (e.g. usdc_base is not sold in New York or Canada) */
   function checkAssetRegion(d: MoonPayDeliverAsset, ctx: AdapterContext) {
@@ -269,6 +267,7 @@ export function moonpay(opts: MoonPayOptions) {
 
   return createAdapter({
     id: 'moonpay',
+    env,
     name: 'MoonPay',
     legs,
 
@@ -377,6 +376,8 @@ export function moonpay(opts: MoonPayOptions) {
     },
 
     webhook: {
+      // Without the webhookKey, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookKey,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookKey) {
           ctx.log.warn('moonpay: webhookKey is not set; rejecting webhook')

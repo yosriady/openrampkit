@@ -148,6 +148,8 @@ Types: `Theme`, `ThemeOptions`, `ThemeColors`, `ThemeMode`, `RadiusScale`, `Appe
 
 Types: `Messages`, `CatalogLocale`, `LocaleSources`.
 
+`messages.stepSub` has one label for each value of `Step.sub` (`STEP_SUBS` in `@openrampkit/core`), in every catalog. The processing screen shows it. Without a known `sub`, the screen shows the state title (`messages.stepTitle`). It never shows a raw provider status. To change a label, override the whole `stepSub` object.
+
 ## Provider renderers
 
 | Export | Description |
@@ -169,4 +171,4 @@ Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 | `defineOpenRampModal()` | Registers the element if it is not registered |
 | `DepositController`, `WithdrawController`, `RampController` | Re-exported from `@openrampkit/client` (one class) |
 
-Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.
+Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.

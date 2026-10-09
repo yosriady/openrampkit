@@ -22,7 +22,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#transak).
 | `apiKey` | `string` | required | Partner API key |
 | `apiSecret` | `string` | required | Partner API secret |
 | `referrerDomain` | `string` | required | Your web domain (or mobile package name), registered with Transak |
-| `env` | `'staging' \| 'production'` | `'production'` | Staging uses the `-stg` hosts |
+| `env` | `'sandbox' \| 'production'` | `'production'` | `sandbox` uses the Transak staging (`-stg`) hosts. `'staging'` is a deprecated alias of `'sandbox'`. The server checks `env` against `livemode`. |
 | `surface` | `'IFRAME' \| 'REDIRECT'` | `'IFRAME'` | How the widget opens (see the warning below) |
 | `defaultCountry` | `string` | none | Country for quotes when the session has none |
 
@@ -41,7 +41,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#transak).
 
 - The catalog also maps `pm_astropay` to `astropay`.
 - Sources: the live list [`GET /api/v2/currencies/fiat-currencies`](https://api.transak.com/api/v2/currencies/fiat-currencies), the [Get Fiat Currencies example](https://docs.transak.com/api/public/get-fiat-currencies) and the [Transak fee table](https://transak.notion.site/On-Ramp-Payment-Methods-Fees-Other-Details-b0761634feed4b338a69f4f186d906a5).
-- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana.
+- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana. Another token or chain gets no quote (`NO_QUOTES`). The adapter does not quote USDC on Base in its place.
 - Live catalog: `GET /fiat/public/v1/currencies/fiat-currencies`, cached for one hour. For the session currency, it builds one leg per active payment option, with the supporting countries and the min and max amounts. Common methods keep the static leg ids.
 - Surface: `IFRAME` (625 px high) by default.
 

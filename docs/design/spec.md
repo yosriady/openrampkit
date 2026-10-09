@@ -125,7 +125,7 @@ Adapters work like wagmi connectors. A provider package exports a factory. The a
 ```ts
 import { createAdapter } from '@openrampkit/adapter'
 
-export const transak = (opts: { apiKey: string; apiSecret: string; env: 'sandbox' | 'production' }) =>
+export const transak = (opts: { apiKey: string; apiSecret: string; env?: 'sandbox' | 'production' }) =>
   createAdapter({
     id: 'transak',
     name: 'Transak',
@@ -156,7 +156,7 @@ interface LegSpec {
   eta: { min: number; max: number }     // seconds
   surfaces: SurfaceKind[]               // what the client must be able to show
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods'>
+  capabilities?: Array<'settlement' | 'surface_after_processing'>  // results come from status() and webhook, not from a capability
 }
 ```
 
@@ -268,7 +268,7 @@ The server sends one `Step` at a time. The client draws the state and offers the
 type Step = {
   sessionId: string
   state: StateName
-  sub?: string                                  // e.g. KYC 'IN_REVIEW'
+  sub?: StepSub                                 // closed list STEP_SUBS, e.g. KYC 'kyc_review'
   legIndex?: number                             // which leg this step belongs to
   surface?: Surface                             // what to show
   transitions: Transition[]                     // what the user or client can do now

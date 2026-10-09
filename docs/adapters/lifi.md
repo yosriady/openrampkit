@@ -20,7 +20,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#lifi).
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | `string` | none | Sent as `x-lifi-api-key`. Get it in the LI.FI Partner Portal. Keep it on the server. |
-| `baseUrl` | `string` | `https://li.quest/v1` | The LI.FI API |
+| `baseUrl` | `string` | `https://li.quest/v1` | The LI.FI API. There is no sandbox: `adapter.env` is always `production`. |
 | `integrator` | `string` | none | LI.FI `integrator`: your app name, for attribution and fees |
 | `feeBps` | `number` | none | Your fee in basis points. The adapter sends it as LI.FI `fee` (a fraction: 25 bps is `0.0025`). It needs `integrator`. The factory throws without it. |
 | `slippageBps` | `number` | none (LI.FI picks) | LI.FI `slippage` in basis points (50 is 0.5%) |
@@ -68,12 +68,18 @@ Status calls `GET /v1/status?txHash=...&fromChain=...&toChain=...`.
 
 | LI.FI status | Substatus | Leg |
 |---|---|---|
-| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, sub-state `not_found` |
-| `PENDING` | any | `processing`, the substatus in lower case is the sub-state |
+| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, sub-state `confirming` (LI.FI has not indexed the transaction yet) |
+| `PENDING` | `WAIT_SOURCE_CONFIRMATIONS` | `processing`, sub-state `confirming` |
+| `PENDING` | `WAIT_DESTINATION_TRANSACTION`, or none | `processing`, sub-state `bridging` |
+| `PENDING` | `BRIDGE_NOT_AVAILABLE`, `CHAIN_NOT_AVAILABLE`, `NOT_PROCESSABLE_REFUND_NEEDED` | `processing`, sub-state `delayed` |
+| `PENDING` | `REFUND_IN_PROGRESS` | `processing`, sub-state `refunding` |
+| `PENDING` | other | `processing`, sub-state `processing` |
 | `DONE` | `COMPLETED` | `succeeded`, after the delivery checks below |
 | `DONE` | `PARTIAL` | `failed` with `DELIVERY_FAILED`: LI.FI delivered another token |
 | `DONE` or `FAILED` | `REFUNDED` | `refunded` |
 | `FAILED` | other | `failed` with `DELIVERY_FAILED` |
+
+The raw LI.FI status or substatus goes to `providerStatus`, which the session timeline keeps. The browser does not get it.
 | `INVALID` | | `failed` with `DELIVERY_FAILED` |
 
 ## One payment, one session

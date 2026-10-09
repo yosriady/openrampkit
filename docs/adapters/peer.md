@@ -19,7 +19,7 @@ peer({
   enabled: true,
   apiKey: process.env.PEER_API_KEY!,
   webhookSecret: process.env.PEER_WEBHOOK_SECRET!,
-  env: 'live',
+  env: 'production',
 })
 ```
 
@@ -32,7 +32,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#peer).
 | `enabled` | `true` | required | The opt-in flag |
 | `apiKey` | `string` | required | Merchant API key. Sandbox and live keys are separate. |
 | `webhookSecret` | `string` | required | Peer reports settlement only by webhook |
-| `env` | `'sandbox' \| 'live'` | required | Which key you pass |
+| `env` | `'sandbox' \| 'production'` | required | Which key you pass. `'live'` is a deprecated alias of `'production'`. The server checks `env` against `livemode`. |
 | `rails` | `string[]` | all | `venmo`, `cashapp`, `zelle`, `chime`, `paypal`, `revolut`, `wise` |
 | `feePayer` | `'MERCHANT' \| 'PAYEE' \| 'SPLIT'` | merchant setting | Who pays the fee |
 | `buyerFeeShareBps` | `number` | none | With `SPLIT`: the buyer's share, 0 to 10000 in steps of 1000 |

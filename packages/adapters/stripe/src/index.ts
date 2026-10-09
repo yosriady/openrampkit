@@ -26,11 +26,13 @@ import {
   httpStatus,
   legStepFromEvent,
   randomHex,
+  requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type StripeOptions = {
   /** Secret key (sk_live_... or sk_test_...). A restricted key with onramp access also works. */
@@ -45,6 +47,18 @@ export type StripeOptions = {
   methods?: string[]
   /** Default https://api.stripe.com */
   apiUrl?: string
+  /**
+   * 'sandbox' (test mode) or 'production' (live mode). Default: from the key prefix (`sk_test_`, `rk_test_`:
+   * sandbox; `sk_live_`, `rk_live_`: production). A value that does not agree with the key throws.
+   */
+  env?: AdapterEnv
+}
+
+/** The Stripe mode of a secret or restricted key, from its prefix */
+export function stripeKeyEnv(key: string): AdapterEnv | undefined {
+  if (/^(sk|rk)_test_/.test(key)) return 'sandbox'
+  if (/^(sk|rk)_live_/.test(key)) return 'production'
+  return undefined
 }
 
 type StripeNetwork = 'ethereum' | 'base' | 'polygon' | 'solana' | 'avalanche'
@@ -152,6 +166,9 @@ export function parseStripeSignature(header: string): { t?: string; v1: string[]
 }
 
 export function stripe(opts: StripeOptions) {
+  const keyEnv = stripeKeyEnv(opts.secretKey)
+  const env = resolveEnv('stripe', opts.env, undefined, keyEnv)
+  if (opts.env && keyEnv && opts.env !== keyEnv) throw new Error(`stripe: env is '${opts.env}', but secretKey is a ${keyEnv === 'sandbox' ? 'test mode' : 'live mode'} key`)
   const api = (opts.apiUrl ?? 'https://api.stripe.com').replace(/\/+$/, '')
   const auth = `Basic ${btoa(`${opts.secretKey}:`)}`
   const surfaceKind = opts.surface === 'redirect' ? 'REDIRECT' : 'PROVIDER_SDK'
@@ -170,16 +187,12 @@ export function stripe(opts: StripeOptions) {
     eta: d.eta,
     surfaces: [surfaceKind],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling', 'exact_output'],
   }))
   const byId = new Map(defs.map((d) => [d.id, d]))
 
-  function deliverFor(asset: CryptoAsset | undefined): DeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = STRIPE_DELIVER_ASSETS.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return STRIPE_DELIVER_ASSETS[0]!
+  /** The asset Stripe delivers for `asset`. NO_QUOTES when Stripe does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): DeliverAsset {
+    return requireDeliverAsset(STRIPE_DELIVER_ASSETS, asset, 'Stripe')
   }
 
   function assetOf(d: DeliverAsset): CryptoAsset {
@@ -240,6 +253,7 @@ export function stripe(opts: StripeOptions) {
 
   return createAdapter({
     id: 'stripe',
+    ...(env ? { env } : {}),
     name: 'Stripe',
     legs,
 

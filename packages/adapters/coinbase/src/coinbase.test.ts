@@ -248,12 +248,23 @@ describe('coinbase errors and edge cases', () => {
     }
   })
 
-  it('quote: maps 429, 404/401 (setup errors), 5xx; a missing quote is NO_QUOTES', async () => {
+  it('quote: maps 429, 401/403 (setup errors), 404, 5xx; a missing quote is NO_QUOTES', async () => {
     const { secret } = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const q = (routes: Parameters<typeof fakeFetch>[0], log = recordingLog()) => a.quote({ leg: cardLeg, amountIn: usd('10') }, makeCtx({ fetch: fakeFetch(routes).fetch, log }))
     await expect(q([{ method: 'POST', match: '/onramp/sessions', status: 429, reply: () => ({}) }])).rejects.toMatchObject({ status: 429, error: { code: 'RATE_LIMITED' } })
-    for (const status of [401, 403, 404, 500]) {
+    // 401 and 403: our key is wrong. Not retryable, the user chooses another method, the operator gets one error log.
+    for (const status of [401, 403]) {
+      const log = recordingLog()
+      await expect(q([{ method: 'POST', match: '/onramp/sessions', status, reply: () => ({ errorMessage: 'Unauthorized key' }) }], log)).rejects.toMatchObject({
+        status: 502,
+        error: { code: 'PROVIDER_UNAVAILABLE', message: 'Coinbase is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' },
+      })
+      expect(log.warnings).toEqual([])
+      expect(log.errors).toHaveLength(1)
+      expect(log.errors[0]).toMatch(/^Coinbase: cannot price this amount: .*HTTP 40[13]/)
+    }
+    for (const status of [404, 500]) {
       const log = recordingLog()
       await expect(q([{ method: 'POST', match: '/onramp/sessions', status, reply: () => ({ errorMessage: 'Unauthorized key' }) }], log)).rejects.toMatchObject({
         status: 502,
@@ -288,9 +299,17 @@ describe('coinbase errors and edge cases', () => {
     await a.quote({ leg: cardLeg, amountIn: usd('10') }, makeCtx({ fetch, session: { country: 'GB', region: 'US-NY' } }))
     expect((calls[1]!.body as Record<string, unknown>).subdivision).toBeUndefined()
     expect(calls[1]!.body).toMatchObject({ country: 'GB' })
-    // unknown chain: Base; google_pay maps to CARD; sandbox forced on
-    const b = coinbase({ apiKeyId: 'k', apiKeySecret: secret, sandbox: true })
-    await b.quote({ leg: { ...cardLeg, legId: 'google_pay', to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: DEST } } }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))
+    // unknown chain, or another token on a known chain: no quote (never USDC on Base instead), and no Coinbase call
+    const b = coinbase({ apiKeyId: 'k', apiKeySecret: secret, env: 'sandbox' })
+    for (const asset of [{ kind: 'crypto' as const, chain: 'eip155:143', token: '0x1' }, { kind: 'crypto' as const, chain: 'eip155:8453', token: '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2' }]) {
+      await expect(b.quote({ leg: { ...cardLeg, to: { asset, location: { kind: 'address', address: DEST } } }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))).rejects.toMatchObject({
+        status: 422,
+        error: { code: 'NO_QUOTES', message: expect.stringMatching(/^Coinbase does not deliver /) },
+      })
+    }
+    expect(calls).toHaveLength(2)
+    // google_pay maps to CARD; env: 'sandbox' wins over a live session
+    await b.quote({ leg: { ...cardLeg, legId: 'google_pay' }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))
     expect(calls[2]!.body).toMatchObject({ destinationNetwork: 'base', paymentMethod: 'CARD' })
     expect((calls[2]!.body as { partnerUserRef: string }).partnerUserRef).toMatch(/^sandbox-ork-/)
     expect(COINBASE_NETWORKS['eip155:8453']).toBe('base')

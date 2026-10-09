@@ -143,6 +143,32 @@ All built-in stores have a `queue`. A custom store without `queue` gets a fallba
 
 When you upgrade from a version that kept these lists as KV arrays (`outbox`, `open-sessions`), the first sweep moves the old entries to the queues.
 
+## Record schema
+
+Each session record has two numbers. Do not mix them up:
+
+| Field | What it is |
+|---|---|
+| `version` | The optimistic-lock counter. Each write adds 1. `put(rec, expectedVersion)` compares it. |
+| `schema` | The shape of the record. The server writes `SESSION_SCHEMA` (now `1`) in each new record. A record from a version before this field has no `schema`: it is schema 0. |
+
+The server runs `migrateRecord()` on each record that it reads from the store. The function brings an older record up to the current schema, in memory. The next write saves the result. You do not run a migration script, and old sessions keep working after an upgrade.
+
+Schema 0 to 1 sets:
+
+- `updatedAt` to `createdAt` when it is missing.
+- `ActivePayment.n` (the attempt number) to the number of earlier attempts, and `n` of each earlier attempt to its place in `attempts`.
+- `quotes`, `startUrls`, `notified` and `outbox` to empty values when they are missing.
+- Each step `sub` (the session step, and the step of each leg) to its lower-case form when that is in `STEP_SUBS`. Another value is removed. See [Sub-states](../concepts/flow.md#sub-states).
+
+Rules:
+
+- `migrateRecord` changes only session records. It returns other records (for example the `__queue:*` records of a custom store) as they are.
+- A record with a newer `schema` than the server (written by a newer server, before a rollback) is returned as it is. Do not roll back across a schema change while sessions are open.
+- A custom store does not need to know about `schema`. Store the whole record as JSON, as before.
+
+The server tests load records written before `schema` existed (`packages/server/src/fixtures/records-v0.json`) and finish their payments.
+
 ## A custom store
 
 Implement `SessionStore`:

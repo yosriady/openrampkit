@@ -20,19 +20,23 @@ import {
   awaitPoll,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
   httpStatus,
   legStepFromEvent,
   providerMessage,
+  providerSetupError,
   randomHex,
+  requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo, sub } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
 
 export { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, sha256Hex, signV2 } from './sign.js'
@@ -49,7 +53,8 @@ export type OnramperOptions = {
   secretKey: string
   /** Webhook secret from your Onramper CSM: verifies webhooks and is sent as `x-onramper-secret` for status reads. */
   webhookSecret?: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Only these onramps (e.g. ['moonpay', 'banxa']) */
   onramps?: string[]
   /** Assets Onramper may deliver, most preferred first. Default: USDC on Base, Ethereum, Polygon, Arbitrum. */
@@ -207,11 +212,12 @@ export function onramperSetupError(e: unknown, log: Pick<Logger, 'error'>, what:
     hint = 'Onramper refused the API key (401). Make sure apiKey is correct: pk_test_ with env sandbox, pk_prod_ with env production.'
   }
   log.error(`onramper: cannot ${what}. ${hint}`, { status, ...(typeof body?.errorId === 'number' ? { errorId: body.errorId } : {}), ...(detail ? { message: detail.slice(0, 200) } : {}) })
-  return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' }), 502)
+  return providerSetupError('Onramper')
 }
 
 export function onramper(opts: OnramperOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
+  const env = resolveEnv('onramper', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
   const toChains: Record<string, string[]> = {}
   for (const d of deliver) (toChains[d.chain] ??= []).push(d.chain.startsWith('eip155:') ? d.token.toLowerCase() : d.token)
@@ -228,22 +234,16 @@ export function onramper(opts: OnramperOptions) {
     eta: { min: 60, max: 1800 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const staticLegs = STATIC.map((s) => leg(s.id, { from: { asset: { kind: 'fiat', currencies: s.currencies }, location: ['user_account'] }, regions: { allow: s.countries ?? ['*'], deny: [] }, eta: s.eta }))
 
-  function deliverFor(asset: CryptoAsset | undefined): OnramperDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return deliver[0]!
+  /** The asset Onramper delivers for `asset`. NO_QUOTES when Onramper does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): OnramperDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Onramper')
   }
 
-  function assetOf(d: OnramperDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   const get = <T>(ctx: Pick<AdapterContext, 'fetch'>, pathAndQuery: string, extra: Record<string, string> = {}) =>
     fetchJson<T>(ctx.fetch, `${api}${pathAndQuery}`, { headers: { authorization: opts.apiKey, ...extra } })
@@ -273,6 +273,7 @@ export function onramper(opts: OnramperOptions) {
 
   return createAdapter({
     id: 'onramper',
+    env,
     name: 'Onramper',
     legs: staticLegs,
 
@@ -436,6 +437,8 @@ export function onramper(opts: OnramperOptions) {
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('onramper: webhookSecret is not set; rejecting webhook')

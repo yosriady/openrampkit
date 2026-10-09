@@ -8,7 +8,7 @@ The server drives the flow. Every response carries the session's current `Step`.
 type Step = {
   sessionId: string
   state: StateName
-  sub?: string                // provider sub-state, e.g. 'SETTLING' or 'waiting_for_deposit'
+  sub?: StepSub               // a finer label from a closed list, e.g. 'settling' or 'waiting_for_deposit'
   legIndex?: number           // which leg of the pathway is active
   surface?: Surface           // what to show: QR, redirect, deposit address, ...
   transitions: Transition[]   // what the user or the client may do next
@@ -19,6 +19,35 @@ type Step = {
   expiresAt?: string
 }
 ```
+
+## Sub-states
+
+`Step.sub` is a finer label inside `state`. It comes from a closed list of lowercase values, `STEP_SUBS` in `@openrampkit/core` (type `StepSub`):
+
+| `sub` | Used in | Meaning |
+|---|---|---|
+| `kyc_details` | `KYC` | The user gives details in a form |
+| `kyc_terms` | `KYC` | The user accepts the provider terms |
+| `kyc_verify` | `KYC` | The user verifies identity at the provider |
+| `kyc_review` | `KYC` | The provider reviews the identity |
+| `card_details` | `PAYMENT` | The user gives card details |
+| `bank_details` | `PAYMENT` | The user sends a bank transfer to the details shown |
+| `payout_account` | `PAYMENT` | The user gives a payout account |
+| `send_crypto` | `PAYMENT` | The user sends crypto |
+| `waiting_for_deposit` | `PROCESSING` | The provider waits for a deposit |
+| `ambiguous_deposit` | `PAYMENT`, `PROCESSING` | A deposit matches more than one session; an operator must check it |
+| `confirming` | `PROCESSING` | A transaction waits for confirmation on chain |
+| `bridging` | `PROCESSING` | The funds move between networks |
+| `settling` | `PROCESSING` | The provider settles or pays out |
+| `delayed` | `PROCESSING` | The provider reports a delay |
+| `refunding` | `PROCESSING` | The provider refunds the payment |
+| `processing` | `PROCESSING` | Any other provider work |
+
+Rules:
+
+- An adapter maps its provider statuses to this list. It puts the raw provider status in `LegStep.providerStatus`. The server writes each new raw status to the session timeline (`leg.provider_status`). The raw status never reaches the browser.
+- The server drops a `sub` that is not in the list, and logs a warning.
+- The web UI shows the label of `messages.stepSub[sub]` in the user's language. Without a known `sub`, it shows the state title.
 
 ## States
 
@@ -232,7 +261,7 @@ type OrkError = {
 | `PAYMENT_REVERSED` | The provider refunded or reversed this payment after it completed. | No |
 | `DELIVERY_FAILED` | The funds could not be delivered. Contact support. | No |
 | `RATE_LIMITED` | Too many requests. Wait a moment and try again. | Yes |
-| `PROVIDER_UNAVAILABLE` | The provider is not available right now. | Yes |
+| `PROVIDER_UNAVAILABLE` | The provider is not available right now. | Yes. A provider that refuses our credentials (HTTP 401 or 403) gives a setup error: "{Provider} is not set up for this app yet. Try another method.", not retryable, recovery `choose_other`. |
 | `CLIENT_UPGRADE_REQUIRED` | Update the app to use this method. | No |
 | `SESSION_EXPIRED` | This session expired. Start a new deposit. | No |
 | `UNAUTHORIZED` | This session is not valid. | No |

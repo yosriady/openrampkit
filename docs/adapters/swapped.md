@@ -20,11 +20,11 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#swapped).
 |---|---|---|---|
 | `publicKey` | `string` | required | Public key (`pk_...`). Used as `apiKey` in the widget URL and the merchant APIs. |
 | `secretKey` | `string` | required | Secret key (`sk_...`). Signs widget URLs and verifies order notifications. |
-| `env` | `'sandbox' \| 'production'` | `'production'` | Sandbox uses `https://sandbox.swapped.com` (BTC and ETH testnets and test cards only) |
+| `env` | `'sandbox' \| 'production'` | `'production'` | Sandbox uses `https://sandbox.swapped.com` (BTC and ETH testnets and test cards only). The server checks `env` against `livemode`. |
 | `widgetUrl` | `string` | `https://widget.swapped.com` or the sandbox URL | Widget base URL |
 | `apiUrl` | `string` | same as `widgetUrl` | Merchant API base URL |
 | `markup` | `number` | none | Your markup in percent, 0 to 5 (0.5 means 0.5%) |
-| `deliverAssets` | `SwappedDeliverAsset[]` | USDC on Base, Arbitrum, Polygon, Ethereum | Assets Swapped may deliver, most preferred first |
+| `deliverAssets` | `SwappedDeliverAsset[]` | USDC on Base, Arbitrum, Polygon, Ethereum | Assets Swapped may deliver, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `defaultCountry` | `string` | `'US'` | Country for pricing when the session has none |
 | `statusPolling` | `boolean` | `false` | Also poll `get_transactions` for order status. **TO VERIFY** (see below). |
 
@@ -85,7 +85,7 @@ The quote output is the fiat amount after fees. The fees are the Swapped fee and
 
 1. **Start**: a signed widget URL on `/sell`, with `userSendsFunds=false`, the payout method, the crypto code and amount, the payout currency, `externalCustomerId`, the email and country when known, and `responseUrl` (the webhook URL). The user enters the payout details, and passes any checks that Swapped needs, in the widget.
 2. **`payment_pending` webhook**: Swapped is ready for the crypto. The notification has the deposit address (`order_crypto_address`) and the amount. The adapter turns it into a `WALLET_TX` step: an ERC-20 `transfer` of that amount to that address. The user's wallet signs it, or the server's [treasury hook](../guide/withdraw.md#custody-app) sends it (`custody: 'app'`).
-3. **`submit_tx`**: the client (or the server, for the treasury) reports the hash. The leg is `PROCESSING` (sub-state `CONFIRMING`).
+3. **`submit_tx`**: the client (or the server, for the treasury) reports the hash. The leg is `PROCESSING` (sub-state `confirming`).
 4. **Payout**: `payout_pending` keeps it `processing`. `order_completed` is `succeeded`. `order_cancelled` fails the leg with `PAYMENT_FAILED` ("The payout was cancelled.", `recovery: 'contact_support'`).
 
 The deposit address and the amount of the `WALLET_TX` come from the verified Swapped webhook, not from the quote. With `custody: 'app'`, check them in your treasury hook.

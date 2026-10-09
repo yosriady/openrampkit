@@ -1,7 +1,7 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
+import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
 import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
 import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
@@ -57,7 +57,8 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
   return {
     sessionId: rec.id,
     state: legDone ? 'PROCESSING' : ls.state,
-    ...(ls.sub ? { sub: ls.sub } : {}),
+    // Only the closed list reaches the browser (a third-party adapter may send another value).
+    ...(isStepSub(ls.sub) ? { sub: ls.sub } : {}),
     legIndex: act.index,
     ...(ls.surface ? { surface: ls.surface } : {}),
     transitions: legDone ? [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }] : ls.transitions,
@@ -304,6 +305,11 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
       ...(wrapped.error ? { error: wrapped.error.code } : {}),
     })
   }
+  // The provider's own status is for operators: the timeline keeps each new value.
+  if (wrapped.providerStatus && wrapped.providerStatus !== leg.step?.providerStatus) {
+    addTimeline(rec, 'leg.provider_status', { index: i, adapterId: leg.adapterId, status: wrapped.providerStatus.slice(0, 64) })
+  }
+  if (ls.sub !== undefined && !isStepSub(ls.sub)) rt.log.warn('adapter step has a sub that is not in STEP_SUBS; dropped', { adapter: leg.adapterId, sub: String(ls.sub).slice(0, 64) })
   const prevOutput = leg.step?.output
   leg.step = wrapped
   // Check again when the amount or the asset changes (the same amount in another asset is not the quote).

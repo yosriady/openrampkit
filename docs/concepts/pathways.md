@@ -70,7 +70,7 @@ type LegSpec = {
   eta: { min: number; max: number }                          // seconds
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement'>
+  capabilities?: Array<'settlement' | 'surface_after_processing'>  // see below
 }
 
 type EndpointMatcher = {
@@ -80,6 +80,8 @@ type EndpointMatcher = {
   location: Array<'user_wallet' | 'user_account' | 'merchant_account' | 'address'>
 }
 ```
+
+`capabilities` has two values, and the server checks both. `settlement`: the leg can pay into an OpenRampSettlement contract; the planner offers a `settlement` destination only through a pathway whose last leg has it. `surface_after_processing`: a provider event may reopen the leg once with a new surface (see [Flow](./flow.md)). How the server learns a leg result is not a capability: it comes from the adapter's `status()` and `webhook`.
 
 An adapter may also have a live `catalog()`. The server calls it at plan time with the user's country and currency, and uses the returned legs instead of the static ones. If the catalog fails, the server logs a warning and falls back to the static legs.
 

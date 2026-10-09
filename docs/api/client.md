@@ -24,7 +24,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `getSession(secret)` | `GET /sessions/:id` | `PublicSession` |
 | `plan(secret, { walletConnected, walletAddress?, surfaces? })` | `POST /sessions/:id/plan` | `PlanResult` |
 | `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. |
-| `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: Quote[]; errors: OrkError[] }` |
+| `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: PublicQuote[]; errors: OrkError[] }` |
 | `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
@@ -123,7 +123,7 @@ type Snapshot = {
   method?: MethodOption
   amount: string
   amountSide: 'source' | 'destination'
-  quotes: Quote[]
+  quotes: PublicQuote[]
   quoteErrors: OrkError[]
   quotesLoading: boolean
   selectedQuoteId?: string
@@ -169,4 +169,4 @@ The returned object also has `sent: Array<{ chain, txs, hash }>`.
 
 ## Re-exported types
 
-`MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.
+`MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.

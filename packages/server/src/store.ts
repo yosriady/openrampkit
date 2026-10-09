@@ -14,6 +14,7 @@ import type {
   Step,
   WithdrawSource,
 } from '@openrampkit/core'
+import { isStepSub } from '@openrampkit/core'
 
 export type ActiveLeg = {
   adapterId: string
@@ -75,6 +76,12 @@ export type OutboxEvent = {
 export type SessionRecord = {
   id: string
   secretHash: string
+  /**
+   * Schema of this record (see `SESSION_SCHEMA` and `migrateRecord`). Records written before this field
+   * existed have none: they are schema 0. Not the same as `version`.
+   */
+  schema?: number
+  /** Optimistic-lock counter: each write adds 1 (see `SessionStore.put`). Not the record schema. */
   version: number
   userId: string
   direction: Direction
@@ -199,6 +206,69 @@ export interface SessionStore {
 }
 
 export class VersionConflictError extends Error {}
+
+/** The schema that this server writes in `SessionRecord.schema`. */
+export const SESSION_SCHEMA = 1
+
+/** True for a session record. A custom store without a `queue` also keeps queue records (`__queue:*`). */
+function isSessionRecord(rec: unknown): rec is SessionRecord {
+  const r = rec as Partial<SessionRecord> | null
+  return !!r && typeof r === 'object' && typeof r.id === 'string' && typeof r.secretHash === 'string' && !!r.step
+}
+
+/**
+ * Bring a stored session record up to `SESSION_SCHEMA`. The server runs it on every store read, so a
+ * record written by an earlier version loads and works. It changes the record in place, returns it, and
+ * runs again with no effect (idempotent). The next write saves the result.
+ *
+ * Schema 0 to 1 (records with no `schema`): `updatedAt` from `createdAt`; `ActivePayment.n` from the number
+ * of earlier attempts, and `n` of each earlier attempt from its place; empty `quotes`, `startUrls`,
+ * `notified` and `outbox` when absent; each step `sub` in lower case when that is in `STEP_SUBS`, else removed.
+ *
+ * A record with a newer schema (written by a newer server) is returned as it is. Other records (for
+ * example the queue records of a custom store) are returned as they are.
+ */
+export function migrateRecord<T>(rec: T): T {
+  if (!isSessionRecord(rec)) return rec
+  const from = rec.schema ?? 0
+  if (from >= SESSION_SCHEMA) return rec
+  if (from < 1) {
+    rec.updatedAt ??= rec.createdAt
+    rec.quotes ??= {}
+    rec.startUrls ??= {}
+    rec.notified ??= []
+    rec.outbox ??= []
+    rec.attempts?.forEach((p, i) => {
+      p.n ??= i
+    })
+    if (rec.active) rec.active.n ??= rec.attempts?.length ?? 0
+    // `sub` was free text (for example 'SETTLING'); now it is the closed list `STEP_SUBS`.
+    for (const step of [rec.step, ...[rec.active, ...(rec.attempts ?? [])].flatMap((p) => p?.legs.map((l) => l.step) ?? [])]) {
+      if (step?.sub === undefined || isStepSub(step.sub)) continue
+      const lower = String(step.sub).toLowerCase()
+      if (isStepSub(lower)) step.sub = lower
+      else delete step.sub
+    }
+  }
+  rec.schema = SESSION_SCHEMA
+  return rec
+}
+
+/**
+ * The store that the server uses: `store`, with `migrateRecord` on every `get`. `put`, `kv` and `queue`
+ * are the same as in `store`.
+ */
+export function migratingStore(store: SessionStore): SessionStore {
+  return {
+    get: async (id) => {
+      const rec = await store.get(id)
+      return rec ? migrateRecord(rec) : rec
+    },
+    put: (rec, expectedVersion) => store.put(rec, expectedVersion),
+    kv: store.kv,
+    ...(store.queue ? { queue: store.queue } : {}),
+  }
+}
 
 type QueueEntry = { dueAt: number; token?: string }
 
