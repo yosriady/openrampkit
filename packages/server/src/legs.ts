@@ -121,7 +121,11 @@ export function mergeLegStep(prev: LegStep | undefined, next: LegStep): LegStep 
   const out: LegStep = { status: next.status }
   if (next.status === 'requires_action') {
     const prevAction = prev?.status === 'requires_action' ? prev.action : undefined
-    const action = next.action ?? prevAction ?? { kind: 'payment' as const, transitions: pollTransitions(next) }
+    // A status poll while the user acts often reports `requires_action` with a bare action: no surface
+    // and only AWAIT (poll) transitions. It must not replace the user's action, or the user's own
+    // transitions (submit_tx, a FORM, a simulate step) are lost and the next one gets 409.
+    const bare = !!next.action && !next.action.surface && next.action.transitions.every((t) => t.kind === 'AWAIT')
+    const action = (bare ? prevAction : undefined) ?? next.action ?? prevAction ?? { kind: 'payment' as const, transitions: pollTransitions(next) }
     const surface = action.surface ?? prevAction?.surface
     out.action = { ...action, ...(surface ? { surface } : {}) }
   }
