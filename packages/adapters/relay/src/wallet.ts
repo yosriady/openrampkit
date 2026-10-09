@@ -68,7 +68,7 @@ export function walletLeg(rt: RelayRuntime) {
     const chain = rec.chain!
     if (isSolana(chain)) return verifySolanaWallet(ctx, ref, rec)
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
-    const extra = { ref, txHash: rec.txHash! }
+    const extra = { ref, txHash: rec.txHash!, sourceTxHash: rec.txHash! }
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
     const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
@@ -92,7 +92,7 @@ export function walletLeg(rt: RelayRuntime) {
 
   /** Common end of a same-chain wallet check: the amount, then one transaction for one payment only. */
   async function settleDirect(ctx: AdapterContext, ref: string, rec: WalletRecord, paid: bigint): Promise<LegStep> {
-    const extra = { ref, txHash: rec.txHash! }
+    const extra = { ref, txHash: rec.txHash!, sourceTxHash: rec.txHash! }
     const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
     if (paid < BigInt(rec.amountBase ?? '0')) return fail('The transaction does not pay the destination the quoted amount.')
     // One transaction can complete one payment only: an old hash must not be reused for a new session.
@@ -110,7 +110,7 @@ export function walletLeg(rt: RelayRuntime) {
   async function verifySolanaWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
     const chain = rec.chain!
     const sig = rec.txHash!
-    const extra = { ref, txHash: sig }
+    const extra = { ref, txHash: sig, sourceTxHash: sig }
     const waiting: LegStep = { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
     const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
     const st = await rpc<{ value?: SolStatus[] } | null>(ctx, chain, 'getSignatureStatuses', [[sig], { searchTransactionHistory: true }])
@@ -200,11 +200,11 @@ export function walletLeg(rt: RelayRuntime) {
     })
     if (r.settled) {
       if (!r.ok) return fail(r.problem!, r.record.txHash)
-      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref, txHash: r.record.txHash, ...(rec.output ? { output: rec.output } : {}) }
+      return { state: 'COMPLETED', status: 'succeeded', transitions: [], ref, txHash: r.record.txHash, sourceTxHash: r.record.txHash, ...(rec.output ? { output: rec.output } : {}) }
     }
     if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
-    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: rec.txHash }
+    if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ref, txHash: rec.txHash, sourceTxHash: rec.txHash }
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.', rec.txHash)
     return fail('The transaction did not settle this session.', rec.txHash)
   }

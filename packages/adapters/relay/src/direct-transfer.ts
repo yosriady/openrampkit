@@ -159,6 +159,7 @@ export function directTransfer(rt: RelayRuntime) {
         transitions: [],
         ref,
         txHash: s.signature,
+        sourceTxHash: s.signature,
         ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(amount.toString(), decimals) } } : {}),
       })
     }
@@ -214,6 +215,7 @@ export function directTransfer(rt: RelayRuntime) {
           transitions: [],
           ref,
           txHash: l.transactionHash,
+        sourceTxHash: l.transactionHash,
           ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(amount.toString(), decimals) } } : {}),
         })
       }

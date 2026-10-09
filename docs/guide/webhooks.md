@@ -117,7 +117,8 @@ The [background sweep](../api/server.md#background-sweep) finds expired sessions
           "output": { "amount": "18.92", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
           "outputConfirmed": true,
           "fees": [{ "kind": "provider", "label": "Swapped fee", "amount": "9000", "currency": "VND" }],
-          "txHashes": ["0x..."]
+          "txHashes": ["0x..."],
+          "sourceTxHashes": ["0x..."]
         }
       },
       "userId": "user_123",
@@ -127,7 +128,7 @@ The [background sweep](../api/server.md#background-sweep) finds expired sessions
 }
 ```
 
-`data.object.session` is a [`PublicSession`](../api/core.md#publicsession). Once a payment started, it has `result` (a [`SessionResult`](../api/core.md#sessionresult)): the method, the provider, what the user paid (`input`), what arrived (`output`), whether `output` is confirmed, the fees and the transaction hashes. `userId` and `metadata` are what you passed to `sessions.create()`. See [Events](../concepts/events.md) for the full types.
+`data.object.session` is a [`PublicSession`](../api/core.md#publicsession). Once a payment started, it has `result` (a [`SessionResult`](../api/core.md#sessionresult)): the method, the provider, what the user paid (`input`), what arrived (`output`), whether `output` is confirmed, the fees and the transaction hashes. `txHashes` has the main transaction of each leg (for a bridge or swap, the fill on the destination chain). `sourceTxHashes` has the transaction that paid into each leg (for example the origin chain transaction that the user's wallet sent); it is absent when no leg reports one. `userId` and `metadata` are what you passed to `sessions.create()`. See [Events](../concepts/events.md) for the full types.
 
 The [webhooks flow](../concepts/flows.md#webhooks-to-your-backend) shows signing, the outbox and the retries as a diagram.
 

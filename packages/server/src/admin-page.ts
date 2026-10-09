@@ -239,6 +239,7 @@ function renderDetail(s) {
       ['Reversal', s.reversal ? 'Leg ' + s.reversal.index + ' (' + s.reversal.adapterId + ') ' + s.reversal.status + ' at ' + time(s.reversal.at) + ' (was ' + s.reversal.previous + ')' : undefined],
       ['Resolution', s.resolution ? s.resolution.state + ' at ' + time(s.resolution.at) + ' (was ' + s.resolution.previous + '): ' + s.resolution.note : undefined],
       ['Tx hashes', s.txHashes.join(', ') || undefined],
+      ['Source tx hashes', (s.sourceTxHashes || []).join(', ') || undefined],
     ]),
     resolveBox,
     h('h2', null, 'Payment'),

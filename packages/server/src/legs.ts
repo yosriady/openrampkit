@@ -36,6 +36,7 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
       provider: rt.adapters.get(l.adapterId)?.name ?? l.adapterId,
       status: l.step?.status ?? ('pending' as const),
       ...(l.step?.txHash ? { txHash: l.step.txHash } : {}),
+      ...(l.step?.sourceTxHash ? { sourceTxHash: l.step.sourceTxHash } : {}),
     })),
   }
   // A refund or a chargeback after success ends the session, whatever the other legs do.
@@ -277,7 +278,10 @@ export function adapterMoveAllowed(cur: LegStep, next: LegStep): boolean {
 export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<void> {
   const act = rec.active!
   const leg = act.legs[i]!
-  const wrapped = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
+  const checked = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
+  // Keep the transaction that paid into the leg when a later step (for example the fill) leaves it out.
+  const keptSource = !checked.sourceTxHash && leg.step?.sourceTxHash
+  const wrapped: LegStep = keptSource ? { ...checked, sourceTxHash: keptSource } : checked
   const before = leg.step?.status
   const wasExpired = rec.step.state === 'EXPIRED'
   if (before !== wrapped.status) {
@@ -466,6 +470,7 @@ export function legStepFromEvent(cur: LegStep | undefined, ev: LegEvent): LegSte
     ...(withSurface ? { surface: ev.surface } : {}),
     ...(ev.output ? { output: ev.output } : {}),
     ...(ev.txHash ? { txHash: ev.txHash } : {}),
+    ...(ev.sourceTxHash ? { sourceTxHash: ev.sourceTxHash } : {}),
     ...(ev.error ? { error: ev.error } : {}),
     ref: ev.ref,
   }

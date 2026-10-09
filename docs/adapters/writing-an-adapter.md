@@ -121,6 +121,7 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 
 - `status({ leg, ref })` asks the provider for the current state. The server calls it when the browser polls (at most every 2 seconds per leg), from the background `sweep()`, and from `sessions.refresh()`.
 - `transition({ leg, ref, name, inputs })` handles SUBMIT and SURFACE_RESULT transitions that your steps offer, for example an OTP form or `submit_tx` with `{ txHash }`.
+- Transaction hashes: set `txHash` to the leg's main transaction. For a bridge or swap, this is the delivery (fill) on the destination chain when the provider reports it. Set `sourceTxHash` to the transaction that paid into the leg, for example the hash from `submit_tx`. The server keeps the last `sourceTxHash` when a later step leaves it out. The session shows them in `result.txHashes` and `result.sourceTxHashes`.
 
 ## webhook
 

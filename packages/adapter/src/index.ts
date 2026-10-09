@@ -104,6 +104,8 @@ export type LegEvent = {
   eventId?: string
   output?: Amount
   txHash?: string
+  /** The transaction that paid into the leg (see `LegStep.sourceTxHash`) */
+  sourceTxHash?: string
   error?: OrkError
   /**
    * Optional new surface for a non-terminal event, e.g. an offramp `payment_pending` webhook that

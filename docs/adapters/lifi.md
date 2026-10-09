@@ -60,6 +60,7 @@ LI.FI refuses a quote with `fee` when the `integrator` has no fee wallet (error 
 - Solana: LI.FI returns a serialized transaction (base64) in `transactionRequest.data`. The adapter puts it in the `WALLET_TX` surface as a `SolanaTxRequest` (`type: 'transaction'`).
 - The leg ref is `lifi:<sessionId>:<random>`. The session store keeps the payment record for 7 days.
 - After the wallet sends, the client fires `submit_tx` with `{ txHash }` (EVM hash or Solana signature).
+- Transaction hashes: the leg's `sourceTxHash` is the source transaction that the wallet sent. The leg's `txHash` is the delivery (`receiving.txHash`) when the transfer completes. The session shows them in `result.sourceTxHashes` and `result.txHashes`.
 
 ## Status mapping
 

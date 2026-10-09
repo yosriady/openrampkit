@@ -82,6 +82,7 @@ export function sessionView(s: PublicSession) {
           received: amountText(r.output),
           received_confirmed: r.outputConfirmed,
           ...(r.txHashes.length ? { tx_hashes: r.txHashes } : {}),
+          ...(r.sourceTxHashes?.length ? { source_tx_hashes: r.sourceTxHashes } : {}),
         }
       : {}),
     ...(s.destination?.type === 'fiat' ? { payout_currency: s.destination.currency } : {}),

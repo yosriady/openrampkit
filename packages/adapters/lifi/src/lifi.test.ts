@@ -293,7 +293,8 @@ describe('lifi status', () => {
     await s.a.transition!({ leg: walletLeg, ref: s.ref, name: 'submit_tx', inputs: { txHash: HASH } }, s.ctx)
     const done = await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)
     expect(checkLegStep(done)).toEqual([])
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: OUT_HASH, output: { amount: '9.97', asset: { chain: 'eip155:8453' } } })
+    // txHash: the delivery. sourceTxHash: the source transaction the wallet sent.
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: OUT_HASH, sourceTxHash: HASH, output: { amount: '9.97', asset: { chain: 'eip155:8453' } } })
     const st = new URL(s.calls.find((c) => c.url.includes('/v1/status'))!.url)
     expect(Object.fromEntries(st.searchParams)).toEqual({ txHash: HASH, fromChain: '42161', toChain: '8453' })
   })

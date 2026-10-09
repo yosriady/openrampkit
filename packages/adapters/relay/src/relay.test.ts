@@ -122,11 +122,12 @@ describe('relay adapter', () => {
 
     const hash = `0x${'ab'.repeat(32)}`
     const t = await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: hash } }, ctx)
-    expect(t).toMatchObject({ state: 'PROCESSING', status: 'processing', txHash: hash })
+    expect(t).toMatchObject({ state: 'PROCESSING', status: 'processing', txHash: hash, sourceTxHash: hash })
     expect(t.transitions[0]).toMatchObject({ kind: 'AWAIT', poll: { intervalMs: 2500, backoff: 1.2, maxIntervalMs: 10000, giveUpAfterMs: 1800000 } })
     const s = await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)
     expect(checkLegStep(s)).toEqual([])
-    expect(s).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xdest' })
+    // txHash: the fill on the destination chain. sourceTxHash: the origin transaction the wallet sent.
+    expect(s).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xdest', sourceTxHash: hash })
   })
 
   it('wallet: maps failure, refund and pending statuses', async () => {
@@ -220,7 +221,7 @@ describe('relay adapter', () => {
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     requests = [
-      { id: 'new', status: 'pending', createdAt: new Date().toISOString(), data: { metadata: { currencyIn: cin('25000000') } } },
+      { id: 'new', status: 'pending', createdAt: new Date().toISOString(), data: { inTxs: [{ hash: '0xin', chainId: 42161 }], metadata: { currencyIn: cin('25000000') } } },
       ...requests,
     ]
     expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
@@ -229,12 +230,13 @@ describe('relay adapter', () => {
         id: 'new',
         status: 'success',
         createdAt: new Date().toISOString(),
-        data: { outTxs: [{ hash: '0xout', chainId: 8453 }], metadata: { currencyIn: cin('25000000'), currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: '24950000' } } },
+        data: { inTxs: [{ hash: '0xin', chainId: 42161 }], outTxs: [{ hash: '0xout', chainId: 8453 }], metadata: { currencyIn: cin('25000000'), currencyOut: { currency: usdc(8453, BASE_USDC.token), amount: '24950000' } } },
       },
     ]
     const done = await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)
     expect(checkLegStep(done)).toEqual([])
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xout', output: { amount: '24.95' } })
+    // txHash: the fill. sourceTxHash: the transfer into the deposit address.
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xout', sourceTxHash: '0xin', output: { amount: '24.95' } })
     expect(calls.filter((c) => c.url.includes('/requests/v2')).every((c) => c.url.includes(`depositAddress=${DEPOSIT}`) && c.url.includes('limit='))).toBe(true)
     expect(silentLog.warnings.filter((w) => w.includes('/requests/v2'))).toHaveLength(1)
   })

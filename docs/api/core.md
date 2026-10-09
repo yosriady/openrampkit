@@ -54,7 +54,8 @@ type SessionResult = {
   output: Amount          // what arrived: the last leg's reported output, else its quoted output
   outputConfirmed: boolean // true when output comes from the provider or the chain; false when it is the quote
   fees: Fee[]             // the fees of every leg's quote
-  txHashes: string[]      // transaction hashes the legs reported, in leg order
+  txHashes: string[]      // the main transaction of each leg, in leg order (for a bridge or swap: the fill on the destination chain)
+  sourceTxHashes?: string[] // the transaction that paid into each leg, in leg order (for example the user's origin chain transaction); absent when no leg reports one
   amountMismatch?: AmountMismatch // a leg reported less than its quote (see below)
 }
 
@@ -72,6 +73,11 @@ The server compares each leg's reported output with the leg's quote. It fails cl
 - `short`: the provider reports less than the quote by more than `policy.outputToleranceBps` (default 100, that is 1%). The leg keeps its result. The next leg starts (it takes what arrived), and the session can complete.
 - `asset_mismatch`: the output is in another asset (another token, chain or currency) than the quote.
 - `invalid_amount`: the reported or the quoted amount is not a decimal number.
+
+`txHashes` and `sourceTxHashes` come from the legs (`LegStep.txHash` and `LegStep.sourceTxHash`):
+
+- `txHashes` has the main transaction of each leg. For a bridge or swap leg (Relay, LI.FI), this is the delivery (fill) on the destination chain once the provider reports it. Use it to check the delivery on chain.
+- `sourceTxHashes` has the transaction that paid into each leg: the transaction that the user's wallet (or your treasury) sent on the origin chain, or the transfer into a deposit address. For a same-chain transfer it is the same hash as in `txHashes`. It is absent when no leg reports one (for example a card payment).
 
 For `asset_mismatch` and `invalid_amount`, `outputConfirmed` is `false` on the last leg. On a leg before the last, the next leg does not start: the step becomes `FAILED` with `DELIVERY_FAILED` (recovery `contact_support`), and an operator checks the funds. When more than one leg has a mismatch, `amountMismatch` shows the last one. The timeline gets `leg.amount_mismatch` with the reason. The server checks the output again each time its amount or its asset changes.
 

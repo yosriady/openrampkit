@@ -257,6 +257,36 @@ describe('P0-2: events are saved with the change and delivered after the commit'
   })
 })
 
+describe('transaction hashes in the result', () => {
+  it('keeps the source transaction next to the fill, also when a later step leaves it out', async () => {
+    const { hook, toPayment, ramp, statusOf } = make()
+    const s = await toPayment()
+    expect((await hook([{ ref: 'order-1', status: 'processing', txHash: '0xsrc', sourceTxHash: '0xsrc' }])).status).toBe(200)
+    let pub = await ramp.sessions.retrieve(s.id)
+    expect(pub!.result).toMatchObject({ txHashes: ['0xsrc'], sourceTxHashes: ['0xsrc'] })
+    // The fill arrives by webhook: the main hash changes, the source stays.
+    expect((await hook([{ ref: 'order-1', status: 'processing', txHash: '0xfill' }])).status).toBe(200)
+    pub = await ramp.sessions.retrieve(s.id)
+    expect(pub!.result).toMatchObject({ txHashes: ['0xfill'], sourceTxHashes: ['0xsrc'] })
+    // A status check without hashes completes the leg: the server keeps the source hash.
+    statusOf['order-1'] = 'succeeded'
+    await ramp.sessions.refresh(s.id)
+    pub = await ramp.sessions.retrieve(s.id)
+    expect(pub!.status).toBe('completed')
+    expect(pub!.result!.sourceTxHashes).toEqual(['0xsrc'])
+    expect(pub!.step.progress!.legs[0]).toMatchObject({ status: 'succeeded', sourceTxHash: '0xsrc' })
+  })
+
+  it('has no sourceTxHashes when no leg reports one', async () => {
+    const { hook, toPayment, ramp } = make()
+    const s = await toPayment()
+    await hook([{ ref: 'order-1', status: 'succeeded', txHash: '0x1' }])
+    const pub = await ramp.sessions.retrieve(s.id)
+    expect(pub!.result!.txHashes).toEqual(['0x1'])
+    expect(pub!.result!.sourceTxHashes).toBeUndefined()
+  })
+})
+
 describe('P0-5: restart while waiting for payment keeps the attempt', () => {
   it('a late success for the left attempt completes the session', async () => {
     const { hook, toPayment, post, app, ramp } = make()

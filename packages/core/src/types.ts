@@ -387,7 +387,18 @@ export type Step = {
   surface?: Surface
   transitions: Transition[]
   error?: OrkError
-  progress?: { legs: Array<{ adapterId: string; legId: string; provider?: string; status: LegStatus; txHash?: string }> }
+  progress?: {
+    legs: Array<{
+      adapterId: string
+      legId: string
+      provider?: string
+      status: LegStatus
+      /** The leg's main transaction: the delivery (fill) when the provider reports it, else the one the user sent */
+      txHash?: string
+      /** The transaction that paid into the leg (the user's wallet transaction or deposit), when the adapter knows it */
+      sourceTxHash?: string
+    }>
+  }
   expiresAt?: string
 }
 
@@ -402,7 +413,17 @@ export type LegStep = {
   /** Provider reference, used to route webhooks and status checks */
   ref?: string
   output?: Amount
+  /**
+   * The leg's main transaction. For a bridge or swap it is the delivery (fill) on the destination chain
+   * once the provider reports it; before that, the transaction the user sent.
+   */
   txHash?: string
+  /**
+   * The transaction that paid into the leg: the one the user's wallet (or the app treasury) sent on the
+   * origin chain, or the transfer into a deposit address. Equal to `txHash` for a same-chain transfer.
+   * The server keeps the last value when a later step leaves it out.
+   */
+  sourceTxHash?: string
 }
 
 // ---------- Sessions ----------
@@ -450,7 +471,13 @@ export type SessionResult = {
   /** True when `output` comes from the provider or chain, false when it is the quote */
   outputConfirmed: boolean
   fees: Fee[]
+  /** The main transaction of each leg (`LegStep.txHash`): for a bridge or swap, the delivery (fill) on the destination chain */
   txHashes: string[]
+  /**
+   * The transaction that paid into each leg (`LegStep.sourceTxHash`), when the adapter reports it: for
+   * example the origin chain transaction that the user's wallet sent. Absent when no leg reports one.
+   */
+  sourceTxHashes?: string[]
   /**
    * Set when a provider reported less output than the quote, by more than the server's tolerance
    * (`policy.outputToleranceBps`), or an output that is not comparable with the quote (another asset,

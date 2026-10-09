@@ -57,6 +57,7 @@ All legs allow every region.
 - On start, the adapter reuses the quote's transaction steps when they are less than 20 seconds old and built for the same user. Otherwise it quotes again with the user's address.
 - Only `transaction` steps are supported. A route that needs a `signature` step fails with `PROVIDER_DECLINED` and suggests another token or "Transfer crypto".
 - After the wallet sends, the client fires `submit_tx` with `{ txHash }`. The adapter then checks `GET /intents/status/v3?requestId=...`.
+- Transaction hashes: the leg's `sourceTxHash` is the origin chain transaction that the wallet sent (`submit_tx`), else the first of Relay's `inTxHashes`. The leg's `txHash` is the fill on the destination chain (the first of Relay's `txHashes`) once Relay reports it. The session shows them in `result.sourceTxHashes` and `result.txHashes`. For `transfer` and `bridge` legs, `sourceTxHash` is the transfer into the deposit address (`depositAddress.depositTxHash`, else the first of `data.inTxs`).
 
 #### Solana and Tempo
 

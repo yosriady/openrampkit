@@ -13,7 +13,9 @@ type Step = {
   surface?: Surface           // what to show: QR, redirect, deposit address, ...
   transitions: Transition[]   // what the user or the client may do next
   error?: OrkError
-  progress?: { legs: Array<{ adapterId: string; legId: string; provider?: string; status: LegStatus; txHash?: string }> }
+  // txHash: the leg's main transaction (for a bridge or swap, the fill on the destination chain).
+  // sourceTxHash: the transaction that paid into the leg (for example the one the user's wallet sent).
+  progress?: { legs: Array<{ adapterId: string; legId: string; provider?: string; status: LegStatus; txHash?: string; sourceTxHash?: string }> }
   expiresAt?: string
 }
 ```

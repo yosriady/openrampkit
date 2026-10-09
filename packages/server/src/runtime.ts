@@ -144,6 +144,7 @@ export function sessionResult(rec: SessionRecord): SessionResult {
   let k = act.legs.length - 1
   while (k >= 0 && !act.legs[k]!.amountMismatch) k--
   const mismatch = k === -1 ? undefined : act.legs[k]!.amountMismatch!
+  const sourceTxHashes = act.legs.map((l) => l.step?.sourceTxHash).filter((h): h is string => !!h)
   return {
     method: act.pathway.method,
     provider: act.pathway.provider,
@@ -153,6 +154,7 @@ export function sessionResult(rec: SessionRecord): SessionResult {
     outputConfirmed: !!reported && (!last.amountMismatch || last.amountMismatch.reason === 'short'),
     fees: act.legs.flatMap((l) => l.quote.fees),
     txHashes: act.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h),
+    ...(sourceTxHashes.length ? { sourceTxHashes } : {}),
     ...(mismatch ? { amountMismatch: { legIndex: k, ...mismatch } } : {}),
   }
 }

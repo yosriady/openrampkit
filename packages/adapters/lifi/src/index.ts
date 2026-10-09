@@ -626,7 +626,12 @@ export function lifi(opts: LifiOptions = {}) {
     const rec = await ctx.store.get<WalletRecord>(`w:${ref}`)
     if (!rec) throw new OrkException(orkError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
     if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
-    const txHash = rec.txHash
+    // `txHash` becomes the delivery once LI.FI reports it; `sourceTxHash` stays the transaction the wallet sent.
+    return { ...(await checkSource(ctx, ref, rec, rec.txHash)), sourceTxHash: rec.txHash }
+  }
+
+  /** Status of a wallet leg whose source transaction `txHash` the wallet sent */
+  async function checkSource(ctx: AdapterContext, ref: string, rec: WalletRecord, txHash: string): Promise<LegStep> {
     const waiting = (sub: string): LegStep => ({ state: 'PROCESSING', sub, status: 'processing', transitions: [POLL_TRANSITION], ref, txHash })
     // One source transaction pays one session only.
     const usedBy = await ctx.shared.get<string>(srcKey(rec.fromChain, txHash))
@@ -700,7 +705,7 @@ export function lifi(opts: LifiOptions = {}) {
         throw new OrkException(orkError('BAD_REQUEST', { message: 'This transaction was already used for another payment.' }), 409)
       }
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
-      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash }
+      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash, sourceTxHash: txHash }
     },
 
     async status(input, ctx) {

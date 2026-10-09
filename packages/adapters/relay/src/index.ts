@@ -102,7 +102,7 @@ export function relay(opts: RelayOptions = {}) {
       const ok = rec.chain ? (isSolana(rec.chain) ? isSolanaSignature(txHash) : evmHash) : evmHash || isSolanaSignature(txHash)
       if (!ok) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
-      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash }
+      return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash, sourceTxHash: txHash }
     },
 
     async status(input, ctx) {
@@ -118,8 +118,11 @@ export function relay(opts: RelayOptions = {}) {
         const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
           throw toOrk(e, ctx.log)
         })
-        const txHash = s.txHashes?.[0] ?? rec?.txHash
-        const extra = { ref: input.ref, ...(txHash ? { txHash } : {}) }
+        // `txHash` is the fill on the destination chain once Relay reports it; `sourceTxHash` is the
+        // origin transaction that the user's wallet sent (`submit_tx`), else the one Relay saw.
+        const sourceTxHash = rec?.txHash ?? s.inTxHashes?.[0]
+        const txHash = s.txHashes?.[0] ?? sourceTxHash
+        const extra = { ref: input.ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}) }
         const done = terminalStep(s.status, extra)
         if (done) return done
         if (!rec?.txHash && !s.inTxHashes?.length) {

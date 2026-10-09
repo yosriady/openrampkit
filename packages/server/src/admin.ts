@@ -219,6 +219,8 @@ export type AdminSession = AdminSessionSummary & {
   outbox: AdminOutboxEvent[]
   providerRefs: Array<{ adapterId: string; ref: string; attempt: number; active: boolean }>
   txHashes: string[]
+  /** The transactions that paid into the legs (`LegStep.sourceTxHash`), for example the user's origin chain transaction */
+  sourceTxHashes: string[]
   timeline: Array<Omit<TimelineEntry, 'at'> & { at: string }>
   resolution?: Omit<Resolution, 'at'> & { at: string }
   /** Set when the provider refunded or reversed a leg after it succeeded */
@@ -337,6 +339,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     outbox: (rec.outbox ?? []).map(outboxView),
     providerRefs: payments.flatMap(({ p, active }) => p.legs.filter((l) => l.ref).map((l) => ({ adapterId: l.adapterId, ref: l.ref!, attempt: p.n ?? 0, active }))),
     txHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h)),
+    sourceTxHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.sourceTxHash).filter((h): h is string => !!h)),
     timeline: (rec.timeline ?? []).map((t) => ({ ...t, at: iso(t.at)! })),
     ...(rec.resolution ? { resolution: { ...rec.resolution, at: iso(rec.resolution.at)! } } : {}),
     ...(rec.reversal ? { reversal: { ...rec.reversal, at: iso(rec.reversal.at)! } } : {}),

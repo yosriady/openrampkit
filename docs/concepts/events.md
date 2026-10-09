@@ -83,7 +83,7 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 }
 ```
 
-`data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started.
+`data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started. `result.txHashes` has the main transaction of each leg (for a bridge or swap, the fill on the destination chain). `result.sourceTxHashes` has the transaction that paid into each leg, for example the origin chain transaction that the user's wallet sent. It is absent when no leg reports one.
 
 ### Refunds and chargebacks after success
 

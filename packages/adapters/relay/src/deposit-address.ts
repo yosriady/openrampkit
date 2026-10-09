@@ -151,10 +151,17 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     return t?.txHash ?? t?.hash
   }
 
+  /** The transfer into the deposit address */
+  function requestSourceTxHash(r: RelayRequest): string | undefined {
+    const t = r.data?.inTxs?.[0]
+    return r.depositAddress?.depositTxHash ?? t?.txHash ?? t?.hash
+  }
+
   function mapRequest(r: RelayRequest, ref: string): LegStep {
     const txHash = requestTxHash(r)
+    const sourceTxHash = requestSourceTxHash(r)
     const output = requestOutput(r)
-    const extra = { ref, ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
+    const extra = { ref, ...(txHash ? { txHash } : {}), ...(sourceTxHash ? { sourceTxHash } : {}), ...(output ? { output } : {}) }
     return terminalStep(r.status, extra) ?? { state: 'PROCESSING', sub: r.status, status: 'processing', transitions: [POLL_TRANSITION], ...extra }
   }
 
