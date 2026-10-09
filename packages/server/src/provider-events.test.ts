@@ -700,6 +700,30 @@ describe('fourth review: output checks and earlier attempts', () => {
     expect(rec.step.state).toBe('PROCESSING')
   })
 
+  it('a sweep never saves a half-applied earlier attempt: it became the payment again, then its next leg failed to start', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    const a0 = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const a1 = await t.pay(s)
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const a2 = await t.pay(s)
+    t.statusOf[a1] = { status: 'succeeded' }
+    t.statusOf[a0] = { status: 'processing' }
+    t.bridge.down = true
+    await t.ramp.sweep()
+    let rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(a2)
+    expect(rec.active!.legs[rec.active!.index]!.step).toBeDefined()
+
+    t.bridge.down = false
+    await t.ramp.sweep()
+    rec = await t.record(s.id)
+    expect(rec.active!.legs[0]!.ref).toBe(a1)
+    expect(t.bridgeStarts).toHaveLength(1)
+    expect(rec.active!.legs[1]!.step!.status).toBe('processing')
+  })
+
   it('a refund of an earlier attempt that never succeeded does not replace the payment in progress', async () => {
     const t = make()
     const s = await t.toPayment()

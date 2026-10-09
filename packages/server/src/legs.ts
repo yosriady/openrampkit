@@ -563,15 +563,20 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
       if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) continue
       const a = rt.adapters.get(leg.adapterId)
       if (!a?.status) continue
+      let ls: LegStep
       try {
-        const ls = await a.status({ leg: att.pathway.legs[i]!, ref: leg.ref }, adapterContext(rt, rec, a, att.pathway, i))
-        if (ls.status === leg.step.status) continue
-        const { surface: _s, ...rest } = ls
-        await applyToAttempt(rt, rec, k, i, { ...rest, ref: ls.ref ?? leg.ref })
-        return true
+        ls = await a.status({ leg: att.pathway.legs[i]!, ref: leg.ref }, adapterContext(rt, rec, a, att.pathway, i))
       } catch (e) {
         rt.log.warn('status check failed', { adapter: a.id, error: String(e) })
+        continue
       }
+      // Forward only, like a provider event (see `isLegalLegMove`).
+      if (ls.status === leg.step.status || !isLegalLegMove(leg.step.status, ls.status)) continue
+      const { surface: _s, ...rest } = ls
+      // Not inside the catch: when this fails half way (for example the attempt became the payment
+      // again and its next leg cannot start), the error goes to the caller and nothing is saved.
+      await applyToAttempt(rt, rec, k, i, { ...rest, ref: ls.ref ?? leg.ref })
+      return true
     }
   }
   return false
