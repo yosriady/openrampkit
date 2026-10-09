@@ -151,6 +151,7 @@ Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
 | `legStepFromEvent(event, ref, poll)` | No event, `pending` or `awaiting_user`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`: those states. `processing`: `PROCESSING`. |
 | `decimalFrom(n, digits = 8)` | Provider number to an exact decimal string; missing or non-finite gives `'0'` |
+| `minWithToleranceBps(expectedBase, bps)` | The smallest amount (integer base units, as a string) that still counts as `expectedBase` when it can be up to `bps` basis points lower: `expected - floor(expected * bps / 10000)`, with bigint math. `minWithToleranceBps('999', 50)` is `'995'`. |
 | `randomHex(bytes = 8)` | Random hex string |
 | `bytesToHex(bytes)` | Lowercase hex of a `Uint8Array` or `ArrayBuffer`, no `0x` |
 | `base64ToBytes(b64)`, `bytesToBase64(bytes)` | Standard base64 (not base64url). `base64ToBytes` ignores whitespace and throws on other characters. |

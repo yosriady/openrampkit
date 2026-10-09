@@ -41,6 +41,17 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(bin)
 }
 
+/**
+ * The smallest amount that still counts as `expectedBase` when it can be up to `bps` basis points
+ * lower: `expected - floor(expected * bps / 10000)`, in integer base units with bigint math. The
+ * tolerance rounds down, so the result never goes below the exact value. `expectedBase` is a
+ * non-negative integer string and `bps` an integer (BigInt throws otherwise).
+ */
+export function minWithToleranceBps(expectedBase: string, bps: number): string {
+  const expected = BigInt(expectedBase)
+  return (expected - (expected * BigInt(bps)) / 10_000n).toString()
+}
+
 /** Hex string of `bytes` random bytes (WebCrypto) */
 export function randomHex(bytes = 8): string {
   const b = new Uint8Array(bytes)
