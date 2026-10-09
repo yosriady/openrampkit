@@ -26,6 +26,7 @@ import {
   httpStatus,
   legStepFromEvent,
   providerMessage,
+  providerSetupError,
   randomHex,
   timingSafeEqual,
   webhookBodyKey,
@@ -207,7 +208,7 @@ export function onramperSetupError(e: unknown, log: Pick<Logger, 'error'>, what:
     hint = 'Onramper refused the API key (401). Make sure apiKey is correct: pk_test_ with env sandbox, pk_prod_ with env production.'
   }
   log.error(`onramper: cannot ${what}. ${hint}`, { status, ...(typeof body?.errorId === 'number' ? { errorId: body.errorId } : {}), ...(detail ? { message: detail.slice(0, 200) } : {}) })
-  return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' }), 502)
+  return providerSetupError('Onramper')
 }
 
 export function onramper(opts: OnramperOptions) {

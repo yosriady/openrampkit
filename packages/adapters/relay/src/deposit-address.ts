@@ -31,7 +31,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
    * gives the address of one session to another session.
    */
   async function depositQuote(
-    ctx: Pick<AdapterContext, 'fetch' | 'store'>,
+    ctx: Pick<AdapterContext, 'fetch' | 'store'> & Partial<Pick<AdapterContext, 'log'>>,
     p: { origin: CryptoAsset; dest: CryptoAsset; recipient: string; amountBase: string },
   ): Promise<{ q: RelayQuoteResponse; address: string; requestId?: string }> {
     const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', {
@@ -44,7 +44,7 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
       useDepositAddress: true,
       refundTo: refundTo(p.origin.chain),
     }).catch((e) => {
-      throw toOrk(e)
+      throw toOrk(e, ctx.log)
     })
     const key = depositKey(p.recipient, p.origin, p.dest)
     const cached = await ctx.store.get<string>(key)

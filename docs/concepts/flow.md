@@ -230,7 +230,7 @@ type OrkError = {
 | `PAYMENT_REVERSED` | The provider refunded or reversed this payment after it completed. | No |
 | `DELIVERY_FAILED` | The funds could not be delivered. Contact support. | No |
 | `RATE_LIMITED` | Too many requests. Wait a moment and try again. | Yes |
-| `PROVIDER_UNAVAILABLE` | The provider is not available right now. | Yes |
+| `PROVIDER_UNAVAILABLE` | The provider is not available right now. | Yes. A provider that refuses our credentials (HTTP 401 or 403) gives a setup error: "{Provider} is not set up for this app yet. Try another method.", not retryable, recovery `choose_other`. |
 | `CLIENT_UPGRADE_REQUIRED` | Update the app to use this method. | No |
 | `SESSION_EXPIRED` | This session expired. Start a new deposit. | No |
 | `UNAUTHORIZED` | This session is not valid. | No |

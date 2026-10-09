@@ -182,7 +182,7 @@ From the project's design notes:
 | Helper | Description |
 |---|---|
 | `fetchJson(fetch, url, init)` | JSON fetch with a timeout (default 8000 ms). Errors carry `status`, `body` and `timeout`. |
-| `httpErrorToOrk(e, provider, opts)` | 429 to `RATE_LIMITED`; 400, 404, 409, 422 to `NO_QUOTES` with the provider's message; timeouts and other errors to `PROVIDER_UNAVAILABLE` |
+| `httpErrorToOrk(e, provider, opts)` | 429 to `RATE_LIMITED`; 400, 404, 409, 422 to `NO_QUOTES` with the provider's message; 401 and 403 to a setup error (not retryable, recovery `choose_other`, one error log); timeouts and other errors to `PROVIDER_UNAVAILABLE` |
 | `httpStatus(e)`, `providerMessage(e)` | Read the HTTP status or the provider's message from an error |
 | `POLL.onchain`, `POLL.checkout`, `POLL.dev` | Poll schedules for AWAIT transitions |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |

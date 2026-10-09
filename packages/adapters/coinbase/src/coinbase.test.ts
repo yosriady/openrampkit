@@ -248,12 +248,23 @@ describe('coinbase errors and edge cases', () => {
     }
   })
 
-  it('quote: maps 429, 404/401 (setup errors), 5xx; a missing quote is NO_QUOTES', async () => {
+  it('quote: maps 429, 401/403 (setup errors), 404, 5xx; a missing quote is NO_QUOTES', async () => {
     const { secret } = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const q = (routes: Parameters<typeof fakeFetch>[0], log = recordingLog()) => a.quote({ leg: cardLeg, amountIn: usd('10') }, makeCtx({ fetch: fakeFetch(routes).fetch, log }))
     await expect(q([{ method: 'POST', match: '/onramp/sessions', status: 429, reply: () => ({}) }])).rejects.toMatchObject({ status: 429, error: { code: 'RATE_LIMITED' } })
-    for (const status of [401, 403, 404, 500]) {
+    // 401 and 403: our key is wrong. Not retryable, the user chooses another method, the operator gets one error log.
+    for (const status of [401, 403]) {
+      const log = recordingLog()
+      await expect(q([{ method: 'POST', match: '/onramp/sessions', status, reply: () => ({ errorMessage: 'Unauthorized key' }) }], log)).rejects.toMatchObject({
+        status: 502,
+        error: { code: 'PROVIDER_UNAVAILABLE', message: 'Coinbase is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' },
+      })
+      expect(log.warnings).toEqual([])
+      expect(log.errors).toHaveLength(1)
+      expect(log.errors[0]).toMatch(/^Coinbase: cannot price this amount: .*HTTP 40[13]/)
+    }
+    for (const status of [404, 500]) {
       const log = recordingLog()
       await expect(q([{ method: 'POST', match: '/onramp/sessions', status, reply: () => ({ errorMessage: 'Unauthorized key' }) }], log)).rejects.toMatchObject({
         status: 502,

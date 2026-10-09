@@ -153,6 +153,28 @@ describe('xendit adapter', () => {
     expect(other.error).toMatchObject({ code: 'PROVIDER_DECLINED', retryable: false, message: 'Xendit: request_amount is too small' })
   })
 
+  it('401 and 403 about our key are setup errors (shared mapping), not payment declines', async () => {
+    const quote = { adapterId: 'xendit', legId: 'id-qris', input: { amount: '100', asset: { kind: 'fiat' as const, currency: 'IDR' } }, output: { amount: '100', asset: { kind: 'fiat' as const, currency: 'IDR' } }, fees: [], eta: { min: 1, max: 2 } }
+    for (const [status, body] of [
+      [401, { error_code: 'INVALID_API_KEY', message: 'API key is not authorized for this API service' }],
+      [403, { error_code: 'REQUEST_FORBIDDEN_ERROR', message: 'The API key is forbidden to perform this request' }],
+    ] as const) {
+      const errors: string[] = []
+      const warnings: string[] = []
+      const log = { ...quiet, error: (m: string) => void errors.push(m), warn: (m: string) => void warnings.push(m) }
+      const { f } = fakeFetch(() => new Response(JSON.stringify(body), { status }))
+      const e = await a.start({ leg: leg('id-qris', 'IDR'), quote }, { ...ctx(f), log }).catch((x) => x)
+      expect(e.error).toEqual({ code: 'PROVIDER_UNAVAILABLE', message: 'Xendit is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' })
+      // The user message does not quote Xendit; the operator log does.
+      expect(e.error.message).not.toContain(body.message)
+      expect(errors).toHaveLength(1)
+      expect(warnings).toHaveLength(0)
+      expect(errors[0]).toMatch(/^Xendit: /)
+      expect(errors[0]).toContain(body.error_code)
+      expect(errors[0]).toContain('secretKey')
+    }
+  })
+
   it('verifies the callback token and parses capture and failure webhooks', async () => {
     const wctx = { log: quiet, shared: kv(), fetch }
     const req = (tok?: string) => new Request('https://app.test/webhooks/xendit', { method: 'POST', headers: tok ? { 'x-callback-token': tok } : {} })

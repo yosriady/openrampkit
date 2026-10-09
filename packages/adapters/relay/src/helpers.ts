@@ -115,16 +115,17 @@ export function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: num
 }
 
 /**
- * Map a failed Relay HTTP call to an OrkException with a safe message. A 401 with errorCode
- * `UNAUTHORIZED_QUOTE` means our setup is wrong: Relay requires a valid API key for `POST /quote/v2`
- * (announced policy from 2026-10-02; a quote with a `referrer` and no key is refused now).
+ * Map a failed Relay HTTP call to an OrkException with a safe message. A 401 or 403 is a setup error
+ * (see `httpErrorToOrk`). A 401 with errorCode `UNAUTHORIZED_QUOTE` means Relay requires a valid API key
+ * for `POST /quote/v2` (announced policy from 2026-10-02; a quote with a `referrer` and no key is refused now).
  */
-export function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
-  if (httpStatus(e) === 401 && (e as { body?: { errorCode?: unknown } } | undefined)?.body?.errorCode === 'UNAUTHORIZED_QUOTE') {
-    log?.warn('relay: quote refused (401 UNAUTHORIZED_QUOTE). Relay quotes need a valid API key. Set relay({ apiKey }), for example from RELAY_API_KEY.')
-    return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Relay quotes need a valid API key. Set relay({ apiKey }), for example from RELAY_API_KEY.', retryable: false }), 502)
-  }
-  return httpErrorToOrk(e, 'Relay', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
+export function toOrk(e: unknown, log?: Pick<Logger, 'warn'> & Partial<Pick<Logger, 'error'>>): OrkException {
+  const unauthorizedQuote = httpStatus(e) === 401 && (e as { body?: { errorCode?: unknown } } | undefined)?.body?.errorCode === 'UNAUTHORIZED_QUOTE'
+  return httpErrorToOrk(e, 'Relay', {
+    what: 'find a route for this pair right now',
+    ...(log ? { log } : {}),
+    ...(unauthorizedQuote ? { setupHint: 'Relay refused the quote (401 UNAUTHORIZED_QUOTE): Relay quotes need a valid API key. Set relay({ apiKey }), for example from RELAY_API_KEY.' } : {}),
+  })
 }
 
 export const POLL_TRANSITION = awaitPoll(RELAY_POLL)

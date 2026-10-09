@@ -44,7 +44,7 @@ export function createRuntime(opts: RelayOptions) {
     })
   }
 
-  async function decimalsOf(ctx: Pick<AdapterContext, 'fetch' | 'shared'>, asset: CryptoAsset): Promise<number> {
+  async function decimalsOf(ctx: Pick<AdapterContext, 'fetch' | 'shared'> & Partial<Pick<AdapterContext, 'log'>>, asset: CryptoAsset): Promise<number> {
     if (typeof asset.decimals === 'number') return asset.decimals
     const known = knownDecimals(asset.chain, asset.token)
     if (known !== undefined) return known
@@ -56,7 +56,7 @@ export function createRuntime(opts: RelayOptions) {
       address: relayCurrency(asset.chain, asset.token),
       limit: 1,
     }).catch((e) => {
-      throw toOrk(e)
+      throw toOrk(e, ctx.log)
     })
     const d = list?.[0]?.decimals
     if (typeof d !== 'number') throw new OrkException(orkError('BAD_REQUEST', { message: 'Relay does not know this token.' }))

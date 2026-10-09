@@ -3,7 +3,7 @@
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
-import { createAdapter, fetchJson, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
+import { createAdapter, fetchJson, httpErrorToOrk, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, add, bps as applyBps, cmp, minorUnits, orkError, roundTo, sub } from '@openrampkit/core'
 import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
@@ -158,6 +158,15 @@ export function xendit(opts: XenditOptions) {
     if (status === 400 && code === 'API_VALIDATION_ERROR' && c && /channel/i.test(msg ?? '')) {
       return setup(`xendit: Xendit refused the payment request for channel ${name}: ${(msg ?? '').slice(0, 200)}. Check the channel code and request body for this channel in the Xendit API reference.`)
     }
+    // Other 401 and 403 answers refuse our key or its permissions: a setup error, not a payment decline.
+    if (status === 401 || status === 403) {
+      return httpErrorToOrk(e, 'Xendit', {
+        what: `call the API for ${name}`,
+        log: ctx.log,
+        setupHint: `Xendit answered ${code ?? 'with no error code'}. Check secretKey (xnd_development_ for test mode, xnd_production_ for live mode) and the API key permissions in the Xendit Dashboard.`,
+      })
+    }
+    // Other 4xx answers are about this payment (amount, account, channel state): a decline.
     if (status && status >= 400 && status < 500) return new OrkException(orkError('PROVIDER_DECLINED', { message: msg ? `Xendit: ${msg}`.slice(0, 200) : 'Xendit declined this payment.' }), 422)
     return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Xendit is not available right now.' }), 502)
   }
