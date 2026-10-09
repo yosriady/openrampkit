@@ -118,7 +118,9 @@ export function wagmiWallet(config: Config, opts: WagmiWalletOptions = {}): Wall
         })
         const last = i === txs.length - 1
         if ((!last && waitBetween) || (last && opts.waitForLast)) {
-          await waitForTransactionReceipt(config, { hash, chainId: id })
+          const receipt = await waitForTransactionReceipt(config, { hash, chainId: id })
+          // A reverted approve must stop the batch: the next transaction (the deposit) would fail or misbehave.
+          if (receipt.status === 'reverted') throw new Error(`Transaction ${hash} reverted on chain ${chainId}. Nothing else was sent.`)
         }
       }
       return { hash: hash! }

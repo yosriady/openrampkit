@@ -139,6 +139,18 @@ describe('wagmiWallet: more', () => {
     expect(calls[2]).toEqual({ chainId: 8453, to: '0xcccc' })
   })
 
+  it('stops the batch when a receipt reverted: the next transaction is not sent', async () => {
+    vi.mocked(core.waitForTransactionReceipt).mockResolvedValueOnce({ status: 'reverted' } as never)
+    const w = wagmiWallet(config)
+    await expect(
+      w.sendTransactions('eip155:8453', [
+        { to: '0xaaaa', data: '0x095ea7b3', chainId: 8453 },
+        { to: '0xbbbb', chainId: 8453 },
+      ]),
+    ).rejects.toThrow(/reverted/)
+    expect(log.filter((l) => l.startsWith('send:'))).toEqual(['send:8453:0xaaaa:'])
+  })
+
   it('waitBetweenTxs: false sends without waiting; waitForLast waits for the final receipt', async () => {
     await wagmiWallet(config, { waitBetweenTxs: false }).sendTransactions('eip155:1', [{ to: '0x1', chainId: 1 }, { to: '0x2', chainId: 1 }])
     expect(log).toEqual(['send:1:0x1:', 'send:1:0x2:'])
