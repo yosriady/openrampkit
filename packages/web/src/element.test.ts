@@ -2,15 +2,13 @@
 // <openramp-modal> driven by a real DepositController against the in-process server and the mock adapter.
 // Surfaces that the mock adapter never returns (IFRAME, FORM, OTP, ...) use a fake client.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DepositController, createMockWallet } from '@openrampkit/client'
 import type { Destination, PublicSession, Surface, Transition, WalletAdapter } from '@openrampkit/core'
 import { USDC, orkError } from '@openrampkit/core'
 import { BASE, BASE_DEST, fakeClient, quote, session, setupServer, sleep, step, waitFor } from '../../client/src/testctx.js'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import { OpenRampModal, TAG_NAME, createDepositController, darkColors, defineOpenRampModal, lightColors } from './index.js'
-
-type Mounted = Awaited<ReturnType<typeof mount>>
 
 const mounted: OpenRampModal[] = []
 afterEach(() => {

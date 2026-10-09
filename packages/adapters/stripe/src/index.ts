@@ -132,11 +132,6 @@ function num(s: string | undefined | null): string | undefined {
   return s && isDecimal(s) ? s : undefined
 }
 
-function money(m: StripeMoney): string | undefined {
-  if (!m) return undefined
-  return num(typeof m === 'string' ? m : m.amount)
-}
-
 /** Stripe form encoding: nested keys like `wallet_addresses[base_network]` and arrays like `destination_networks[]` */
 function form(params: Array<[string, string | undefined]>): string {
   const q = new URLSearchParams()

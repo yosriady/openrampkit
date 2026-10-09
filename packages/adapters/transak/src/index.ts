@@ -17,7 +17,7 @@
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
 import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, fetchJson, httpErrorToOrk, randomHex, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, ScopedKV } from '@openrampkit/adapter'
+import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, orkError } from '@openrampkit/core'
 import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 

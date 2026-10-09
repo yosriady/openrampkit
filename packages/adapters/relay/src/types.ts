@@ -4,10 +4,10 @@ import type { Amount, SolanaInstruction } from '@openrampkit/core'
 
 // ---------------- Relay API types (only the fields we read) ----------------
 
-export type RelayCurrency = { chainId: number; address: string; symbol: string; decimals: number }
+type RelayCurrency = { chainId: number; address: string; symbol: string; decimals: number }
 export type RelayAmount = { currency: RelayCurrency; amount: string; amountFormatted?: string }
 /** EVM items carry `to`/`data`/`chainId`; Solana items carry `instructions` and lookup tables. */
-export type RelayStepItem = {
+type RelayStepItem = {
   status?: string
   data?: {
     from?: string
@@ -28,7 +28,7 @@ export type RelayQuoteResponse = {
   details?: { currencyIn?: RelayAmount; currencyOut?: RelayAmount & { minimumAmount?: string }; timeEstimate?: number }
 }
 export type RelayIntentStatus = { status: string; details?: string; inTxHashes?: string[]; txHashes?: string[] }
-export type RelayTx = { hash?: string; txHash?: string; chainId?: number }
+type RelayTx = { hash?: string; txHash?: string; chainId?: number }
 export type RelayRequest = {
   id: string
   status: string

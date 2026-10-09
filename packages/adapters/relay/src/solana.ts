@@ -2,7 +2,7 @@
 
 import { isNative } from './helpers.js'
 
-export type SolTokenBalance = { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string } }
+type SolTokenBalance = { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string } }
 export type SolTx = {
   blockTime?: number | null
   meta: { err: unknown; preBalances: number[]; postBalances: number[]; preTokenBalances?: SolTokenBalance[]; postTokenBalances?: SolTokenBalance[] } | null

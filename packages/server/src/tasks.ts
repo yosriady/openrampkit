@@ -16,8 +16,6 @@ import type { Runtime } from './runtime.js'
 import { pruneIndex } from './admin.js'
 import type { SessionRecord } from './store.js'
 
-export { trackOpenSession } from './queue.js'
-
 const LAST_SWEEP_KEY = 'sweep:last-run'
 
 /** How long a sweep holds the entries it claimed. Longer than one sweep run. */
