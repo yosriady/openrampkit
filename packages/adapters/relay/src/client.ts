@@ -2,11 +2,11 @@
 
 import { evmRpc, fetchJson } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
-import { OrkException, chainName, orkError } from '@openrampkit/core'
+import { OpenRampException, chainName, openRampError } from '@openrampkit/core'
 import type { CryptoAsset } from '@openrampkit/core'
 import { DEFAULT_LOG_BLOCK_RANGE, DEFAULT_RPC_URLS, DEFAULT_TOLERANCE_BPS, EVM_NATIVE, SOLANA_NATIVE } from './config.js'
 import type { RelayOptions } from './config.js'
-import { isSolana, knownDecimals, relayChainId, relayCurrency, toOrk } from './helpers.js'
+import { isSolana, knownDecimals, relayChainId, relayCurrency, toOpenRamp } from './helpers.js'
 import type { SolTx } from './solana.js'
 import type { RelayRequest } from './types.js'
 
@@ -65,10 +65,10 @@ export function createRuntime(opts: RelayOptions) {
       address: relayCurrency(asset.chain, asset.token),
       limit: 1,
     }).catch((e) => {
-      throw toOrk(e, ctx.log)
+      throw toOpenRamp(e, ctx.log)
     })
     const d = list?.[0]?.decimals
-    if (typeof d !== 'number') throw new OrkException(orkError('BAD_REQUEST', { message: 'Relay does not know this token.' }))
+    if (typeof d !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Relay does not know this token.' }))
     await ctx.shared.put(key, d, 7 * 24 * 60 * 60)
     return d
   }
@@ -92,7 +92,7 @@ export function createRuntime(opts: RelayOptions) {
 
   async function rpc<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, method: string, params: unknown[]): Promise<T> {
     const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
-    if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
+    if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
     return evmRpc<T>(ctx.fetch, url, method, params, { log: ctx.log })
   }
 

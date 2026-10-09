@@ -160,7 +160,7 @@ export function directTransfer(rt: RelayRuntime) {
         ref,
         txHash: s.signature,
         sourceTxHash: s.signature,
-        ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(amount.toString(), decimals) } } : {}),
+        ...(rec.output ? { output: { ...rec.output, value: fromBaseUnits(amount.toString(), decimals) } } : {}),
       })
     }
     return ambiguous ? ambiguousStep(ctx, ref, rec.address, waiting) : undefined
@@ -216,7 +216,7 @@ export function directTransfer(rt: RelayRuntime) {
           ref,
           txHash: l.transactionHash,
         sourceTxHash: l.transactionHash,
-          ...(rec.output ? { output: { ...rec.output, amount: fromBaseUnits(amount.toString(), decimals) } } : {}),
+          ...(rec.output ? { output: { ...rec.output, value: fromBaseUnits(amount.toString(), decimals) } } : {}),
         })
       }
       from = to + 1n

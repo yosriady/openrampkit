@@ -1,7 +1,7 @@
 import type { ProviderRenderer } from './provider-sdk.js'
-import { createOpenRampClient, DepositController, toOrkError } from '@openrampkit/client'
-import { orkError } from '@openrampkit/core'
-import type { Direction, OrkError, OrkEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
+import { createOpenRampClient, DepositController, toOpenRampError } from '@openrampkit/client'
+import { openRampError } from '@openrampkit/core'
+import type { Direction, OpenRampError, OpenRampEvent, PublicSession, SurfaceKind, WalletAdapter } from '@openrampkit/core'
 import { defineOpenRampModal, OpenRampModal } from './element.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -18,7 +18,7 @@ export type CreateControllerOptions = {
   baseUrl: string
   clientSecret: string
   wallet?: WalletAdapter
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
   /** Custom fetch, for tests and demos */
   fetch?: typeof fetch
   surfaces?: string[]
@@ -70,7 +70,7 @@ export type OpenDepositOptions = {
   embedded?: boolean
   /** Renderers for PROVIDER_SDK surfaces, e.g. `{ stripe: stripeOnrampRenderer() }` */
   providerRenderers?: Record<string, ProviderRenderer>
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
   /** Called once when the modal closes, with the last session state */
   onClose?: (session: PublicSession | undefined) => void
   fetch?: typeof fetch
@@ -84,7 +84,7 @@ export type DepositHandle = {
   readonly controller: DepositController | undefined
   /**
    * Resolves with the session when the deposit completes (the modal can stay open on the success screen).
-   * Rejects with an `OrkError` when the modal closes before completion.
+   * Rejects with an `OpenRampError` when the modal closes before completion.
    */
   done: Promise<PublicSession>
   close(): void
@@ -124,7 +124,7 @@ function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
   let finished = false
   let unsub: (() => void) | undefined
   let resolveDone!: (s: PublicSession) => void
-  let rejectDone!: (e: OrkError) => void
+  let rejectDone!: (e: OpenRampError) => void
   const done = new Promise<PublicSession>((res, rej) => {
     resolveDone = res
     rejectDone = rej
@@ -133,7 +133,7 @@ function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
 
   const ready = (async () => {
     const secret = await resolveClientSecret(opts.clientSecret)
-    if (finished) throw orkError(CLOSED_CODE, { message: `The ${kind} was closed.` })
+    if (finished) throw openRampError(CLOSED_CODE, { message: `The ${kind} was closed.` })
     const c = createDepositController({
       baseUrl: opts.baseUrl,
       clientSecret: secret,
@@ -157,7 +157,7 @@ function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
     return c
   })()
   ready.catch((e) => {
-    if (!finished) el.error = toOrkError(e)
+    if (!finished) el.error = toOpenRampError(e)
   })
 
   const finish = () => {
@@ -170,7 +170,7 @@ function openSession(opts: OpenDepositOptions, kind: Direction): DepositHandle {
     if (!settled) {
       settled = true
       rejectDone(
-        snap?.session?.step.error ?? snap?.error ?? el.error ?? orkError(CLOSED_CODE, { message: `The ${kind === 'withdraw' ? 'withdrawal' : 'deposit'} was closed before it finished.` }),
+        snap?.session?.step.error ?? snap?.error ?? el.error ?? openRampError(CLOSED_CODE, { message: `The ${kind === 'withdraw' ? 'withdrawal' : 'deposit'} was closed before it finished.` }),
       )
     }
     opts.onClose?.(snap?.session)

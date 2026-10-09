@@ -76,7 +76,7 @@ describe('adapters: a destination token the provider does not deliver gets no qu
           to: { asset: to, location: { kind: 'address', address: '0x000000000000000000000000000000000000beef' } },
         }
         const ctx = makeCtx({ fetch, session: { country: 'US' } })
-        await expect(a.quote({ leg, amountIn: { amount: '100', asset: { kind: 'fiat', currency } }, deliverTo: { address: '0x000000000000000000000000000000000000beef' } }, ctx)).rejects.toMatchObject({
+        await expect(a.quote({ leg, amountIn: { value: '100', asset: { kind: 'fiat', currency } }, deliverTo: { address: '0x000000000000000000000000000000000000beef' } }, ctx)).rejects.toMatchObject({
           status: 422,
           error: { code: 'NO_QUOTES', message: expect.stringMatching(new RegExp(`^${name} does not deliver `)) },
         })

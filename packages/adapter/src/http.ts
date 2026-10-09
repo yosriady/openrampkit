@@ -1,7 +1,7 @@
 // HTTP helpers for adapter authors: a JSON fetch with a timeout, and one mapping from
-// failed provider calls to OrkException, so every adapter reports errors the same way.
+// failed provider calls to OpenRampException, so every adapter reports errors the same way.
 
-import { OrkException, orkError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
 import type { Logger } from './index.js'
 
 /** The error `fetchJson` throws. `status` is set for HTTP errors, `timeout` when the call timed out. */
@@ -92,16 +92,16 @@ const SETUP_STATUSES = [401, 403]
  * The error for a provider that refused our credentials or setup (401, 403). A retry cannot fix it, so it is
  * not retryable, and the user can choose another method. The user message is neutral: the operator gets the details.
  */
-export function providerSetupError(provider: string): OrkException {
-  return new OrkException(
-    orkError('PROVIDER_UNAVAILABLE', { message: `${provider} is not set up for this app yet. Try another method.`, retryable: false, recovery: 'choose_other' }),
+export function providerSetupError(provider: string): OpenRampException {
+  return new OpenRampException(
+    openRampError('PROVIDER_UNAVAILABLE', { message: `${provider} is not set up for this app yet. Try another method.`, retryable: false, recovery: 'choose_other' }),
     502,
   )
 }
 
 /**
- * Map a failed provider call to an OrkException with a message that is safe to show:
- * - OrkException: returned as is
+ * Map a failed provider call to an OpenRampException with a message that is safe to show:
+ * - OpenRampException: returned as is
  * - 429: RATE_LIMITED (429)
  * - 400, 404, 409, 422: NO_QUOTES (422) with the provider's message when it gives one
  * - 401, 403 (our credentials or setup): PROVIDER_UNAVAILABLE (502), not retryable, recovery `choose_other`,
@@ -109,14 +109,14 @@ export function providerSetupError(provider: string): OrkException {
  * - timeout: PROVIDER_UNAVAILABLE (504)
  * - other 4xx, 5xx, network errors: PROVIDER_UNAVAILABLE (502)
  */
-export function httpErrorToOrk(e: unknown, provider: string, opts: HttpErrorOptions = {}): OrkException {
-  if (e instanceof OrkException) return e
+export function httpErrorToOpenRamp(e: unknown, provider: string, opts: HttpErrorOptions = {}): OpenRampException {
+  if (e instanceof OpenRampException) return e
   const status = httpStatus(e)
-  if (status === 429) return new OrkException(orkError('RATE_LIMITED'), 429)
+  if (status === 429) return new OpenRampException(openRampError('RATE_LIMITED'), 429)
   if (status !== undefined && (opts.noQuoteStatuses ?? NO_QUOTE_STATUSES).includes(status)) {
     const msg = providerMessage(e)
     const message = msg ? `${provider}: ${msg}`.slice(0, 200) : `${provider} could not ${opts.what ?? 'handle this request'}.`
-    return new OrkException(orkError('NO_QUOTES', { message }), 422)
+    return new OpenRampException(openRampError('NO_QUOTES', { message }), 422)
   }
   const detail = String((e as Error | undefined)?.message ?? e).slice(0, 300)
   if (status !== undefined && SETUP_STATUSES.includes(status)) {
@@ -127,8 +127,8 @@ export function httpErrorToOrk(e: unknown, provider: string, opts: HttpErrorOpti
   }
   if ((e as HttpError | undefined)?.timeout) {
     opts.log?.warn(`${provider}: request timed out`, { error: detail })
-    return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `${provider} did not answer in time.` }), 504)
+    return new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `${provider} did not answer in time.` }), 504)
   }
   opts.log?.warn(`${provider}: request failed`, { status, error: detail })
-  return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `${provider} is not available right now.` }), 502)
+  return new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `${provider} is not available right now.` }), 502)
 }

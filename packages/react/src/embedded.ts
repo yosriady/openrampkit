@@ -1,7 +1,7 @@
 import { createElement, useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
-import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
-import { toOrkError } from '@openrampkit/client'
+import type { OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import { toOpenRampError } from '@openrampkit/client'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal } from '@openrampkit/web'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
@@ -18,7 +18,7 @@ export type OpenRampEmbeddedProps = {
   messages?: Partial<Messages>
   /** BCP 47 locale. Defaults to the provider's `locale` */
   locale?: string
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
   onComplete?: (session: PublicSession) => void
   /** Called when the user presses Close on a result or error screen */
   onClose?: (session: PublicSession | undefined) => void
@@ -67,7 +67,7 @@ export function OpenRampEmbedded(props: OpenRampEmbeddedProps) {
       void ctl.start()
     })().catch((e: unknown) => {
       if (cancelled || !ref.current) return
-      ref.current.error = toOrkError(e)
+      ref.current.error = toOpenRampError(e)
     })
     return () => {
       cancelled = true

@@ -32,8 +32,8 @@ export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
 
 export function checkLegQuote(q: LegQuote): ConformanceProblem[] {
   const out: ConformanceProblem[] = []
-  if (!isDecimal(q.input.amount)) out.push({ where: 'quote.input', problem: 'not a decimal string' })
-  if (!isDecimal(q.output.amount)) out.push({ where: 'quote.output', problem: 'not a decimal string' })
+  if (!isDecimal(q.input.value)) out.push({ where: 'quote.input', problem: 'not a decimal string' })
+  if (!isDecimal(q.output.value)) out.push({ where: 'quote.output', problem: 'not a decimal string' })
   for (const f of q.fees) if (!isDecimal(f.amount)) out.push({ where: `fee ${f.label}`, problem: 'not a decimal string' })
   if (q.expiresAt && Number.isNaN(Date.parse(q.expiresAt))) out.push({ where: 'quote.expiresAt', problem: 'not an ISO date' })
   return out

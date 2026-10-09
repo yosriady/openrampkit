@@ -5,7 +5,7 @@ import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
 import { isAddressTransfer, isWebUrl, methodName } from '@openrampkit/core'
-import type { FieldSpec, MethodOption, OrkError, PublicQuote, Step, Surface, Transition } from '@openrampkit/core'
+import type { FieldSpec, MethodOption, OpenRampError, PublicQuote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
 import { resolveMessages } from './messages.js'
@@ -89,7 +89,7 @@ export class OpenRampModal extends LitElement {
    */
   declare locale: string | undefined
   /** Error shown when there is no controller (for example the client secret could not load) */
-  declare error: OrkError | undefined
+  declare error: OpenRampError | undefined
   declare open: boolean
   declare embedded: boolean
   /**
@@ -515,7 +515,7 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  private _renderErrorNotice(error: OrkError | undefined, id?: string) {
+  private _renderErrorNotice(error: OpenRampError | undefined, id?: string) {
     if (!error) return nothing
     return html`<div class="notice error" role="alert" id=${id ?? nothing}>${icons.alert}<span>${error.message}</span></div>`
   }
@@ -891,7 +891,7 @@ export class OpenRampModal extends LitElement {
         <span class="row-sub wrap">${quoteSubtitle(q, m, s.direction)}</span>
       </span>
       <span class="row-end">
-        ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output, m.locale)}</strong>` : nothing}
+        ${Number(q.output.value) > 0 ? html`<strong>${formatAmount(q.output, m.locale)}</strong>` : nothing}
         ${formatEta(q.eta, m)}
       </span>
     </button>`
@@ -910,7 +910,7 @@ export class OpenRampModal extends LitElement {
     const extra = formSurface ? submits.slice(1) : submits
     const hasPrimary = !!surface && ['REDIRECT', 'DEEPLINK', 'WALLET_TX', 'FORM', 'OTP'].includes(surface.kind)
     const showProgress = !!step.progress && (step.progress.legs.length > 1 || step.state === 'PROCESSING')
-    const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined].filter((e): e is OrkError => !!e)
+    const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined].filter((e): e is OpenRampError => !!e)
 
     return html`
       ${surface ? this._renderSurface(m, s, step, surface, submits[0]) : this._renderProcessing(m, step, s.direction === 'withdraw')}
@@ -1216,7 +1216,7 @@ export class OpenRampModal extends LitElement {
       </div>`
   }
 
-  private _renderError(m: Messages, error: OrkError | undefined, canRetry: boolean) {
+  private _renderError(m: Messages, error: OpenRampError | undefined, canRetry: boolean) {
     return html`<div class="center">
         <span class="result-icon failure" aria-hidden="true">${icons.alert}</span>
         <h3 class="result-title">${m.errorTitle}</h3>

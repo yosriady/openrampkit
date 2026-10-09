@@ -6,7 +6,7 @@
 // holds a lease, so a second sweep at the same time skips those entries. Webhooks are still
 // at-least-once (a lease can end during a slow run): the app must dedupe by event id.
 
-import { isLegTerminal, isTerminal, OrkException, orkError } from '@openrampkit/core'
+import { isLegTerminal, isTerminal, OpenRampException, openRampError } from '@openrampkit/core'
 import { DEFAULT_LATE_POLL_MINUTES } from './config.js'
 import { inLateGrace, lateGraceMs, refreshActive, refreshAttempts } from './legs.js'
 import { notify } from './notify.js'
@@ -70,7 +70,7 @@ async function migrateLegacyLists(rt: Runtime): Promise<void> {
         await putVersioned(rt, rec)
         moved = true
       } catch (err) {
-        if (!(err instanceof OrkException && err.status === 409)) throw err
+        if (!(err instanceof OpenRampException && err.status === 409)) throw err
       }
     }
     if (moved) await rt.store.kv.put(`outbox:${eid}`, null, 60)
@@ -181,5 +181,5 @@ export async function sweep(rt: Runtime, opts: { limit?: number } = {}): Promise
 
 export function expire(rec: SessionRecord): void {
   rec.status = 'expired'
-  rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: orkError('SESSION_EXPIRED') }
+  rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: openRampError('SESSION_EXPIRED') }
 }

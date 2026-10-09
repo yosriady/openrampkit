@@ -41,7 +41,7 @@ function hookedAdapter(specExtra: Partial<LegSpec> = {}, replay = false) {
   const adapter = createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { amount: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
     },
     async start() {
       const ref = `order-${++n}`
@@ -86,7 +86,7 @@ function bridgeAdapter() {
       return { address: '0x00000000000000000000000000000000000000dd' }
     },
     async quote({ leg, amountIn }) {
-      return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { amount: amountIn!.amount, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { value: amountIn!.value, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
     },
     async start() {
       if (ctl.down) throw new Error('bridge API down')
@@ -373,7 +373,7 @@ describe('P1-2 review: a reversal is final, always notified, and stops all fund 
 })
 
 describe('P1-3: the reported output is checked against the quote', () => {
-  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
+  const usdc = (amount: string) => ({ value: amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
 
   it('flags a shortfall beyond the tolerance: the session completes, the result and the webhook show it', async () => {
     const t = make()
@@ -381,12 +381,12 @@ describe('P1-3: the reported output is checked against the quote', () => {
     await t.hook([{ ref: s.ref, status: 'succeeded', output: usdc('8.5') }])
     const rec = await t.record(s.id)
     expect(rec.step.state).toBe('COMPLETED')
-    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ expected: { amount: '9' }, received: { amount: '8.5' }, shortfall: '0.5' })
+    expect(rec.active!.legs[0]!.amountMismatch).toMatchObject({ expected: { value: '9' }, received: { value: '8.5' }, shortfall: '0.5' })
     expect(rec.timeline!.find((e) => e.type === 'leg.amount_mismatch')).toMatchObject({ detail: { index: 0, expected: '9', received: '8.5' } })
     const done = t.app.of('session.completed')
     expect(done).toHaveLength(1)
     expect(done[0]!.data.object).toMatchObject({
-      session: { result: { output: { amount: '8.5' }, outputConfirmed: true, amountMismatch: { legIndex: 0, expected: { amount: '9' }, received: { amount: '8.5' }, shortfall: '0.5' } } },
+      session: { result: { output: { value: '8.5' }, outputConfirmed: true, amountMismatch: { legIndex: 0, expected: { value: '9' }, received: { value: '8.5' }, shortfall: '0.5' } } },
     })
     expect((await t.ramp.admin.get(s.id))!.payment!.legs[0]).toMatchObject({ amountMismatch: { shortfall: '0.5' } })
   })
@@ -416,7 +416,7 @@ describe('P1-3: the reported output is checked against the quote', () => {
     const t = make()
     const a = await t.toPayment()
     // The right amount, but on another chain.
-    await t.hook([{ ref: a.ref, status: 'succeeded', output: { amount: '9', asset: { kind: 'crypto', chain: 'eip155:1', token: USDC['eip155:1']! } } }])
+    await t.hook([{ ref: a.ref, status: 'succeeded', output: { value: '9', asset: { kind: 'crypto', chain: 'eip155:1', token: USDC['eip155:1']! } } }])
     const ra = await t.record(a.id)
     expect(ra.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'asset_mismatch', shortfall: '9' })
     expect(ra.timeline!.find((e) => e.type === 'leg.amount_mismatch')).toMatchObject({ detail: { reason: 'asset_mismatch' } })
@@ -424,7 +424,7 @@ describe('P1-3: the reported output is checked against the quote', () => {
     expect(done.data.object).toMatchObject({ session: { result: { outputConfirmed: false, amountMismatch: { reason: 'asset_mismatch', legIndex: 0 } } } })
 
     const b = await t.toPayment()
-    await t.hook([{ ref: b.ref, status: 'succeeded', output: { amount: '9e9', asset: usdc('9').asset } }])
+    await t.hook([{ ref: b.ref, status: 'succeeded', output: { value: '9e9', asset: usdc('9').asset } }])
     const rb = await t.record(b.id)
     expect(rb.active!.legs[0]!.amountMismatch).toMatchObject({ reason: 'invalid_amount' })
     expect((await t.ramp.admin.get(b.id))!.payment!.legs[0]).toMatchObject({ amountMismatch: { reason: 'invalid_amount' } })
@@ -434,7 +434,7 @@ describe('P1-3: the reported output is checked against the quote', () => {
     const t = make()
     const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
     const s = await t.toPayment({ destination: ARB })
-    await t.hook([{ ref: s.ref, status: 'succeeded', output: { amount: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } } }])
+    await t.hook([{ ref: s.ref, status: 'succeeded', output: { value: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } } }])
     const rec = await t.record(s.id)
     expect(t.bridgeStarts).toHaveLength(0)
     expect(rec.active!.index).toBe(0)
@@ -646,8 +646,8 @@ describe('third review: who can move a session on, and how far', () => {
 
 describe('fourth review: output checks and earlier attempts', () => {
   const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
-  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
-  const other = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } })
+  const usdc = (amount: string) => ({ value: amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! } })
+  const other = (amount: string) => ({ value: amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000ee' } })
 
   it('checks the output again when only its asset changes: another asset with the same amount does not start the next leg', async () => {
     const t = make()

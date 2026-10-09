@@ -7,7 +7,7 @@
 
 import { reconnect } from '@wagmi/core'
 import { fromBaseUnits, lamportsToSol } from '@openrampkit/core'
-import type { OrkEvent } from '@openrampkit/core'
+import type { OpenRampEvent } from '@openrampkit/core'
 import { openDeposit } from '@openrampkit/web'
 import type { DepositHandle, Theme } from '@openrampkit/web'
 import { BASE_URL } from '../server.js'
@@ -25,7 +25,7 @@ export type TestnetEnv = {
   container: HTMLElement
   theme: Theme
   locale: string
-  onEvent: (e: OrkEvent) => void
+  onEvent: (e: OpenRampEvent) => void
   setBanner(text: string): void
   setCode(text: string): void
 }

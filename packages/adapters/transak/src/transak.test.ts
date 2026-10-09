@@ -96,9 +96,9 @@ describe('transak adapter', () => {
     const a = transak({ apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test', env: 'sandbox' })
     const shared = memoryKV()
     const ctx = makeCtx({ fetch, shared, session: { country: 'DE', email: 'a@b.co' } })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q.output).toEqual({ amount: '102.345678', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '102.345678', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees.map((f) => [f.kind, f.amount])).toEqual([
       ['provider', '4.5'],
       ['app', '1'],
@@ -139,7 +139,7 @@ describe('transak adapter', () => {
 
     // after a start() the adapter knows the token
     const ctx = makeCtx({ fetch })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
     await a.start({ leg: cardLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     const make = (webhookData: object, secret = 'ACCESS_TOKEN_1') => JSON.stringify({ data: hs256({ webhookData, eventID: 'X' }, secret) })
     const ok = make({ partnerOrderId: 'ork_1', status: 'COMPLETED', cryptoAmount: 99.5, network: 'base', transactionHash: '0xtx' })
@@ -148,7 +148,7 @@ describe('transak adapter', () => {
     expect(await a.webhook!.verify(new Request('https://x', { method: 'POST', body: forged }), forged, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
 
     expect(await a.webhook!.parse(ok, { log: silentLog, shared: memoryKV(), fetch })).toEqual([
-      { ref: 'ork_1', status: 'succeeded', txHash: '0xtx', output: { amount: '99.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      { ref: 'ork_1', status: 'succeeded', txHash: '0xtx', output: { value: '99.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const st = async (status: string) => (await a.webhook!.parse(make({ partnerOrderId: 'ork_1', status }), { log: silentLog, shared: memoryKV(), fetch }))[0]?.status
     expect(await st('AWAITING_PAYMENT_FROM_USER')).toBeUndefined()
@@ -170,10 +170,10 @@ describe('transak adapter', () => {
 })
 
 
-const eur = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
+const eur = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
 const opts = { apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test' }
 const TOKEN_ROUTE = { method: 'POST', match: '/partners/api/v2/refresh-token', reply: () => ({ data: { accessToken: 'ACCESS_TOKEN_1', expiresAt: Math.floor(Date.now() / 1000) + 7 * 86400 } }) }
-const QUOTE = { adapterId: 'transak', legId: 'card', input: eur('100'), output: { amount: '100', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+const QUOTE = { adapterId: 'transak', legId: 'card', input: eur('100'), output: { value: '100', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
 
 describe('transak conformance', () => {
   it('card leg and HS256 webhooks pass runAdapterConformance', async () => {
@@ -213,7 +213,7 @@ describe('transak errors and edge cases', () => {
     await expect(q({ status: 401, reply: () => ({ message: 'Invalid API key' }) })).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(q({ status: 502, reply: () => ({}) })).rejects.toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE', message: 'Transak is not available right now.' } })
     await expect(q({ reply: () => ({}) })).rejects.toMatchObject({ status: 422, error: { code: 'NO_QUOTES', message: 'Transak did not return a quote.' } })
-    await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+    await expect(a.quote({ leg: cardLeg, amountIn: { value: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 
   it('quote: payment method per leg and currency, exact output, country, zero fees dropped', async () => {
@@ -233,7 +233,7 @@ describe('transak errors and edge cases', () => {
       ['open_banking', 'EUR', 'pm_open_banking'],
       ['pse', 'COP', 'pm_pse'],
     ] as const) {
-      const q = await a.quote({ leg: leg(legId, currency), amountOut: { amount: '20', asset: BASE_USDC } }, makeCtx({ fetch, session: { country: undefined } }))
+      const q = await a.quote({ leg: leg(legId, currency), amountOut: { value: '20', asset: BASE_USDC } }, makeCtx({ fetch, session: { country: undefined } }))
       expect(params()).toMatchObject({ paymentMethod: pm, fiatCurrency: currency, cryptoAmount: '20', quoteCountryCode: 'GB' })
       expect(params().fiatAmount).toBeUndefined()
       expect(q.fees).toEqual([])
@@ -272,7 +272,7 @@ describe('transak errors and edge cases', () => {
       const shared = memoryKV()
       await shared.put('accessToken', { token: 'STORED', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
       const a = transak({ ...opts, env: 'sandbox' })
-      const quote = { ...QUOTE, input: { amount: '100', asset: { kind: 'fiat' as const, currency } }, data: {} }
+      const quote = { ...QUOTE, input: { value: '100', asset: { kind: 'fiat' as const, currency } }, data: {} }
       await a.start({ leg: { ...cardLeg, legId }, quote }, makeCtx({ fetch, shared }))
       const session = calls.find((c) => c.url.includes('/auth/session'))!
       expect((session.body as { widgetParams: Record<string, unknown> }).widgetParams).toMatchObject({ fiatCurrency: currency, paymentMethod: pm })
@@ -286,7 +286,7 @@ describe('transak errors and edge cases', () => {
     const a = transak({ ...opts, surface: 'REDIRECT', env: 'sandbox' })
     expect(a.legs[0]!.surfaces).toEqual(['REDIRECT'])
     const ctx = makeCtx({ fetch, shared, session: { email: undefined, country: undefined, ip: '203.0.113.7' } })
-    const step = await a.start({ leg: { ...cardLeg, legId: 'bank_transfer' }, quote: { ...QUOTE, input: { amount: '100', asset: BASE_USDC } } }, ctx)
+    const step = await a.start({ leg: { ...cardLeg, legId: 'bank_transfer' }, quote: { ...QUOTE, input: { value: '100', asset: BASE_USDC } } }, ctx)
     // keepReferrer: Transak checks the Referer against the partner domain
     expect(step.surface).toEqual({ kind: 'REDIRECT', url: 'https://global-stg.transak.com?apiKey=K&sessionId=eyJ.x.y', popup: true, provider: 'Transak', keepReferrer: true })
     const session = calls.find((c) => c.url.includes('/auth/session'))!
@@ -373,7 +373,7 @@ describe('transak errors and edge cases', () => {
     expect(await a.webhook!.parse(body({ webhookData: { status: 'COMPLETED' } }), ctx)).toEqual([])
     expect(await a.webhook!.parse(JSON.stringify({ data: 'a.!!!.c' }), ctx)).toEqual([])
     expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'PAYMENT_DONE_MARKED_BY_USER' } }), ctx)).toEqual([{ ref: 'o', status: 'processing' }])
-    expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'COMPLETED', network: 'polygon', cryptoAmount: '7.25' } }), ctx)).toMatchObject([{ status: 'succeeded', output: { amount: '7.25', asset: { chain: 'eip155:137' } } }])
+    expect(await a.webhook!.parse(body({ webhookData: { partnerOrderId: 'o', status: 'COMPLETED', network: 'polygon', cryptoAmount: '7.25' } }), ctx)).toMatchObject([{ status: 'succeeded', output: { value: '7.25', asset: { chain: 'eip155:137' } } }])
   })
 
   it('verifyHs256: malformed tokens and payloads', async () => {

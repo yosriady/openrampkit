@@ -22,7 +22,7 @@ import {
   createAdapter,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   httpStatus,
   legStepFromEvent,
   randomHex,
@@ -31,7 +31,7 @@ import {
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
-import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
+import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type StripeOptions = {
@@ -204,17 +204,17 @@ export function stripe(opts: StripeOptions) {
     const region = ctx.session.region?.toUpperCase()
     const hit = d.deny.some((x) => (x === 'EU' ? !!country && EU.includes(country) : x.includes('-') ? region === x : country === x))
     if (hit) {
-      throw new OrkException(orkError('REGION_UNSUPPORTED', { message: `Stripe does not sell USDC on ${d.network} in your region.`, recovery: 'choose_other' }), 422)
+      throw new OpenRampException(openRampError('REGION_UNSUPPORTED', { message: `Stripe does not sell USDC on ${d.network} in your region.`, recovery: 'choose_other' }), 422)
     }
   }
 
   /** 400s about the customer's country mean "not in your region"; other 4xx about the request mean "no quote". */
-  function toOrk(e: unknown, what: string, log: Pick<Logger, 'warn'>): OrkException {
+  function toOpenRamp(e: unknown, what: string, log: Pick<Logger, 'warn'>): OpenRampException {
     const code = ((e as { body?: { error?: { code?: string } } })?.body?.error?.code) ?? ''
     if (code === 'crypto_onramp_unsupported_country' || code === 'crypto_onramp_unsupportable_customer') {
-      return new OrkException(orkError('REGION_UNSUPPORTED', { message: 'Stripe cannot sell crypto to you in your region.', recovery: 'choose_other' }), 422)
+      return new OpenRampException(openRampError('REGION_UNSUPPORTED', { message: 'Stripe cannot sell crypto to you in your region.', recovery: 'choose_other' }), 422)
     }
-    return httpErrorToOrk(e, 'Stripe', { what, noQuoteStatuses: [400, 422], log })
+    return httpErrorToOpenRamp(e, 'Stripe', { what, noQuoteStatuses: [400, 422], log })
   }
 
   async function call<T>(ctx: Pick<AdapterContext, 'fetch'>, method: 'GET' | 'POST', path: string, body?: string, idem?: string): Promise<T> {
@@ -235,14 +235,14 @@ export function stripe(opts: StripeOptions) {
     const td = s.transaction_details ?? {}
     const d = STRIPE_DELIVER_ASSETS.find((x) => x.network === td.destination_network || (x.network === 'base' && td.destination_network === 'base_network'))
     const amount = num(td.destination_amount)
-    const output = d && amount && (td.destination_currency ?? 'usdc').toLowerCase() === 'usdc' ? { amount, asset: assetOf(d) } : undefined
+    const output = d && amount && (td.destination_currency ?? 'usdc').toLowerCase() === 'usdc' ? { value: amount, asset: assetOf(d) } : undefined
     switch (s.status) {
       case 'fulfillment_complete':
         return { ref, status: 'succeeded', ...(td.transaction_id ? { txHash: td.transaction_id } : {}), ...(output ? { output } : {}) }
       case 'fulfillment_processing':
         return { ref, status: 'processing', ...(output ? { output } : {}) }
       case 'rejected':
-        return { ref, status: 'failed', error: orkError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
+        return { ref, status: 'failed', error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       case 'initialized':
       case 'requires_payment':
         return { ref, status: 'awaiting_user' }
@@ -259,16 +259,16 @@ export function stripe(opts: StripeOptions) {
 
     async quote(input, ctx) {
       const d = byId.get(input.leg.legId)
-      if (!d) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Stripe leg ${input.leg.legId}` }), 400)
+      if (!d) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Stripe leg ${input.leg.legId}` }), 400)
       const target = deliverFor(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       checkRegion(target, ctx)
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
       const fiat = (fiatAsset.kind === 'fiat' ? fiatAsset.currency : 'USD').toLowerCase()
-      if (fiat !== 'usd' && fiat !== 'eur') throw new OrkException(orkError('NO_QUOTES', { message: 'Stripe takes USD or EUR only.' }), 422)
+      if (fiat !== 'usd' && fiat !== 'eur') throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Stripe takes USD or EUR only.' }), 422)
       const q = form([
         ['source_currency', fiat],
-        ['source_amount', input.amountIn ? roundTo(input.amountIn.amount, 2) : undefined],
-        ['destination_amount', !input.amountIn ? input.amountOut?.amount : undefined],
+        ['source_amount', input.amountIn ? roundTo(input.amountIn.value, 2) : undefined],
+        ['destination_amount', !input.amountIn ? input.amountOut?.value : undefined],
         ['destination_currencies[]', 'usdc'],
         ['destination_networks[]', target.network],
       ])
@@ -282,14 +282,14 @@ export function stripe(opts: StripeOptions) {
           res = await call<QuotesResponse>(ctx, 'GET', `/v1/crypto/onramp/quotes?${q}`)
         }
       } catch (e) {
-        throw toOrk(e, 'price this amount', ctx.log)
+        throw toOpenRamp(e, 'price this amount', ctx.log)
       }
       const quotes = res.destination_network_quotes ?? {}
       const list = quotes[target.network] ?? quotes[WALLET_KEY[target.network]] ?? []
       const nq = list.find((x) => (x.destination_currency ?? '').toLowerCase() === 'usdc')
       const out = num(nq?.destination_amount)
       const total = num(nq?.source_total_amount)
-      if (!nq || !out || !total) throw new OrkException(orkError('NO_QUOTES', { message: 'Stripe did not return a quote for this amount.' }), 422)
+      if (!nq || !out || !total) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Stripe did not return a quote for this amount.' }), 422)
       const cur = fiat.toUpperCase()
       const fees: Fee[] = []
       const txFee = num(nq.fees?.transaction_fee_monetary)
@@ -299,15 +299,15 @@ export function stripe(opts: StripeOptions) {
       return {
         adapterId: 'stripe',
         legId: d.id,
-        input: { amount: total, asset: { kind: 'fiat', currency: cur } },
-        output: { amount: out, asset: assetOf(target) },
+        input: { value: total, asset: { kind: 'fiat', currency: cur } },
+        output: { value: out, asset: assetOf(target) },
         fees,
         eta: d.eta,
         expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
         data: {
           network: target.network,
           sourceCurrency: fiat,
-          ...(input.amountIn ? { sourceAmount: roundTo(input.amountIn.amount, 2) } : { destinationAmount: out }),
+          ...(input.amountIn ? { sourceAmount: roundTo(input.amountIn.value, 2) } : { destinationAmount: out }),
           nonce: randomHex(8),
         },
       }
@@ -318,7 +318,7 @@ export function stripe(opts: StripeOptions) {
       const target = deliverFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const network = data.network ?? target.network
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Stripe needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Stripe needs a wallet address to deliver to.' }))
       const body = form([
         [`wallet_addresses[${WALLET_KEY[network]}]`, wallet],
         ['lock_wallet_address', 'true'],
@@ -328,7 +328,7 @@ export function stripe(opts: StripeOptions) {
         ['destination_networks[]', network],
         ['source_currency', data.sourceCurrency ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency.toLowerCase() : 'usd')],
         ['source_amount', data.sourceAmount],
-        ['destination_amount', data.sourceAmount ? undefined : data.destinationAmount ?? input.quote.output.amount],
+        ['destination_amount', data.sourceAmount ? undefined : data.destinationAmount ?? input.quote.output.value],
         ['customer_ip_address', ctx.session.ip],
         ['metadata[ork_session]', ctx.session.id],
         ['metadata[ork_leg]', input.leg.legId],
@@ -337,11 +337,11 @@ export function stripe(opts: StripeOptions) {
       try {
         s = await call<OnrampSession>(ctx, 'POST', '/v1/crypto/onramp_sessions', body, ctx.idempotencyKey(`stripe:${data.nonce ?? randomHex(8)}`))
       } catch (e) {
-        throw toOrk(e, 'start the purchase', ctx.log)
+        throw toOpenRamp(e, 'start the purchase', ctx.log)
       }
-      if (!s.id || !s.client_secret) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Stripe did not return an onramp session.' }), 502)
+      if (!s.id || !s.client_secret) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Stripe did not return an onramp session.' }), 502)
       if (s.status === 'rejected') {
-        return { state: 'FAILED', status: 'failed', transitions: [], ref: s.id, error: orkError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
+        return { state: 'FAILED', status: 'failed', transitions: [], ref: s.id, error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       }
       let surface: Surface
       if (opts.surface === 'redirect' && s.redirect_url) {
@@ -362,7 +362,7 @@ export function stripe(opts: StripeOptions) {
       try {
         s = await call<OnrampSession>(ctx, 'GET', `/v1/crypto/onramp_sessions/${encodeURIComponent(input.ref)}`)
       } catch (e) {
-        throw toOrk(e, 'find this purchase', ctx.log)
+        throw toOpenRamp(e, 'find this purchase', ctx.log)
       }
       return legStepFromEvent(eventFrom(s, input.ref), input.ref, POLL)
     },

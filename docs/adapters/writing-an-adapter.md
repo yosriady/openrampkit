@@ -138,7 +138,7 @@ webhook: {
   replayKey?(req: Request, rawBody: string, ctx): Promise<string | undefined>
 }
 type LegEvent = {
-  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OpenRampError
   eventId?: string           // the provider event id, when the provider has one
   surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
   transitions?: Transition[] // goes with surface; default: an AWAIT poll
@@ -179,7 +179,7 @@ From the project's design notes:
 - Verify webhook signatures. Be idempotent on repeated webhooks.
 - Return money as decimal strings, never floats. Fill every fee you know in `LegQuote.fees`.
 - Do not store KYC data. Provider references (order id, customer id) are fine.
-- Throw `OrkException` with a safe message for expected failures. Use `httpErrorToOrk()` for failed provider calls.
+- Throw `OpenRampException` with a safe message for expected failures. Use `httpErrorToOpenRamp()` for failed provider calls.
 - Naming: first-party packages are `@openrampkit/adapter-<id>`. Community packages should be `openrampkit-adapter-<id>`.
 
 ## Helpers
@@ -189,7 +189,7 @@ From the project's design notes:
 | Helper | Description |
 |---|---|
 | `fetchJson(fetch, url, init)` | JSON fetch with a timeout (default 8000 ms). Errors carry `status`, `body` and `timeout`. |
-| `httpErrorToOrk(e, provider, opts)` | 429 to `RATE_LIMITED`; 400, 404, 409, 422 to `NO_QUOTES` with the provider's message; 401 and 403 to a setup error (not retryable, recovery `choose_other`, one error log); timeouts and other errors to `PROVIDER_UNAVAILABLE` |
+| `httpErrorToOpenRamp(e, provider, opts)` | 429 to `RATE_LIMITED`; 400, 404, 409, 422 to `NO_QUOTES` with the provider's message; 401 and 403 to a setup error (not retryable, recovery `choose_other`, one error log); timeouts and other errors to `PROVIDER_UNAVAILABLE` |
 | `httpStatus(e)`, `providerMessage(e)` | Read the HTTP status or the provider's message from an error |
 | `findDeliverAsset(list, asset)`, `requireDeliverAsset(list, asset, provider)` | Find the token you deliver for the requested destination. No match gives `undefined` (or `NO_QUOTES`). Never quote another token in its place. |
 | `POLL.onchain`, `POLL.checkout`, `POLL.dev` | Poll schedules for AWAIT transitions |
@@ -205,10 +205,10 @@ From the project's design notes:
 ```ts
 // packages/adapter-acme/src/index.ts
 import {
-  POLL, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, timingSafeEqual,
+  POLL, awaitPoll, createAdapter, fetchJson, hmacSha256, httpErrorToOpenRamp, legStepFromEvent, randomHex, timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
-import { USDC, orkError } from '@openrampkit/core'
+import { USDC, openRampError } from '@openrampkit/core'
 import type { CryptoAsset, LegSpec } from '@openrampkit/core'
 
 export type AcmeOptions = { apiKey: string; webhookSecret: string; apiUrl?: string }
@@ -238,11 +238,11 @@ export function acme(opts: AcmeOptions) {
     const ref = o.reference
     switch (o.status) {
       case 'delivered':
-        return { ref, status: 'succeeded', ...(o.tx_hash ? { txHash: o.tx_hash } : {}), ...(o.usdc ? { output: { amount: o.usdc, asset: BASE_USDC } } : {}) }
+        return { ref, status: 'succeeded', ...(o.tx_hash ? { txHash: o.tx_hash } : {}), ...(o.usdc ? { output: { value: o.usdc, asset: BASE_USDC } } : {}) }
       case 'paid':
         return { ref, status: 'processing' }
       case 'failed':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED') }
+        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED') }
       default:
         return undefined // still paying
     }
@@ -257,15 +257,15 @@ export function acme(opts: AcmeOptions) {
       if (amountIn?.asset.kind !== 'fiat') throw new Error('Acme quotes need a fiat amount')
       let q: { usdc: string; fee: string }
       try {
-        q = await fetchJson(ctx.fetch, `${api}/quotes?usd=${amountIn.amount}`, { headers })
+        q = await fetchJson(ctx.fetch, `${api}/quotes?usd=${amountIn.value}`, { headers })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Acme Pay', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Acme Pay', { what: 'price this amount', log: ctx.log })
       }
       return {
         adapterId: 'acme',
         legId: leg.legId,
         input: amountIn,
-        output: { amount: q.usdc, asset: BASE_USDC },
+        output: { value: q.usdc, asset: BASE_USDC },
         fees: [{ kind: 'provider', label: 'Acme fee', amount: q.fee, currency: 'USD' }],
         eta: { min: 60, max: 900 },
         expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
@@ -281,10 +281,10 @@ export function acme(opts: AcmeOptions) {
         order = await fetchJson(ctx.fetch, `${api}/orders`, {
           method: 'POST',
           headers: { ...headers, 'idempotency-key': ctx.idempotencyKey(`acme:${reference}`) },
-          body: JSON.stringify({ usd: quote.input.amount, wallet: address, reference, return_url: ctx.urls.returnUrl, webhook_url: ctx.urls.webhookUrl }),
+          body: JSON.stringify({ usd: quote.input.value, wallet: address, reference, return_url: ctx.urls.returnUrl, webhook_url: ctx.urls.webhookUrl }),
         })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Acme Pay', { what: 'start the payment', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Acme Pay', { what: 'start the payment', log: ctx.log })
       }
       return {
         state: 'PAYMENT',
@@ -369,7 +369,7 @@ describe('acme adapter', () => {
       fixtures: [
         {
           leg,
-          quote: { amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } },
+          quote: { amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } },
           expect: { start: 'PAYMENT', status: 'COMPLETED' },
         },
       ],

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
-import { OrkException, orkError } from '@openrampkit/core'
-import { OrkClientError, createOpenRampClient, toOrkError } from './index.js'
+import { OpenRampException, openRampError } from '@openrampkit/core'
+import { OpenRampClientError, createOpenRampClient, toOpenRampError } from './index.js'
 import { BASE_DEST, setupServer } from './testctx.js'
 
 type Call = { url: string; init: RequestInit }
@@ -76,15 +76,15 @@ describe('createOpenRampClient request shapes', () => {
     expect(await createOpenRampClient({ baseUrl: '/b', fetch: f }).getSession(secret)).toEqual({})
   })
 
-  it('throws OrkClientError with the server error and status', async () => {
-    const err = orkError('QUOTE_EXPIRED')
+  it('throws OpenRampClientError with the server error and status', async () => {
+    const err = openRampError('QUOTE_EXPIRED')
     const { f } = recorder(() => Response.json({ error: err }, { status: 409 }))
     const p = createOpenRampClient({ baseUrl: '/b', fetch: f }).select(secret, { quoteId: 'q' })
-    await expect(p).rejects.toBeInstanceOf(OrkClientError)
+    await expect(p).rejects.toBeInstanceOf(OpenRampClientError)
     await expect(p).rejects.toMatchObject({ status: 409, error: err, message: err.message })
   })
 
-  it('maps a non-JSON error page to an OrkError by status', async () => {
+  it('maps a non-JSON error page to an OpenRampError by status', async () => {
     const html = (status: number) => recorder(() => new Response('<html>Bad gateway</html>', { status })).f
     const get = (status: number) => createOpenRampClient({ baseUrl: '/b', fetch: html(status) }).getSession(secret)
     await expect(get(502)).rejects.toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE' } })
@@ -122,16 +122,16 @@ describe('createOpenRampClient request shapes', () => {
   })
 })
 
-describe('toOrkError', () => {
+describe('toOpenRampError', () => {
   it('maps every kind of thrown value', () => {
-    const e = orkError('NO_QUOTES')
-    expect(toOrkError(new OrkClientError(e, 400))).toBe(e)
-    expect(toOrkError(e)).toBe(e)
-    expect(toOrkError(new OrkException(e))).toEqual(e)
-    expect(toOrkError({ error: e })).toBe(e)
-    expect(toOrkError(new Error('boom'))).toMatchObject({ code: 'INTERNAL', message: 'boom' })
-    expect(toOrkError('str')).toMatchObject({ code: 'INTERNAL', message: 'str' })
-    expect(toOrkError({ error: 'nope' })).toMatchObject({ code: 'INTERNAL' })
-    expect(toOrkError(null)).toMatchObject({ code: 'INTERNAL', message: 'null' })
+    const e = openRampError('NO_QUOTES')
+    expect(toOpenRampError(new OpenRampClientError(e, 400))).toBe(e)
+    expect(toOpenRampError(e)).toBe(e)
+    expect(toOpenRampError(new OpenRampException(e))).toEqual(e)
+    expect(toOpenRampError({ error: e })).toBe(e)
+    expect(toOpenRampError(new Error('boom'))).toMatchObject({ code: 'INTERNAL', message: 'boom' })
+    expect(toOpenRampError('str')).toMatchObject({ code: 'INTERNAL', message: 'str' })
+    expect(toOpenRampError({ error: 'nope' })).toMatchObject({ code: 'INTERNAL' })
+    expect(toOpenRampError(null)).toMatchObject({ code: 'INTERNAL', message: 'null' })
   })
 })

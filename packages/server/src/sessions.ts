@@ -1,5 +1,5 @@
 import { isEvmAddress, settlementCallsFrom } from '@openrampkit/adapter'
-import { OrkException, isTerminal, orkError } from '@openrampkit/core'
+import { OpenRampException, isTerminal, openRampError } from '@openrampkit/core'
 import type { Destination } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { randomHex, safeEqual, sha256Hex } from './crypto.js'
@@ -30,7 +30,7 @@ const DECIMAL = /^\d{1,30}(\.\d{1,36})?$/
 
 /** Check the parts of the input that are stored or sent to providers. Throws a 400 when one is not valid. */
 function checkInput(input: CreateSessionInput): void {
-  const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
   const L = SESSION_LIMITS
   if (typeof input.userId !== 'string' || !input.userId || input.userId.length > L.userIdLength) throw bad(`\`userId\` must be a string of 1 to ${L.userIdLength} characters.`)
   if (input.ttlMinutes !== undefined && (typeof input.ttlMinutes !== 'number' || !(input.ttlMinutes > 0) || input.ttlMinutes > L.ttlMinutes)) {
@@ -76,11 +76,11 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   const now = Date.now()
   const expiresAt = now + (input.ttlMinutes ?? 30) * 60_000
   const direction = input.direction ?? 'deposit'
-  if (direction !== 'deposit' && direction !== 'withdraw') throw new OrkException(orkError('BAD_REQUEST', { message: '`direction` must be "deposit" or "withdraw".' }), 400)
+  if (direction !== 'deposit' && direction !== 'withdraw') throw new OpenRampException(openRampError('BAD_REQUEST', { message: '`direction` must be "deposit" or "withdraw".' }), 400)
   if (input.destination?.type === 'crypto') checkSettlement(input.destination)
-  if (direction === 'deposit' && !input.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'A deposit session needs `destination`.' }), 400)
+  if (direction === 'deposit' && !input.destination) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A deposit session needs `destination`.' }), 400)
   if (direction === 'withdraw' && input.destination) {
-    throw new OrkException(orkError('BAD_REQUEST', { message: 'A withdraw session takes `source`, not `destination`: the user picks the target.' }), 400)
+    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A withdraw session takes `source`, not `destination`: the user picks the target.' }), 400)
   }
   const rec: SessionRecord = {
     id,
@@ -130,7 +130,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
  * The settlement contract must be on an EVM destination chain, and the recipient an EVM address.
  */
 function checkSettlement(d: Extract<Destination, { type: 'crypto' }>): void {
-  const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
   if (!d.settlement) {
     if (d.calls?.length) throw bad('Contract calls after delivery (`destination.calls`) need `destination.settlement`.')
     return
@@ -147,17 +147,17 @@ export async function loadAuthed(rt: Runtime, req: Request, id: string): Promise
   const auth = req.headers.get('authorization') ?? ''
   const token = auth.startsWith('Bearer ') ? auth.slice(7) : ''
   const [sid, secret] = token.split('.')
-  if (!sid || !secret || sid !== id) throw new OrkException(orkError('UNAUTHORIZED'), 401)
+  if (!sid || !secret || sid !== id) throw new OpenRampException(openRampError('UNAUTHORIZED'), 401)
   if (isPayCredential(secret)) {
     const check = await checkPayCredential(rt, sid, secret)
-    if (check !== 'ok') throw new OrkException(orkError('UNAUTHORIZED', check === 'expired' ? { message: 'This pay link expired.' } : {}), 401)
+    if (check !== 'ok') throw new OpenRampException(openRampError('UNAUTHORIZED', check === 'expired' ? { message: 'This pay link expired.' } : {}), 401)
   }
   const rec = await rt.store.get(id)
-  if (!rec || (!isPayCredential(secret) && !safeEqual(rec.secretHash, await sha256Hex(secret)))) throw new OrkException(orkError('UNAUTHORIZED'), 401)
-  if (isRevokedPayLink(rec, secret)) throw new OrkException(orkError('UNAUTHORIZED', { message: 'This pay link no longer works.' }), 401)
+  if (!rec || (!isPayCredential(secret) && !safeEqual(rec.secretHash, await sha256Hex(secret)))) throw new OpenRampException(openRampError('UNAUTHORIZED'), 401)
+  if (isRevokedPayLink(rec, secret)) throw new OpenRampException(openRampError('UNAUTHORIZED', { message: 'This pay link no longer works.' }), 401)
   if (Date.now() > rec.expiresAt && !isTerminal(rec.step.state) && rec.status === 'open') {
     rec.status = 'expired'
-    rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: orkError('SESSION_EXPIRED') }
+    rec.step = { sessionId: rec.id, state: 'EXPIRED', transitions: [], error: openRampError('SESSION_EXPIRED') }
     await notify(rt, rec, 'session.expired')
     await saveSession(rt, rec)
   }

@@ -7,8 +7,8 @@
 // every built-in store, so sessions made at the same time are never lost. Nothing claims these queues;
 // `StoreQueue.range` reads them, latest first. The sweep removes days older than `admin.indexDays`.
 
-import { add, isTerminal, OrkException, orkError } from '@openrampkit/core'
-import type { Amount, AmountMismatch, Direction, Fee, OrkError, StateName } from '@openrampkit/core'
+import { add, isTerminal, OpenRampException, openRampError } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Direction, Fee, OpenRampError, StateName } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { json, readJson } from './http.js'
 import { sessionStatusFor } from './legs.js'
@@ -35,8 +35,8 @@ const MAX_NOTE = 500
 const FINAL_STATES = ['COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED'] as const
 type FinalState = (typeof FINAL_STATES)[number]
 
-const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
-const notFound = () => new OrkException(orkError('NOT_FOUND'), 404)
+const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
+const notFound = () => new OpenRampException(openRampError('NOT_FOUND'), 404)
 
 const dayOf = (ms: number) => Math.floor(ms / DAY_MS)
 const indexName = (day: number) => `${INDEX_PREFIX}${new Date(day * DAY_MS).toISOString().slice(0, 10)}`
@@ -92,7 +92,7 @@ function decodeCursor(s: string | undefined): Cursor | undefined {
 async function* indexEntries(rt: Runtime, newest: number, oldest: number, after?: Cursor): AsyncGenerator<{ d: number; e: QueueItem }> {
   const q = queueOf(rt.store)
   if (!q.range) {
-    throw new OrkException(orkError('INTERNAL', { message: 'The store queue has no `range`. The admin index needs it (see Session stores).' }), 501)
+    throw new OpenRampException(openRampError('INTERNAL', { message: 'The store queue has no `range`. The admin index needs it (see Session stores).' }), 501)
   }
   for (let d = after ? Math.min(after.d, dayOf(newest)) : dayOf(newest); d >= dayOf(oldest); d--) {
     let last: Cursor | undefined = after && d === after.d ? after : undefined
@@ -176,7 +176,7 @@ export type AdminLeg = {
   status: string
   state?: StateName
   txHash?: string
-  error?: Pick<OrkError, 'code' | 'message'>
+  error?: Pick<OpenRampError, 'code' | 'message'>
   input: Amount
   output: Amount
   outputConfirmed: boolean
@@ -213,7 +213,7 @@ export type AdminSession = AdminSessionSummary & {
   amountBounds?: SessionRecord['amountBounds']
   allowedMethods?: string[]
   revokedPayLinks: number
-  step: { state: StateName; sub?: string; legIndex?: number; error?: Pick<OrkError, 'code' | 'message'> }
+  step: { state: StateName; sub?: string; legIndex?: number; error?: Pick<OpenRampError, 'code' | 'message'> }
   payment?: AdminPayment
   attempts: AdminPayment[]
   outbox: AdminOutboxEvent[]
@@ -241,10 +241,10 @@ const isPositive = (v: string) => /^\d*\.?\d+$/.test(v) && /[1-9]/.test(v)
 export function amountOf(rec: SessionRecord): Amount | undefined {
   const legs = rec.active?.legs ?? []
   const input = legs[0]?.quote.input
-  if (input && isPositive(input.amount)) return input
+  if (input && isPositive(input.value)) return input
   const last = legs[legs.length - 1]
   const out = last?.step?.output ?? last?.quote.output
-  if (out && isPositive(out.amount)) return out
+  if (out && isPositive(out.value)) return out
   return input
 }
 
@@ -256,7 +256,7 @@ function summarize(rt: Runtime, rec: SessionRecord, now: number): AdminSessionSu
     direction: rec.direction,
     status: rec.status,
     state: rec.step.state,
-    ...(input ? { amount: input.amount, currency: currencyOf(input) } : {}),
+    ...(input ? { amount: input.value, currency: currencyOf(input) } : {}),
     ...(act ? { method: act.pathway.method, provider: act.pathway.provider } : {}),
     userId: rec.userId,
     livemode: rec.livemode,
@@ -273,7 +273,7 @@ function isStuck(rt: Runtime, rec: SessionRecord, now: number): boolean {
   return !isTerminal(rec.step.state) && now - rec.createdAt > stuckAfterMs(rt)
 }
 
-const errorView = (e?: OrkError) => (e ? { code: e.code, message: e.message } : undefined)
+const errorView = (e?: OpenRampError) => (e ? { code: e.code, message: e.message } : undefined)
 
 function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
   return {
@@ -479,7 +479,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
       const key = `${rec.direction}|${currency}`
       const v = volume.get(key) ?? { direction: rec.direction, currency, amount: '0', count: 0 }
       try {
-        v.amount = add(v.amount, input.amount)
+        v.amount = add(v.amount, input.value)
         v.count++
       } catch {
         // An amount that is not a decimal string is left out.
@@ -526,7 +526,7 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
   for (let attempt = 0; attempt < 5; attempt++) {
     const rec = await rt.store.get(id)
     if (!rec || typeof rec.secretHash !== 'string') throw notFound()
-    if (rec.step.state === target) throw new OrkException(orkError('BAD_REQUEST', { message: `The session is already ${target}.` }), 409)
+    if (rec.step.state === target) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `The session is already ${target}.` }), 409)
     const now = Date.now()
     const previous = rec.step.state
     rec.resolution = { state: target, note: text, at: now, previous }
@@ -536,8 +536,8 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
       transitions: [],
       ...(rec.step.progress ? { progress: rec.step.progress } : {}),
       ...(rec.step.legIndex !== undefined ? { legIndex: rec.step.legIndex } : {}),
-      ...(target === 'FAILED' ? { error: orkError('PAYMENT_FAILED', { message: 'The operator closed this payment.', recovery: 'contact_support' }) } : {}),
-      ...(target === 'EXPIRED' ? { error: orkError('SESSION_EXPIRED') } : {}),
+      ...(target === 'FAILED' ? { error: openRampError('PAYMENT_FAILED', { message: 'The operator closed this payment.', recovery: 'contact_support' }) } : {}),
+      ...(target === 'EXPIRED' ? { error: openRampError('SESSION_EXPIRED') } : {}),
     }
     rec.status = sessionStatusFor(target, !!rec.active)
     addTimeline(rec, 'admin.resolved', { state: target, previous, note: text })
@@ -549,10 +549,10 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
       rt.log.info('admin resolved a session', { sessionId: rec.id, state: target, previous })
       return adminView(rt, rec)
     } catch (e) {
-      if (!(e instanceof OrkException && e.status === 409)) throw e
+      if (!(e instanceof OpenRampException && e.status === 409)) throw e
     }
   }
-  throw new OrkException(orkError('CONFLICT'), 409)
+  throw new OpenRampException(openRampError('CONFLICT'), 409)
 }
 
 /** Send the dead letters of a session again (`webhooks.replay`). */
@@ -585,13 +585,13 @@ const send = (body: unknown, status = 200) => json(body, status, NO_STORE)
 
 /** `/admin` and `/admin/*`. Off (404) without `admin.token`. */
 export async function adminRoute(rt: Runtime, req: Request, method: string, rest: string[]): Promise<Response> {
-  if (!rt.config.admin?.token) return send({ error: orkError('NOT_FOUND') }, 404)
+  if (!rt.config.admin?.token) return send({ error: openRampError('NOT_FOUND') }, 404)
   const [head, id, action] = rest
   if (!head && method === 'GET') {
-    if (rt.config.admin.page === false) return send({ error: orkError('NOT_FOUND') }, 404)
+    if (rt.config.admin.page === false) return send({ error: openRampError('NOT_FOUND') }, 404)
     return adminPage(rt)
   }
-  if (!(await authorized(rt, req))) return send({ error: orkError('UNAUTHORIZED', { message: 'The admin token is missing or wrong.' }) }, 401)
+  if (!(await authorized(rt, req))) return send({ error: openRampError('UNAUTHORIZED', { message: 'The admin token is missing or wrong.' }) }, 401)
   const url = new URL(req.url)
   const p = url.searchParams
   if (head === 'stats' && !id && method === 'GET') return send(await adminStats(rt, p.get('since') ? { since: /^\d+$/.test(p.get('since')!) ? Number(p.get('since')) : p.get('since')! } : {}))
@@ -620,7 +620,7 @@ export async function adminRoute(rt: Runtime, req: Request, method: string, rest
     const sid = decodeURIComponent(id)
     if (!action && method === 'GET') {
       const s = await adminGet(rt, sid)
-      return s ? send(s) : send({ error: orkError('NOT_FOUND') }, 404)
+      return s ? send(s) : send({ error: openRampError('NOT_FOUND') }, 404)
     }
     if (action === 'resolve' && method === 'POST') {
       const body = await readJson<{ state?: unknown; note?: unknown }>(req)
@@ -628,5 +628,5 @@ export async function adminRoute(rt: Runtime, req: Request, method: string, rest
     }
     if (action === 'replay' && method === 'POST') return send(await adminReplay(rt, sid))
   }
-  return send({ error: orkError('NOT_FOUND') }, 404)
+  return send({ error: openRampError('NOT_FOUND') }, 404)
 }

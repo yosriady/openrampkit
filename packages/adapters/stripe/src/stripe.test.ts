@@ -13,7 +13,7 @@ const opts = { secretKey: SK, publishableKey: PK, webhookSecret: WH }
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
 const ETH_USDC = { kind: 'crypto' as const, chain: 'eip155:1', token: USDC['eip155:1']! }
 const POLY_USDC = { kind: 'crypto' as const, chain: 'eip155:137', token: USDC['eip155:137']! }
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 
 const leg = (legId: string, to: typeof BASE_USDC = BASE_USDC, currency = 'USD'): PathwayLeg => ({
   adapterId: 'stripe',
@@ -71,7 +71,7 @@ describe('stripe adapter', () => {
     ])
     expect(calls[0]!.headers.get('authorization')).toBe(`Basic ${Buffer.from(`${SK}:`).toString('base64')}`)
     expect(q.input).toEqual(usd('103.26'))
-    expect(q.output).toEqual({ amount: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
       { kind: 'provider', label: 'Stripe fee', amount: '3.25', currency: 'USD' },
       { kind: 'network', label: 'Network fee', amount: '0.01', currency: 'USD' },
@@ -83,20 +83,20 @@ describe('stripe adapter', () => {
       { match: '/v1/crypto/onramp_quotes', status: 404, reply: () => ({ error: { message: 'Unrecognized request URL' } }) },
       { match: '/v1/crypto/onramp/quotes', reply: () => ({ destination_network_quotes: { ethereum: [{ destination_currency: 'usdc', destination_amount: '50', source_total_amount: '52.5', fees: { transaction_fee_monetary: '2.5' } }] } }) },
     ])
-    const q = await stripe(opts).quote({ leg: leg('card', ETH_USDC), amountOut: { amount: '50', asset: ETH_USDC } }, makeCtx({ fetch }))
+    const q = await stripe(opts).quote({ leg: leg('card', ETH_USDC), amountOut: { value: '50', asset: ETH_USDC } }, makeCtx({ fetch }))
     expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/v1/crypto/onramp_quotes', '/v1/crypto/onramp/quotes'])
     expect(new URL(calls[1]!.url).searchParams.get('destination_amount')).toBe('50')
     expect(new URL(calls[1]!.url).searchParams.get('source_amount')).toBeNull()
-    expect(q.output.amount).toBe('50')
-    expect(q.input.amount).toBe('52.5')
+    expect(q.output.value).toBe('50')
+    expect(q.input.value).toBe('52.5')
   })
 
   it('quote: region rules per asset (no Base USDC in the EU, no Polygon USDC in New York)', async () => {
     const { fetch, calls } = fakeFetch([{ match: '/onramp_quotes', reply: () => QUOTES }])
     const a = stripe(opts)
-    await expect(a.quote({ leg: leg('card', BASE_USDC, 'EUR'), amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, makeCtx({ fetch, session: { country: 'DE' } }))).rejects.toMatchObject({ error: { code: 'REGION_UNSUPPORTED' } })
+    await expect(a.quote({ leg: leg('card', BASE_USDC, 'EUR'), amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, makeCtx({ fetch, session: { country: 'DE' } }))).rejects.toMatchObject({ error: { code: 'REGION_UNSUPPORTED' } })
     await expect(a.quote({ leg: leg('card', POLY_USDC), amountIn: usd('100') }, makeCtx({ fetch, session: { country: 'US', region: 'US-NY' } }))).rejects.toMatchObject({ error: { code: 'REGION_UNSUPPORTED' } })
-    await expect(a.quote({ leg: leg('card', BASE_USDC, 'GBP'), amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'GBP' } } }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(a.quote({ leg: leg('card', BASE_USDC, 'GBP'), amountIn: { value: '100', asset: { kind: 'fiat', currency: 'GBP' } } }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
     expect(calls).toHaveLength(0)
   })
 
@@ -146,7 +146,7 @@ describe('stripe adapter', () => {
   })
 
   it('start: REDIRECT to the hosted onramp when asked, SDK fallback without redirect_url, rejected sessions fail', async () => {
-    const quote = { adapterId: 'stripe', legId: 'card', input: usd('103'), output: { amount: '97', asset: ETH_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { network: 'ethereum', sourceCurrency: 'usd', sourceAmount: '100.00' } }
+    const quote = { adapterId: 'stripe', legId: 'card', input: usd('103'), output: { value: '97', asset: ETH_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { network: 'ethereum', sourceCurrency: 'usd', sourceAmount: '100.00' } }
     const run = async (session: unknown, surface: 'sdk' | 'redirect' = 'redirect') => {
       const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/onramp_sessions', reply: () => session }])
       const step = await stripe({ ...opts, surface }).start({ leg: leg('card', ETH_USDC), quote }, makeCtx({ fetch }))
@@ -175,7 +175,7 @@ describe('stripe adapter', () => {
     expect(await run(SESSION('requires_payment'))).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     expect(await run(SESSION('fulfillment_processing'))).toMatchObject({ state: 'PROCESSING', status: 'processing' })
     const done = await run(SESSION('fulfillment_complete', { transaction_details: { ...SESSION('x').transaction_details, transaction_id: '0xhash' } }))
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { amount: '97.912345', asset: { chain: 'eip155:8453' } } })
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { value: '97.912345', asset: { chain: 'eip155:8453' } } })
     expect(await run(SESSION('rejected'))).toMatchObject({ state: 'FAILED', error: { code: 'PROVIDER_DECLINED' } })
   })
 
@@ -200,7 +200,7 @@ describe('stripe adapter', () => {
     expect(v1(1700000000, '{}')).toBe('ceb8863f7208fa249a6cd8f951e993c7563412aca65866f6272283debe143ab3')
 
     expect(await a.webhook!.parse(body, wctx)).toEqual([
-      { ref: 'cos_123', status: 'succeeded', txHash: '0xhash', output: { amount: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      { ref: 'cos_123', status: 'succeeded', txHash: '0xhash', output: { value: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
     expect(await parse({ type: 'crypto.onramp_session_updated', data: { object: SESSION('fulfillment_processing') } })).toMatchObject([{ status: 'processing' }])

@@ -3,7 +3,7 @@
 
 import { POLL as POLLS, awaitPoll, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
-import { CHAINS, OrkException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, minorUnits, mulRatio, nativeDecimals, normalizeToken, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
+import { CHAINS, OpenRampException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, minorUnits, mulRatio, nativeDecimals, normalizeToken, openRampError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
@@ -366,7 +366,7 @@ export function mockAdapter(opts: MockOptions = {}) {
   async function settled(ref: string, ctx: Pick<AdapterContext, 'shared'>): Promise<LegStep | undefined> {
     const o = await ctx.shared.get<MockOrder>(orderKey(ref))
     if (!o) return undefined
-    if (o.status === 'failed') return { state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED'), ref }
+    if (o.status === 'failed') return { state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED'), ref }
     if (o.status === 'paid' && o.paidAt && Date.now() - o.paidAt >= settleMs) {
       return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: `0x${ref.replace(/[^0-9a-f]/g, '').padEnd(64, '0').slice(0, 64)}` }
     }
@@ -383,9 +383,9 @@ export function mockAdapter(opts: MockOptions = {}) {
         transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }],
       }
     }
-    const input = o.input ?? { amount: '0', asset: BASE_USDC }
+    const input = o.input ?? { value: '0', asset: BASE_USDC }
     const asset = input.asset.kind === 'crypto' ? input.asset : BASE_USDC
-    const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo ?? fakeAddress(ref), toBaseUnits(input.amount, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
+    const tx: TxRequest = { to: asset.token, data: erc20TransferData(o.payTo ?? fakeAddress(ref), toBaseUnits(input.value, asset.decimals ?? 6)), value: '0', chainId: evmChainId(asset.chain) ?? 8453 }
     return {
       state: 'PAYMENT', sub: 'send_crypto', status: 'awaiting_user', ref,
       surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
@@ -408,7 +408,7 @@ export function mockAdapter(opts: MockOptions = {}) {
    */
   function localStep(ref: string, o: MockOrder, ctx: Pick<AdapterContext, 'session' | 'destination'>): LegStep {
     const asset = localAsset!
-    const amount = BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))
+    const amount = BigInt(toBaseUnits(o.input!.value, asset.decimals ?? 6))
     const chainId = evmChainId(asset.chain)!
     const calls = ctx.destination.type === 'crypto' ? settlementCallsFrom(ctx.destination.calls) : []
     const txs: TxRequest[] = o.settlement
@@ -430,7 +430,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     const asset = localAsset!
     const s = o.settlement!
     const fail = (message: string, txHash?: string): LegStep => ({
-      state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, ...(txHash ? { txHash } : {}),
+      state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message }), ref, ...(txHash ? { txHash } : {}),
     })
     const r = await verifySettlement({
       rpcUrl: local!.rpcUrl,
@@ -439,7 +439,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       fetch: ctx.fetch,
       log: ctx.log,
       fromBlock: s.fromBlock,
-      expect: { token: asset.token, recipient: o.payTo!, minAmount: BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6)), callsHash: s.callsHash },
+      expect: { token: asset.token, recipient: o.payTo!, minAmount: BigInt(toBaseUnits(o.input!.value, asset.decimals ?? 6)), callsHash: s.callsHash },
     })
     if (r.settled) {
       if (!r.ok) return fail(r.problem!, r.record.txHash)
@@ -458,9 +458,9 @@ export function mockAdapter(opts: MockOptions = {}) {
     const txHash = o.txHash!
     const receipt = await evmRpc<EvmReceipt | null>(ctx.fetch, local!.rpcUrl, 'eth_getTransactionReceipt', [txHash], { log: ctx.log })
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, txHash, transitions: [awaitPoll(POLL)] }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, txHash })
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message }), ref, txHash })
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
-    if (erc20PaidTo(receipt, asset.token, o.payTo!) < BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))) {
+    if (erc20PaidTo(receipt, asset.token, o.payTo!) < BigInt(toBaseUnits(o.input!.value, asset.decimals ?? 6))) {
       return fail('The transaction does not pay the destination the quoted amount.')
     }
     // One transaction completes one payment only.
@@ -473,7 +473,7 @@ export function mockAdapter(opts: MockOptions = {}) {
   function solanaStep(ref: string, o: MockOrder): LegStep {
     const asset = solAsset!
     const decimals = asset.decimals ?? 6
-    const tx: TxRequest = { kind: 'solana', type: 'transfer', to: o.payTo!, mint: asset.token, amount: toBaseUnits(o.input!.amount, decimals), decimals }
+    const tx: TxRequest = { kind: 'solana', type: 'transfer', to: o.payTo!, mint: asset.token, amount: toBaseUnits(o.input!.value, decimals), decimals }
     return {
       state: 'PAYMENT', sub: 'send_crypto', status: 'awaiting_user', ref,
       surface: { kind: 'WALLET_TX', chain: asset.chain, txs: [tx] },
@@ -490,7 +490,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     const sig = o.txHash!
     const rpc = <T>(method: string, params: unknown[]) => evmRpc<T>(ctx.fetch, sol!.rpcUrl, method, params, { log: ctx.log })
     const waiting: LegStep = { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, txHash: sig, transitions: [awaitPoll(POLL)] }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, txHash: sig })
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message }), ref, txHash: sig })
     // One signature completes one payment only. Solana signatures are case-sensitive.
     const usedKey = `txused:${asset.chain}:${sig}`
     // Fail early (before the RPC calls) when another payment has it. The claim at the end is the real check.
@@ -506,7 +506,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     if (tx.meta.err) return fail('The transaction failed on chain.')
     // Only a transaction from after the start of this leg can pay it.
     if (o.fromSlot !== undefined && (typeof tx.slot !== 'number' || tx.slot < o.fromSlot)) return fail('The transaction was sent before this payment started.')
-    if (solanaPaidTo(tx, o.payTo!, asset.token) < BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))) {
+    if (solanaPaidTo(tx, o.payTo!, asset.token) < BigInt(toBaseUnits(o.input!.value, asset.decimals ?? 6))) {
       return fail('The transaction does not pay the destination the quoted amount.')
     }
     if (!(await claimOnce(ctx.shared, usedKey, ref, ORDER_TTL_SEC))) return fail('This transaction was already used for another payment.')
@@ -530,15 +530,15 @@ export function mockAdapter(opts: MockOptions = {}) {
         // USDC in, fiat out: 1 USDC = 1 USD, minus 1%.
         const fiat = (leg.to.asset.kind === 'fiat' ? leg.to.asset.currency : ctx.destination.type === 'fiat' ? ctx.destination.currency : 'USD').toUpperCase()
         const rate = rateOf(fiat, 'sell')
-        if (!rate) throw new OrkException(orkError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
+        if (!rate) throw new OpenRampException(openRampError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
         const inAsset: CryptoAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : leg.from.asset.kind === 'crypto' ? leg.from.asset : BASE_USDC
-        const usdc = amountIn ? amountIn.amount : roundTo(div(mulRatio(amountOut?.amount ?? '0', rate), String((10_000 - fees.offramp) / 10_000)), 6)
+        const usdc = amountIn ? amountIn.value : roundTo(div(mulRatio(amountOut?.value ?? '0', rate), String((10_000 - fees.offramp) / 10_000)), 6)
         const fee = roundTo(bps(usdc, fees.offramp), 6)
         const out = roundTo(div(sub(usdc, fee), rate), minorUnits(fiat))
         return {
           adapterId: id, legId: leg.legId,
-          input: { amount: usdc, asset: { ...inAsset, symbol: 'USDC', decimals: 6 } },
-          output: { amount: out.startsWith('-') ? '0' : out, asset: { kind: 'fiat', currency: fiat } },
+          input: { value: usdc, asset: { ...inAsset, symbol: 'USDC', decimals: 6 } },
+          output: { value: out.startsWith('-') ? '0' : out, asset: { kind: 'fiat', currency: fiat } },
           fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: 'USDC' }],
           eta: spec.eta, expiresAt,
         }
@@ -546,15 +546,15 @@ export function mockAdapter(opts: MockOptions = {}) {
       if (spec.kind === 'fiat_onramp' || spec.kind === 'fiat_payin') {
         const fiat = (amountIn?.asset.kind === 'fiat' ? amountIn.asset.currency : leg.from.asset.kind === 'fiat' ? leg.from.asset.currency : 'USD').toUpperCase()
         const rate = rateOf(fiat, 'buy')
-        if (!rate) throw new OrkException(orkError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
-        const input = amountIn?.amount ?? '0'
+        if (!rate) throw new OpenRampException(openRampError('NO_QUOTES', { message: `${name} has no rate for ${fiat}.` }), 422)
+        const input = amountIn?.value ?? '0'
         const feePct = spec.id === 'card' ? fees.card : fees.local
         if (spec.kind === 'fiat_payin') {
           const fee = roundTo(bps(input, fees.payin), minorUnits(fiat))
           return {
             adapterId: id, legId: leg.legId,
-            input: { amount: input, asset: { kind: 'fiat', currency: fiat } },
-            output: { amount: roundTo(sub(input, fee), minorUnits(fiat)), asset: { kind: 'fiat', currency: fiat } },
+            input: { value: input, asset: { kind: 'fiat', currency: fiat } },
+            output: { value: roundTo(sub(input, fee), minorUnits(fiat)), asset: { kind: 'fiat', currency: fiat } },
             fees: [{ kind: 'provider', label: `${name} fee`, amount: fee, currency: fiat }],
             eta: spec.eta, expiresAt,
           }
@@ -564,36 +564,36 @@ export function mockAdapter(opts: MockOptions = {}) {
         const out = roundTo(sub(usd, fee), 6)
         return {
           adapterId: id, legId: leg.legId,
-          input: { amount: input, asset: { kind: 'fiat', currency: fiat } },
-          output: { amount: out.startsWith('-') ? '0' : out, asset: leg.to.asset.kind === 'crypto' ? { ...BASE_USDC, ...leg.to.asset, symbol: 'USDC', decimals: 6 } : BASE_USDC },
+          input: { value: input, asset: { kind: 'fiat', currency: fiat } },
+          output: { value: out.startsWith('-') ? '0' : out, asset: leg.to.asset.kind === 'crypto' ? { ...BASE_USDC, ...leg.to.asset, symbol: 'USDC', decimals: 6 } : BASE_USDC },
           fees: [{ kind: 'provider', label: `${name} fee`, amount: roundTo(mulRatio(fee, String(1 / Number(rate))), minorUnits(fiat)), currency: fiat }],
           eta: spec.eta, expiresAt,
         }
       }
       if (spec.id === 'solana-onchain' && solAsset) {
         // A plain transfer on the cluster: what the user sends arrives.
-        const amount = amountIn?.amount ?? amountOut?.amount ?? '0'
-        return { adapterId: id, legId: leg.legId, input: { amount, asset: solAsset }, output: { amount, asset: solAsset }, fees: [], eta: spec.eta, expiresAt }
+        const amount = amountIn?.value ?? amountOut?.value ?? '0'
+        return { adapterId: id, legId: leg.legId, input: { value: amount, asset: solAsset }, output: { value: amount, asset: solAsset }, fees: [], eta: spec.eta, expiresAt }
       }
       if (spec.id === 'onchain' && localAsset) {
         // A plain transfer on the local chain: what the user sends arrives.
-        const amount = amountIn?.amount ?? amountOut?.amount ?? '0'
+        const amount = amountIn?.value ?? amountOut?.value ?? '0'
         return {
           adapterId: id, legId: leg.legId,
-          input: { amount, asset: localAsset },
-          output: { amount, asset: localAsset },
+          input: { value: amount, asset: localAsset },
+          output: { value: amount, asset: localAsset },
           fees: [],
           eta: spec.eta, expiresAt,
         }
       }
       // crypto legs: 1:1 minus 5 bps
-      const input = amountIn?.amount ?? amountOut?.amount ?? '0'
+      const input = amountIn?.value ?? amountOut?.value ?? '0'
       const fee = bps(input, fees.crypto)
       const inAsset = amountIn?.asset.kind === 'crypto' ? amountIn.asset : BASE_USDC
       return {
         adapterId: id, legId: leg.legId,
-        input: { amount: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : nativeDecimals(inAsset.chain)) } },
-        output: { amount: roundTo(sub(input, fee), 6), asset: destAsset(ctx) },
+        input: { value: input, asset: { ...inAsset, symbol: symbolOf(inAsset), decimals: inAsset.decimals ?? (symbolOf(inAsset) === 'USDC' ? 6 : nativeDecimals(inAsset.chain)) } },
+        output: { value: roundTo(sub(input, fee), 6), asset: destAsset(ctx) },
         fees: [{ kind: 'network', label: 'Network and bridge', amount: roundTo(fee, 6), currency: 'USDC' }],
         eta: spec.eta, expiresAt,
         ...(leg.legId === 'transfer' ? { data: { anyAmount: true } } : {}),
@@ -615,7 +615,7 @@ export function mockAdapter(opts: MockOptions = {}) {
           if (cardForm) return cardFormStep(ref)
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
-            surface: { kind: 'REDIRECT', url: `${base}/adapters/${id}/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.amount}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
+            surface: { kind: 'REDIRECT', url: `${base}/adapters/${id}/checkout?ref=${encodeURIComponent(ref)}&amount=${quote.input.value}&currency=${quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : ''}&to=${encodeURIComponent(deliverTo?.address ?? '')}`, popup: true, provider: name },
             transitions: [awaitPoll(POLL)],
           }
         case 'local':
@@ -623,7 +623,7 @@ export function mockAdapter(opts: MockOptions = {}) {
           const cur = quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : 'USD'
           return {
             state: 'PAYMENT', status: 'awaiting_user', ref,
-            surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.amount}|${cur}`, amount: quote.input.amount, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
+            surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.value}|${cur}`, amount: quote.input.value, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
             transitions: [
               { name: 'simulate_payment', kind: 'SUBMIT', label: 'Simulate payment (test mode)' },
               awaitPoll(POLL),
@@ -639,7 +639,7 @@ export function mockAdapter(opts: MockOptions = {}) {
                 kind: 'solana', type: 'transfer',
                 to: deliverTo?.address && isSolanaChain(d.chain) ? deliverTo.address : fakeAddressFor(src.chain, ref),
                 mint: src.token === 'native' ? 'native' : src.token,
-                amount: toBaseUnits(quote.input.amount, src.decimals ?? nativeDecimals(src.chain)),
+                amount: toBaseUnits(quote.input.value, src.decimals ?? nativeDecimals(src.chain)),
                 decimals: src.decimals ?? nativeDecimals(src.chain),
               }
             : { to: deliverTo?.address ?? fakeAddress(ref), data: '0x', value: '0', chainId: evmChainId(src.chain) ?? 8453 }
@@ -666,7 +666,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         }
         case 'onchain': {
           const recipient = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-          if (!recipient) throw new OrkException(orkError('BAD_REQUEST', { message: 'The local chain leg needs a destination address.' }), 400)
+          if (!recipient) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'The local chain leg needs a destination address.' }), 400)
           const d = ctx.destination
           let settlement: MockOrder['settlement']
           if (d.type === 'crypto' && d.settlement) {
@@ -680,7 +680,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         }
         case 'solana-onchain': {
           const recipient = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-          if (!recipient) throw new OrkException(orkError('BAD_REQUEST', { message: 'The Solana leg needs a destination address.' }), 400)
+          if (!recipient) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'The Solana leg needs a destination address.' }), 400)
           // Only slots from now on can hold the payment.
           const fromSlot = await evmRpc<number>(ctx.fetch, sol!.rpcUrl, 'getSlot', [{ commitment: 'confirmed' }], { log: ctx.log })
           const o: MockOrder = { ...order, input: quote.input, payTo: recipient, ...(typeof fromSlot === 'number' ? { fromSlot } : {}) }
@@ -703,58 +703,58 @@ export function mockAdapter(opts: MockOptions = {}) {
 
     async transition({ ref, name: t, inputs }, ctx): Promise<LegStep> {
       const o = await ctx.shared.get<MockOrder>(orderKey(ref))
-      if (!o) throw new OrkException(orkError('NOT_FOUND', { message: 'Unknown mock order.' }), 404)
+      if (!o) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'Unknown mock order.' }), 404)
       if (o.kind === 'offramp' && t === 'submit_details') {
-        if (o.status !== 'awaiting') throw new OrkException(orkError('BAD_REQUEST', { message: 'The payout account is already set.' }), 409)
+        if (o.status !== 'awaiting') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'The payout account is already set.' }), 409)
         const v = (id: string) => (typeof inputs?.[id] === 'string' ? (inputs[id] as string).trim() : '')
         for (const f of payoutFields(o.method)) {
-          if (!v(f.id)) throw new OrkException(orkError('BAD_REQUEST', { message: `Enter the ${f.label.toLowerCase()}.` }), 400)
+          if (!v(f.id)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Enter the ${f.label.toLowerCase()}.` }), 400)
         }
         const acct = v('account_number') || v('phone')
-        if (v('phone') && !/^\+?[0-9 ()-]{7,20}$/.test(v('phone'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid phone number.' }), 400)
-        if (v('account_number') && !/^[0-9A-Za-z -]{4,34}$/.test(v('account_number'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid account number.' }), 400)
+        if (v('phone') && !/^\+?[0-9 ()-]{7,20}$/.test(v('phone'))) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter a valid phone number.' }), 400)
+        if (v('account_number') && !/^[0-9A-Za-z -]{4,34}$/.test(v('account_number'))) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter a valid account number.' }), 400)
         const next: MockOrder = { ...o, account: mask(acct.replace(/\D/g, '') || acct) }
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
         return offrampStep(ref, next)
       }
       if (o.kind === 'solana-onchain') {
-        if (t !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+        if (t !== 'submit_tx') throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
         const sig = typeof inputs?.txHash === 'string' ? inputs.txHash : ''
-        if (!isSolanaSignature(sig)) throw new OrkException(orkError('BAD_REQUEST', { message: 'Send a valid Solana transaction signature.' }), 400)
+        if (!isSolanaSignature(sig)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Send a valid Solana transaction signature.' }), 400)
         const next: MockOrder = { ...o, txHash: sig }
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
         return verifySolana(ref, next, ctx)
       }
       if (o.kind === 'onchain') {
-        if (t !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+        if (t !== 'submit_tx') throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
         const txHash = typeof inputs?.txHash === 'string' ? inputs.txHash : ''
-        if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
+        if (!/^0x[0-9a-fA-F]{64}$/.test(txHash)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
         const next: MockOrder = { ...o, txHash }
         await ctx.shared.put(orderKey(ref), next, ORDER_TTL_SEC)
         return next.settlement ? verifyLocalSettlement(ref, next, ctx) : verifyLocal(ref, next, ctx)
       }
       if (o.kind === 'card' && t === 'pay_card') {
-        if (!cardForm) throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
-        if (o.status !== 'awaiting') throw new OrkException(orkError('BAD_REQUEST', { message: 'This card payment is already sent.' }), 409)
+        if (!cardForm) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+        if (o.status !== 'awaiting') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This card payment is already sent.' }), 409)
         const v = (k: string) => (typeof inputs?.[k] === 'string' ? (inputs[k] as string).replace(/\s+/g, '') : '')
-        if (!/^[0-9]{12,19}$/.test(v('card_number'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid card number.' }), 400)
-        if (!/^(0[1-9]|1[0-2])\/?[0-9]{2}$/.test(v('expiry'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the expiry as MM/YY.' }), 400)
-        if (!/^[0-9]{3,4}$/.test(v('cvc'))) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid CVC.' }), 400)
+        if (!/^[0-9]{12,19}$/.test(v('card_number'))) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter a valid card number.' }), 400)
+        if (!/^(0[1-9]|1[0-2])\/?[0-9]{2}$/.test(v('expiry'))) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter the expiry as MM/YY.' }), 400)
+        if (!/^[0-9]{3,4}$/.test(v('cvc'))) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter a valid CVC.' }), 400)
         if (v('card_number') === MOCK_DECLINED_CARD) {
           await ctx.shared.put(orderKey(ref), { ...o, status: 'failed' }, ORDER_TTL_SEC)
-          return { state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message: 'The test card was declined.' }), ref }
+          return { state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PAYMENT_FAILED', { message: 'The test card was declined.' }), ref }
         }
         await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
         return { state: 'PROCESSING', sub: 'settling', status: 'processing', ref, transitions: [awaitPoll(POLL)] }
       }
       if (o.kind === 'offramp' && t === 'submit_tx' && !o.account) {
-        throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
+        throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
       }
       if (t === 'simulate_payment' || t === 'simulate_deposit' || t === 'submit_tx') {
         // A transfer with no amount up front (any amount): the simulated deposit sends a test amount,
         // so the session and the admin tools show what arrived, as a real provider reports it.
-        const output = t === 'simulate_deposit' && o.output && !/[1-9]/.test(o.output.amount)
-          ? { ...o.output, amount: typeof inputs?.amount === 'string' && /[1-9]/.test(inputs.amount) ? inputs.amount : SIMULATED_DEPOSIT }
+        const output = t === 'simulate_deposit' && o.output && !/[1-9]/.test(o.output.value)
+          ? { ...o.output, value: typeof inputs?.amount === 'string' && /[1-9]/.test(inputs.amount) ? inputs.amount : SIMULATED_DEPOSIT }
           : o.output
         await ctx.shared.put(orderKey(ref), { ...o, output, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
         return {
@@ -763,7 +763,7 @@ export function mockAdapter(opts: MockOptions = {}) {
           ...(typeof inputs?.txHash === 'string' ? { txHash: inputs.txHash } : {}),
         }
       }
-      throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${t} is not supported.` }), 409)
     },
 
     async status({ ref }, ctx): Promise<LegStep> {
@@ -797,7 +797,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         if (!o) return new Response('Unknown order', { status: 404 })
         if (outcome === 'fail') {
           await ctx.shared.put(orderKey(r), { ...o, status: 'failed' }, ORDER_TTL_SEC)
-          await ctx.applyEvent({ ref: r, status: 'failed', error: orkError('PAYMENT_FAILED') } satisfies LegEvent)
+          await ctx.applyEvent({ ref: r, status: 'failed', error: openRampError('PAYMENT_FAILED') } satisfies LegEvent)
         } else {
           await ctx.shared.put(orderKey(r), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
           await ctx.applyEvent({ ref: r, status: 'processing' })
@@ -814,11 +814,11 @@ export function mockAdapter(opts: MockOptions = {}) {
  * So it never runs in a live session: a live app must not credit a mock payment.
  */
 function refuseLive(ctx: AdapterContext) {
-  if (ctx.session.livemode) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'The mock provider is for test mode only.' }), 503)
+  if (ctx.session.livemode) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The mock provider is for test mode only.' }), 503)
 }
 
 function unknownLeg(legId: string) {
-  return new OrkException(orkError('NOT_FOUND', { message: `Unknown mock leg ${legId}` }), 404)
+  return new OpenRampException(openRampError('NOT_FOUND', { message: `Unknown mock leg ${legId}` }), 404)
 }
 
 function escapeHtml(s: string) {

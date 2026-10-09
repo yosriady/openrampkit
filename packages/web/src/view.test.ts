@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Snapshot } from '@openrampkit/client'
-import { USDC, orkError } from '@openrampkit/core'
+import { USDC, openRampError } from '@openrampkit/core'
 import { METHODS, method, plan, quote, session, step } from '../../client/src/testctx.js'
 import { en } from './messages.js'
 import {
@@ -42,7 +42,7 @@ describe('mode, keys and screens', () => {
 
   it('screenOf', () => {
     expect(screenOf(snap({ screen: 'quotes' }), undefined)).toBe('quotes')
-    expect(screenOf(undefined, orkError('INTERNAL'))).toBe('error')
+    expect(screenOf(undefined, openRampError('INTERNAL'))).toBe('error')
     expect(screenOf(undefined, undefined)).toBe('loading')
   })
 })
@@ -66,9 +66,9 @@ describe('screenTitle', () => {
 describe('liveText', () => {
   it('announces loading, errors, quotes and step progress', () => {
     expect(liveText(undefined, undefined, en)).toBe('Loading')
-    expect(liveText(undefined, orkError('UNAUTHORIZED'), en)).toBe('This session is not valid.')
+    expect(liveText(undefined, openRampError('UNAUTHORIZED'), en)).toBe('This session is not valid.')
     expect(liveText(snap({ quotesLoading: true }), undefined, en)).toBe('Getting quotes')
-    expect(liveText(snap({ error: orkError('NO_QUOTES') }), undefined, en)).toMatch(/^No provider/)
+    expect(liveText(snap({ error: openRampError('NO_QUOTES') }), undefined, en)).toMatch(/^No provider/)
     const s = session(
       step({
         state: 'PROCESSING',
@@ -179,10 +179,10 @@ describe('amountModel', () => {
 describe('quotes', () => {
   it('quoteSubtitle', () => {
     expect(quoteSubtitle(quote({ id: 'a' }), en)).toBe('You pay $100.00 · Fees $2.50')
-    expect(quoteSubtitle(quote({ id: 'a', input: { amount: '0', asset: { kind: 'fiat', currency: 'USD' } }, fees: [] }), en)).toBe('No fees')
+    expect(quoteSubtitle(quote({ id: 'a', input: { value: '0', asset: { kind: 'fiat', currency: 'USD' } }, fees: [] }), en)).toBe('No fees')
     // Fees in the rate: a known amount shows; an unknown amount never says "No fees"
     const inRate = (amount: string) => [{ kind: 'provider' as const, label: 'guardarian fee (included in rate)', amount, currency: 'EUR', inRate: true }]
-    expect(quoteSubtitle(quote({ id: 'a', input: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } }, fees: inRate('0') }), en)).toBe('You pay €100.00')
+    expect(quoteSubtitle(quote({ id: 'a', input: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } }, fees: inRate('0') }), en)).toBe('You pay €100.00')
     expect(quoteSubtitle(quote({ id: 'a', fees: inRate('4.8').map((f) => ({ ...f, currency: 'USD' })) }), en)).toBe('You pay $100.00 · Fees $4.80')
   })
 

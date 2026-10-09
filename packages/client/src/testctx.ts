@@ -5,7 +5,7 @@ import { vi } from 'vitest'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import { USDC } from '@openrampkit/core'
-import type { Destination, MethodOption, OrkError, PlanResult, PublicSession, Quote, Step } from '@openrampkit/core'
+import type { Destination, MethodOption, OpenRampError, PlanResult, PublicSession, Quote, Step } from '@openrampkit/core'
 import { createOpenRamp } from '@openrampkit/server'
 import type { OpenRampConfig } from '@openrampkit/server'
 import { createOpenRampClient } from './client.js'
@@ -83,8 +83,8 @@ export function quote(p: Partial<Quote> & { id: string }): Quote {
     method: 'card',
     provider: 'Test provider',
     legs: [],
-    input: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } },
-    output: { amount: '97.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } },
+    input: { value: '100', asset: { kind: 'fiat', currency: 'USD' } },
+    output: { value: '97.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } },
     fees: [{ kind: 'provider', label: 'Fee', amount: '2.5', currency: 'USD' }],
     eta: { min: 60, max: 300 },
     ...p,
@@ -99,7 +99,7 @@ export function fakeClient(over: Partial<{ [K in keyof OpenRampClient]: OpenRamp
     baseUrl: BASE,
     getSession: vi.fn(async () => session('SELECT_METHOD')),
     plan: vi.fn(async () => plan()),
-    quotes: vi.fn(async () => ({ quotes: [quote({ id: 'q1' }), quote({ id: 'q2', provider: 'Other' })], errors: [] as OrkError[] })),
+    quotes: vi.fn(async () => ({ quotes: [quote({ id: 'q1' }), quote({ id: 'q2', provider: 'Other' })], errors: [] as OpenRampError[] })),
     select: vi.fn(async () => session(step({ state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://pay.example/x', popup: true } }))),
     transition: vi.fn(async () => session(step({ state: 'PROCESSING' }))),
     step: vi.fn(async () => session(step({ state: 'PROCESSING' }))),

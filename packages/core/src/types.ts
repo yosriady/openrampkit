@@ -170,7 +170,7 @@ export type Fee = {
 }
 
 /** Amount on one side of a leg or pathway */
-export type Amount = { amount: string; asset: Asset }
+export type Amount = { value: string; asset: Asset }
 
 export type LegQuote = {
   adapterId: string
@@ -202,7 +202,7 @@ export type Pathway = {
   legs: PathwayLeg[]
   method: string
   group: PathwayGroup
-  reason?: OrkError
+  reason?: OpenRampError
   eta: { min: number; max: number }
   limits?: { min?: string; max?: string; currency: string }
   /** Display name of the first leg's provider */
@@ -232,7 +232,7 @@ export type PublicLegQuote = Omit<LegQuote, 'data'>
  */
 export type PublicQuote = Omit<Quote, 'legs'> & { legs: PublicLegQuote[] }
 
-export type OrkErrorCode =
+export type OpenRampErrorCode =
   | 'REGION_UNSUPPORTED'
   | 'AMOUNT_TOO_LOW'
   | 'AMOUNT_TOO_HIGH'
@@ -257,8 +257,8 @@ export type OrkErrorCode =
   | 'INTERNAL'
   | (string & {})
 
-export type OrkError = {
-  code: OrkErrorCode
+export type OpenRampError = {
+  code: OpenRampErrorCode
   /** Safe to show to the user */
   message: string
   retryable: boolean
@@ -440,7 +440,7 @@ export type Step = {
   legIndex?: number
   surface?: Surface
   transitions: Transition[]
-  error?: OrkError
+  error?: OpenRampError
   progress?: {
     legs: Array<{
       adapterId: string
@@ -469,7 +469,7 @@ export type LegStep = {
   surface?: Surface
   transitions: Transition[]
   status: LegStatus
-  error?: OrkError
+  error?: OpenRampError
   /** Provider reference, used to route webhooks and status checks */
   ref?: string
   output?: Amount
@@ -572,7 +572,7 @@ export type AmountMismatch = {
 
 // ---------- Events ----------
 
-export type OrkEventType =
+export type OpenRampEventType =
   | 'session.created'
   | 'session.completed'
   | 'session.failed'
@@ -594,9 +594,9 @@ export type OrkEventType =
   | 'surface.opened'
   | (string & {})
 
-export type OrkEvent<T = unknown> = {
+export type OpenRampEvent<T = unknown> = {
   id: string
-  type: OrkEventType
+  type: OpenRampEventType
   created: number
   livemode: boolean
   sessionId?: string

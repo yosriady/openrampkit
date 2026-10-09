@@ -190,7 +190,7 @@ describe('withdraw to a wallet (custody: user_wallet)', () => {
     const t = make()
     const s = await t.create()
     const { quote, session } = await run(t, s, TO_ARB, 'wallet')
-    expect(quote.input).toMatchObject({ amount: '25', asset: { chain: 'eip155:8453', symbol: 'USDC' } })
+    expect(quote.input).toMatchObject({ value: '25', asset: { chain: 'eip155:8453', symbol: 'USDC' } })
     expect(quote.output.asset).toMatchObject({ chain: 'eip155:42161', token: USDC['eip155:42161'] })
     expect(session.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: ARB_ADDR, chainId: 8453 }] } })
     const sent = await t.call<PublicSession>(`/sessions/${s.id}/transitions/submit_tx`, s.clientSecret, { inputs: { txHash: TX } })
@@ -212,8 +212,8 @@ describe('withdraw to cash with the mock offramp', () => {
     const t = make()
     const s = await t.create()
     const { quote, session } = await run(t, s, { type: 'fiat', currency: 'PHP' }, 'gcash', '20')
-    expect(quote).toMatchObject({ method: 'gcash', input: { amount: '20' }, output: { asset: { kind: 'fiat', currency: 'PHP' } }, fees: [{ amount: '0.200000', currency: 'USDC' }] })
-    expect(quote.output.amount).toBe('1131.43') // (20 - 1%) / 0.0175
+    expect(quote).toMatchObject({ method: 'gcash', input: { value: '20' }, output: { asset: { kind: 'fiat', currency: 'PHP' } }, fees: [{ amount: '0.200000', currency: 'USDC' }] })
+    expect(quote.output.value).toBe('1131.43') // (20 - 1%) / 0.0175
     expect(session.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'FORM', fields: [{ id: 'account_name' }, { id: 'phone', type: 'tel', label: 'GCash phone number' }] }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] })
 
     const tr = (name: string, inputs: Record<string, unknown> = {}) => t.call<PublicSession>(`/sessions/${s.id}/transitions/${name}`, s.clientSecret, { inputs })
@@ -320,7 +320,7 @@ function eventOfframp() {
       },
     ],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { amount: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 } }
+      return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { value: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 } }
     },
     async start() {
       return { state: 'PROCESSING', status: 'processing', ref: 'order_1', transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] }

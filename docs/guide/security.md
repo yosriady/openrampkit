@@ -83,7 +83,7 @@ A same-chain `wallet` payment completes only when the transaction succeeded, was
 
 ### Errors and logs
 
-- The browser gets only `OrkError` codes and safe messages. A raw provider error, a stack trace or a key never goes to the browser.
+- The browser gets only `OpenRampError` codes and safe messages. A raw provider error, a stack trace or a key never goes to the browser.
 - The server does not log secrets, API keys or request headers.
 
 ### CORS

@@ -1,7 +1,7 @@
 import { createComponent, untrack } from 'solid-js'
 import type { Accessor, JSX } from 'solid-js'
 import { Dynamic } from 'solid-js/web'
-import type { OrkError, OrkEvent, PublicSession } from '@openrampkit/core'
+import type { OpenRampError, OpenRampEvent, PublicSession } from '@openrampkit/core'
 import { useOpenRamp } from './provider.js'
 
 export type DepositButtonRenderProps = {
@@ -16,8 +16,8 @@ export type DepositButtonCustomProps = {
   getClientSecret: string | (() => Promise<string>)
   onComplete?: (session: PublicSession) => void
   /** Called when the modal closes before the session completes */
-  onError?: (error: OrkError) => void
-  onEvent?: (e: OrkEvent) => void
+  onError?: (error: OpenRampError) => void
+  onEvent?: (e: OpenRampEvent) => void
   children: (props: DepositButtonRenderProps) => JSX.Element
 }
 
@@ -39,7 +39,7 @@ function useOpen(kind: Kind, props: Omit<DepositButtonCustomProps, 'children'>):
     const begin = kind === 'withdraw' ? beginWithdraw : beginDeposit
     begin({ clientSecret: props.getClientSecret, ...(props.onEvent ? { onEvent: props.onEvent } : {}) }).then(
       (s) => props.onComplete?.(s),
-      (e: OrkError) => props.onError?.(e),
+      (e: OpenRampError) => props.onError?.(e),
     )
   }
   return { open, isOpen }

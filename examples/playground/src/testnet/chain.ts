@@ -1,7 +1,7 @@
 // Testnet mode: calldata, error messages and the wallet guard. Pure code with no wagmi import,
 // so the unit tests run in Node.
 
-import { fromBaseUnits, isEvmTx, orkError, toBaseUnits } from '@openrampkit/core'
+import { fromBaseUnits, isEvmTx, openRampError, toBaseUnits } from '@openrampkit/core'
 import type { TxRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
 import { SETTLEMENT_SELECTORS, bytes32ToSessionId, erc20ApproveData } from '@openrampkit/adapter'
 
@@ -127,7 +127,7 @@ export type GuardOptions = {
  * - It turns wallet errors into short messages that the widget shows.
  */
 export function guardWallet(base: WalletAdapter, g: GuardOptions): WalletAdapter {
-  const fail = (message: string) => orkError('BAD_REQUEST', { message, recovery: 'retry_payment' })
+  const fail = (message: string) => openRampError('BAD_REQUEST', { message, recovery: 'retry_payment' })
   return {
     id: `${base.id}-testnet`,
     namespaces: ['eip155'],

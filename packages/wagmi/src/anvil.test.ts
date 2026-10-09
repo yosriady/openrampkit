@@ -88,7 +88,7 @@ describe.skipIf(!hasAnvil() && process.env.OPENRAMP_REQUIRE_ANVIL !== '1')('loca
       await c.submitAmount()
     }
     await waitFor(() => !c.getSnapshot().quotesLoading && c.getSnapshot().quotes.length > 0)
-    expect(c.getSnapshot().quotes[0]).toMatchObject({ output: { amount: '25' } })
+    expect(c.getSnapshot().quotes[0]).toMatchObject({ output: { value: '25' } })
     await c.confirm()
     const surface = c.getSnapshot().session!.step.surface!
     expect(surface).toMatchObject({ kind: 'WALLET_TX', chain: ANVIL_CHAIN })

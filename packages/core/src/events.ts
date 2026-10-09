@@ -1,4 +1,4 @@
-import type { OrkEvent, OrkEventType } from './types.js'
+import type { OpenRampEvent, OpenRampEventType } from './types.js'
 
 export function randomId(prefix: string, bytes = 12): string {
   const buf = new Uint8Array(bytes)
@@ -9,7 +9,7 @@ export function randomId(prefix: string, bytes = 12): string {
 }
 
 /** Build an event envelope. The id is random unless `opts.id` is given (the server gives a deterministic one). */
-export function createEvent<T>(type: OrkEventType, object: T, opts: { id?: string; sessionId?: string; livemode?: boolean } = {}): OrkEvent<T> {
+export function createEvent<T>(type: OpenRampEventType, object: T, opts: { id?: string; sessionId?: string; livemode?: boolean } = {}): OpenRampEvent<T> {
   return {
     id: opts.id ?? randomId('evt'),
     type,

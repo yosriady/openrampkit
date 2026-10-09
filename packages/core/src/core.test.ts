@@ -109,8 +109,8 @@ describe('rankQuotes', () => {
   it('orders by output and marks badges', () => {
     const q = (id: string, out: string, eta: number): Quote => ({
       id, pathwayId: id, method: 'card', provider: id, legs: [],
-      input: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } },
-      output: { amount: out, asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x' } }, fees: [], eta: { min: 0, max: eta },
+      input: { value: '100', asset: { kind: 'fiat', currency: 'USD' } },
+      output: { value: out, asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x' } }, fees: [], eta: { min: 0, max: eta },
     })
     const r = rankQuotes([q('a', '97', 300), q('b', '98', 600), q('c', '95', 60)])
     expect(r.map((x) => x.id)).toEqual(['b', 'a', 'c'])

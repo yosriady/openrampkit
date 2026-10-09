@@ -101,9 +101,9 @@ describe('swapped adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/api/v1/merchant/pricing', reply: () => PRICING }])
     const a = swapped({ publicKey: PK, secretKey: SK, markup: 1 })
     const ctx = makeCtx({ fetch })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q.output).toEqual({ amount: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
       { kind: 'provider', label: 'Swapped fee', amount: '2.16', currency: 'USD' },
       { kind: 'network', label: 'Network fee', amount: '0.02', currency: 'USD' },
@@ -115,9 +115,9 @@ describe('swapped adapter', () => {
   it('quote: a failed pricing call is PROVIDER_UNAVAILABLE, an unsuccessful one is NO_QUOTES', async () => {
     const bad = fakeFetch([{ method: 'POST', match: '/pricing', status: 500, reply: () => ({}) }])
     const a = swapped({ publicKey: PK, secretKey: SK })
-    await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    await expect(a.quote({ leg: cardLeg, amountIn: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     const no = fakeFetch([{ method: 'POST', match: '/pricing', reply: () => ({ success: false, message: 'Amount too low' }) }])
-    await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: no.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Swapped: Amount too low' } })
+    await expect(a.quote({ leg: cardLeg, amountIn: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: no.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Swapped: Amount too low' } })
   })
 
   it('regional groups: BLIK (PL), SPEI (MX) and mobile money (KE) from the catalog, planned, quoted and started', async () => {
@@ -156,7 +156,7 @@ describe('swapped adapter', () => {
       expect(plan.methods[0]).toMatchObject({ method, group: 'recommended', providers: ['Swapped'] })
       const leg: PathwayLeg = { ...cardLeg, legId: group, from: { asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } } }
       const ctx = makeCtx({ fetch, session: { country } })
-      const q = await a.quote({ leg, amountIn: { amount: '100', asset: { kind: 'fiat', currency } } }, ctx)
+      const q = await a.quote({ leg, amountIn: { value: '100', asset: { kind: 'fiat', currency } } }, ctx)
       expect(calls.find((c) => c.url.includes('/pricing'))!.body).toMatchObject({ payment_method: group, fiat_currency: currency, region: country })
       const step = await a.start({ leg, quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
       expect(new URL((step.surface as { url: string }).url).searchParams.get('method')).toBe(group)
@@ -167,7 +167,7 @@ describe('swapped adapter', () => {
     const { fetch } = fakeFetch([{ method: 'POST', match: '/pricing', reply: () => PRICING }])
     const a = swapped({ publicKey: PK, secretKey: SK })
     const ctx = makeCtx({ fetch, session: { email: 'a@b.co', country: 'US', userId: 'u_42' } })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
     expect(step.state).toBe('PAYMENT')
@@ -216,7 +216,7 @@ describe('swapped adapter', () => {
     const emptySig = createHmac('sha256', '').update(broadcast).digest('base64')
     expect(await unset.webhook!.verify(req(broadcast, emptySig), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
     expect(await a.webhook!.parse(broadcast, { log: silentLog, shared: memoryKV(), fetch })).toMatchObject([
-      { ref: 'u_42.abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      { ref: 'u_42.abc', status: 'succeeded', txHash: '0xhash', output: { value: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const parse = (o: object) => a.webhook!.parse(JSON.stringify(o), { log: silentLog, shared: memoryKV(), fetch })
     expect(await parse({ order_status: 'payment_pending', external_customer_id: 'u_42.abc' })).toEqual([])
@@ -234,7 +234,7 @@ describe('swapped adapter', () => {
 })
 
 
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 const signB64 = (body: string) => createHmac('sha256', SK).update(body).digest('base64')
 const hookReq = (body: string, headers: Record<string, string> = {}) => new Request('https://app.test/api/openramp/webhooks/swapped', { method: 'POST', body, headers })
 
@@ -280,10 +280,10 @@ describe('swapped errors and edge cases', () => {
     const a = swapped({ publicKey: PK, secretKey: SK, defaultCountry: 'vn', markup: 0.5 })
     const arb = { kind: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!.toUpperCase().replace('0X', '0x') }
     const leg: PathwayLeg = { ...cardLeg, legId: 'vietqr', to: { asset: arb, location: { kind: 'address', address: 'x' } } }
-    const q = await a.quote({ leg, amountOut: { amount: '50', asset: arb } }, makeCtx({ fetch, session: { country: undefined } }))
+    const q = await a.quote({ leg, amountOut: { value: '50', asset: arb } }, makeCtx({ fetch, session: { country: undefined } }))
     expect(checkLegQuote(q)).toEqual([])
     expect(calls[0]!.body).toEqual({ api_key: PK, payment_method: 'vietqr', fiat_currency: 'USD', crypto_currency: 'USDC_ARBITRUM', crypto_amount: 50, region: 'VN', markup: 0.5 })
-    expect(q.input.amount).toBe('52.5')
+    expect(q.input.value).toBe('52.5')
     expect(q.output.asset).toMatchObject({ chain: 'eip155:42161', decimals: 6 })
     expect(q.fees).toEqual([{ kind: 'app', label: 'App fee', amount: '0.25', currency: 'USD' }])
     expect(q.eta).toEqual({ min: 120, max: 1800 })
@@ -296,7 +296,7 @@ describe('swapped errors and edge cases', () => {
     })
     expect(calls).toHaveLength(2)
     // Swapped needs a fiat amount
-    await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch }))).rejects.toMatchObject({
+    await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { value: '1', asset: BASE_USDC } }, makeCtx({ fetch }))).rejects.toMatchObject({
       error: { code: 'BAD_REQUEST' },
     })
   })
@@ -310,13 +310,13 @@ describe('swapped errors and edge cases', () => {
     const q = await a.quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: SOL, token: mint }, location: { kind: 'address', address: 'x' } } }, amountIn: usd('10') }, makeCtx({ fetch }))
     expect((calls[0]!.body as { crypto_currency: string }).crypto_currency).toBe('USDC_SOLANA')
     expect(q.output.asset).toEqual({ kind: 'crypto', chain: SOL, token: mint })
-    expect(q.output.amount).toBe('95.93')
+    expect(q.output.value).toBe('95.93')
     expect(swapped({ publicKey: PK, secretKey: SK, deliverAssets: [] }).legs[0]!.to.asset).toMatchObject({ chains: { 'eip155:8453': [DEFAULT_DELIVER_ASSETS[0]!.token] } })
   })
 
   it('start: needs a wallet address; falls back to the leg and target when quote data is missing', async () => {
     const a = swapped({ publicKey: PK, secretKey: SK, markup: 1 })
-    const quote = { adapterId: 'swapped', legId: 'creditcard', input: usd('20'), output: { amount: '19', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'swapped', legId: 'creditcard', input: usd('20'), output: { value: '19', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
     await expect(a.start({ leg: cardLeg, quote }, makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', merchantId: 'm', currency: 'USD' } as never }))).rejects.toMatchObject({
       error: { code: 'BAD_REQUEST', message: 'Swapped needs a wallet address to deliver to.' },
     })
@@ -331,7 +331,7 @@ describe('swapped errors and edge cases', () => {
     expect(url.searchParams.has('baseCountry')).toBe(false)
     expect(await ctx.store.get(`o:${step.ref}`)).toMatchObject({ currencyCode: 'USDC_BASE' })
     // a crypto-denominated quote input uses the currency stored in quote data
-    const s2 = await a.start({ leg: cardLeg, quote: { ...quote, input: { amount: '20', asset: BASE_USDC }, data: { fiat: 'EUR' } } }, ctx)
+    const s2 = await a.start({ leg: cardLeg, quote: { ...quote, input: { value: '20', asset: BASE_USDC }, data: { fiat: 'EUR' } } }, ctx)
     expect(new URL((s2.surface as { url: string }).url).searchParams.get('baseCurrencyCode')).toBe('EUR')
   })
 
@@ -427,7 +427,7 @@ describe('swapped status polling (statusPolling: true)', () => {
     expect(await status()).toMatchObject({ state: 'PROCESSING', status: 'processing' })
     list = [{ external_customer_id: ref, order_status: 'order_completed', transaction_id: '0xtx', order_crypto: 'USDC_BASE', order_crypto_amount: 95.93 }]
     const done = await status()
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xtx', output: { amount: '95.93' } })
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xtx', output: { value: '95.93' } })
     expect(checkLegStep(done)).toEqual([])
     list = [{ external_customer_id: ref, order_status: 'order_cancelled' }]
     expect(await status()).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'PAYMENT_FAILED' } })
@@ -449,9 +449,9 @@ describe('swapped live API', () => {
     const ctx = makeCtx({ fetch: globalThis.fetch, session: { country: 'US' } })
     const legs = await a.catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, ctx)
     expect(legs.map((l) => l.methods![0])).toContain('card')
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(Number(q.output.amount)).toBeGreaterThan(80)
+    expect(Number(q.output.value)).toBeGreaterThan(80)
   }, 30_000)
 })
 

@@ -1,6 +1,6 @@
-import type { OrkError, OrkErrorCode } from './types.js'
+import type { OpenRampError, OpenRampErrorCode } from './types.js'
 
-const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
+const DEFAULT_MESSAGES: Partial<Record<OpenRampErrorCode, string>> = {
   REGION_UNSUPPORTED: 'This method is not available in your region.',
   AMOUNT_TOO_LOW: 'The amount is below the minimum for this method.',
   AMOUNT_TOO_HIGH: 'The amount is above the maximum for this method.',
@@ -25,7 +25,7 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
   INTERNAL: 'Something went wrong on our side.',
 }
 
-const RETRYABLE: Partial<Record<OrkErrorCode, boolean>> = {
+const RETRYABLE: Partial<Record<OpenRampErrorCode, boolean>> = {
   CONFLICT: true,
   QUOTE_EXPIRED: true,
   NO_QUOTES: true,
@@ -35,7 +35,7 @@ const RETRYABLE: Partial<Record<OrkErrorCode, boolean>> = {
   INTERNAL: true,
 }
 
-export function orkError(code: OrkErrorCode, overrides: Partial<Omit<OrkError, 'code'>> = {}): OrkError {
+export function openRampError(code: OpenRampErrorCode, overrides: Partial<Omit<OpenRampError, 'code'>> = {}): OpenRampError {
   return {
     code,
     message: overrides.message ?? DEFAULT_MESSAGES[code] ?? 'Something went wrong.',
@@ -45,17 +45,17 @@ export function orkError(code: OrkErrorCode, overrides: Partial<Omit<OrkError, '
   }
 }
 
-/** Error class for throwing across boundaries; serializes to OrkError. */
-export class OrkException extends Error {
-  readonly error: OrkError
+/** Error class for throwing across boundaries; serializes to OpenRampError. */
+export class OpenRampException extends Error {
+  readonly error: OpenRampError
   readonly status: number
-  constructor(error: OrkError, status = 400) {
+  constructor(error: OpenRampError, status = 400) {
     super(error.message)
     this.error = error
     this.status = status
   }
 }
 
-export function isOrkError(value: unknown): value is OrkError {
+export function isOpenRampError(value: unknown): value is OpenRampError {
   return !!value && typeof value === 'object' && 'code' in value && 'message' in value
 }

@@ -1,6 +1,6 @@
 import { defineComponent, h } from 'vue'
 import type { DefineComponent, PropType, Ref } from 'vue'
-import type { OrkError, OrkEvent, PublicSession } from '@openrampkit/core'
+import type { OpenRampError, OpenRampEvent, PublicSession } from '@openrampkit/core'
 import { useOpenRamp } from './provider.js'
 
 export type DepositButtonSlotProps = {
@@ -17,8 +17,8 @@ const customProps = {
   getClientSecret: { type: [String, Function] as PropType<string | (() => Promise<string>)>, required: true as const },
   onComplete: Function as PropType<(session: PublicSession) => void>,
   /** Called when the modal closes before the session completes */
-  onError: Function as PropType<(error: OrkError) => void>,
-  onEvent: Function as PropType<(e: OrkEvent) => void>,
+  onError: Function as PropType<(error: OpenRampError) => void>,
+  onEvent: Function as PropType<(e: OpenRampEvent) => void>,
 }
 
 export type DepositButtonCustomProps = {
@@ -26,8 +26,8 @@ export type DepositButtonCustomProps = {
   getClientSecret: string | (() => Promise<string>)
   onComplete?: ((session: PublicSession) => void) | undefined
   /** Called when the modal closes before the session completes */
-  onError?: ((error: OrkError) => void) | undefined
-  onEvent?: ((e: OrkEvent) => void) | undefined
+  onError?: ((error: OpenRampError) => void) | undefined
+  onEvent?: ((e: OpenRampEvent) => void) | undefined
 }
 export type DepositButtonProps = DepositButtonCustomProps & {
   /** Button text. The default slot takes precedence. */
@@ -46,7 +46,7 @@ function useOpen(kind: Kind, props: DepositButtonCustomProps): { open: () => voi
     const begin = kind === 'withdraw' ? beginWithdraw : beginDeposit
     begin({ clientSecret: props.getClientSecret, ...(props.onEvent ? { onEvent: props.onEvent } : {}) }).then(
       (s) => props.onComplete?.(s),
-      (e: OrkError) => props.onError?.(e),
+      (e: OpenRampError) => props.onError?.(e),
     )
   }
   return { open, isOpen }

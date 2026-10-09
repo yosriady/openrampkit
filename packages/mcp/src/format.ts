@@ -1,12 +1,12 @@
 // Compact, agent-friendly views of server objects. No secrets, no provider internals.
 
-import type { Amount, MethodOption, OrkError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
+import type { Amount, MethodOption, OpenRampError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
 
 export const TERMINAL = new Set(['completed', 'failed', 'expired', 'refunded', 'reversed'])
 
 export function amountText(a: Amount): string {
   const unit = a.asset.kind === 'fiat' ? a.asset.currency : (a.asset.symbol ?? a.asset.token)
-  return `${a.amount} ${unit}`
+  return `${a.value} ${unit}`
 }
 
 export function amountCurrency(a: Amount): string {
@@ -44,7 +44,7 @@ export function quoteView(q: PublicQuote) {
   }
 }
 
-export function errorView(e: OrkError) {
+export function errorView(e: OpenRampError) {
   return { code: e.code, message: e.message }
 }
 

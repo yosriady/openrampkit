@@ -3,9 +3,9 @@
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
-import { createAdapter, fetchJson, httpErrorToOrk, resolveEnv, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
+import { createAdapter, fetchJson, httpErrorToOpenRamp, resolveEnv, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
-import { OrkException, add, bps as applyBps, cmp, minorUnits, orkError, roundTo, sub } from '@openrampkit/core'
+import { OpenRampException, add, bps as applyBps, cmp, minorUnits, openRampError, roundTo, sub } from '@openrampkit/core'
 import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
 
 export type XenditOptions = {
@@ -114,7 +114,7 @@ export function xendit(opts: XenditOptions) {
 
   function channelFor(id: string): Channel {
     const c = byLeg.get(id)
-    if (!c) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Xendit leg ${id}` }), 400)
+    if (!c) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Xendit leg ${id}` }), 400)
     return c
   }
 
@@ -140,7 +140,7 @@ export function xendit(opts: XenditOptions) {
         ...(body ? { body: JSON.stringify(body) } : {}),
       })
     } catch (e) {
-      throw toOrk(e, ctx, c)
+      throw toOpenRamp(e, ctx, c)
     }
   }
 
@@ -152,17 +152,17 @@ export function xendit(opts: XenditOptions) {
    * - 400 API_VALIDATION_ERROR on a payment request for a channel ("... not supported for 'X' channel code"):
    *   the channel code or request body does not match the Xendit API for that channel.
    */
-  function toOrk(e: unknown, ctx: Pick<AdapterContext, 'log'>, c?: Channel): OrkException {
+  function toOpenRamp(e: unknown, ctx: Pick<AdapterContext, 'log'>, c?: Channel): OpenRampException {
     const status = (e as { status?: number }).status
     const errBody = (e as { body?: { error_code?: string; message?: string } }).body
     const code = errBody?.error_code
     const msg = errBody?.message
-    if (status === 429) return new OrkException(orkError('RATE_LIMITED'), 429)
+    if (status === 429) return new OpenRampException(openRampError('RATE_LIMITED'), 429)
     const name = c ? `${c.method} (${c.code}, ${c.country})` : 'this channel'
     const setup = (operator: string) => {
       ctx.log.error(operator, { status, error_code: code, message: msg?.slice(0, 200) })
-      return new OrkException(
-        orkError('PROVIDER_UNAVAILABLE', { message: 'This payment method is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' }),
+      return new OpenRampException(
+        openRampError('PROVIDER_UNAVAILABLE', { message: 'This payment method is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' }),
         502,
       )
     }
@@ -174,15 +174,15 @@ export function xendit(opts: XenditOptions) {
     }
     // Other 401 and 403 answers refuse our key or its permissions: a setup error, not a payment decline.
     if (status === 401 || status === 403) {
-      return httpErrorToOrk(e, 'Xendit', {
+      return httpErrorToOpenRamp(e, 'Xendit', {
         what: `call the API for ${name}`,
         log: ctx.log,
         setupHint: `Xendit answered ${code ?? 'with no error code'}. Check secretKey (xnd_development_ for test mode, xnd_production_ for live mode) and the API key permissions in the Xendit Dashboard.`,
       })
     }
     // Other 4xx answers are about this payment (amount, account, channel state): a decline.
-    if (status && status >= 400 && status < 500) return new OrkException(orkError('PROVIDER_DECLINED', { message: msg ? `Xendit: ${msg}`.slice(0, 200) : 'Xendit declined this payment.' }), 422)
-    return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Xendit is not available right now.' }), 502)
+    if (status && status >= 400 && status < 500) return new OpenRampException(openRampError('PROVIDER_DECLINED', { message: msg ? `Xendit: ${msg}`.slice(0, 200) : 'Xendit declined this payment.' }), 422)
+    return new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Xendit is not available right now.' }), 502)
   }
 
   function surfaceFor(pr: XenditPaymentRequest, c: Channel, amount: string): Surface | undefined {
@@ -215,8 +215,8 @@ export function xendit(opts: XenditOptions) {
       ref: pr.payment_request_id,
       ...(surface ? { surface } : {}),
       transitions: m.status === 'awaiting_user' || m.status === 'processing' ? [{ name: 'poll', kind: 'AWAIT', poll: POLL }] : [],
-      ...(m.status === 'failed' ? { error: orkError('PAYMENT_FAILED', { ...(pr.failure_code ? { message: `The payment failed (${pr.failure_code}).` } : {}) }) } : {}),
-      ...(m.status === 'expired' ? { error: orkError('QUOTE_EXPIRED', { message: 'The payment expired. Start again.' }) } : {}),
+      ...(m.status === 'failed' ? { error: openRampError('PAYMENT_FAILED', { ...(pr.failure_code ? { message: `The payment failed (${pr.failure_code}).` } : {}) }) } : {}),
+      ...(m.status === 'expired' ? { error: openRampError('QUOTE_EXPIRED', { message: 'The payment expired. Start again.' }) } : {}),
     }
   }
 
@@ -228,16 +228,16 @@ export function xendit(opts: XenditOptions) {
 
     async quote({ leg, amountIn }): Promise<LegQuote> {
       const c = channelFor(leg.legId)
-      const amount = roundTo(amountIn?.amount ?? '0', minorUnits(c.currency))
-      if (cmp(amount, c.min) < 0) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${c.min} ${c.currency}.` }), 422)
-      if (cmp(amount, c.max) > 0) throw new OrkException(orkError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${c.max} ${c.currency}.` }), 422)
+      const amount = roundTo(amountIn?.value ?? '0', minorUnits(c.currency))
+      if (cmp(amount, c.min) < 0) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${c.min} ${c.currency}.` }), 422)
+      if (cmp(amount, c.max) > 0) throw new OpenRampException(openRampError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${c.max} ${c.currency}.` }), 422)
       const fees = feesFor(c, amount)
       const net = fees.reduce((acc, f) => sub(acc, f.amount), amount)
       return {
         adapterId: 'xendit',
         legId: leg.legId,
-        input: { amount, asset: { kind: 'fiat', currency: c.currency } },
-        output: { amount: roundTo(net, minorUnits(c.currency)), asset: { kind: 'fiat', currency: c.currency } },
+        input: { value: amount, asset: { kind: 'fiat', currency: c.currency } },
+        output: { value: roundTo(net, minorUnits(c.currency)), asset: { kind: 'fiat', currency: c.currency } },
         fees,
         eta: legs.find((l) => l.id === leg.legId)!.eta,
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
@@ -250,7 +250,7 @@ export function xendit(opts: XenditOptions) {
 
     async start({ leg, quote }, ctx): Promise<LegStep> {
       const c = channelFor(leg.legId)
-      const amount = quote.input.amount
+      const amount = quote.input.value
       const referenceId = `${ctx.session.id}-${Date.now().toString(36)}`
       const pr = await call<XenditPaymentRequest>(
         ctx,
@@ -306,7 +306,7 @@ export function xendit(opts: XenditOptions) {
           return [{ ref: d.payment_request_id, status: 'succeeded', eventId }]
         }
         if (body.event === 'payment.failure' || d.status === 'FAILED') {
-          return [{ ref: d.payment_request_id, status: 'failed', eventId, error: orkError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]
+          return [{ ref: d.payment_request_id, status: 'failed', eventId, error: openRampError('PAYMENT_FAILED', { ...(d.failure_code ? { message: `The payment failed (${d.failure_code}).` } : {}) }) }]
         }
         return []
       },

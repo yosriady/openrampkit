@@ -13,7 +13,7 @@ const API_KEY = 'pk_test_onramper'
 const WH = 'onramper_webhook_secret'
 const opts = { apiKey: API_KEY, secretKey: PEM, webhookSecret: WH, env: 'production' as const }
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
-const money = (amount: string, currency = 'USD') => ({ amount, asset: { kind: 'fiat' as const, currency } })
+const money = (amount: string, currency = 'USD') => ({ value: amount, asset: { kind: 'fiat' as const, currency } })
 
 const leg = (legId: string, currency = 'USD'): PathwayLeg => ({
   adapterId: 'onramper',
@@ -172,7 +172,7 @@ describe('onramper adapter', () => {
     const u = new URL(calls[0]!.url)
     expect(u.origin + u.pathname).toBe('https://api.onramper.com/quotes/usd/usdc_base')
     expect(Object.fromEntries(u.searchParams)).toEqual({ amount: '100.00', paymentMethod: 'creditcard', type: 'buy', country: 'US', platform: 'web', walletAddress: '0xabc' })
-    expect(q.output).toEqual({ amount: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.input).toEqual(money('100.00'))
     expect(q.fees).toEqual([
       { kind: 'provider', label: 'banxa fee', amount: '2.5', currency: 'USD' },
@@ -194,7 +194,7 @@ describe('onramper adapter', () => {
     await expect(run(401, {})).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(run(429, {})).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
     await expect(run(500, {})).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
-    await expect(onramper(opts).quote({ leg: leg('card'), amountOut: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(onramper(opts).quote({ leg: leg('card'), amountOut: { value: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })
 
   it('start: POST /checkout/v2/intent with a valid Signature V2 (Ed25519, checked with the public key)', async () => {
@@ -233,7 +233,7 @@ describe('onramper adapter', () => {
 
   it('start: needs the user IP, a wallet and a provider; maps HTTP errors', async () => {
     const a = onramper(opts)
-    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { amount: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
     const f = (status = 200, body: unknown = { redirectUrl: 'https://x' }) => fakeFetch([{ method: 'POST', match: '/checkout/v2/intent', status, reply: () => body }]).fetch
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f() }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote: { ...quote, data: {} } }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'QUOTE_EXPIRED' } })
@@ -245,7 +245,7 @@ describe('onramper adapter', () => {
 
   it('start: 401 "No V2 signing key" is a setup error: not retryable, operator log names the public key, user message is neutral', async () => {
     const a = onramper(opts)
-    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { amount: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
     const run = async (status: number, body: unknown) => {
       const log = recordingLog()
       const e = await a
@@ -311,7 +311,7 @@ describe('onramper adapter', () => {
     expect(sig('{}')).toBe('1156082a881702dc9edab3dda95d53704f3ee7e9e0a5a899a4646c01fdb7773a')
 
     expect(await a.webhook!.parse(body, wctx)).toMatchObject([
-      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { value: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     expect(await shared.get('tx:ork_abc')).toBe('otx_1')
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
@@ -335,7 +335,7 @@ describe('onramper adapter', () => {
     await shared.put('tx:ork_abc', 'otx_1')
     const s = await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)
     expect(checkLegStep(s)).toEqual([])
-    expect(s).toMatchObject({ state: 'COMPLETED', txHash: '0xhash', output: { amount: '95.4' } })
+    expect(s).toMatchObject({ state: 'COMPLETED', txHash: '0xhash', output: { value: '95.4' } })
     expect(calls[0]!.url).toBe('https://api.onramper.com/transactions/otx_1')
     expect(calls[0]!.headers.get('x-onramper-secret')).toBe(WH)
     const down = fakeFetch([{ match: '/transactions/', status: 503, reply: () => ({}) }])

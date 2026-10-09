@@ -1,6 +1,6 @@
 import { ADAPTER_API_VERSION, resultChannels } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
-import { OrkException, normalizeToken, orkError } from '@openrampkit/core'
+import { OpenRampException, normalizeToken, openRampError } from '@openrampkit/core'
 import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
 import type { OpenRampConfig } from './config.js'
@@ -61,7 +61,7 @@ export function createRuntime(config: OpenRampConfig): Runtime {
     livemode: config.livemode ?? false,
     adapter(id) {
       const a = adapters.get(id)
-      if (!a) throw new OrkException(orkError('INTERNAL', { message: `Adapter ${id} is not configured` }), 500)
+      if (!a) throw new OpenRampException(openRampError('INTERNAL', { message: `Adapter ${id} is not configured` }), 500)
       return a
     },
     metric(name, value, tags = {}) {
@@ -151,7 +151,7 @@ export async function putVersioned(rt: Runtime, rec: SessionRecord): Promise<voi
     rec.version -= 1
     if (updatedAt === undefined) delete rec.updatedAt
     else rec.updatedAt = updatedAt
-    if (e instanceof VersionConflictError) throw new OrkException(orkError('CONFLICT'), 409)
+    if (e instanceof VersionConflictError) throw new OpenRampException(openRampError('CONFLICT'), 409)
     throw e
   }
 }
@@ -203,7 +203,7 @@ export function sessionResult(rec: SessionRecord): SessionResult {
 
 /** The session destination. A withdraw session has one only after the user picks a target. */
 export function destinationOf(rec: SessionRecord): Destination {
-  if (!rec.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'Choose where to send the funds first.' }), 409)
+  if (!rec.destination) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Choose where to send the funds first.' }), 409)
   return rec.destination
 }
 

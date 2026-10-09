@@ -1,8 +1,8 @@
 // EVM helpers for adapters that build ERC-20 transfers or check them on chain over JSON-RPC.
 // Web-standard APIs only (fetch), no viem.
 
-import { OrkException, orkError } from '@openrampkit/core'
-import { fetchJson, httpErrorToOrk } from './http.js'
+import { OpenRampException, openRampError } from '@openrampkit/core'
+import { fetchJson, httpErrorToOpenRamp } from './http.js'
 import type { Logger } from './index.js'
 
 /** keccak256("Transfer(address,address,uint256)") */
@@ -30,9 +30,9 @@ export async function evmRpc<T>(f: typeof fetch, url: string, method: string, pa
   try {
     res = await fetchJson(f, url, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
   } catch (e) {
-    throw httpErrorToOrk(e, 'The chain RPC', { what: 'check this transfer', ...(opts.log ? { log: opts.log } : {}) })
+    throw httpErrorToOpenRamp(e, 'The chain RPC', { what: 'check this transfer', ...(opts.log ? { log: opts.log } : {}) })
   }
-  if (res.error) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `RPC error: ${String(res.error.message ?? '').slice(0, 120)}` }), 502)
+  if (res.error) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `RPC error: ${String(res.error.message ?? '').slice(0, 120)}` }), 502)
   return res.result as T
 }
 

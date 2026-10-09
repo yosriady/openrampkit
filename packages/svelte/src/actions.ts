@@ -1,5 +1,5 @@
 // Svelte actions (`use:`). They run only in the browser, so server rendering never loads Lit.
-import type { OrkError, OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { OpenRampError, OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal } from '@openrampkit/web'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
@@ -20,8 +20,8 @@ export type ButtonActionParams = {
   getClientSecret: string | (() => Promise<string>)
   onComplete?: (session: PublicSession) => void
   /** Called when the modal closes before the session completes */
-  onError?: (error: OrkError) => void
-  onEvent?: (e: OrkEvent) => void
+  onError?: (error: OpenRampError) => void
+  onEvent?: (e: OpenRampEvent) => void
   /** Keep the element disabled. The action also disables it while the modal is open. */
   disabled?: boolean
 }
@@ -45,7 +45,7 @@ function buttonAction(kind: 'deposit' | 'withdraw') {
       const begin = kind === 'withdraw' ? p.ramp.beginWithdraw : p.ramp.beginDeposit
       begin({ clientSecret: p.getClientSecret, ...(p.onEvent ? { onEvent: p.onEvent } : {}) }).then(
         (s) => p.onComplete?.(s),
-        (e: OrkError) => p.onError?.(e),
+        (e: OpenRampError) => p.onError?.(e),
       )
     }
     node.addEventListener('click', onClick)
@@ -84,7 +84,7 @@ export type EmbeddedActionParams = {
   /** BCP 47 locale */
   locale?: string
   /** Called after the ramp's `onEvent` */
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
   onComplete?: (session: PublicSession) => void
   /** Called when the user presses Close on a result or error screen */
   onClose?: (session: PublicSession | undefined) => void

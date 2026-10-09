@@ -2,7 +2,7 @@
 // Node 20+, Bun and Deno. It holds provider secrets, fixes the destination per session,
 // plans pathways, runs legs, takes provider webhooks and sends signed webhooks to the app.
 
-import { OrkException, orkError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
 import type { OpenRampConfig } from './config.js'
 import { verifyWebhook } from './crypto.js'
 import { corsHeaders, errorResponse, withCors } from './http.js'
@@ -41,12 +41,12 @@ export function createOpenRamp(config: OpenRampConfig) {
     try {
       res = await route(rt, req)
     } catch (e) {
-      if (e instanceof OrkException) res = errorResponse(e.error, e.status)
+      if (e instanceof OpenRampException) res = errorResponse(e.error, e.status)
       // No message from the error: a parse error can quote a provider response.
-      else if (e instanceof SyntaxError) res = errorResponse(orkError('BAD_REQUEST'), 400)
+      else if (e instanceof SyntaxError) res = errorResponse(openRampError('BAD_REQUEST'), 400)
       else {
         rt.log.error('unhandled error', { error: e instanceof Error ? (e.stack ?? e.message) : String(e) })
-        res = errorResponse(orkError('INTERNAL'), 500)
+        res = errorResponse(openRampError('INTERNAL'), 500)
       }
     }
     return withCors(res, cors)

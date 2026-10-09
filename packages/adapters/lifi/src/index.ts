@@ -17,11 +17,11 @@
 //
 // Server-side only. Web-standard APIs only (fetch), so it runs on Cloudflare Workers.
 
-import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOrk, httpStatus, randomHex, topicAddress } from '@openrampkit/adapter'
+import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOpenRamp, httpStatus, randomHex, topicAddress } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
-  OrkException,
+  OpenRampException,
   SOLANA_MAINNET,
   chainName,
   cmp,
@@ -30,7 +30,7 @@ import {
   isSolanaAddress,
   isSolanaSignature,
   isUsdc,
-  orkError,
+  openRampError,
   sameToken,
   toBaseUnits,
 } from '@openrampkit/core'
@@ -147,7 +147,7 @@ function isSolana(chain: string) {
 export function lifiChainId(chain: string): number {
   if (chain === SOLANA_MAINNET) return LIFI_SOLANA_CHAIN_ID
   const id = evmChainId(chain)
-  if (id === undefined) throw new OrkException(orkError('NO_QUOTES', { message: `LI.FI does not support ${chainName(chain)} here.` }), 422)
+  if (id === undefined) throw new OpenRampException(openRampError('NO_QUOTES', { message: `LI.FI does not support ${chainName(chain)} here.` }), 422)
   return id
 }
 
@@ -213,8 +213,8 @@ const quantity = (v: string | undefined): string | undefined => {
 }
 
 function cryptoAsset(a: Amount | undefined, what: string): CryptoAsset {
-  if (!a || a.asset.kind !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: `LI.FI needs a crypto ${what}.` }))
-  if (a.asset.chain === '*' || a.asset.token === '*') throw new OrkException(orkError('BAD_REQUEST', { message: 'Choose the token you want to pay with.' }))
+  if (!a || a.asset.kind !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: `LI.FI needs a crypto ${what}.` }))
+  if (a.asset.chain === '*' || a.asset.token === '*') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Choose the token you want to pay with.' }))
   return a.asset
 }
 
@@ -281,8 +281,8 @@ export function lifiSub(raw: string): StepSub {
   }
 }
 
-function toOrk(e: unknown, log?: Pick<Logger, 'warn'>): OrkException {
-  return httpErrorToOrk(e, 'LI.FI', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
+function toOpenRamp(e: unknown, log?: Pick<Logger, 'warn'>): OpenRampException {
+  return httpErrorToOpenRamp(e, 'LI.FI', { what: 'find a route for this pair right now', ...(log ? { log } : {}) })
 }
 
 // ---------------- stored state ----------------
@@ -340,9 +340,9 @@ export function lifi(opts: LifiOptions = {}) {
     const cached = await ctx.shared.get<number>(k)
     if (typeof cached === 'number') return cached
     const t = await api<LifiToken>(ctx, '/token', { chain: String(lifiChainId(asset.chain)), token: lifiToken(asset.chain, asset.token) }).catch((e) => {
-      throw toOrk(e)
+      throw toOpenRamp(e)
     })
-    if (typeof t?.decimals !== 'number') throw new OrkException(orkError('BAD_REQUEST', { message: 'LI.FI does not know this token.' }))
+    if (typeof t?.decimals !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'LI.FI does not know this token.' }))
     await ctx.shared.put(k, t.decimals, 7 * 24 * 60 * 60)
     return t.decimals
   }
@@ -355,13 +355,13 @@ export function lifi(opts: LifiOptions = {}) {
   function recipientOf(ctx: AdapterContext, deliverTo?: { address: string }): string {
     if (deliverTo?.address) return deliverTo.address
     if (ctx.destination.type === 'crypto') return ctx.destination.address
-    throw new OrkException(orkError('BAD_REQUEST', { message: 'LI.FI legs need a crypto destination.' }))
+    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'LI.FI legs need a crypto destination.' }))
   }
 
   function destAsset(ctx: AdapterContext, legTo: CryptoAsset | undefined): CryptoAsset {
     if (legTo && legTo.chain !== '*' && legTo.token !== '*') return legTo
     const d = ctx.destination
-    if (d.type !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: 'LI.FI legs need a crypto destination.' }))
+    if (d.type !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'LI.FI legs need a crypto destination.' }))
     return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
   }
 
@@ -395,10 +395,10 @@ export function lifi(opts: LifiOptions = {}) {
 
   async function fetchQuote(ctx: AdapterContext, exactOut: boolean, params: QuoteParams): Promise<LifiQuote> {
     const q = await api<LifiQuote>(ctx, exactOut ? '/quote/toAmount' : '/quote', params).catch((e) => {
-      throw toOrk(e, ctx.log)
+      throw toOpenRamp(e, ctx.log)
     })
     if (!q?.action?.fromToken || !q.action.toToken || !q.estimate || !big(q.estimate.fromAmount) || !big(q.estimate.toAmount) || big(q.estimate.toAmountMin) === undefined) {
-      throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned an incomplete quote.' }), 502)
+      throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned an incomplete quote.' }), 502)
     }
     return q
   }
@@ -406,27 +406,27 @@ export function lifi(opts: LifiOptions = {}) {
   async function quoteWallet(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote> {
     const origin: CryptoAsset = input.source
       ? { kind: 'crypto', chain: input.source.chain, token: input.source.token }
-      : cryptoAsset(input.amountIn ?? { amount: '0', asset: input.leg.from.asset }, 'source')
+      : cryptoAsset(input.amountIn ?? { value: '0', asset: input.leg.from.asset }, 'source')
     if (!origin.chain.startsWith('eip155:') && origin.chain !== SOLANA_MAINNET) {
-      throw new OrkException(orkError('NO_QUOTES', { message: 'LI.FI wallet payments support EVM chains and Solana only.' }), 422)
+      throw new OpenRampException(openRampError('NO_QUOTES', { message: 'LI.FI wallet payments support EVM chains and Solana only.' }), 422)
     }
     const dest = destAsset(ctx, input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
     if (settles(ctx, input.deliverTo)) {
-      throw new OrkException(orkError('NO_QUOTES', { message: 'LI.FI cannot pay into a settlement contract.' }), 422)
+      throw new OpenRampException(openRampError('NO_QUOTES', { message: 'LI.FI cannot pay into a settlement contract.' }), 422)
     }
     if (sameAsset(origin.chain, origin.token, dest.chain, dest.token)) {
       // A plain transfer needs no router. The Relay adapter covers it, with on-chain checks.
-      throw new OrkException(orkError('NO_QUOTES', { message: 'LI.FI does not route a token to itself.' }), 422)
+      throw new OpenRampException(openRampError('NO_QUOTES', { message: 'LI.FI does not route a token to itself.' }), 422)
     }
     const recipient = recipientOf(ctx, input.deliverTo)
-    if (!fitsChain(dest.chain, recipient)) throw new OrkException(orkError('BAD_REQUEST', { message: `The receiver is not a ${chainName(dest.chain)} address.` }))
+    if (!fitsChain(dest.chain, recipient)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `The receiver is not a ${chainName(dest.chain)} address.` }))
     const user = fitsChain(origin.chain, input.source?.address) ? input.source!.address! : isSolana(origin.chain) ? PLACEHOLDER_SOLANA_USER : PLACEHOLDER_USER
 
     const exactOut = !input.amountIn && !!input.amountOut
     const inDec = await decimalsOf(ctx, { ...origin, ...(input.amountIn?.asset.kind === 'crypto' && input.amountIn.asset.decimals !== undefined ? { decimals: input.amountIn.asset.decimals } : {}) })
     const outDec = exactOut ? await decimalsOf(ctx, dest) : undefined
-    const amount = exactOut ? input.amountOut!.amount : (input.amountIn?.amount ?? '0')
-    if (cmp(amount, '0') <= 0) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter an amount to pay.' }))
+    const amount = exactOut ? input.amountOut!.value : (input.amountIn?.value ?? '0')
+    if (cmp(amount, '0') <= 0) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter an amount to pay.' }))
 
     const params: QuoteParams = {
       fromChain: String(lifiChainId(origin.chain)),
@@ -448,8 +448,8 @@ export function lifi(opts: LifiOptions = {}) {
     return {
       adapterId: 'lifi',
       legId: 'wallet',
-      input: { amount: fromBaseUnits(q.estimate.fromAmount, from.decimals), asset: withMeta(origin, from.decimals, from.symbol) },
-      output: { amount: fromBaseUnits(q.estimate.toAmount, to.decimals), asset: withMeta(dest, to.decimals, to.symbol) },
+      input: { value: fromBaseUnits(q.estimate.fromAmount, from.decimals), asset: withMeta(origin, from.decimals, from.symbol) },
+      output: { value: fromBaseUnits(q.estimate.toAmount, to.decimals), asset: withMeta(dest, to.decimals, to.symbol) },
       fees: feesFrom(q),
       eta: etaFrom(q, legs[0]!.eta),
       expiresAt: new Date(Date.now() + WALLET_QUOTE_TTL_MS).toISOString(),
@@ -477,7 +477,7 @@ export function lifi(opts: LifiOptions = {}) {
       sameAsset(fromChain, a.fromToken.address, fromChain, params.fromToken!) &&
       sameAsset(toChain, a.toToken.address, toChain, params.toToken!) &&
       (a.toAddress === undefined || sameAddress(toChain, a.toAddress, params.toAddress!))
-    if (!ok) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned a route for another pair.' }), 502)
+    if (!ok) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned a route for another pair.' }), 502)
   }
 
   // ---------- start ----------
@@ -495,11 +495,11 @@ export function lifi(opts: LifiOptions = {}) {
 
   async function walletTxs(ctx: AdapterContext, q: LifiQuote, origin: CryptoAsset, user: string): Promise<TxRequest[]> {
     const t = q.transactionRequest
-    if (!t?.data) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned no transaction for this route.' }), 502)
+    if (!t?.data) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned no transaction for this route.' }), 502)
     if (isSolana(origin.chain)) return [{ kind: 'solana', type: 'transaction', transaction: t.data }]
     const chainId = evmChainId(origin.chain)!
     if (!t.to || (t.chainId !== undefined && t.chainId !== chainId)) {
-      throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned a transaction for another chain.' }), 502)
+      throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'LI.FI returned a transaction for another chain.' }), 502)
     }
     const txs: TxRequest[] = []
     const spender = q.estimate.approvalAddress
@@ -521,11 +521,11 @@ export function lifi(opts: LifiOptions = {}) {
     const origin = cryptoAsset(input.quote.input, 'input')
     const dest = cryptoAsset(input.quote.output, 'output')
     const params = data.params as QuoteParams | undefined
-    if (!params) throw new OrkException(orkError('QUOTE_EXPIRED'), 410)
+    if (!params) throw new OpenRampException(openRampError('QUOTE_EXPIRED'), 410)
     // LI.FI builds the transaction for `fromAddress` (refunds go there too): we need the real wallet.
     const user = input.source?.address
     if (!fitsChain(origin.chain, user)) {
-      throw new OrkException(orkError('BAD_REQUEST', { message: `Connect a ${isSolana(origin.chain) ? 'Solana' : 'EVM'} wallet to pay from ${chainName(origin.chain)}.`, recovery: 'choose_other' }))
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Connect a ${isSolana(origin.chain) ? 'Solana' : 'EVM'} wallet to pay from ${chainName(origin.chain)}.`, recovery: 'choose_other' }))
     }
     let q = data.step as LifiQuote | undefined
     const fresh = typeof data.quotedAt === 'number' && Date.now() - data.quotedAt < WALLET_QUOTE_REUSE_MS
@@ -537,7 +537,7 @@ export function lifi(opts: LifiOptions = {}) {
     const txs = await walletTxs(ctx, q, origin, user)
     const ref = `lifi:${ctx.session.id}:${randomHex()}`
     const toDecimals = q.action.toToken.decimals
-    const output: Amount = { amount: fromBaseUnits(q.estimate.toAmount, toDecimals), asset: { ...dest, decimals: toDecimals } }
+    const output: Amount = { value: fromBaseUnits(q.estimate.toAmount, toDecimals), asset: { ...dest, decimals: toDecimals } }
     await ctx.store.put(
       `w:${ref}`,
       {
@@ -575,7 +575,7 @@ export function lifi(opts: LifiOptions = {}) {
     transitions: [],
     ref,
     ...(txHash ? { txHash } : {}),
-    error: orkError('DELIVERY_FAILED', { message, ...(recovery ? { recovery } : {}) }),
+    error: openRampError('DELIVERY_FAILED', { message, ...(recovery ? { recovery } : {}) }),
   })
 
   /**
@@ -640,13 +640,13 @@ export function lifi(opts: LifiOptions = {}) {
       transitions: [],
       ref,
       txHash: outHash,
-      output: { ...rec.output, amount: fromBaseUnits(paid.toString(), decimals) },
+      output: { ...rec.output, value: fromBaseUnits(paid.toString(), decimals) },
     }
   }
 
   async function statusWallet(ctx: AdapterContext, ref: string): Promise<LegStep> {
     const rec = await ctx.store.get<WalletRecord>(`w:${ref}`)
-    if (!rec) throw new OrkException(orkError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
+    if (!rec) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
     if (!rec.txHash) return { state: 'PAYMENT', transitions: [SUBMIT_TX], status: 'awaiting_user', ref }
     // `txHash` becomes the delivery once LI.FI reports it; `sourceTxHash` stays the transaction the wallet sent.
     return { ...(await checkSource(ctx, ref, rec, rec.txHash)), sourceTxHash: rec.txHash }
@@ -666,7 +666,7 @@ export function lifi(opts: LifiOptions = {}) {
     } catch (e) {
       // 404 (code 1003): LI.FI has not indexed the hash yet. Normal for a minute or two.
       if (httpStatus(e) === 404) return waiting('NOT_FOUND')
-      throw toOrk(e, ctx.log)
+      throw toOpenRamp(e, ctx.log)
     }
     // LI.FI also finds a transfer by its delivery hash: the hash the wallet gave must be the source.
     if (s.sending?.txHash && key(s.sending.txHash) !== key(txHash)) return fail(ref, 'The transaction is not the source of a LI.FI transfer.', txHash)
@@ -706,35 +706,35 @@ export function lifi(opts: LifiOptions = {}) {
 
     async quote(input, ctx) {
       warnNoKey(ctx.log)
-      if (input.leg.legId !== 'wallet') throw new OrkException(orkError('NOT_FOUND', { message: `Unknown LI.FI leg ${input.leg.legId}` }), 404)
+      if (input.leg.legId !== 'wallet') throw new OpenRampException(openRampError('NOT_FOUND', { message: `Unknown LI.FI leg ${input.leg.legId}` }), 404)
       return quoteWallet(input, ctx)
     },
 
     async start(input, ctx) {
-      if (input.leg.legId !== 'wallet') throw new OrkException(orkError('NOT_FOUND', { message: `Unknown LI.FI leg ${input.leg.legId}` }), 404)
+      if (input.leg.legId !== 'wallet') throw new OpenRampException(openRampError('NOT_FOUND', { message: `Unknown LI.FI leg ${input.leg.legId}` }), 404)
       return startWallet(input, ctx)
     },
 
     async transition(input, ctx) {
       if (input.leg.legId !== 'wallet' || input.name !== 'submit_tx') {
-        throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
+        throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
       }
       const rec = await ctx.store.get<WalletRecord>(`w:${input.ref}`)
-      if (!rec) throw new OrkException(orkError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
+      if (!rec) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'This LI.FI payment is not known.' }), 404)
       const txHash = String(input.inputs?.txHash ?? input.inputs?.hash ?? '').trim()
       const ok = isSolana(rec.fromChain) ? isSolanaSignature(txHash) : /^0x[0-9a-fA-F]{64}$/.test(txHash)
-      if (!ok) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
-      if (rec.txHash && key(rec.txHash) !== key(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'This payment already has a transaction.' }), 409)
+      if (!ok) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
+      if (rec.txHash && key(rec.txHash) !== key(txHash)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This payment already has a transaction.' }), 409)
       // One source transaction pays one session only: refuse a hash that another payment holds.
       if (!(await claimOnce(ctx.shared, srcKey(rec.fromChain, txHash), ownerOf(ctx, input.ref), USED_TTL_SEC))) {
-        throw new OrkException(orkError('BAD_REQUEST', { message: 'This transaction was already used for another payment.' }), 409)
+        throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This transaction was already used for another payment.' }), 409)
       }
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
       return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash, sourceTxHash: txHash }
     },
 
     async status(input, ctx) {
-      if (input.leg.legId !== 'wallet') throw new OrkException(orkError('NOT_FOUND', { message: `Unknown LI.FI leg ${input.leg.legId}` }), 404)
+      if (input.leg.legId !== 'wallet') throw new OpenRampException(openRampError('NOT_FOUND', { message: `Unknown LI.FI leg ${input.leg.legId}` }), 404)
       return statusWallet(ctx, input.ref)
     },
 

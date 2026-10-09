@@ -1,7 +1,7 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
+import { OpenRampException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, openRampError, sub } from '@openrampkit/core'
 import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
 import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
@@ -41,13 +41,13 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
   }
   // A refund or a chargeback after success ends the session, whatever the other legs do.
   if (rec.reversal) {
-    return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: orkError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), progress, legIndex: act.index }
+    return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: openRampError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), progress, legIndex: act.index }
   }
   // A leg before the last delivered another asset (or no valid amount): the next leg cannot take it,
   // so it does not start. An operator checks the funds (`admin.resolve`).
   const cur = act.legs[act.index]!
   if (act.index < act.legs.length - 1 && cur.step?.status === 'succeeded' && deliveredWrongAsset(cur)) {
-    const error = orkError('DELIVERY_FAILED', { message: 'The provider delivered another asset than the quote. Contact support.', recovery: 'contact_support', legId: cur.legId })
+    const error = openRampError('DELIVERY_FAILED', { message: 'The provider delivered another asset than the quote. Contact support.', recovery: 'contact_support', legId: cur.legId })
     return { sessionId: rec.id, state: 'FAILED', transitions: [], error, progress, legIndex: act.index }
   }
   if (act.legs.every((l) => l.step?.status === 'succeeded')) {
@@ -90,7 +90,7 @@ export function checkSurfaceUrls(rt: Runtime, rec: SessionRecord, ls: LegStep): 
   if (ok) return ls
   rt.log.error('adapter returned a surface URL that is not safe; the leg fails', { sessionId: rec.id, kind: s.kind })
   const { surface: _unsafe, ...rest } = ls
-  return { ...rest, state: 'FAILED', status: 'failed', transitions: [], error: orkError('PROVIDER_UNAVAILABLE', { recovery: 'choose_other' }) }
+  return { ...rest, state: 'FAILED', status: 'failed', transitions: [], error: openRampError('PROVIDER_UNAVAILABLE', { recovery: 'choose_other' }) }
 }
 
 /** Replace a provider REDIRECT with a signed, popup-safe start URL on our own origin. */
@@ -190,7 +190,7 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
     status: 'failed',
     transitions: [],
     ...(ls.ref ? { ref: ls.ref } : {}),
-    error: orkError('PAYMENT_FAILED', { message, recovery: 'contact_support', legId: leg.legId }),
+    error: openRampError('PAYMENT_FAILED', { message, recovery: 'contact_support', legId: leg.legId }),
   })
   const treasury = rt.config.treasury
   if (!treasury) return failed('Withdrawals are not set up for this app yet.')
@@ -241,21 +241,21 @@ function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): v
   const expected = leg.quote.output
   // Fail closed: an output that cannot be compared with the quote never counts as a full delivery.
   let reason: AmountMismatch['reason'] | undefined
-  let shortfall = expected.amount
+  let shortfall = expected.value
   if (!got?.asset || !sameAsset(expected.asset, got.asset)) reason = 'asset_mismatch'
-  else if (typeof got.amount !== 'string' || !isDecimal(got.amount) || !isDecimal(expected.amount)) reason = 'invalid_amount'
+  else if (typeof got.value !== 'string' || !isDecimal(got.value) || !isDecimal(expected.value)) reason = 'invalid_amount'
   else {
     const tolerance = Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)
-    if (cmp(got.amount, sub(expected.amount, bps(expected.amount, tolerance))) >= 0) {
+    if (cmp(got.value, sub(expected.value, bps(expected.value, tolerance))) >= 0) {
       delete leg.amountMismatch
       return
     }
     reason = 'short'
-    shortfall = sub(expected.amount, got.amount)
+    shortfall = sub(expected.value, got.value)
   }
   leg.amountMismatch = { reason, expected, received: got, shortfall }
-  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, reason, expected: expected.amount, received: String(got?.amount) })
-  rt.log.warn('provider reported an output that is not the quoted delivery', { sessionId: rec.id, adapterId: leg.adapterId, index: i, reason, expected: expected.amount, received: String(got?.amount) })
+  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, reason, expected: expected.value, received: String(got?.value) })
+  rt.log.warn('provider reported an output that is not the quoted delivery', { sessionId: rec.id, adapterId: leg.adapterId, index: i, reason, expected: expected.value, received: String(got?.value) })
   rt.metric('leg.amount_mismatch', 1, { adapter: leg.adapterId, reason })
 }
 
@@ -432,7 +432,7 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
     await startLeg(rt, rec, 0)
   } catch (e) {
     const adapter = stored.pathway.legs[0]?.adapterId ?? 'unknown'
-    rt.metric('start.error', 1, { adapter, code: e instanceof OrkException ? e.error.code : 'INTERNAL' })
+    rt.metric('start.error', 1, { adapter, code: e instanceof OpenRampException ? e.error.code : 'INTERNAL' })
     addTimeline(rec, 'payment.start_failed', { attempt: n, adapterId: adapter })
     rec.active = before.active
     if (before.attempts) rec.attempts = before.attempts
@@ -672,7 +672,7 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
       if (!isTerminal(rec.step.state)) await trackOpenSession(rt, rec.id)
       return 'applied'
     } catch (e) {
-      if (e instanceof OrkException && e.status === 409) continue
+      if (e instanceof OpenRampException && e.status === 409) continue
       throw e
     }
   }

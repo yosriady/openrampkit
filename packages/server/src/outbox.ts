@@ -3,7 +3,7 @@
 // events left goes on the outbox queue, and `sweep()` retries them with backoff for about 24 hours.
 // After that, an event stays in the record as a dead letter, and `webhooks.replay(sessionId)` sends it again.
 
-import { OrkException } from '@openrampkit/core'
+import { OpenRampException } from '@openrampkit/core'
 import { signWebhook } from './crypto.js'
 import { OUTBOX_QUEUE, queueOf } from './queue.js'
 import { putVersioned, withTimeout } from './runtime.js'
@@ -51,7 +51,7 @@ export async function deliver(rt: Runtime, id: string, body: string): Promise<bo
 }
 
 const isLive = (e: OutboxEvent) => e.deadAt === undefined
-const isConflict = (e: unknown) => e instanceof OrkException && e.status === 409
+const isConflict = (e: unknown) => e instanceof OpenRampException && e.status === 409
 
 /** The earliest next attempt of the live events, or undefined when none is left. */
 export function nextDue(rec: SessionRecord): number | undefined {

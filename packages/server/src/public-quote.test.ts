@@ -50,8 +50,8 @@ describe('public quotes', () => {
   it('publicQuote drops each leg data and keeps the rest', () => {
     const leg: LegQuote = {
       adapterId: 'x', legId: 'card',
-      input: { amount: '10', asset: { kind: 'fiat', currency: 'USD' } },
-      output: { amount: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0xabc' } },
+      input: { value: '10', asset: { kind: 'fiat', currency: 'USD' } },
+      output: { value: '9', asset: { kind: 'crypto', chain: 'eip155:8453', token: '0xabc' } },
       fees: [], eta: { min: 1, max: 2 }, data: { onrampUrl: 'https://secret.test/?sessionToken=t', nonce: 'n' },
     }
     const q = { id: 'q_1', pathwayId: 'p', method: 'card', provider: 'X', legs: [leg], input: leg.input, output: leg.output, fees: [], eta: leg.eta }

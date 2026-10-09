@@ -66,7 +66,7 @@ async function begin(p: Parameters<typeof setup>[0] & { shared?: ReturnType<type
   const c = { ...ctx, ...(p.shared ? { shared: p.shared } : {}), session: { ...ctx.session, id: p.sessionId ?? ctx.session.id } }
   const asset = p.mint === 'native' ? SOL : USDC
   const leg = legOf(asset)
-  const q = await a.quote({ leg, amountIn: { amount: p.amount ?? '5', asset } }, c)
+  const q = await a.quote({ leg, amountIn: { value: p.amount ?? '5', asset } }, c)
   const start = await a.start({ leg, quote: q, deliverTo: { address: USER } }, c)
   const submit = (txHash = SIG) => a.transition!({ leg, ref: start.ref!, name: 'submit_tx', inputs: { txHash } }, c)
   return { a, c, q, start, leg, submit, rpc }
@@ -77,9 +77,9 @@ describe('mock adapter: solanaLocalChain', () => {
     const { a, ctx } = setup()
     expect(a.legs.map((l) => l.id)).toEqual(['solana-onchain'])
     expect(a.legs[0]).toMatchObject({ methods: ['wallet'], surfaces: ['WALLET_TX'], from: { asset: { chains: { [SOLANA_DEVNET]: [MINT] } } } })
-    const q = await a.quote({ leg: legOf(USDC), amountIn: { amount: '5', asset: USDC } }, ctx)
+    const q = await a.quote({ leg: legOf(USDC), amountIn: { value: '5', asset: USDC } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q).toMatchObject({ input: { amount: '5', asset: USDC }, output: { amount: '5', asset: USDC }, fees: [] })
+    expect(q).toMatchObject({ input: { value: '5', asset: USDC }, output: { value: '5', asset: USDC }, fees: [] })
   })
 
   it('asks for one SPL transfer to the destination owner, and completes when the chain shows it', async () => {
@@ -91,7 +91,7 @@ describe('mock adapter: solanaLocalChain', () => {
     await expect(a.status!({ leg, ref: start.ref! }, c)).resolves.toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX' } })
     await expect(submit('0xabc')).rejects.toMatchObject({ status: 400 })
     const done = await submit()
-    expect(done).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '5' } })
+    expect(done).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { value: '5' } })
     expect(rpc.calls.map((x) => (x.body as { method: string }).method)).toEqual(['getSlot', 'getSignatureStatuses', 'getTransaction'])
     expect(rpc.calls[2]!.body).toMatchObject({ params: [SIG, { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0 }] })
     await expect(a.status!({ leg, ref: start.ref! }, c)).resolves.toMatchObject({ state: 'COMPLETED' })

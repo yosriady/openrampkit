@@ -53,19 +53,19 @@ describe('xendit adapter', () => {
 
   it('quotes with the configured fee and enforces channel limits', async () => {
     const { f } = fakeFetch(() => new Response('{}'))
-    const q = await a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { amount: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, ctx(f))
+    const q = await a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, ctx(f))
     expect(checkLegQuote(q)).toEqual([])
     expect(q.fees).toEqual([{ kind: 'provider', label: 'Xendit fee', amount: '1050', currency: 'IDR' }])
-    expect(q.output.amount).toBe('148950')
-    await expect(a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { amount: '99999999', asset: { kind: 'fiat', currency: 'IDR' } } }, ctx(f))).rejects.toMatchObject({ error: { code: 'AMOUNT_TOO_HIGH' } })
-    await expect(a.quote({ leg: leg('vn-momo', 'VND'), amountIn: { amount: '10', asset: { kind: 'fiat', currency: 'VND' } } }, ctx(f))).rejects.toMatchObject({ error: { code: 'AMOUNT_TOO_LOW' } })
-    await expect(a.quote({ leg: leg('xx-nope', 'IDR'), amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'IDR' } } }, ctx(f))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+    expect(q.output.value).toBe('148950')
+    await expect(a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { value: '99999999', asset: { kind: 'fiat', currency: 'IDR' } } }, ctx(f))).rejects.toMatchObject({ error: { code: 'AMOUNT_TOO_HIGH' } })
+    await expect(a.quote({ leg: leg('vn-momo', 'VND'), amountIn: { value: '10', asset: { kind: 'fiat', currency: 'VND' } } }, ctx(f))).rejects.toMatchObject({ error: { code: 'AMOUNT_TOO_LOW' } })
+    await expect(a.quote({ leg: leg('xx-nope', 'IDR'), amountIn: { value: '1', asset: { kind: 'fiat', currency: 'IDR' } } }, ctx(f))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 
   it('creates a QRIS payment request with the right headers and body, and shows a QR', async () => {
     const { f, calls } = fakeFetch(() => Response.json(pr()))
     const c = ctx(f)
-    const q = await a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { amount: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, c)
+    const q = await a.quote({ leg: leg('id-qris', 'IDR'), amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, c)
     const step = await a.start({ leg: leg('id-qris', 'IDR'), quote: q }, c)
     expect(checkLegStep(step)).toEqual([])
     expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: 'pr-1', surface: { kind: 'QR', payload: '00020101021226...', currency: 'IDR', amount: '150000' } })
@@ -81,11 +81,11 @@ describe('xendit adapter', () => {
   it('e-wallets redirect or deep link; for-user-id is sent for xenPlatform', async () => {
     const withSub = xendit({ secretKey: 'k', webhookToken: 't', forUserId: 'sub_1' })
     const web = fakeFetch(() => Response.json(pr({ channel_code: 'GCASH', currency: 'PHP', actions: [{ type: 'REDIRECT_CUSTOMER', descriptor: 'WEB_URL', value: 'https://gcash.test/pay' }] })))
-    const s1 = await withSub.start({ leg: leg('ph-gcash', 'PHP'), quote: { adapterId: 'xendit', legId: 'ph-gcash', input: { amount: '500', asset: { kind: 'fiat', currency: 'PHP' } }, output: { amount: '500', asset: { kind: 'fiat', currency: 'PHP' } }, fees: [], eta: { min: 1, max: 2 } } }, ctx(web.f))
+    const s1 = await withSub.start({ leg: leg('ph-gcash', 'PHP'), quote: { adapterId: 'xendit', legId: 'ph-gcash', input: { value: '500', asset: { kind: 'fiat', currency: 'PHP' } }, output: { value: '500', asset: { kind: 'fiat', currency: 'PHP' } }, fees: [], eta: { min: 1, max: 2 } } }, ctx(web.f))
     expect(s1.surface).toMatchObject({ kind: 'REDIRECT', url: 'https://gcash.test/pay' })
     expect(new Headers(web.calls[0]!.init.headers).get('for-user-id')).toBe('sub_1')
     const deep = fakeFetch(() => Response.json(pr({ actions: [{ type: 'REDIRECT_CUSTOMER', descriptor: 'DEEPLINK_URL', value: 'momo://pay' }] })))
-    const s2 = await a.start({ leg: leg('vn-momo', 'VND'), quote: { adapterId: 'xendit', legId: 'vn-momo', input: { amount: '50000', asset: { kind: 'fiat', currency: 'VND' } }, output: { amount: '50000', asset: { kind: 'fiat', currency: 'VND' } }, fees: [], eta: { min: 1, max: 2 } } }, ctx(deep.f))
+    const s2 = await a.start({ leg: leg('vn-momo', 'VND'), quote: { adapterId: 'xendit', legId: 'vn-momo', input: { value: '50000', asset: { kind: 'fiat', currency: 'VND' } }, output: { value: '50000', asset: { kind: 'fiat', currency: 'VND' } }, fees: [], eta: { min: 1, max: 2 } } }, ctx(deep.f))
     expect(s2.surface).toMatchObject({ kind: 'DEEPLINK', url: 'momo://pay' })
   })
 
@@ -113,13 +113,13 @@ describe('xendit adapter', () => {
   it('PayNow uses channel code SGQR (Xendit PayNow QR page), with a 0.01 SGD minimum', async () => {
     const { f, calls } = fakeFetch(() => Response.json(pr({ channel_code: 'SGQR', currency: 'SGD', request_amount: 12.5 })))
     const c = { ...ctx(f), destination: { type: 'merchant' as const, currency: 'SGD' } }
-    const q = await a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { amount: '12.5', asset: { kind: 'fiat', currency: 'SGD' } } }, c)
+    const q = await a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { value: '12.5', asset: { kind: 'fiat', currency: 'SGD' } } }, c)
     const step = await a.start({ leg: leg('sg-paynow', 'SGD'), quote: q }, c)
     expect(step.surface).toMatchObject({ kind: 'QR', currency: 'SGD', method: 'paynow' })
     expect(calls[0]!.url).toBe('https://api.xendit.co/v3/payment_requests')
     expect(JSON.parse(String(calls[0]!.init.body))).toMatchObject({ type: 'PAY', country: 'SG', currency: 'SGD', request_amount: 12.5, channel_code: 'SGQR' })
     expect(a.legs.find((l) => l.id === 'sg-paynow')!.limits).toEqual({ min: '0.01', max: '200000', currency: 'SGD' })
-    await expect(a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { amount: '0.01', asset: { kind: 'fiat', currency: 'SGD' } } }, c)).resolves.toMatchObject({ input: { amount: '0.01' } })
+    await expect(a.quote({ leg: leg('sg-paynow', 'SGD'), amountIn: { value: '0.01', asset: { kind: 'fiat', currency: 'SGD' } } }, c)).resolves.toMatchObject({ input: { value: '0.01' } })
   })
 
   it('setup errors are not retryable and tell the operator what to do', async () => {
@@ -127,7 +127,7 @@ describe('xendit adapter', () => {
     const log = { ...quiet, error: (m: string) => void errors.push(m) }
     const start = async (legId: string, currency: string, status: number, body: unknown) => {
       const { f } = fakeFetch(() => new Response(JSON.stringify(body), { status }))
-      const quote = { adapterId: 'xendit', legId, input: { amount: '100', asset: { kind: 'fiat' as const, currency } }, output: { amount: '100', asset: { kind: 'fiat' as const, currency } }, fees: [], eta: { min: 1, max: 2 } }
+      const quote = { adapterId: 'xendit', legId, input: { value: '100', asset: { kind: 'fiat' as const, currency } }, output: { value: '100', asset: { kind: 'fiat' as const, currency } }, fees: [], eta: { min: 1, max: 2 } }
       return a.start({ leg: leg(legId, currency), quote }, { ...ctx(f), log })
     }
     // Live test mode answer for QRIS and QRPH on an account without the channel (2026-10-09)
@@ -154,7 +154,7 @@ describe('xendit adapter', () => {
   })
 
   it('401 and 403 about our key are setup errors (shared mapping), not payment declines', async () => {
-    const quote = { adapterId: 'xendit', legId: 'id-qris', input: { amount: '100', asset: { kind: 'fiat' as const, currency: 'IDR' } }, output: { amount: '100', asset: { kind: 'fiat' as const, currency: 'IDR' } }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'xendit', legId: 'id-qris', input: { value: '100', asset: { kind: 'fiat' as const, currency: 'IDR' } }, output: { value: '100', asset: { kind: 'fiat' as const, currency: 'IDR' } }, fees: [], eta: { min: 1, max: 2 } }
     for (const [status, body] of [
       [401, { error_code: 'INVALID_API_KEY', message: 'API key is not authorized for this API service' }],
       [403, { error_code: 'REQUEST_FORBIDDEN_ERROR', message: 'The API key is forbidden to perform this request' }],
@@ -234,7 +234,7 @@ describe('xendit conformance (shared test kit)', () => {
     const report = await runAdapterConformance(a, {
       ctx,
       fixtures: [
-        { leg: leg('id-qris', 'IDR'), quote: { amountIn: { amount: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
+        { leg: leg('id-qris', 'IDR'), quote: { amountIn: { value: '150000', asset: { kind: 'fiat', currency: 'IDR' } } }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
       ],
       webhooks: [
         { request: () => new Request('https://app.test/w', { method: 'POST', headers: { 'x-callback-token': 'tok' } }), rawBody: JSON.stringify({ event: 'payment.capture', data: { payment_request_id: 'pr-1', status: 'SUCCEEDED' } }), events: 1 },

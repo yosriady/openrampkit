@@ -241,8 +241,8 @@ For a withdraw session, the server sends the usual [session webhooks](./webhooks
 {
   "method": "gcash",
   "provider": "Test provider",
-  "input": { "amount": "20", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
-  "output": { "amount": "1131.43", "asset": { "kind": "fiat", "currency": "PHP" } },
+  "input": { "value": "20", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
+  "output": { "value": "1131.43", "asset": { "kind": "fiat", "currency": "PHP" } },
   "outputConfirmed": true,
   "fees": [{ "kind": "provider", "label": "Test provider fee", "amount": "0.2", "currency": "USDC" }],
   "txHashes": ["0x..."]

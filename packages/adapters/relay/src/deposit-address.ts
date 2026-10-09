@@ -3,12 +3,12 @@
 
 import { claimOnce } from '@openrampkit/adapter'
 import type { AdapterContext, StartInput } from '@openrampkit/adapter'
-import { OrkException, chainName, cmp, orkError, toBaseUnits } from '@openrampkit/core'
+import { OpenRampException, chainName, cmp, openRampError, toBaseUnits } from '@openrampkit/core'
 import type { Amount, CryptoAsset, LegQuote, LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEPOSIT_ADDRESS_TTL_SEC, RECORD_TTL_SEC, USED_TTL_SEC } from './config.js'
 import type { DirectTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, relaySub, requestIdOf, sameAsset, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, addrKey, cryptoAsset, isSolana, knownDecimals, knownSymbol, quoteUser, recipientOf, relayOutput, relaySub, requestIdOf, sameAsset, terminalStep, toOpenRamp } from './helpers.js'
 import type { DepositRecord, RelayQuoteResponse, RelayRequest } from './types.js'
 
 export type DepositAddresses = ReturnType<typeof depositAddresses>
@@ -44,13 +44,13 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
       useDepositAddress: true,
       refundTo: refundTo(p.origin.chain),
     }).catch((e) => {
-      throw toOrk(e, ctx.log)
+      throw toOpenRamp(e, ctx.log)
     })
     const key = depositKey(p.recipient, p.origin, p.dest)
     const cached = await ctx.store.get<string>(key)
     const fresh = q.steps?.find((s) => s.depositAddress)?.depositAddress
     const address = cached ?? fresh
-    if (!address) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Relay did not return a deposit address.' }), 502)
+    if (!address) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Relay did not return a deposit address.' }), 502)
     if (!cached) await ctx.store.put(key, address, DEPOSIT_ADDRESS_TTL_SEC)
     const requestId = requestIdOf(q)
     return { q, address, ...(requestId ? { requestId } : {}) }
@@ -221,8 +221,8 @@ export function depositAddresses(rt: RelayRuntime, direct: DirectTransfer) {
     if (data.nominal || data.depositAddress) return undefined
     // A quote without our data (e.g. from an older server): use its input when the decimals are known.
     const decimals = origin.decimals ?? knownDecimals(origin.chain, origin.token)
-    if (decimals === undefined || cmp(quote.input.amount, '0') <= 0) return undefined
-    return toBaseUnits(quote.input.amount, decimals)
+    if (decimals === undefined || cmp(quote.input.value, '0') <= 0) return undefined
+    return toBaseUnits(quote.input.value, decimals)
   }
 
   return { depositQuote, openDepositAddress, nominalAmount, findRelayDeposit, startDeposit, depositRef }

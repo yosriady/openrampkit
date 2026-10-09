@@ -169,7 +169,7 @@ describe('server + controller, mock provider', () => {
     await c.submitAmount()
     const q = c.getSnapshot().quotes[0]!
     expect(q.output.asset).toEqual({ kind: 'fiat', currency: 'IDR' })
-    expect(q.output.amount).toBe('148950')
+    expect(q.output.value).toBe('148950')
     await c.confirm()
     await c.fire('simulate_payment')
     await waitFor(() => c.getSnapshot().screen === 'result')

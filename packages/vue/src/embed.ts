@@ -1,6 +1,6 @@
 // Framework-agnostic embedded mode: create one controller for one `<openramp-modal embedded>` element.
-import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
-import { toOrkError } from '@openrampkit/client'
+import type { OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import { toOpenRampError } from '@openrampkit/client'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal, ProviderRenderer } from '@openrampkit/web'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
@@ -11,7 +11,7 @@ export type EmbedSession = {
   clientSecret: string | (() => Promise<string>)
   wallet?: WalletAdapter
   providerRenderers?: Record<string, ProviderRenderer>
-  onEvent: (e: OrkEvent) => void
+  onEvent: (e: OpenRampEvent) => void
   onComplete: (session: PublicSession) => void
   onController: (controller: DepositController) => void
 }
@@ -44,7 +44,7 @@ export function startEmbedded(el: OpenRampModal, o: EmbedSession): () => void {
     o.onController(ctl)
     void ctl.start()
   })().catch((e: unknown) => {
-    if (!cancelled) el.error = toOrkError(e)
+    if (!cancelled) el.error = toOpenRampError(e)
   })
   return () => {
     cancelled = true

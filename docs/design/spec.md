@@ -105,7 +105,7 @@ Deny is checked first. A more specific allow can open an exception inside a deny
 ### 3.6 Errors
 
 ```ts
-type OrkError = {
+type OpenRampError = {
   code: 'REGION_UNSUPPORTED' | 'AMOUNT_TOO_LOW' | 'AMOUNT_TOO_HIGH' | 'QUOTE_EXPIRED'
       | 'PROVIDER_DECLINED' | 'KYC_REJECTED' | 'PAYMENT_FAILED' | 'DELIVERY_FAILED'
       | 'RATE_LIMITED' | 'PROVIDER_UNAVAILABLE' | 'CLIENT_UPGRADE_REQUIRED' | (string & {})
@@ -231,7 +231,7 @@ type Pathway = {
   legs: Array<{ adapterId: string; legId: string; from: Endpoint; to: Endpoint }>
   method: string                  // user-facing method of the first leg
   group: 'connected' | 'recommended' | 'more' | 'unavailable'
-  reason?: OrkError               // for 'unavailable'
+  reason?: OpenRampError               // for 'unavailable'
   eta: { min: number; max: number }
   limits?: { min?: string; max?: string; currency: string }
 }
@@ -272,7 +272,7 @@ type Step = {
   legIndex?: number                             // which leg this step belongs to
   surface?: Surface                             // what to show
   transitions: Transition[]                     // what the user or client can do now
-  error?: OrkError                              // errors are fields, never states
+  error?: OpenRampError                              // errors are fields, never states
   progress?: { legs: Array<{ id: string; status: LegStatus }> }
   expiresAt?: string
 }

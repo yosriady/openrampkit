@@ -2,12 +2,12 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
+import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError } from '@openrampkit/core'
 import type {
   Direction,
   MethodOption,
-  OrkError,
-  OrkEvent,
+  OpenRampError,
+  OpenRampEvent,
   PlanResult,
   PublicSession,
   PublicQuote,
@@ -16,7 +16,7 @@ import type {
   WalletAdapter,
   WalletBalance,
 } from '@openrampkit/core'
-import { toOrkError } from './client.js'
+import { toOpenRampError } from './client.js'
 import type { OpenRampClient } from './client.js'
 
 export type Tab = 'crypto' | 'cash'
@@ -41,11 +41,11 @@ export type Snapshot = {
   amount: string
   amountSide: 'source' | 'destination'
   quotes: PublicQuote[]
-  quoteErrors: OrkError[]
+  quoteErrors: OpenRampError[]
   quotesLoading: boolean
   selectedQuoteId?: string
   busy: boolean
-  error?: OrkError
+  error?: OpenRampError
   walletConnected: boolean
   walletAddress?: string
   balances: WalletBalance[]
@@ -65,7 +65,7 @@ export type ControllerOptions = {
   wallet?: WalletAdapter
   /** Surfaces this UI can render. Defaults to all built-in ones. */
   surfaces?: string[]
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
   /** Refuse a session of the other direction (e.g. `openWithdraw()` with a deposit secret) */
   expect?: Direction
 }
@@ -96,7 +96,7 @@ export class RampController {
   private pollTimer: ReturnType<typeof setTimeout> | undefined
   private quoteTimer: ReturnType<typeof setTimeout> | undefined
   private resolveDone!: (s: PublicSession) => void
-  private rejectDone!: (e: OrkError) => void
+  private rejectDone!: (e: OpenRampError) => void
   private destroyed = false
   /** Resolves when the session reaches a terminal state */
   readonly done: Promise<PublicSession>
@@ -147,7 +147,7 @@ export class RampController {
   }
 
   private fail(e: unknown) {
-    const error = toOrkError(e)
+    const error = toOpenRampError(e)
     this.set({ busy: false, error })
     return error
   }
@@ -171,7 +171,7 @@ export class RampController {
       // Withdraw: the account on the source chain (an EVM and a Solana wallet can both be connected).
       const walletAddress: string | undefined = (session.source ? accountFor(accounts, session.source.chain) : undefined)?.address ?? accounts[0]?.address
       if (this.opts.expect && session.direction !== this.opts.expect) {
-        throw orkError('BAD_REQUEST', { message: `This is not a ${this.opts.expect} session.` })
+        throw openRampError('BAD_REQUEST', { message: `This is not a ${this.opts.expect} session.` })
       }
       this.set({ session, direction: session.direction, walletConnected: !!walletAddress, ...(walletAddress ? { walletAddress } : {}) })
       if (session.step.state !== 'SELECT_METHOD') return this.applySession(session)
@@ -280,7 +280,7 @@ export class RampController {
     }
     const tabs = this.withdrawTabs()
     if (!tabs.length) {
-      this.set({ screen: 'error', error: orkError('TARGET_NOT_ALLOWED') })
+      this.set({ screen: 'error', error: openRampError('TARGET_NOT_ALLOWED') })
       return
     }
     this.setTab(tabs[0]!)
@@ -331,7 +331,7 @@ export class RampController {
     const t = this.snap.target
     if (!t) return
     if (!isValidTargetAddress(t.chain, t.address)) {
-      this.set({ error: orkError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }) })
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }) })
       return
     }
     this.set({ busy: true, error: undefined })
@@ -448,7 +448,7 @@ export class RampController {
   async submitAmount() {
     // `!(n > 0)` also rejects NaN (for example ".")
     if (!(Number(this.snap.amount) > 0)) {
-      this.set({ error: orkError('BAD_REQUEST', { message: 'Enter an amount.' }) })
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'Enter an amount.' }) })
       return
     }
     this.set({ screen: 'quotes', error: undefined })
@@ -533,7 +533,7 @@ export class RampController {
     const step = this.snap.session?.step
     if (step?.surface?.kind !== 'WALLET_TX') return
     if (!this.opts.wallet) {
-      this.set({ error: orkError('BAD_REQUEST', { message: 'No wallet is connected.' }) })
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'No wallet is connected.' }) })
       return
     }
     const t = step.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'tx_hash')
@@ -602,7 +602,7 @@ export class RampController {
 
   close() {
     this.emit('modal.closed', { screen: this.snap.screen, state: this.snap.session?.step.state })
-    if (this.snap.session?.step.state !== 'COMPLETED') this.rejectDone(orkError('BAD_REQUEST', { message: 'Closed before completion.', recovery: 'choose_other' }))
+    if (this.snap.session?.step.state !== 'COMPLETED') this.rejectDone(openRampError('BAD_REQUEST', { message: 'Closed before completion.', recovery: 'choose_other' }))
     this.destroy()
   }
 

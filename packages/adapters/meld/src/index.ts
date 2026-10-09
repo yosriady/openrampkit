@@ -22,7 +22,7 @@ import {
   deliverableToAsset,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   legStepFromEvent,
   randomHex,
   requireDeliverAsset,
@@ -30,7 +30,7 @@ import {
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
+import { OpenRampException, USDC, cmp, openRampError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type MeldDeliverAsset = { chain: string; token: string; currencyCode: string; symbol?: string; decimals?: number }
@@ -236,7 +236,7 @@ export function meld(opts: MeldOptions) {
 
   function eventFrom(ref: string, status: string | undefined, tx?: MeldTransaction): LegEvent | undefined {
     const d = deliver.find((x) => x.currencyCode === tx?.destinationCurrencyCode)
-    const output = d && tx?.destinationAmount !== undefined ? { amount: dec(tx.destinationAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
+    const output = d && tx?.destinationAmount !== undefined ? { value: dec(tx.destinationAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
     const txHash = tx?.cryptoDetails?.blockchainTransactionId ?? undefined
     switch (status) {
       case 'SETTLED':
@@ -257,7 +257,7 @@ export function meld(opts: MeldOptions) {
       case 'DECLINED':
       case 'CANCELLED':
       case 'AUTHORIZATION_EXPIRED':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
+        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
       case 'REFUNDED':
         return { ref, status: 'refunded' }
       default:
@@ -282,7 +282,7 @@ export function meld(opts: MeldOptions) {
         methods = await call<MeldPaymentMethod[]>(ctx, 'GET', `/service-providers/properties/payment-methods?${q}`)
         // An empty or odd answer is a failure: throw so the server keeps the static legs, and do not cache it.
         if (!Array.isArray(methods) || !methods.length) {
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Meld returned no payment methods.' }), 502)
+          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld returned no payment methods.' }), 502)
         }
         await ctx.shared.put(key, methods, CATALOG_TTL_SEC)
       }
@@ -298,9 +298,9 @@ export function meld(opts: MeldOptions) {
     },
 
     async quote(input, ctx) {
-      if (!input.amountIn) throw new OrkException(orkError('NO_QUOTES', { message: 'Meld quotes need a fiat amount.' }), 422)
+      if (!input.amountIn) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Meld quotes need a fiat amount.' }), 422)
       const fiatAsset = input.amountIn.asset
-      if (fiatAsset.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Meld quotes need a fiat amount.' }))
+      if (fiatAsset.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Meld quotes need a fiat amount.' }))
       const fiat = fiatAsset.currency.toUpperCase()
       const target = deliverFor(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
@@ -310,7 +310,7 @@ export function meld(opts: MeldOptions) {
       const body = {
         countryCode: country,
         sourceCurrencyCode: fiat,
-        sourceAmount: Number(roundTo(input.amountIn.amount, 2)),
+        sourceAmount: Number(roundTo(input.amountIn.value, 2)),
         destinationCurrencyCode: target.currencyCode,
         paymentMethodType,
         ...(wallet ? { walletAddress: wallet } : {}),
@@ -321,11 +321,11 @@ export function meld(opts: MeldOptions) {
       try {
         res = await call(ctx, 'POST', '/payments/crypto/quote', body)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Meld', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Meld', { what: 'price this amount', log: ctx.log })
       }
       const quotes = (res.quotes ?? []).filter((q) => q.serviceProvider && typeof q.destinationAmount === 'number' && q.destinationAmount > 0 && typeof q.sourceAmount === 'number')
       if (!quotes.length) {
-        throw new OrkException(orkError('NO_QUOTES', { message: res.message ? `Meld: ${res.message}`.slice(0, 200) : 'No Meld provider can serve this amount.' }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: res.message ? `Meld: ${res.message}`.slice(0, 200) : 'No Meld provider can serve this amount.' }), 422)
       }
       const providers = quotes
         .map((q) => ({
@@ -344,8 +344,8 @@ export function meld(opts: MeldOptions) {
       return {
         adapterId: 'meld',
         legId: input.leg.legId,
-        input: { amount: dec(best.sourceAmount, 2), asset: { kind: 'fiat', currency: fiat } },
-        output: { amount: providers[0]!.destinationAmount, asset: assetOf(target) },
+        input: { value: dec(best.sourceAmount, 2), asset: { kind: 'fiat', currency: fiat } },
+        output: { value: providers[0]!.destinationAmount, asset: assetOf(target) },
         fees,
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
         expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
@@ -355,10 +355,10 @@ export function meld(opts: MeldOptions) {
 
     async start(input, ctx) {
       const data = (input.quote.data ?? {}) as { serviceProvider?: string; paymentMethodType?: string; currencyCode?: string; fiat?: string; country?: string }
-      if (!data.serviceProvider) throw new OrkException(orkError('QUOTE_EXPIRED', { recovery: 'requote' }), 409)
+      if (!data.serviceProvider) throw new OpenRampException(openRampError('QUOTE_EXPIRED', { recovery: 'requote' }), 409)
       const target = deliverFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Meld needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Meld needs a wallet address to deliver to.' }))
       const ref = `ork_${randomHex(12)}`
       const body = {
         sessionType: 'BUY',
@@ -367,7 +367,7 @@ export function meld(opts: MeldOptions) {
           countryCode: data.country ?? (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase(),
           sourceCurrencyCode: data.fiat ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD'),
           // A string here (the quote API takes a number)
-          sourceAmount: roundTo(input.quote.input.amount, 2),
+          sourceAmount: roundTo(input.quote.input.value, 2),
           destinationCurrencyCode: data.currencyCode ?? target.currencyCode,
           serviceProvider: data.serviceProvider,
           paymentMethodType: data.paymentMethodType ?? meldCode(input.leg.legId),
@@ -381,10 +381,10 @@ export function meld(opts: MeldOptions) {
       try {
         res = await call(ctx, 'POST', '/crypto/session/widget', body)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Meld', { what: 'start the purchase', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Meld', { what: 'start the purchase', log: ctx.log })
       }
       const url = res.serviceProviderWidgetUrl || res.widgetUrl
-      if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Meld did not return a widget URL.' }), 502)
+      if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld did not return a widget URL.' }), 502)
       return {
         state: 'PAYMENT',
         surface: { kind: 'REDIRECT', url, popup: true, provider: data.serviceProvider },
@@ -399,7 +399,7 @@ export function meld(opts: MeldOptions) {
       try {
         res = await call(ctx, 'GET', `/payments/transactions?externalSessionIds=${encodeURIComponent(input.ref)}`)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Meld', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Meld', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
       const tx = res.transactions?.[0]
       return legStepFromEvent(tx ? eventFrom(input.ref, tx.status, tx) : undefined, input.ref, POLL)

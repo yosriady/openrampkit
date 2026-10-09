@@ -10,7 +10,7 @@ body:
     id: what
     attributes:
       label: What happened
-      description: Tell us what you saw. Paste the error, the `OrkError` code, or a screenshot.
+      description: Tell us what you saw. Paste the error, the `OpenRampError` code, or a screenshot.
     validations:
       required: true
   - type: textarea

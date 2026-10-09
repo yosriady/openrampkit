@@ -10,7 +10,7 @@ Both need a server (see [Quick start](./quick-start-nextjs.md) steps 3 to 5, or 
 ## openDeposit()
 
 ```ts
-import { openDeposit, lightTheme, type OrkError } from '@openrampkit/web'
+import { openDeposit, lightTheme, type OpenRampError } from '@openrampkit/web'
 
 const handle = openDeposit({
   baseUrl: '/api/openramp',
@@ -28,9 +28,9 @@ try {
   const session = await handle.done
   console.log('deposit complete', session.id)
 } catch (err) {
-  // An OrkError. `code` is 'CLOSED' when the user closed the modal before completion,
+  // An OpenRampError. `code` is 'CLOSED' when the user closed the modal before completion,
   // or the step's error code when the payment failed.
-  const error = err as OrkError
+  const error = err as OpenRampError
   console.log(error.code, error.message)
 }
 ```
@@ -44,7 +44,7 @@ The modal opens at once. It shows a loading state while `clientSecret` resolves.
 | `element` | `OpenRampModal` | The mounted element |
 | `ready` | `Promise<DepositController>` | Resolves once the client secret is known |
 | `controller` | `DepositController \| undefined` | The controller, or `undefined` while the secret loads |
-| `done` | `Promise<PublicSession>` | Resolves when the step reaches `COMPLETED`. Rejects with an `OrkError` when the modal closes first. |
+| `done` | `Promise<PublicSession>` | Resolves when the step reaches `COMPLETED`. Rejects with an `OpenRampError` when the modal closes first. |
 | `close()` | `() => void` | Closes and removes the element |
 
 `done` resolves when the deposit completes, even if the success screen is still open. The element is removed when the user presses **Done** or **Close**, or when you call `close()`.

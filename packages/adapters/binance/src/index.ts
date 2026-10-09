@@ -19,9 +19,9 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOrk, legStepFromEvent, POLL as POLLS, randomHex, requireDeliverAsset } from '@openrampkit/adapter'
+import { awaitPoll, createAdapter, deliverableToAsset, fetchJson, httpErrorToOpenRamp, legStepFromEvent, POLL as POLLS, randomHex, requireDeliverAsset } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, SOLANA_MAINNET, USDC, isDecimal, isWebUrl, orkError } from '@openrampkit/core'
+import { OpenRampException, SOLANA_MAINNET, USDC, isDecimal, isWebUrl, openRampError } from '@openrampkit/core'
 import type { Amount, Asset, CryptoAsset, Fee, LegSpec, PollSpec, RegionPolicy } from '@openrampkit/core'
 import { importRsaPrivateKey, importRsaPublicKey, rsaSign, rsaVerify } from './rsa.js'
 
@@ -190,7 +190,7 @@ export function binance(opts: BinanceOptions) {
 
   const assetOf = deliverableToAsset
 
-  /** Signed POST to the Binance API. Throws an OrkException for HTTP errors and for a non-success envelope. */
+  /** Signed POST to the Binance API. Throws an OpenRampException for HTTP errors and for a non-success envelope. */
   async function call<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, path: string, body: Record<string, unknown>, what: string): Promise<T> {
     const json = JSON.stringify(body)
     const timestamp = String(Date.now())
@@ -201,7 +201,7 @@ export function binance(opts: BinanceOptions) {
     } catch (e) {
       signKey = undefined
       ctx.log.error('binance: cannot import privateKey', { error: String((e as Error)?.message ?? e).slice(0, 200) })
-      throw new OrkException(orkError('PROVIDER_UNAVAILABLE'), 502)
+      throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE'), 502)
     }
     let res: Envelope<T>
     try {
@@ -218,13 +218,13 @@ export function binance(opts: BinanceOptions) {
         ...(opts.timeoutMs ? { timeoutMs: opts.timeoutMs } : {}),
       })
     } catch (e) {
-      throw httpErrorToOrk(e, NAME, { what, log: ctx.log })
+      throw httpErrorToOpenRamp(e, NAME, { what, log: ctx.log })
     }
     if (res?.success === false || (res?.code !== undefined && res.code !== '000000') || res?.data === undefined || res.data === null) {
       ctx.log.warn('binance: request refused', { path, code: res?.code, message: res?.message })
-      // TO VERIFY: map Binance error codes (docs "Error Codes") to finer OrkError codes.
+      // TO VERIFY: map Binance error codes (docs "Error Codes") to finer OpenRampError codes.
       const message = res?.message ? `${NAME}: ${res.message}`.slice(0, 200) : `${NAME} could not ${what}.`
-      throw new OrkException(orkError('NO_QUOTES', { message }), 422)
+      throw new OpenRampException(openRampError('NO_QUOTES', { message }), 422)
     }
     return res.data
   }
@@ -233,7 +233,7 @@ export function binance(opts: BinanceOptions) {
     const ref = o.externalOrderId
     if (!ref) return undefined
     const d = deliver.find((x) => x.network === o.withdrawNetwork && x.cryptoCurrency === o.cryptoCurrency)
-    const output = d && o.cryptoAmount && isDecimal(o.cryptoAmount) ? { output: { amount: o.cryptoAmount, asset: assetOf(d) } } : {}
+    const output = d && o.cryptoAmount && isDecimal(o.cryptoAmount) ? { output: { value: o.cryptoAmount, asset: assetOf(d) } } : {}
     const txHash = o.withdrawTxHash ? { txHash: o.withdrawTxHash } : {}
     const S = BINANCE_ORDER_STATUS
     switch (o.status) {
@@ -253,19 +253,19 @@ export function binance(opts: BinanceOptions) {
         return {
           ref,
           status: 'failed',
-          error: orkError('PAYMENT_FAILED', { message: 'The transfer was cancelled in Binance. Your crypto stays in your Binance account.', recovery: 'retry_payment' }),
+          error: openRampError('PAYMENT_FAILED', { message: 'The transfer was cancelled in Binance. Your crypto stays in your Binance account.', recovery: 'retry_payment' }),
         }
       case S.WITHDRAW_FAILED:
         return {
           ref,
           status: 'failed',
-          error: orkError('DELIVERY_FAILED', { message: 'Binance could not send the crypto. It stays in your Binance account.', recovery: 'contact_support' }),
+          error: openRampError('DELIVERY_FAILED', { message: 'Binance could not send the crypto. It stays in your Binance account.', recovery: 'contact_support' }),
         }
       case S.SWAP_FAILED:
       case S.OFF_RAMP_FAILED:
       case S.ON_RAMP_FAILED:
       case S.FAILED:
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { recovery: 'retry_payment' }) }
+        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { recovery: 'retry_payment' }) }
       default:
         // INIT (0) and unknown codes: the user has not paid yet. No state change.
         return undefined
@@ -282,12 +282,12 @@ export function binance(opts: BinanceOptions) {
     async quote(input, ctx) {
       const target = deliverAssetFor(input.leg.to.asset)
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
-      if (fiatAsset.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Binance quotes need a fiat currency.' }))
+      if (fiatAsset.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Binance quotes need a fiat currency.' }))
       const fiat = fiatAsset.currency.toUpperCase()
       const byFiat = !!input.amountIn
-      const raw = byFiat ? input.amountIn!.amount : input.amountOut?.amount
+      const raw = byFiat ? input.amountIn!.value : input.amountOut?.value
       const requested = raw && isDecimal(raw) ? trimDigits(raw, AMOUNT_DIGITS) : undefined
-      if (!requested || Number(requested) <= 0) throw new OrkException(orkError('BAD_REQUEST', { message: 'Binance quotes need an amount.' }))
+      if (!requested || Number(requested) <= 0) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Binance quotes need an amount.' }))
       const q = await call<EstimatedQuote>(
         ctx,
         '/papi/v1/ramp/connect/buy/estimated-quote',
@@ -301,7 +301,7 @@ export function binance(opts: BinanceOptions) {
         },
         'price this amount',
       )
-      if (!q.totalAmount || !isDecimal(q.totalAmount)) throw new OrkException(orkError('NO_QUOTES', { message: `${NAME} returned no price.` }), 422)
+      if (!q.totalAmount || !isDecimal(q.totalAmount)) throw new OpenRampException(openRampError('NO_QUOTES', { message: `${NAME} returned no price.` }), 422)
       const fees: Fee[] = []
       // `feeCurrency` is "fiat currency or crypto" per the docs.
       if (q.feeAmount && isDecimal(q.feeAmount) && Number(q.feeAmount) > 0) fees.push({ kind: 'provider', label: 'Binance fee', amount: q.feeAmount, currency: q.feeCurrency || fiat })
@@ -313,8 +313,8 @@ export function binance(opts: BinanceOptions) {
       return {
         adapterId: ID,
         legId: input.leg.legId,
-        input: { amount: fiatAmount, asset: { kind: 'fiat', currency: fiat } },
-        output: { amount: cryptoAmount, asset: assetOf(target) },
+        input: { value: fiatAmount, asset: { kind: 'fiat', currency: fiat } },
+        output: { value: cryptoAmount, asset: assetOf(target) },
         fees,
         eta: { min: 60, max: 1800 },
         // An estimate: Binance shows the final price on its page. TO VERIFY the quote lifetime.
@@ -335,11 +335,11 @@ export function binance(opts: BinanceOptions) {
       const data = (input.quote.data ?? {}) as Record<string, string | number | boolean | undefined>
       const target = deliverAssetFor(input.quote.output.asset)
       const address = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!address) throw new OrkException(orkError('BAD_REQUEST', { message: 'Binance needs a wallet address to send to.' }))
+      if (!address) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Binance needs a wallet address to send to.' }))
       // externalOrderId: "Supports only letters and numbers". TO VERIFY the maximum length (we use 27 characters).
       const ref = `ork${randomHex(12)}`
       const amountType = data.amountType === 2 ? 2 : 1
-      const requestedAmount = String(data.requestedAmount ?? (amountType === 1 ? input.quote.input.amount : input.quote.output.amount))
+      const requestedAmount = String(data.requestedAmount ?? (amountType === 1 ? input.quote.input.value : input.quote.output.value))
       const order = await call<{ link?: string; linkExpireTime?: number }>(
         ctx,
         '/papi/v1/ramp/connect/buy/pre-order',
@@ -359,7 +359,7 @@ export function binance(opts: BinanceOptions) {
         'start the payment',
       )
       if (!isWebUrl(order.link, { allowHttp: !ctx.session.livemode })) {
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `${NAME} returned no payment link.` }), 502)
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `${NAME} returned no payment link.` }), 502)
       }
       await ctx.store.put(`o:${ref}`, { since: Date.now() }, ORDER_TTL_SEC)
       return {

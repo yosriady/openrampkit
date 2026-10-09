@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  OrkException, add, cmp, combinePolicies, createEvent, currencyForCountry, evmChainId, fromScaled, isDecimal, isLegalMove,
-  isOrkError, isRegionAllowed, methodAvailableIn, methodName, minorUnits, mulRatio, orkError, planPathways, roundTo, sub,
+  OpenRampException, add, cmp, combinePolicies, createEvent, currencyForCountry, evmChainId, fromScaled, isDecimal, isLegalMove,
+  isOpenRampError, isRegionAllowed, methodAvailableIn, methodName, minorUnits, mulRatio, openRampError, planPathways, roundTo, sub,
   toScaled, validateStep, chainName, USDC,
 } from './index.js'
 import type { LegSpec } from './index.js'
@@ -69,15 +69,15 @@ describe('table and errors', () => {
     expect(validateStep({ state: 'NOPE' as never, transitions: [] })[0]).toMatch(/Unknown state/)
   })
   it('builds errors with defaults and overrides', () => {
-    const e = orkError('QUOTE_EXPIRED')
+    const e = openRampError('QUOTE_EXPIRED')
     expect(e).toMatchObject({ retryable: true })
-    expect(orkError('KYC_REJECTED').retryable).toBe(false)
-    expect(orkError('CUSTOM_CODE').message).toBe('Something went wrong.')
-    expect(orkError('NO_QUOTES', { message: 'm', retryable: false, recovery: 'choose_other', legId: 'l' })).toEqual({ code: 'NO_QUOTES', message: 'm', retryable: false, recovery: 'choose_other', legId: 'l' })
-    const x = new OrkException(e)
+    expect(openRampError('KYC_REJECTED').retryable).toBe(false)
+    expect(openRampError('CUSTOM_CODE').message).toBe('Something went wrong.')
+    expect(openRampError('NO_QUOTES', { message: 'm', retryable: false, recovery: 'choose_other', legId: 'l' })).toEqual({ code: 'NO_QUOTES', message: 'm', retryable: false, recovery: 'choose_other', legId: 'l' })
+    const x = new OpenRampException(e)
     expect(x.status).toBe(400)
-    expect(isOrkError(x.error)).toBe(true)
-    expect(isOrkError(null)).toBe(false)
+    expect(isOpenRampError(x.error)).toBe(true)
+    expect(isOpenRampError(null)).toBe(false)
   })
   it('creates events', () => {
     const ev = createEvent('session.created', { a: 1 }, { sessionId: 's', livemode: true })

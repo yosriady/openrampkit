@@ -59,8 +59,8 @@ const payoutLeg = (legId: string, currency: string, chain = 'eip155:8453', token
   to: { asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } },
 })
 
-const fiat = (amount: string, currency: string) => ({ amount, asset: { kind: 'fiat' as const, currency } })
-const usdc = (amount: string, chain = 'eip155:8453', token = BASE_USDC) => ({ amount, asset: { kind: 'crypto' as const, chain, token } })
+const fiat = (amount: string, currency: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency } })
+const usdc = (amount: string, chain = 'eip155:8453', token = BASE_USDC) => ({ value: amount, asset: { kind: 'crypto' as const, chain, token } })
 
 const USD_INSTRUCTIONS = {
   currency: 'usd',
@@ -118,7 +118,7 @@ describe('bridge adapter: shape and quotes', () => {
     const q = await b.quote({ leg: depositLeg('usd-ach', 'USD'), amountIn: fiat('200', 'USD') }, ctx)
     expect(checkLegQuote(q)).toEqual([])
     expect(q.input).toEqual(fiat('200.00', 'USD'))
-    expect(q.output.amount).toBe('198.000000')
+    expect(q.output.value).toBe('198.000000')
     expect(q.output.asset).toMatchObject({ kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6 })
     expect(q.fees).toEqual([
       { kind: 'provider', label: 'Bridge fee', amount: '1.00', currency: 'USD' },
@@ -130,25 +130,25 @@ describe('bridge adapter: shape and quotes', () => {
   it('quotes EUR with the exchange rate (cached), and exact output rounds the input up', async () => {
     const { ctx, calls } = ctxWith([{ method: 'GET', match: '/exchange_rates', reply: () => ({ midmarket_rate: '1.09', buy_rate: '1.08', sell_rate: '1.07' }) }])
     const q = await a.quote({ leg: depositLeg('eur-sepa', 'EUR'), amountIn: fiat('100', 'EUR') }, ctx)
-    expect(q.output.amount).toBe('108.000000')
+    expect(q.output.value).toBe('108.000000')
     expect(calls[0]!.url).toBe(`${API}/exchange_rates?from=eur&to=usd`)
     expect(calls[0]!.headers.get('api-key')).toBe('sk-live-x')
     expect(calls[0]!.headers.get('idempotency-key')).toBeNull()
     const q2 = await a.quote({ leg: depositLeg('eur-sepa', 'EUR'), amountOut: usdc('100') }, ctx)
-    expect(q2.input.amount).toBe('92.60') // 100 / 1.08 = 92.592..., rounded up
+    expect(q2.input.value).toBe('92.60') // 100 / 1.08 = 92.592..., rounded up
     expect(calls).toHaveLength(1) // cached rate
   })
 
   it('quotes payouts from USDC to USD and EUR', async () => {
     const { ctx, calls } = ctxWith([{ method: 'GET', match: '/exchange_rates', reply: () => ({ buy_rate: '0.9' }) }])
     const q = await a.quote({ leg: payoutLeg('payout-usd-ach', 'USD'), amountIn: usdc('50') }, ctx)
-    expect(q.input.amount).toBe('50.000000')
+    expect(q.input.value).toBe('50.000000')
     expect(q.output).toEqual(fiat('50.00', 'USD'))
     const e = await a.quote({ leg: payoutLeg('payout-eur-sepa', 'EUR'), amountIn: usdc('50') }, ctx)
     expect(e.output).toEqual(fiat('45.00', 'EUR'))
     expect(calls[0]!.url).toBe(`${API}/exchange_rates?from=usd&to=eur`)
     const o = await a.quote({ leg: payoutLeg('payout-usd-wire', 'USD'), amountOut: fiat('20', 'USD') }, ctx)
-    expect(o.input.amount).toBe('20.000000')
+    expect(o.input.value).toBe('20.000000')
   })
 
   it('enforces limits, legs and networks', async () => {
@@ -230,7 +230,7 @@ describe('bridge adapter: deposits', () => {
     expect(await a.status!({ leg, ref }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
     history = [...history, { id: 'e2', type: 'payment_processed', deposit_id: 'dep_1', amount: '99.5', destination_tx_hash: '0xabc', created_at: now() }]
     const done = await a.status!({ leg, ref }, ctx)
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { amount: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC } } })
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { value: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC } } })
     expect(checkLegStep(done)).toEqual([])
     // The ids are stored, the email from the form is not.
     expect(JSON.stringify([...((ctx.shared as unknown as { data: Map<string, unknown> }).data.values())])).not.toContain('jane@example.com')
@@ -471,7 +471,7 @@ describe('bridge adapter: webhooks', () => {
     })
     expect(await b.webhook!.parse(body('funds_received'), w)).toEqual([{ ref: s.ref, status: 'processing', txHash: '0xabc' }])
     const done = await b.webhook!.parse(body('payment_processed'), w)
-    expect(done).toEqual([{ ref: s.ref, status: 'succeeded', txHash: '0xabc', output: { amount: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
+    expect(done).toEqual([{ ref: s.ref, status: 'succeeded', txHash: '0xabc', output: { value: '99.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
     expect(await b.webhook!.parse(body('payment_processed'), w)).toEqual(done) // idempotent
     expect(await b.webhook!.parse(body('account_update'), w)).toEqual([])
     // Another deposit id goes to the same session only while no other session claimed it; unknown accounts are ignored.

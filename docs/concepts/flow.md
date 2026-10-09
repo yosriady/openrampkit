@@ -12,7 +12,7 @@ type Step = {
   legIndex?: number           // which leg of the pathway is active
   surface?: Surface           // what to show: QR, redirect, deposit address, ...
   transitions: Transition[]   // what the user or the client may do next
-  error?: OrkError
+  error?: OpenRampError
   // txHash: the leg's main transaction (for a bridge or swap, the fill on the destination chain).
   // sourceTxHash: the transaction that paid into the leg (for example the one the user's wallet sent).
   progress?: { legs: Array<{ adapterId: string; legId: string; provider?: string; status: LegStatus; txHash?: string; sourceTxHash?: string }> }
@@ -236,11 +236,11 @@ Errors do not end the flow with an exception. They travel as fields:
 - `Step.error` on a failed step, with a recovery hint.
 - `errors` next to `quotes`, one per pathway that could not be quoted.
 - `MethodOption.reason` on an unavailable method.
-- HTTP error responses as `{ "error": OrkError }`.
+- HTTP error responses as `{ "error": OpenRampError }`.
 
 ```ts
-type OrkError = {
-  code: OrkErrorCode
+type OpenRampError = {
+  code: OpenRampErrorCode
   message: string      // safe to show to the user
   retryable: boolean
   recovery?: 'requote' | 'retry_payment' | 'choose_other' | 'contact_support'
@@ -273,7 +273,7 @@ type OrkError = {
 | `NOT_FOUND` | Not found. | No |
 | `INTERNAL` | Something went wrong on our side. | Yes |
 
-Adapters may add their own codes. Build errors with `orkError(code, overrides)`, and throw them across boundaries as `new OrkException(error, httpStatus)`.
+Adapters may add their own codes. Build errors with `openRampError(code, overrides)`, and throw them across boundaries as `new OpenRampException(error, httpStatus)`.
 
 ## The client side
 

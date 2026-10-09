@@ -27,10 +27,10 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOrk, importRsaPublicKey, randomHex, resolveEnv, rsaVerify } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOpenRamp, importRsaPublicKey, randomHex, resolveEnv, rsaVerify } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
-  OrkException,
+  OpenRampException,
   USDC,
   bps as applyBps,
   cmp,
@@ -39,7 +39,7 @@ import {
   isDecimal,
   isSolanaChain,
   minorUnits,
-  orkError,
+  openRampError,
   roundTo,
   sub,
   toBaseUnits,
@@ -254,7 +254,7 @@ function dec(s: string | null | undefined): string | undefined {
   return typeof s === 'string' && isDecimal(s) ? s : undefined
 }
 
-const kycRejected = () => orkError('KYC_REJECTED', { message: 'Bridge could not verify your identity.', recovery: 'choose_other' })
+const kycRejected = () => openRampError('KYC_REJECTED', { message: 'Bridge could not verify your identity.', recovery: 'choose_other' })
 
 /** Parse `t=<ms>,v0=<base64>` */
 export function parseBridgeSignature(header: string): { t?: string; v0: string[] } {
@@ -349,7 +349,7 @@ export function bridge(opts: BridgeOptions) {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       })
     } catch (e) {
-      throw httpErrorToOrk(e, 'Bridge', { what, log: ctx.log })
+      throw httpErrorToOpenRamp(e, 'Bridge', { what, log: ctx.log })
     }
   }
 
@@ -358,7 +358,7 @@ export function bridge(opts: BridgeOptions) {
 
   async function loadRec(ref: string, ctx: Pick<AdapterContext, 'shared'>): Promise<LegRec> {
     const rec = await ctx.shared.get<LegRec>(recKey(ref))
-    if (!rec) throw new OrkException(orkError('NOT_FOUND', { message: 'This Bridge payment is not known.' }), 404)
+    if (!rec) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'This Bridge payment is not known.' }), 404)
     return rec
   }
 
@@ -381,7 +381,7 @@ export function bridge(opts: BridgeOptions) {
     // TO VERIFY: `buy_rate` is "the rate for buying the target currency, including Bridge's fee". We read it
     // as the rate the user gets when converting `from` into `to`.
     const v = dec(r.buy_rate) ?? dec(r.midmarket_rate)
-    if (!v || cmp(v, '0') <= 0) throw new OrkException(orkError('NO_QUOTES', { message: 'Bridge returned no exchange rate.' }), 422)
+    if (!v || cmp(v, '0') <= 0) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Bridge returned no exchange rate.' }), 422)
     await ctx.shared.put(key, v, RATE_TTL_SEC)
     return v
   }
@@ -409,7 +409,7 @@ export function bridge(opts: BridgeOptions) {
   /** The Bridge network for USDC on `asset`'s chain. NO_QUOTES for another chain or another token (never USDC instead). */
   function chainFor(asset: CryptoAsset | undefined): BridgeChain {
     const d = findDeliverAsset(DELIVERABLE, asset)
-    if (!d) throw new OrkException(orkError('NO_QUOTES', { message: 'Bridge does not deliver this token on this network.', recovery: 'choose_other' }), 422)
+    if (!d) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Bridge does not deliver this token on this network.', recovery: 'choose_other' }), 422)
     return d.c
   }
 
@@ -418,8 +418,8 @@ export function bridge(opts: BridgeOptions) {
   }
 
   function checkLimits(amount: string, min: string, max: string | undefined, currency: string) {
-    if (cmp(amount, min) < 0) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${min} ${currency}.` }), 422)
-    if (max && cmp(amount, max) > 0) throw new OrkException(orkError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${max} ${currency}.` }), 422)
+    if (cmp(amount, min) < 0) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${min} ${currency}.` }), 422)
+    if (max && cmp(amount, max) > 0) throw new OpenRampException(openRampError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${max} ${currency}.` }), 422)
   }
 
   async function depositQuote(r: DepositRail, input: QuoteInput, ctx: AdapterContext): Promise<LegQuote> {
@@ -430,9 +430,9 @@ export function bridge(opts: BridgeOptions) {
     const keep = sub('1', feeFraction())
     let fiat: string
     if (input.amountIn) {
-      fiat = roundTo(input.amountIn.amount, digits)
+      fiat = roundTo(input.amountIn.value, digits)
     } else {
-      const out = input.amountOut?.amount ?? '0'
+      const out = input.amountOut?.value ?? '0'
       // out = fiat * keep * usdPer, rounded up to the fiat minor unit so that the user gets at least `out`
       const raw = div(div(out, usdPer), keep)
       const rounded = roundTo(raw, digits)
@@ -443,8 +443,8 @@ export function bridge(opts: BridgeOptions) {
     return {
       adapterId: 'bridge',
       legId: r.id,
-      input: { amount: fiat, asset: { kind: 'fiat', currency: cur } },
-      output: { amount: output, asset: usdcAsset(c) },
+      input: { value: fiat, asset: { kind: 'fiat', currency: cur } },
+      output: { value: output, asset: usdcAsset(c) },
       fees: feesFor(fiat, cur, digits),
       eta: r.eta,
       // Bridge has no rate lock; the rate moves about every 30 s. The bank transfer settles later at the rate of that day.
@@ -463,17 +463,17 @@ export function bridge(opts: BridgeOptions) {
     const keep = sub('1', feeFraction())
     let usdc: string
     if (input.amountIn) {
-      usdc = roundTo(input.amountIn.amount, 6)
+      usdc = roundTo(input.amountIn.value, 6)
     } else {
-      usdc = roundTo(div(div(input.amountOut?.amount ?? '0', perUsd), keep), 6)
+      usdc = roundTo(div(div(input.amountOut?.value ?? '0', perUsd), keep), 6)
     }
     checkLimits(usdc, r.min, undefined, 'USDC')
     const output = roundTo(toScaledMul(toScaledMul(usdc, keep), perUsd), digits)
     return {
       adapterId: 'bridge',
       legId: r.id,
-      input: { amount: usdc, asset: usdcAsset(c) },
-      output: { amount: output, asset: { kind: 'fiat', currency: cur } },
+      input: { value: usdc, asset: usdcAsset(c) },
+      output: { value: output, asset: { kind: 'fiat', currency: cur } },
       fees: feesFor(usdc, 'USDC', 6),
       eta: r.eta,
       expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
@@ -501,7 +501,7 @@ export function bridge(opts: BridgeOptions) {
   }
 
   function redirectStep(ref: string, url: string, sub: StepSub): LegStep {
-    if (!/^https:\/\//.test(url)) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge returned an unsafe verification link.' }), 502)
+    if (!/^https:\/\//.test(url)) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge returned an unsafe verification link.' }), 502)
     return { state: 'KYC', sub, status: 'awaiting_user', ref, surface: { kind: 'REDIRECT', url, popup: true, provider: 'Bridge' }, transitions: [awaitPoll(KYC_POLL)] }
   }
 
@@ -575,7 +575,7 @@ export function bridge(opts: BridgeOptions) {
     const c = await call<Customer>(ctx, 'GET', `/customers/${encodeURIComponent(rec.customerId!)}`, 'check your account')
     if (c.status === 'rejected' || c.status === 'offboarded') return failStep(ref)
     if (c.status === 'paused' || c.status === 'deposits_restricted') {
-      return failStep(ref, orkError('PROVIDER_DECLINED', { message: 'Bridge cannot take payments on this account now. Contact support.', recovery: 'contact_support' }))
+      return failStep(ref, openRampError('PROVIDER_DECLINED', { message: 'Bridge cannot take payments on this account now. Contact support.', recovery: 'contact_support' }))
     }
     const e = c.endorsements?.find((x) => x.name === endorsement)
     if (c.status === 'active' && (!c.endorsements || e?.status === 'approved')) return undefined
@@ -615,8 +615,8 @@ export function bridge(opts: BridgeOptions) {
   function depositSurface(rec: LegRec): Surface {
     const i = rec.instructions ?? {}
     const cur = rec.input.asset.kind === 'fiat' ? rec.input.asset.currency : 'USD'
-    if (i.br_code) return { kind: 'QR', payload: i.br_code, amount: rec.input.amount, currency: cur, method: 'pix' }
-    return bankFields(i, rec.input.amount, cur)
+    if (i.br_code) return { kind: 'QR', payload: i.br_code, amount: rec.input.value, currency: cur, method: 'pix' }
+    return bankFields(i, rec.input.value, cur)
   }
 
   const depositPaymentStep = (ref: string, rec: LegRec): LegStep => ({
@@ -646,7 +646,7 @@ export function bridge(opts: BridgeOptions) {
         },
         ctx.idempotencyKey(`bridge:va:${ref}`),
       )
-      if (!created.id || !created.source_deposit_instructions) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return bank details.' }), 502)
+      if (!created.id || !created.source_deposit_instructions) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return bank details.' }), 502)
       va = { id: created.id, instructions: created.source_deposit_instructions }
       await ctx.shared.put(vaKey, va, REC_TTL_SEC)
     }
@@ -670,14 +670,14 @@ export function bridge(opts: BridgeOptions) {
       case 'payment_processed': {
         // "For outgoing events such as payment_submitted and payment_processed, this is the amount of funds sent to the destination."
         const out = dec(ev.receipt?.final_amount) ?? dec(ev.amount)
-        return { ref, status: 'succeeded', ...(hash ? { txHash: hash } : {}), ...(out ? { output: { amount: out, asset: rec.asset } } : {}) }
+        return { ref, status: 'succeeded', ...(hash ? { txHash: hash } : {}), ...(out ? { output: { value: out, asset: rec.asset } } : {}) }
       }
       // TO VERIFY: the docs table says `refunded`, the OpenAPI enum says `refund`. Accept both.
       case 'refund':
       case 'refunded':
         return { ref, status: 'refunded' }
       case 'refund_failed':
-        return { ref, status: 'failed', error: orkError('DELIVERY_FAILED', { message: 'Bridge could not deliver or refund this deposit. Contact support.', recovery: 'contact_support' }) }
+        return { ref, status: 'failed', error: openRampError('DELIVERY_FAILED', { message: 'Bridge could not deliver or refund this deposit. Contact support.', recovery: 'contact_support' }) }
       default:
         return undefined // microdeposit, account_update, activation, deactivation
     }
@@ -766,7 +766,7 @@ export function bridge(opts: BridgeOptions) {
 
   function sendStep(ref: string, rec: LegRec): LegStep {
     const a = rec.asset
-    const amount = toBaseUnits(rec.payAmount ?? rec.input.amount, 6)
+    const amount = toBaseUnits(rec.payAmount ?? rec.input.value, 6)
     const tx: TxRequest = isSolanaChain(a.chain)
       ? { kind: 'solana', type: 'transfer', to: rec.payTo!, mint: a.token, amount, decimals: 6 }
       : { to: a.token, data: erc20TransferData(rec.payTo!, amount), value: '0', chainId: evmChainId(a.chain)! }
@@ -785,8 +785,8 @@ export function bridge(opts: BridgeOptions) {
     return typeof v === 'string' ? v.trim() : ''
   }
 
-  function bad(message: string): OrkException {
-    return new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  function bad(message: string): OpenRampException {
+    return new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
   }
 
   /** The POST body for an external account, from the FORM inputs. Validates the formats. */
@@ -830,7 +830,7 @@ export function bridge(opts: BridgeOptions) {
       '/transfers',
       'start the payout',
       {
-        amount: rec.input.amount,
+        amount: rec.input.value,
         on_behalf_of: rec.customerId,
         client_reference_id: ref,
         ...(opts.developerFeePercent ? { developer_fee_percent: opts.developerFeePercent } : {}),
@@ -842,10 +842,10 @@ export function bridge(opts: BridgeOptions) {
       ctx.idempotencyKey(`bridge:transfer:${ref}`),
     )
     const to = t.source_deposit_instructions?.to_address
-    if (!t.id || !to) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return a deposit address.' }), 502)
+    if (!t.id || !to) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return a deposit address.' }), 502)
     rec.transferId = t.id
     rec.payTo = to
-    rec.payAmount = dec(t.source_deposit_instructions?.amount) ?? rec.input.amount
+    rec.payAmount = dec(t.source_deposit_instructions?.amount) ?? rec.input.value
     await saveRec(ref, rec, ctx)
     await ctx.shared.put(`tr:${t.id}`, ref, REC_TTL_SEC)
   }
@@ -863,7 +863,7 @@ export function bridge(opts: BridgeOptions) {
       case 'payment_processed': {
         const out = dec(t.receipt?.final_amount)
         const cur = rec && payoutById.get(rec.legId)?.currency
-        return { ref, status: 'succeeded', ...(hash ? { txHash: hash } : {}), ...(out && cur ? { output: { amount: out, asset: { kind: 'fiat', currency: cur } } } : {}) }
+        return { ref, status: 'succeeded', ...(hash ? { txHash: hash } : {}), ...(out && cur ? { output: { value: out, asset: { kind: 'fiat', currency: cur } } } : {}) }
       }
       case 'refunded':
         return { ref, status: 'refunded' }
@@ -873,7 +873,7 @@ export function bridge(opts: BridgeOptions) {
       case 'returned':
       case 'refund_failed':
       case 'missing_return_policy':
-        return { ref, status: 'failed', error: orkError('DELIVERY_FAILED', { message: `Bridge could not pay out (${t.state}). Contact support.`, recovery: 'contact_support' }) }
+        return { ref, status: 'failed', error: openRampError('DELIVERY_FAILED', { message: `Bridge could not pay out (${t.state}). Contact support.`, recovery: 'contact_support' }) }
       default:
         return { ref, status: 'processing' }
     }
@@ -932,7 +932,7 @@ export function bridge(opts: BridgeOptions) {
   function railOf(legId: string): { deposit?: DepositRail; payout?: PayoutRail } {
     const deposit = depositById.get(legId)
     const payout = payoutById.get(legId)
-    if (!deposit && !payout) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Bridge leg ${legId}` }), 400)
+    if (!deposit && !payout) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Bridge leg ${legId}` }), 400)
     return { ...(deposit ? { deposit } : {}), ...(payout ? { payout } : {}) }
   }
 
@@ -954,12 +954,12 @@ export function bridge(opts: BridgeOptions) {
       const src = input.quote.input.asset
       let rec: LegRec
       if (deposit) {
-        if (out.kind !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: 'Bridge deposits deliver USDC.' }), 400)
+        if (out.kind !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Bridge deposits deliver USDC.' }), 400)
         const address = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-        if (!address) throw new OrkException(orkError('BAD_REQUEST', { message: 'Bridge needs a wallet address to deliver to.' }), 400)
+        if (!address) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Bridge needs a wallet address to deliver to.' }), 400)
         rec = { kind: 'deposit', legId: input.leg.legId, userId: ctx.session.userId, since: Date.now(), input: input.quote.input, asset: out, address }
       } else {
-        if (src.kind !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: 'Bridge payouts take USDC.' }), 400)
+        if (src.kind !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Bridge payouts take USDC.' }), 400)
         const from = input.source?.address
         rec = { kind: 'payout', legId: input.leg.legId, userId: ctx.session.userId, since: Date.now(), input: input.quote.input, asset: src, ...(from ? { fromAddress: from } : {}) }
       }
@@ -993,13 +993,13 @@ export function bridge(opts: BridgeOptions) {
           externalAccountBody(r, inputs),
           ctx.idempotencyKey(`bridge:ea:${ref}`),
         )
-        if (!ea.id) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not save the bank account.' }), 502)
+        if (!ea.id) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not save the bank account.' }), 502)
         rec.externalAccountId = ea.id
         await saveRec(ref, rec, ctx)
         return advance(ref, rec, ctx)
       }
       if (name === 'submit_tx') {
-        if (rec.kind !== 'payout' || !rec.transferId) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
+        if (rec.kind !== 'payout' || !rec.transferId) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
         const txHash = typeof inputs?.txHash === 'string' ? inputs.txHash : undefined
         if (txHash) {
           rec.txHash = txHash
@@ -1007,7 +1007,7 @@ export function bridge(opts: BridgeOptions) {
         }
         return { state: 'PROCESSING', sub: 'confirming', status: 'processing', ref, transitions: [awaitPoll(BANK_POLL)], ...(txHash ? { txHash } : {}) }
       }
-      throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
     },
 
     async status({ ref }, ctx) {

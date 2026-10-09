@@ -54,8 +54,8 @@ export function formatToken(amount: string, symbol?: string, locale?: string): s
 
 /** `locale` is a BCP 47 tag (for example `m.locale`). Undefined uses the runtime default. */
 export function formatAmount(a: Amount, locale?: string): string {
-  if (a.asset.kind === 'fiat') return formatFiat(a.amount, a.asset.currency, locale ? { locale } : {})
-  return formatToken(a.amount, a.asset.symbol ?? '', locale)
+  if (a.asset.kind === 'fiat') return formatFiat(a.value, a.asset.currency, locale ? { locale } : {})
+  return formatToken(a.value, a.asset.symbol ?? '', locale)
 }
 
 /** Currency symbol for an ISO code, e.g. USD -> $, PHP -> ₱. Falls back to the code. */

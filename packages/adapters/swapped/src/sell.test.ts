@@ -49,21 +49,21 @@ describe('swapped sell legs', () => {
 
   it('quotes a crypto amount in two pricing calls (probe, then the estimated fiat amount)', async () => {
     const { fetch, calls } = fakeFetch([{ match: 'sell/pricing', reply: (c) => pricing((c.body as { fiat_amount: number }).fiat_amount) }])
-    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { amount: '100', asset: BASE_USDC } }, makeCtx({ fetch }))
+    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, makeCtx({ fetch }))
     expect(checkLegQuote(q)).toEqual([])
     expect(calls.map((c) => (c.body as { fiat_amount: number }).fiat_amount)).toEqual([100, 92])
     expect((calls[0]!.body as Record<string, unknown>)).toMatchObject({ api_key: PK, payout_method: 'bank-transfer', crypto_currency: 'USDC_BASE', fiat_currency: 'EUR' })
-    expect(q.input).toEqual({ amount: '100', asset: expect.objectContaining({ chain: 'eip155:8453' }) })
-    expect(q.output).toEqual({ amount: '90.16', asset: { kind: 'fiat', currency: 'EUR' } })
+    expect(q.input).toEqual({ value: '100', asset: expect.objectContaining({ chain: 'eip155:8453' }) })
+    expect(q.output).toEqual({ value: '90.16', asset: { kind: 'fiat', currency: 'EUR' } })
     expect(q.data).toMatchObject({ estimate: true, slug: 'bank-transfer' })
     const bad = fakeFetch([{ match: 'sell/pricing', reply: () => ({ success: true, data: { crypto_amount: 0, fiat_amount_incl_fees: 0, fiat_amount_excl_fees: 0 } }) }])
-    await expect(a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { amount: '100', asset: BASE_USDC } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })
 
   it('starts a signed /sell widget with userSendsFunds=false and the locked crypto amount', async () => {
     const { fetch } = fakeFetch([{ match: 'sell/pricing', reply: (c) => pricing((c.body as { fiat_amount: number }).fiat_amount) }])
     const ctx = makeCtx({ fetch, session: { country: 'DK', email: 'a@b.test' } })
-    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { amount: '100', asset: BASE_USDC } }, ctx)
+    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, ctx)
     const step = await a.start({ leg: sellLeg('bank-transfer', 'EUR'), quote: q }, ctx)
     expect(checkLegStep(step)).toEqual([])
     expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'IFRAME', origin: 'https://widget.swapped.com' } })

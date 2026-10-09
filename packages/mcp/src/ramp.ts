@@ -2,7 +2,7 @@
 // registry, and return compact JSON views. The MCP layer (server.ts) only maps tools to these.
 
 import { cmp, currencyForCountry } from '@openrampkit/core'
-import type { MethodOption, OrkError, PublicQuote, PublicSession, SurfaceKind } from '@openrampkit/core'
+import type { MethodOption, OpenRampError, PublicQuote, PublicSession, SurfaceKind } from '@openrampkit/core'
 import { createBackend, RampError } from './backend.js'
 import type { Backend, SessionInput } from './backend.js'
 import { checkConfig, resolveBounds, resolveDestination, resolveTarget } from './config.js'
@@ -13,7 +13,7 @@ import { memoryRegistry } from './registry.js'
 import type { SessionRegistry } from './registry.js'
 
 type PlanResult = { methods: MethodOption[]; currency: string }
-type QuotesResult = { quotes: PublicQuote[]; errors: OrkError[] }
+type QuotesResult = { quotes: PublicQuote[]; errors: OpenRampError[] }
 type Direction = 'deposit' | 'withdraw'
 
 const PREVIEW_TTL_MIN = 10

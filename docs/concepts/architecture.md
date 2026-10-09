@@ -165,7 +165,7 @@ classDiagram
     legIndex
     surface: Surface
     transitions: Transition[]
-    error: OrkError
+    error: OpenRampError
     progress
   }
   SessionRecord --> PlanResult

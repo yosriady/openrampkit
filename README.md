@@ -257,7 +257,7 @@ sequenceDiagram
 
 - **The server fixes the destination.** The browser holds only a client secret for one session.
 - **Server-driven steps.** The server tells the modal what to show next: a QR code, a redirect, a deposit address or a wallet transaction. The modal has no provider logic.
-- **Errors are fields.** A failed quote or payment is an `OrkError` with a code, a safe message and a recovery hint.
+- **Errors are fields.** A failed quote or payment is an `OpenRampError` with a code, a safe message and a recovery hint.
 
 Read more: [Architecture](https://openrampkit-getformo.vercel.app/concepts/architecture), [Pathways and legs](https://openrampkit-getformo.vercel.app/concepts/pathways), [Sessions and security](https://openrampkit-getformo.vercel.app/concepts/sessions), [Surfaces](https://openrampkit-getformo.vercel.app/concepts/surfaces).
 

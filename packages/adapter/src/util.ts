@@ -1,6 +1,6 @@
 // Small helpers shared by the first-party adapters. Web-standard APIs only.
 
-import { OrkException, isDecimal, orkError, sameToken } from '@openrampkit/core'
+import { OpenRampException, isDecimal, openRampError, sameToken } from '@openrampkit/core'
 import type { Asset, CryptoAsset, LegStep, PollSpec, Transition } from '@openrampkit/core'
 import type { LegEvent } from './index.js'
 
@@ -125,7 +125,7 @@ export function requireDeliverAsset<T extends DeliverableAsset>(list: readonly T
   const found = findDeliverAsset(list, asset)
   if (!found) {
     const what = asset?.kind === 'crypto' ? `${asset.symbol ?? asset.token} on ${asset.chain}` : 'this asset'
-    throw new OrkException(orkError('NO_QUOTES', { message: `${provider} does not deliver ${what}.`, recovery: 'choose_other' }), 422)
+    throw new OpenRampException(openRampError('NO_QUOTES', { message: `${provider} does not deliver ${what}.`, recovery: 'choose_other' }), 422)
   }
   return found
 }

@@ -1,12 +1,12 @@
-import { OrkException, orkError } from '@openrampkit/core'
-import type { OrkError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
+import type { OpenRampError } from '@openrampkit/core'
 import { IDEMPOTENCY_TTL_SEC, MAX_JSON_BODY_BYTES } from './config.js'
 import type { Runtime } from './runtime.js'
 
 export const json = (body: unknown, status = 200, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json', ...headers } })
 
-export const errorResponse = (e: OrkError, status: number) => json({ error: e }, status)
+export const errorResponse = (e: OpenRampError, status: number) => json({ error: e }, status)
 
 export function corsHeaders(rt: Runtime, req: Request): Record<string, string> {
   const origin = req.headers.get('origin')
@@ -51,7 +51,7 @@ const IDEMPOTENCY_KEY = /^[\x21-\x7e]{1,255}$/
 export async function withIdempotency(rt: Runtime, sessionId: string, scope: string, req: Request, run: () => Promise<Response>): Promise<Response> {
   const key = req.headers.get('idempotency-key')
   if (!key) return run()
-  if (!IDEMPOTENCY_KEY.test(key)) throw new OrkException(orkError('BAD_REQUEST', { message: '`Idempotency-Key` must be 1 to 255 printable ASCII characters.' }), 400)
+  if (!IDEMPOTENCY_KEY.test(key)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: '`Idempotency-Key` must be 1 to 255 printable ASCII characters.' }), 400)
   const k = `idem:${sessionId}:${scope}:${key}`
   const hit = await rt.store.kv.get<{ status: number; body: string }>(k)
   if (hit) return new Response(hit.body, { status: hit.status, headers: { 'content-type': 'application/json', 'idempotent-replay': 'true' } })
@@ -65,7 +65,7 @@ export async function withIdempotency(rt: Runtime, sessionId: string, scope: str
  * the `Content-Length` header is checked first, then the bytes as they arrive.
  */
 export async function readText(req: Request, max: number): Promise<string> {
-  const tooLarge = () => new OrkException(orkError('BAD_REQUEST', { message: `The request body is larger than ${max} bytes.` }), 413)
+  const tooLarge = () => new OpenRampException(openRampError('BAD_REQUEST', { message: `The request body is larger than ${max} bytes.` }), 413)
   const declared = Number(req.headers.get('content-length'))
   if (Number.isFinite(declared) && declared > max) throw tooLarge()
   if (req.body === null) return ''
@@ -103,6 +103,6 @@ export async function readJson<T>(req: Request, fallback?: T): Promise<T> {
     return JSON.parse(text) as T
   } catch {
     if (fallback !== undefined) return fallback
-    throw new OrkException(orkError('BAD_REQUEST', { message: 'Request body must be JSON' }), 400)
+    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Request body must be JSON' }), 400)
   }
 }

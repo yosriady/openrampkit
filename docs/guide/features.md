@@ -58,7 +58,7 @@ See the [withdraw flow](../concepts/flows.md#withdraw).
 | Iframe message protocol | Provider pages can signal completion. The modal checks origin and source. | [Iframe flow](../concepts/flows.md#iframe-message-protocol), [IFRAME](../concepts/surfaces.md#iframe) |
 | Provider SDK renderers | Mount a provider's own UI, for example the Stripe onramp element | [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk), [Stripe](../adapters/stripe.md) |
 | Restart | "Choose another method" leaves a payment that waits for the user | [Transitions](../concepts/flow.md#transitions) |
-| Errors as fields | `OrkError` with a code, a safe message and a recovery hint | [Errors as fields](../concepts/flow.md#errors-as-fields) |
+| Errors as fields | `OpenRampError` with a code, a safe message and a recovery hint | [Errors as fields](../concepts/flow.md#errors-as-fields) |
 | Web component | `<openramp-modal>` in Shadow DOM, for any framework or none | [Web component](./web-component.md), [@openrampkit/web](../api/web.md) |
 | Embedded mode | Render the widget inline in your page | [Embedded mode](./web-component.md#embedded-mode) |
 | Framework wrappers | React, Vue, Svelte and Solid | [React](../api/react.md), [Vue](../api/vue.md), [Svelte](../api/svelte.md), [Solid](../api/solid.md) |

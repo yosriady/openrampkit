@@ -42,7 +42,7 @@ export type Connection =
     }
   | { openramp: InProcessOpenRamp }
 
-/** An error from the OpenRampKit server, with its `OrkError` code. */
+/** An error from the OpenRampKit server, with its `OpenRampError` code. */
 export class RampError extends Error {
   constructor(
     readonly code: string,

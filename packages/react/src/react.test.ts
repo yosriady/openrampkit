@@ -8,7 +8,7 @@ import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DepositController } from '@openrampkit/client'
-import type { OrkEvent, PublicSession } from '@openrampkit/core'
+import type { OpenRampEvent, PublicSession } from '@openrampkit/core'
 import type { OpenRampModal } from '@openrampkit/web'
 import { BASE, BASE_DEST, fakeClient, session, setupServer, sleep, waitFor } from '../../client/src/testctx.js'
 import { DepositButton, OpenRampEmbedded, OpenRampProvider, darkTheme, lightTheme, useDepositController, useOpenRamp } from './index.js'
@@ -83,7 +83,7 @@ describe('OpenRampProvider and useOpenRamp', () => {
     let api!: OpenRampApi
     const events: string[] = []
     const perCall: string[] = []
-    await render(createElement(OpenRampProvider, { baseUrl: BASE, theme: lightTheme(), onEvent: (e: OrkEvent) => events.push(e.type) }, createElement(Capture, { onApi: (a) => (api = a) })))
+    await render(createElement(OpenRampProvider, { baseUrl: BASE, theme: lightTheme(), onEvent: (e: OpenRampEvent) => events.push(e.type) }, createElement(Capture, { onApi: (a) => (api = a) })))
     expect(container.textContent).toBe('closed')
     const secret = await newSecret()
     let p!: Promise<PublicSession>

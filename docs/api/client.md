@@ -3,7 +3,7 @@
 A framework-free client for the OpenRampKit server, and `RampController`, the state machine behind the modal. Use it to build a custom UI, to test flows, or in React Native.
 
 ```ts
-import { createOpenRampClient, DepositController, WithdrawController, createMockWallet, toOrkError, OrkClientError } from '@openrampkit/client'
+import { createOpenRampClient, DepositController, WithdrawController, createMockWallet, toOpenRampError, OpenRampClientError } from '@openrampkit/client'
 ```
 
 `RampController`, `DepositController` and `WithdrawController` are the same class. The session's `direction` picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
@@ -24,7 +24,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `getSession(secret)` | `GET /sessions/:id` | `PublicSession` |
 | `plan(secret, { walletConnected, walletAddress?, surfaces? })` | `POST /sessions/:id/plan` | `PlanResult` |
 | `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. |
-| `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: PublicQuote[]; errors: OrkError[] }` |
+| `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: PublicQuote[]; errors: OpenRampError[] }` |
 | `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
@@ -34,9 +34,9 @@ The type is `OpenRampClient`.
 
 ### Errors
 
-A non-OK response throws `OrkClientError`, which has `error` (an `OrkError`) and `status` (the HTTP status). When the body has no `OrkError` (for example an HTML 502 from a proxy), the error is built from the status: 401 and 403 give `UNAUTHORIZED`, 404 `NOT_FOUND`, 429 `RATE_LIMITED`, 5xx `PROVIDER_UNAVAILABLE`, others `INTERNAL`. A 2xx body that is not JSON throws `INTERNAL`.
+A non-OK response throws `OpenRampClientError`, which has `error` (an `OpenRampError`) and `status` (the HTTP status). When the body has no `OpenRampError` (for example an HTML 502 from a proxy), the error is built from the status: 401 and 403 give `UNAUTHORIZED`, 404 `NOT_FOUND`, 429 `RATE_LIMITED`, 5xx `PROVIDER_UNAVAILABLE`, others `INTERNAL`. A 2xx body that is not JSON throws `INTERNAL`.
 
-`toOrkError(e)` turns anything thrown by the client, the controller or a wallet into an `OrkError`.
+`toOpenRampError(e)` turns anything thrown by the client, the controller or a wallet into an `OpenRampError`.
 
 ## DepositController
 
@@ -124,11 +124,11 @@ type Snapshot = {
   amount: string
   amountSide: 'source' | 'destination'
   quotes: PublicQuote[]
-  quoteErrors: OrkError[]
+  quoteErrors: OpenRampError[]
   quotesLoading: boolean
   selectedQuoteId?: string
   busy: boolean              // an action is in flight
-  error?: OrkError           // the last error, or the step's error
+  error?: OpenRampError           // the last error, or the step's error
   walletConnected: boolean
   walletAddress?: string
   balances: WalletBalance[]  // balances above zero

@@ -14,14 +14,14 @@
 
 import { createAdapter, erc20TransferData } from '@openrampkit/adapter'
 import type { AdapterContext } from '@openrampkit/adapter'
-import { OrkException, isSolanaSignature, orkError } from '@openrampkit/core'
+import { OpenRampException, isSolanaSignature, openRampError } from '@openrampkit/core'
 import type { Amount, LegStep } from '@openrampkit/core'
 import { createRuntime } from './client.js'
 import { RECORD_TTL_SEC } from './config.js'
 import type { RelayOptions } from './config.js'
 import { depositAddresses } from './deposit-address.js'
 import { directTransfer } from './direct-transfer.js'
-import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, relaySub, terminalStep, toOrk } from './helpers.js'
+import { POLL_TRANSITION, SUBMIT_TX, addrKey, cryptoAsset, deliveredOutput, destAsset, isSolana, recipientOf, relaySub, terminalStep, toOpenRamp } from './helpers.js'
 import { quotes, relayLegs } from './quotes.js'
 import type { DepositRecord, RelayIntentStatus, WalletRecord } from './types.js'
 import { walletLeg } from './wallet.js'
@@ -77,12 +77,12 @@ export function relay(opts: RelayOptions = {}) {
         case 'bridge':
           return quoteDeposit('bridge', input, ctx)
         default:
-          throw new OrkException(orkError('NOT_FOUND', { message: `Unknown Relay leg ${input.leg.legId}` }), 404)
+          throw new OpenRampException(openRampError('NOT_FOUND', { message: `Unknown Relay leg ${input.leg.legId}` }), 404)
       }
     },
 
     async prepareDeposit(input, ctx) {
-      const origin = cryptoAsset({ amount: '0', asset: input.leg.from.asset }, 'hop asset')
+      const origin = cryptoAsset({ value: '0', asset: input.leg.from.asset }, 'hop asset')
       const dest = destAsset(ctx, input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const recipient = recipientOf(ctx)
       warnNoKey(ctx.log)
@@ -105,20 +105,20 @@ export function relay(opts: RelayOptions = {}) {
         case 'bridge':
           return startDeposit('bridge', input, ctx)
         default:
-          throw new OrkException(orkError('NOT_FOUND', { message: `Unknown Relay leg ${input.leg.legId}` }), 404)
+          throw new OpenRampException(openRampError('NOT_FOUND', { message: `Unknown Relay leg ${input.leg.legId}` }), 404)
       }
     },
 
     async transition(input, ctx) {
       if (input.leg.legId !== 'wallet' || input.name !== 'submit_tx') {
-        throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
+        throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
       }
       const txHash = String(input.inputs?.txHash ?? input.inputs?.hash ?? '').trim()
       const rec = (await ctx.store.get<WalletRecord>(`w:${input.ref}`)) ?? { mode: 'relay' as const, requestId: input.ref }
       // EVM: a 32-byte hex hash. Solana: a base58 signature.
       const evmHash = /^0x[0-9a-fA-F]{64}$/.test(txHash)
       const ok = rec.chain ? (isSolana(rec.chain) ? isSolanaSignature(txHash) : evmHash) : evmHash || isSolanaSignature(txHash)
-      if (!ok) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
+      if (!ok) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)
       return { state: 'PROCESSING', transitions: [POLL_TRANSITION], status: 'processing', ref: input.ref, txHash, sourceTxHash: txHash }
     },
@@ -134,7 +134,7 @@ export function relay(opts: RelayOptions = {}) {
           return verifyDirectWallet(ctx, input.ref, rec)
         }
         const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
-          throw toOrk(e, ctx.log)
+          throw toOpenRamp(e, ctx.log)
         })
         // `txHash` is the fill on the destination chain once Relay reports it; `sourceTxHash` is the
         // origin transaction that the user's wallet sent (`submit_tx`), else the one Relay saw.
@@ -163,7 +163,7 @@ export function relay(opts: RelayOptions = {}) {
       // Same chain and token: the address is the destination itself; look for Transfer logs to it.
       if (rec?.mode === 'direct') return (await findDirectDeposit(ctx, input.ref, rec, waiting)) ?? waiting
       return findRelayDeposit(ctx, input.ref, rec, waiting).catch((e) => {
-        throw toOrk(e, ctx.log)
+        throw toOpenRamp(e, ctx.log)
       })
     },
 

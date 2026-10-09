@@ -57,7 +57,7 @@ The cost of self-hosting is real. You sign up with each provider, you keep their
 
 **Server-driven steps.** The server tells the modal what to show next as a `Step`: a state, a surface (a QR code, a redirect, a deposit address, a wallet transaction) and the allowed transitions. The modal has no provider logic. See [Flow state machine](../concepts/flow.md) and [Surfaces](../concepts/surfaces.md).
 
-**Errors are fields.** A failed quote or payment is an `OrkError` with a code, a message that is safe to show, and a recovery hint. The flow does not throw.
+**Errors are fields.** A failed quote or payment is an `OpenRampError` with a code, a message that is safe to show, and a recovery hint. The flow does not throw.
 
 **Local rails first.** The method vocabulary and the default order per country put local QR and e-wallet methods first, where people use them most.
 

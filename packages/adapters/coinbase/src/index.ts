@@ -18,9 +18,9 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOpenRamp, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
-import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
+import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
 import type { CdpKey } from './jwt.js'
@@ -234,8 +234,8 @@ export function coinbase(opts: CoinbaseOptions) {
   }
 
   /** 400 and 422 mean "not for this request"; 401, 403 and 404 mean our key or setup is wrong. */
-  function toOrk(e: unknown, what: string, log?: Pick<Logger, 'warn'>): OrkException {
-    return httpErrorToOrk(e, 'Coinbase', { what, noQuoteStatuses: [400, 422], ...(log ? { log } : {}) })
+  function toOpenRamp(e: unknown, what: string, log?: Pick<Logger, 'warn'>): OpenRampException {
+    return httpErrorToOpenRamp(e, 'Coinbase', { what, noQuoteStatuses: [400, 422], ...(log ? { log } : {}) })
   }
 
   const toChains: Record<string, string[]> = Object.fromEntries(
@@ -372,13 +372,13 @@ export function coinbase(opts: CoinbaseOptions) {
   }
 
   /** Map a Create Onramp Order error: guest limits and regions are about the user, others as usual */
-  function orderError(e: unknown, what: string, log: Pick<Logger, 'warn'>): OrkException {
-    if (e instanceof OrkException) return e
+  function orderError(e: unknown, what: string, log: Pick<Logger, 'warn'>): OpenRampException {
+    if (e instanceof OpenRampException) return e
     const body = (e as { body?: unknown } | undefined)?.body
     const type = body && typeof body === 'object' ? (body as { errorType?: unknown }).errorType : undefined
     const known = typeof type === 'string' ? GUEST_ERRORS[type] : undefined
-    if (known) return new OrkException(orkError(known.code, { message: known.message, recovery: 'choose_other' }), 422)
-    return toOrk(e, what, log)
+    if (known) return new OpenRampException(openRampError(known.code, { message: known.message, recovery: 'choose_other' }), 422)
+    return toOpenRamp(e, what, log)
   }
 
   /** Key of the reusable `userAuthToken` of one user and wallet. A token only skips OTP for the same wallet. */
@@ -386,7 +386,7 @@ export function coinbase(opts: CoinbaseOptions) {
 
   function deliverAddress(ctx: AdapterContext, deliverTo?: { address: string }): string {
     const a = deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-    if (!a) throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase needs a wallet address to deliver to.' }))
+    if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Coinbase needs a wallet address to deliver to.' }))
     return a
   }
 
@@ -398,12 +398,12 @@ export function coinbase(opts: CoinbaseOptions) {
     const txHash = hash && hash !== '0x' ? hash : undefined
     const chain = chainForNetwork(tx.purchaseNetwork ?? tx.purchase_network ?? tx.destinationNetwork)
     const amount = amountValue(tx.purchaseAmount ?? tx.purchase_amount)
-    const output = chain && amount ? { amount, asset: usdcOn(chain) } : undefined
+    const output = chain && amount ? { value: amount, asset: usdcOn(chain) } : undefined
     if (status === 'ONRAMP_TRANSACTION_STATUS_SUCCESS' || status === 'ONRAMP_ORDER_STATUS_COMPLETED' || tx.eventType === 'onramp.transaction.success') {
       return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
     }
     if (status.endsWith('_FAILED') || tx.eventType === 'onramp.transaction.failed') {
-      return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The Coinbase purchase did not complete.', recovery: 'retry_payment' }) }
+      return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Coinbase purchase did not complete.', recovery: 'retry_payment' }) }
     }
     // A headless order before payment: the user is still in the frame
     if (ORDER_WAITING.includes(status)) return { ref, status: 'awaiting_user' }
@@ -420,13 +420,13 @@ export function coinbase(opts: CoinbaseOptions) {
   }
 
   async function guestQuote(input: QuoteInput, ctx: AdapterContext, currency: string, t: ReturnType<typeof target>): Promise<LegQuote> {
-    if (currency.toUpperCase() !== 'USD') throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase guest checkout takes USD only.' }))
+    if (currency.toUpperCase() !== 'USD') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Coinbase guest checkout takes USD only.' }))
     let res: CbOrderResponse
     try {
       res = await createOrder(ctx, {
         network: t.network,
         address: deliverAddress(ctx, input.deliverTo),
-        ...(input.amountIn ? { paymentAmount: input.amountIn.amount } : { purchaseAmount: input.amountOut?.amount ?? '0' }),
+        ...(input.amountIn ? { paymentAmount: input.amountIn.value } : { purchaseAmount: input.amountOut?.value ?? '0' }),
         ref: partnerUserRef(ctx),
         isQuote: true,
       })
@@ -434,12 +434,12 @@ export function coinbase(opts: CoinbaseOptions) {
       throw orderError(e, 'price this amount', ctx.log)
     }
     const o = res.order
-    if (!o?.paymentTotal || !o.purchaseAmount) throw new OrkException(orkError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
+    if (!o?.paymentTotal || !o.purchaseAmount) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
     return {
       adapterId: 'coinbase',
       legId: GUEST_APPLE_PAY,
-      input: { amount: o.paymentTotal, asset: { kind: 'fiat', currency: o.paymentCurrency ?? 'USD' } },
-      output: { amount: o.purchaseAmount, asset: t.asset },
+      input: { value: o.paymentTotal, asset: { kind: 'fiat', currency: o.paymentCurrency ?? 'USD' } },
+      output: { value: o.purchaseAmount, asset: t.asset },
       fees: feesOf(o.fees),
       eta: legs.find((l) => l.id === GUEST_APPLE_PAY)!.eta,
       limits: GUEST_LIMITS,
@@ -459,7 +459,7 @@ export function coinbase(opts: CoinbaseOptions) {
       res = await createOrder(ctx, {
         network: data.network ?? t.network,
         address,
-        paymentAmount: input.quote.input.amount,
+        paymentAmount: input.quote.input.value,
         ref,
         isQuote: false,
         ...(saved ? { userAuthToken: saved } : {}),
@@ -469,7 +469,7 @@ export function coinbase(opts: CoinbaseOptions) {
     }
     const link = res.paymentLink?.url
     const orderId = res.order?.orderId
-    if (!link || !orderId) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a payment link.' }), 502)
+    if (!link || !orderId) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a payment link.' }), 502)
     await ctx.store.put(`order:${ref}`, orderId, 7 * 86400)
     // "Store it ... replacing any older value" (embedded orders)
     if (res.userAuthToken && res.userAuthToken !== saved) await ctx.shared.put(tokenKey, res.userAuthToken, USER_AUTH_TOKEN_TTL_SEC)
@@ -544,7 +544,7 @@ export function coinbase(opts: CoinbaseOptions) {
 
     async quote(input, ctx) {
       const fiat = input.amountIn?.asset ?? input.leg.from.asset
-      if (fiat.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Coinbase quotes need a fiat amount.' }))
+      if (fiat.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Coinbase quotes need a fiat amount.' }))
       const t = target(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       if (input.leg.legId === GUEST_APPLE_PAY) return guestQuote(input, ctx, fiat.currency, t)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
@@ -557,23 +557,23 @@ export function coinbase(opts: CoinbaseOptions) {
           network: t.network,
           address: deliverAddress(ctx, input.deliverTo),
           paymentCurrency: fiat.currency.toUpperCase(),
-          ...(input.amountIn ? { paymentAmount: input.amountIn.amount } : { purchaseAmount: input.amountOut?.amount ?? '0' }),
+          ...(input.amountIn ? { paymentAmount: input.amountIn.value } : { purchaseAmount: input.amountOut?.value ?? '0' }),
           paymentMethod,
           country,
           ...(sub ? { subdivision: sub } : {}),
           ref,
         })
       } catch (e) {
-        throw toOrk(e, 'price this amount', ctx.log)
+        throw toOpenRamp(e, 'price this amount', ctx.log)
       }
       const q = res.quote
-      if (!q) throw new OrkException(orkError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
+      if (!q) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Coinbase did not return a quote for this amount.' }), 422)
       const fees = feesOf(q.fees)
       return {
         adapterId: 'coinbase',
         legId: input.leg.legId,
-        input: { amount: q.paymentTotal, asset: { kind: 'fiat', currency: q.paymentCurrency } },
-        output: { amount: q.purchaseAmount, asset: t.asset },
+        input: { value: q.paymentTotal, asset: { kind: 'fiat', currency: q.paymentCurrency } },
+        output: { value: q.purchaseAmount, asset: t.asset },
         fees,
         eta: (legs.find((l) => l.id === input.leg.legId) ?? legs[0]!).eta,
         data: { ref, onrampUrl: res.session?.onrampUrl, createdAt: Date.now(), network: t.network, paymentMethod, country, ...(sub ? { subdivision: sub } : {}) },
@@ -604,7 +604,7 @@ export function coinbase(opts: CoinbaseOptions) {
             network: data.network ?? t.network,
             address: deliverAddress(ctx, input.deliverTo),
             paymentCurrency: fiat,
-            paymentAmount: input.quote.input.amount,
+            paymentAmount: input.quote.input.value,
             ...(data.paymentMethod ? { paymentMethod: data.paymentMethod } : {}),
             ...(data.country ? { country: data.country } : {}),
             ...(data.subdivision ? { subdivision: data.subdivision } : {}),
@@ -612,9 +612,9 @@ export function coinbase(opts: CoinbaseOptions) {
           })
           url = res.session?.onrampUrl
         } catch (e) {
-          throw toOrk(e, 'start the purchase', ctx.log)
+          throw toOpenRamp(e, 'start the purchase', ctx.log)
         }
-        if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a checkout URL.' }), 502)
+        if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Coinbase did not return a checkout URL.' }), 502)
       }
       return {
         state: 'PAYMENT',
@@ -633,7 +633,7 @@ export function coinbase(opts: CoinbaseOptions) {
         try {
           res = await cdp(ctx, cdpApi, 'GET', `/platform/v2/onramp/orders/${encodeURIComponent(orderId)}`)
         } catch (e) {
-          throw toOrk(e, 'find this purchase', ctx.log)
+          throw toOpenRamp(e, 'find this purchase', ctx.log)
         }
         return legStepFromEvent(res.order ? eventFrom(res.order as CbTransaction, input.ref) : undefined, input.ref, POLL)
       }
@@ -643,7 +643,7 @@ export function coinbase(opts: CoinbaseOptions) {
       try {
         res = await cdp(ctx, onrampApi, 'GET', path, '?pageSize=1')
       } catch (e) {
-        throw toOrk(e, 'find this purchase', ctx.log)
+        throw toOpenRamp(e, 'find this purchase', ctx.log)
       }
       const tx = res.transactions?.[0]
       return legStepFromEvent(tx ? eventFrom(tx, input.ref) : undefined, input.ref, POLL)

@@ -261,7 +261,7 @@ describe('withdraw: view helpers', () => {
   })
 
   it('quote subtitle says what the user sends', () => {
-    const q = { fees: [], input: { amount: '10', asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x', symbol: 'USDC' } } } as never
+    const q = { fees: [], input: { value: '10', asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x', symbol: 'USDC' } } } as never
     expect(quoteSubtitle(q, en, 'withdraw')).toBe('You send 10 USDC · No fees')
     expect(quoteSubtitle(q, en)).toBe('You pay 10 USDC · No fees')
   })

@@ -2,7 +2,7 @@
 
 import type { Snapshot } from '@openrampkit/client'
 import { CHAINS, USDC, isStepSub, mulRatio } from '@openrampkit/core'
-import type { IframeMessages, MethodOption, OrkError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
+import type { IframeMessages, MethodOption, OpenRampError, PathwayGroup, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
 import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
@@ -31,7 +31,7 @@ export function stepLabel(m: Messages, step: Step): string {
 }
 
 /** Screen shown for a snapshot, or for an element that has no controller yet. */
-export function screenOf(s: Snapshot | undefined, error: OrkError | undefined): string {
+export function screenOf(s: Snapshot | undefined, error: OpenRampError | undefined): string {
   if (s) return s.screen
   return error ? 'error' : 'loading'
 }
@@ -61,7 +61,7 @@ export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: A
 }
 
 /** Text for the polite live region, so screen readers hear loading, errors and step progress. */
-export function liveText(s: Snapshot | undefined, error: OrkError | undefined, m: Messages): string {
+export function liveText(s: Snapshot | undefined, error: OpenRampError | undefined, m: Messages): string {
   if (!s) return error ? error.message : m.loading
   if (s.quotesLoading) return m.gettingQuotes
   if (s.error) return s.error.message
@@ -170,7 +170,7 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
 export function quoteSubtitle(q: PublicQuote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
-  if (Number(q.input.amount) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
+  if (Number(q.input.value) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
   // A fee in the rate with no known amount: say nothing rather than "No fees".
   if (fees) sub.push(m.fees(fees))
   else if (!q.fees.some((f) => f.inRate)) sub.push(m.noFees)

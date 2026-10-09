@@ -45,9 +45,9 @@ describe('amounts', () => {
   })
 
   it('formatAmount handles fiat and crypto assets', () => {
-    expect(formatAmount({ amount: '10', asset: { kind: 'fiat', currency: 'USD' } })).toBe('$10.00')
-    expect(formatAmount({ amount: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'USDC' } })).toBe('10 USDC')
-    expect(formatAmount({ amount: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x' } })).toBe('10')
+    expect(formatAmount({ value: '10', asset: { kind: 'fiat', currency: 'USD' } })).toBe('$10.00')
+    expect(formatAmount({ value: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'USDC' } })).toBe('10 USDC')
+    expect(formatAmount({ value: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x' } })).toBe('10')
   })
 
   it('crypto tickers with 3 letters are not fiat (regression: "ETH 0.00")', () => {

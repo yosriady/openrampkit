@@ -80,7 +80,7 @@ type StartInput = {
 type TransitionInput = { leg: PathwayLeg; ref: string; name: string; inputs?: Record<string, unknown> }
 
 type LegEvent = {
-  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OpenRampError
   sourceTxHash?: string      // the transaction that paid into the leg (see LegStep.sourceTxHash)
   eventId?: string           // provider event id: the server drops an id that the session already applied
   surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
@@ -157,7 +157,7 @@ The server uses these with `webhook.replayKey`. `claimWebhook` returns a token f
 | Export | Description |
 |---|---|
 | `fetchJson<T>(fetch, url, init?)` | JSON request with `accept: application/json`, `content-type` when there is a body, and a timeout (`init.timeoutMs`, default `DEFAULT_TIMEOUT_MS` = 8000). Throws an `HttpError` with `status` and parsed `body` on non-2xx, `timeout: true` on timeout, and a clear error for non-JSON bodies. |
-| `httpErrorToOrk(e, provider, { what?, noQuoteStatuses?, log?, setupHint? })` | `OrkException` passes through; 429 gives `RATE_LIMITED` (429); `noQuoteStatuses` (default 400, 404, 409, 422) give `NO_QUOTES` (422) with the provider's message; 401 and 403 give a setup error (see below); a timeout gives `PROVIDER_UNAVAILABLE` (504); anything else gives `PROVIDER_UNAVAILABLE` (502) and a warning log |
+| `httpErrorToOpenRamp(e, provider, { what?, noQuoteStatuses?, log?, setupHint? })` | `OpenRampException` passes through; 429 gives `RATE_LIMITED` (429); `noQuoteStatuses` (default 400, 404, 409, 422) give `NO_QUOTES` (422) with the provider's message; 401 and 403 give a setup error (see below); a timeout gives `PROVIDER_UNAVAILABLE` (504); anything else gives `PROVIDER_UNAVAILABLE` (502) and a warning log |
 | `findDeliverAsset(list, asset)` | The entry of `list` (`{ chain, token, symbol?, decimals? }`) that delivers `asset`: same chain and token (EVM addresses without case). `undefined` on no match. It never falls back to another entry. |
 | `requireDeliverAsset(list, asset, provider)` | `findDeliverAsset`, or `NO_QUOTES` (422, recovery `choose_other`) "{provider} does not deliver {token} on {chain}." Use it in `quote()`, so the user never gets a quote for another token. |
 | `deliverableToAsset(d)` | The `CryptoAsset` of a list entry, with `symbol` and `decimals` when known |
@@ -167,7 +167,7 @@ The server uses these with `webhook.replayKey`. `claimWebhook` returns a token f
 
 Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 
-A 401 or 403 from a provider means that the provider refused our credentials or setup (API key, environment, IP allowlist). A retry cannot fix it. `httpErrorToOrk` returns `providerSetupError(provider)`, so the user sees a neutral message and can choose another method. It also writes one `error` log for the operator. The log names the provider and the HTTP status, and tells the operator what to check. Give `setupHint` to add a provider-specific fix to the log, for example "Set relay({ apiKey })".
+A 401 or 403 from a provider means that the provider refused our credentials or setup (API key, environment, IP allowlist). A retry cannot fix it. `httpErrorToOpenRamp` returns `providerSetupError(provider)`, so the user sees a neutral message and can choose another method. It also writes one `error` log for the operator. The log names the provider and the HTTP status, and tells the operator what to check. Give `setupHint` to add a provider-specific fix to the log, for example "Set relay({ apiKey })".
 
 ## Step helpers
 

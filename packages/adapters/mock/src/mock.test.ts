@@ -9,7 +9,7 @@ import { mockAdapter, SIMULATED_DEPOSIT } from './index.js'
 const DEST = '0x000000000000000000000000000000000000beef'
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']! }
 const ARB_USDC: CryptoAsset = { kind: 'crypto', chain: 'eip155:42161', token: USDC['eip155:42161']! }
-const fiat = (currency: string, amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency } })
+const fiat = (currency: string, amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency } })
 const toAddress = { asset: BASE_USDC, location: { kind: 'address' as const, address: DEST } }
 
 const leg = (legId: string, from: PathwayLeg['from'], to: PathwayLeg['to'] = toAddress): PathwayLeg => ({ adapterId: 'mock', legId, from, to })
@@ -42,9 +42,9 @@ describe('mock adapter', () => {
         { leg: cardLeg, quote: { amountIn: fiat('USD', '100') }, start: { deliverTo: { address: DEST } }, expect: { start: 'PAYMENT', status: 'PAYMENT' } },
         { leg: localLeg, quote: { amountIn: fiat('VND', '1000000') }, transitions: [{ name: 'simulate_payment' }], expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: payinLeg, quote: { amountIn: fiat('IDR', '150000') }, transitions: [{ name: 'simulate_payment' }], expect: { status: 'COMPLETED' } },
-        { leg: walletLeg, quote: { amountIn: { amount: '10', asset: ARB_USDC } }, transitions: [{ name: 'submit_tx', inputs: { txHash: '0xabc' } }], expect: { status: 'COMPLETED' } },
-        { leg: transferLeg, quote: { amountIn: { amount: '10', asset: ARB_USDC } }, transitions: [{ name: 'simulate_deposit' }], expect: { status: 'COMPLETED' } },
-        { leg: bridgeLeg, quote: { amountIn: { amount: '10', asset: BASE_USDC } }, expect: { start: 'PROCESSING', status: 'COMPLETED' } },
+        { leg: walletLeg, quote: { amountIn: { value: '10', asset: ARB_USDC } }, transitions: [{ name: 'submit_tx', inputs: { txHash: '0xabc' } }], expect: { status: 'COMPLETED' } },
+        { leg: transferLeg, quote: { amountIn: { value: '10', asset: ARB_USDC } }, transitions: [{ name: 'simulate_deposit' }], expect: { status: 'COMPLETED' } },
+        { leg: bridgeLeg, quote: { amountIn: { value: '10', asset: BASE_USDC } }, expect: { start: 'PROCESSING', status: 'COMPLETED' } },
       ],
     })
     expect(report.problems).toEqual([])
@@ -68,23 +68,23 @@ describe('mock adapter', () => {
     const a = mockAdapter({ crypto: true, bridge: true })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const card = await a.quote({ leg: cardLeg, amountIn: fiat('usd', '100') }, ctx)
-    expect(card).toMatchObject({ input: { amount: '100' }, output: { amount: '97.500000', asset: { symbol: 'USDC', decimals: 6 } }, fees: [{ amount: '2.50', currency: 'USD' }] })
+    expect(card).toMatchObject({ input: { value: '100' }, output: { value: '97.500000', asset: { symbol: 'USDC', decimals: 6 } }, fees: [{ amount: '2.50', currency: 'USD' }] })
     const local = await a.quote({ leg: localLeg, amountIn: fiat('VND', '1000000') }, ctx)
-    expect(local.output.amount).toBe('39.105000')
+    expect(local.output.value).toBe('39.105000')
     expect(local.fees[0]).toMatchObject({ currency: 'VND' })
     const payin = await a.quote({ leg: payinLeg, amountIn: fiat('IDR', '150000') }, ctx)
-    expect(payin).toMatchObject({ input: { amount: '150000' }, output: { amount: '148950', asset: { kind: 'fiat', currency: 'IDR' } }, fees: [{ amount: '1050' }] })
+    expect(payin).toMatchObject({ input: { value: '150000' }, output: { value: '148950', asset: { kind: 'fiat', currency: 'IDR' } }, fees: [{ amount: '1050' }] })
     // no amount: priced at zero with the leg currency
-    expect((await a.quote({ leg: cardLeg }, ctx)).output.amount).toBe('0.000000')
-    const out = await a.quote({ leg: bridgeLeg, amountOut: { amount: '20', asset: BASE_USDC } }, ctx)
-    expect(out).toMatchObject({ input: { amount: '20', asset: { symbol: 'USDC', decimals: 6 } }, output: { amount: '19.990000' }, fees: [{ amount: '0.010000' }] })
-    const transfer = await a.quote({ leg: transferLeg, amountIn: { amount: '1', asset: { ...ARB_USDC, symbol: 'USDC.e', decimals: 6 } } }, ctx)
+    expect((await a.quote({ leg: cardLeg }, ctx)).output.value).toBe('0.000000')
+    const out = await a.quote({ leg: bridgeLeg, amountOut: { value: '20', asset: BASE_USDC } }, ctx)
+    expect(out).toMatchObject({ input: { value: '20', asset: { symbol: 'USDC', decimals: 6 } }, output: { value: '19.990000' }, fees: [{ amount: '0.010000' }] })
+    const transfer = await a.quote({ leg: transferLeg, amountIn: { value: '1', asset: { ...ARB_USDC, symbol: 'USDC.e', decimals: 6 } } }, ctx)
     expect(transfer.data).toEqual({ anyAmount: true })
     expect(transfer.input.asset).toMatchObject({ symbol: 'USDC.e' })
     for (const q of [card, local, payin, out, transfer]) expect(checkLegQuote(q)).toEqual([])
     // fiat destination: crypto legs still price in USDC on Base
     const merchant = makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', merchantId: 'm', currency: 'USD' } as never })
-    expect((await a.quote({ leg: bridgeLeg, amountIn: { amount: '1', asset: BASE_USDC } }, merchant)).output.asset).toMatchObject({ chain: 'eip155:8453', symbol: 'USDC' })
+    expect((await a.quote({ leg: bridgeLeg, amountIn: { value: '1', asset: BASE_USDC } }, merchant)).output.asset).toMatchObject({ chain: 'eip155:8453', symbol: 'USDC' })
   })
 
   it('errors: no FX rate is NO_QUOTES; unknown legs are NOT_FOUND', async () => {
@@ -111,21 +111,21 @@ describe('mock adapter', () => {
     const qr = await a.start({ leg: localLeg, quote: await a.quote({ leg: localLeg, amountIn: fiat('VND', '500000') }, ctx) }, ctx)
     expect(qr.surface).toMatchObject({ kind: 'QR', payload: `MOCKQR|${qr.ref}|500000|VND`, amount: '500000', currency: 'VND', reference: qr.ref!.slice(-10).toUpperCase() })
 
-    const walletQuote: LegQuote = { adapterId: 'mock', legId: 'wallet', input: fiat('USD', '5'), output: { amount: '5', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const walletQuote: LegQuote = { adapterId: 'mock', legId: 'wallet', input: fiat('USD', '5'), output: { value: '5', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
     const w = await a.start({ leg: walletLeg, quote: walletQuote }, ctx)
     expect(w.surface).toMatchObject({ kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ chainId: 8453, value: '0', data: '0x' }] })
     expect((w.surface as { txs: Array<{ to: string }> }).txs[0]!.to).toMatch(/^0x[0-9a-f]{40}$/)
-    const w2 = await a.start({ leg: walletLeg, quote: { ...walletQuote, input: { amount: '5', asset: ARB_USDC } }, deliverTo: { address: DEST } }, ctx)
+    const w2 = await a.start({ leg: walletLeg, quote: { ...walletQuote, input: { value: '5', asset: ARB_USDC } }, deliverTo: { address: DEST } }, ctx)
     expect(w2.surface).toMatchObject({ chain: 'eip155:42161', txs: [{ to: DEST, chainId: 42161 }] })
 
     const t = await a.start({ leg: transferLeg, quote: { ...walletQuote, legId: 'transfer' } }, ctx)
     expect(t.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', chainName: 'Base', symbol: 'USDC', min: '1' })
-    const t2 = await a.start({ leg: transferLeg, quote: { ...walletQuote, legId: 'transfer', input: { amount: '1', asset: { ...ARB_USDC, symbol: 'USDT' } } } }, ctx)
+    const t2 = await a.start({ leg: transferLeg, quote: { ...walletQuote, legId: 'transfer', input: { value: '1', asset: { ...ARB_USDC, symbol: 'USDT' } } } }, ctx)
     expect(t2.surface).toMatchObject({ chain: 'eip155:42161', symbol: 'USDT', warning: 'Send only USDT on Arbitrum. This is a test address.' })
     // payin with a crypto input falls back to USD
     const p = await a.start({ leg: payinLeg, quote: { ...walletQuote, legId: 'payin' } }, ctx)
     expect(p.surface).toMatchObject({ kind: 'QR', currency: 'USD' })
-    const c2 = await a.start({ leg: cardLeg, quote: { ...walletQuote, input: { amount: '5', asset: BASE_USDC } } }, ctx)
+    const c2 = await a.start({ leg: cardLeg, quote: { ...walletQuote, input: { value: '5', asset: BASE_USDC } } }, ctx)
     expect(new URL((c2.surface as { url: string }).url).searchParams.get('currency')).toBe('')
     for (const s of [card, qr, w, w2, t, t2, p, c2]) expect(checkLegStep(s)).toEqual([])
   })
@@ -149,7 +149,7 @@ describe('mock adapter', () => {
     expect(await a.status!({ leg: localLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'settling' })
     vi.advanceTimersByTime(1000)
     const done = await a.status!({ leg: localLeg, ref: step.ref! }, ctx)
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', output: { amount: '3.910500' } })
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', output: { value: '3.910500' } })
     expect(done.txHash).toMatch(/^0x[0-9a-f]{64}$/)
     expect(await a.status!({ leg: localLeg, ref: 'unknown' }, ctx)).toMatchObject({ state: 'PAYMENT' })
   })
@@ -199,7 +199,7 @@ describe('mock offramp (withdraw to cash)', () => {
       fixtures: [
         {
           leg: offrampLeg('gcash'),
-          quote: { amountIn: { amount: '50', asset: BASE_USDC } },
+          quote: { amountIn: { value: '50', asset: BASE_USDC } },
           transitions: [{ name: 'submit_details', inputs: { account_name: 'Juan', phone: '09171234567' } }, { name: 'submit_tx', inputs: { txHash: TX } }],
           expect: { start: 'PAYMENT', status: 'COMPLETED' },
         },
@@ -211,18 +211,18 @@ describe('mock offramp (withdraw to cash)', () => {
     expect(details).toMatchObject({ sub: 'send_crypto', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: BASE_USDC.token, chainId: 8453 }] } })
     expect(sent).toMatchObject({ state: 'PROCESSING', txHash: TX })
     expect(done).toMatchObject({ state: 'COMPLETED', output: { asset: { kind: 'fiat', currency: 'PHP' } } })
-    expect(report.quotes[0]).toMatchObject({ input: { amount: '50' }, output: { amount: '2828.57', asset: { currency: 'PHP' } }, fees: [{ amount: '0.500000', currency: 'USDC' }] })
+    expect(report.quotes[0]).toMatchObject({ input: { value: '50' }, output: { value: '2828.57', asset: { currency: 'PHP' } }, fees: [{ amount: '0.500000', currency: 'USDC' }] })
   })
 
   it('quotes an exact fiat output, rejects unknown currencies, and has fields per payout method', async () => {
     const a = mockAdapter({ offramp: true })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'fiat', currency: 'PHP' } })
-    const out = await a.quote({ leg: offrampLeg(), amountOut: { amount: '1000', asset: PHP.asset } }, ctx)
-    expect(out.input.amount).toBe('17.676768') // 1000 * 0.0175 / 0.99
+    const out = await a.quote({ leg: offrampLeg(), amountOut: { value: '1000', asset: PHP.asset } }, ctx)
+    expect(out.input.value).toBe('17.676768') // 1000 * 0.0175 / 0.99
     const noRate = { ...offrampLeg(), to: { asset: { kind: 'fiat' as const, currency: 'XYZ' }, location: { kind: 'user_account' as const } } }
-    await expect(a.quote({ leg: noRate, amountIn: { amount: '1', asset: BASE_USDC } }, ctx)).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(a.quote({ leg: noRate, amountIn: { value: '1', asset: BASE_USDC } }, ctx)).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
     const fields = async (method?: string) => {
-      const q = await a.quote({ leg: offrampLeg(method), amountIn: { amount: '10', asset: BASE_USDC } }, ctx)
+      const q = await a.quote({ leg: offrampLeg(method), amountIn: { value: '10', asset: BASE_USDC } }, ctx)
       const s = await a.start({ leg: offrampLeg(method), quote: q }, ctx)
       return (s.surface as { fields: Array<{ id: string; label: string }> }).fields
     }
@@ -236,7 +236,7 @@ describe('mock offramp (withdraw to cash)', () => {
     const a = mockAdapter({ offramp: true })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const l = offrampLeg('bank_transfer')
-    const q = await a.quote({ leg: l, amountIn: { amount: '10', asset: BASE_USDC } }, ctx)
+    const q = await a.quote({ leg: l, amountIn: { value: '10', asset: BASE_USDC } }, ctx)
     const { ref } = await a.start({ leg: l, quote: q }, ctx)
     const t = (name: string, inputs?: Record<string, unknown>) => a.transition!({ leg: l, ref: ref!, name, ...(inputs ? { inputs } : {}) }, ctx)
     expect((await a.status!({ leg: l, ref: ref! }, ctx)).surface?.kind).toBe('FORM')
@@ -274,14 +274,14 @@ describe('mock offramp (withdraw to cash)', () => {
       const { a, ctx } = setup(null)
       expect(a.legs.map((l) => l.id)).toEqual(['card', 'local', 'payin', 'onchain'])
       expect(a.legs.find((l) => l.id === 'onchain')).toMatchObject({ methods: ['wallet'], surfaces: ['WALLET_TX'], from: { asset: { chains: { 'eip155:31337': [TOKEN] } } } })
-      const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, ctx)
+      const q = await a.quote({ leg: onchainLeg, amountIn: { value: '25', asset: ANVIL_USDC } }, ctx)
       expect(checkLegQuote(q)).toEqual([])
-      expect(q).toMatchObject({ input: { amount: '25', asset: ANVIL_USDC }, output: { amount: '25', asset: ANVIL_USDC }, fees: [] })
+      expect(q).toMatchObject({ input: { value: '25', asset: ANVIL_USDC }, output: { value: '25', asset: ANVIL_USDC }, fees: [] })
     })
 
     it('asks for an ERC-20 transfer to the destination and completes when the receipt pays it', async () => {
       const { a, ctx, rpc } = setup({ status: '0x1', logs: [transferLog(DEST, 25_000_000n)] })
-      const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, ctx)
+      const q = await a.quote({ leg: onchainLeg, amountIn: { value: '25', asset: ANVIL_USDC } }, ctx)
       const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, ctx)
       expect(checkLegStep(start)).toEqual([])
       expect(start.surface).toEqual({
@@ -292,7 +292,7 @@ describe('mock offramp (withdraw to cash)', () => {
       await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX' } })
       await expect(a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: '0xabc' } }, ctx)).rejects.toMatchObject({ status: 400 })
       const done = await a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx)
-      expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { amount: '25' } })
+      expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { value: '25' } })
       expect(rpc.calls.at(-1)!.body).toMatchObject({ method: 'eth_getTransactionReceipt', params: [HASH] })
       await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED' })
     })
@@ -301,7 +301,7 @@ describe('mock offramp (withdraw to cash)', () => {
       const run = async (receipt: unknown, shared = memoryKV(), sessionId = 'sess_1') => {
         const { a, ctx } = setup(receipt)
         const c = { ...ctx, shared, session: { ...ctx.session, id: sessionId } }
-        const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, c)
+        const q = await a.quote({ leg: onchainLeg, amountIn: { value: '25', asset: ANVIL_USDC } }, c)
         const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, c)
         return a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, c)
       }
@@ -347,7 +347,7 @@ describe('mock offramp (withdraw to cash)', () => {
 
       async function begin(p: Parameters<typeof chainSetup>[0]) {
         const { a, ctx, rpc } = chainSetup(p)
-        const q = await a.quote({ leg: onchainLeg, amountIn: { amount: '25', asset: ANVIL_USDC } }, ctx)
+        const q = await a.quote({ leg: onchainLeg, amountIn: { value: '25', asset: ANVIL_USDC } }, ctx)
         const start = await a.start({ leg: onchainLeg, quote: q, deliverTo: { address: DEST } }, ctx)
         return { a, ctx, rpc, start }
       }
@@ -370,7 +370,7 @@ describe('mock offramp (withdraw to cash)', () => {
 
       it('completes by session id when the contract has a matching receipt, even before a hash arrives', async () => {
         const { a, ctx, start } = await begin({ settled: { amount: 25_000_000n } })
-        await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { amount: '25' } })
+        await expect(a.status!({ leg: onchainLeg, ref: start.ref! }, ctx)).resolves.toMatchObject({ state: 'COMPLETED', txHash: HASH, output: { value: '25' } })
         const done = await a.transition!({ leg: onchainLeg, ref: start.ref!, name: 'submit_tx', inputs: { txHash: `0x${'cd'.repeat(32)}` } }, ctx)
         // The hash comes from the Settled log, not from the browser.
         expect(done).toMatchObject({ state: 'COMPLETED', txHash: HASH })
@@ -413,7 +413,7 @@ describe('mock adapter: Solana', () => {
     expect(ids).toContain('qris:mock.local>mock.bridge@eip155:8453')
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: solDest })
     const bridge = leg('bridge', { asset: BASE_USDC, location: { kind: 'address', address: 'deposit' } }, { asset: SOL_USDC, location: { kind: 'address', address: SOL_DEST } })
-    const q = await a.quote({ leg: bridge, amountIn: { amount: '10', asset: BASE_USDC } }, ctx)
+    const q = await a.quote({ leg: bridge, amountIn: { value: '10', asset: BASE_USDC } }, ctx)
     expect(q.output.asset).toMatchObject({ chain: SOL, token: SOLANA_USDC_MINT, decimals: 6 })
   })
 
@@ -422,11 +422,11 @@ describe('mock adapter: Solana', () => {
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: solDest })
     const to = { asset: SOL_USDC, location: { kind: 'address' as const, address: SOL_DEST } }
     const solWallet = leg('wallet', { asset: SOL_USDC, location: { kind: 'user_wallet' } }, to)
-    const q = await a.quote({ leg: solWallet, amountIn: { amount: '2.5', asset: { ...SOL_USDC, decimals: 6 } } }, ctx)
+    const q = await a.quote({ leg: solWallet, amountIn: { value: '2.5', asset: { ...SOL_USDC, decimals: 6 } } }, ctx)
     const w = await a.start({ leg: solWallet, quote: q, deliverTo: { address: SOL_DEST } }, ctx)
     expect(w.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '2500000', decimals: 6 }] })
     const native = { kind: 'crypto' as const, chain: SOL, token: 'native' }
-    const nq = await a.quote({ leg: solWallet, amountIn: { amount: '1', asset: native } }, ctx)
+    const nq = await a.quote({ leg: solWallet, amountIn: { value: '1', asset: native } }, ctx)
     expect(nq.input.asset).toMatchObject({ symbol: 'SOL', decimals: 9 })
     const t = await a.start({ leg: leg('transfer', { asset: SOL_USDC, location: { kind: 'user_wallet' } }, to), quote: { ...q, legId: 'transfer' } }, ctx)
     expect(t.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, chainName: 'Solana', symbol: 'USDC' })
@@ -459,11 +459,11 @@ describe('mock adapter: several instances (demo options)', () => {
     expect(cheap.legs.find((l) => l.id === 'local')!.eta).toEqual({ min: 5, max: 30 })
     const local = await cheap.quote({ leg: { ...localLeg, adapterId: 'mock-b' }, amountIn: fiat('VND', '1000000') }, ctx)
     // 1,000,000 VND x 0.0000395 = 39.5 USD; spread 1% gives 39.105; fee 0.4% gives 38.94858
-    expect(local).toMatchObject({ adapterId: 'mock-b', output: { amount: '38.948580' }, fees: [{ label: 'Mock B fee' }] })
+    expect(local).toMatchObject({ adapterId: 'mock-b', output: { value: '38.948580' }, fees: [{ label: 'Mock B fee' }] })
     const card = await cheap.quote({ leg: { ...cardLeg, adapterId: 'mock-b' }, amountIn: fiat('USD', '100') }, ctx)
-    expect(card.output.amount).toBe('98.010000')
+    expect(card.output.value).toBe('98.010000')
     const payin = await cheap.quote({ leg: { ...payinLeg, adapterId: 'mock-b' }, amountIn: fiat('IDR', '150000') }, ctx)
-    expect(payin.output.amount).toBe('150000')
+    expect(payin.output.value).toBe('150000')
     for (const q of [local, card, payin]) expect(checkLegQuote(q)).toEqual([])
   })
 
@@ -536,7 +536,7 @@ describe('mock adapter: several instances (demo options)', () => {
     expect(a.legs.find((l) => l.id === 'transfer')!.methods).toEqual(['transfer', 'exchange_transfer'])
     expect(mockAdapter({ exchange: true }).legs.some((l) => l.id === 'transfer')).toBe(false)
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
-    const q = await a.quote({ leg: transferLeg, amountIn: { amount: '1', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
+    const q = await a.quote({ leg: transferLeg, amountIn: { value: '1', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
     expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', warning: 'In your exchange, withdraw USDC and choose the Arbitrum network. This is a test address.' })
     expect(await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)).toMatchObject({ state: 'PROCESSING' })
@@ -545,14 +545,14 @@ describe('mock adapter: several instances (demo options)', () => {
   it('exchange: a deposit with no amount up front reports the simulated amount that arrived', async () => {
     const a = mockAdapter({ crypto: true, exchange: true, settleMs: 0 })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
-    const q = await a.quote({ leg: transferLeg, amountIn: { amount: '0', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
+    const q = await a.quote({ leg: transferLeg, amountIn: { value: '0', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const step = await a.start({ leg: { ...transferLeg, method: 'exchange_transfer' }, quote: q }, ctx)
     await a.transition!({ leg: transferLeg, ref: step.ref!, name: 'simulate_deposit' }, ctx)
-    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', output: { amount: SIMULATED_DEPOSIT } })
+    expect(await a.status!({ leg: transferLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', output: { value: SIMULATED_DEPOSIT } })
     // A quote with an amount keeps that amount.
-    const q2 = await a.quote({ leg: transferLeg, amountIn: { amount: '10', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
+    const q2 = await a.quote({ leg: transferLeg, amountIn: { value: '10', asset: { ...ARB_USDC, symbol: 'USDC' } } }, ctx)
     const s2 = await a.start({ leg: transferLeg, quote: q2 }, ctx)
     await a.transition!({ leg: transferLeg, ref: s2.ref!, name: 'simulate_deposit' }, ctx)
-    expect((await a.status!({ leg: transferLeg, ref: s2.ref! }, ctx)).output?.amount).toBe(q2.output.amount)
+    expect((await a.status!({ leg: transferLeg, ref: s2.ref! }, ctx)).output?.value).toBe(q2.output.value)
   })
 })

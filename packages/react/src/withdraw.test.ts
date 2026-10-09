@@ -6,7 +6,7 @@ import { createRoot } from 'react-dom/client'
 import type { Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMockWallet } from '@openrampkit/client'
-import type { OrkError, PublicSession } from '@openrampkit/core'
+import type { OpenRampError, PublicSession } from '@openrampkit/core'
 import type { OpenRampModal } from '@openrampkit/web'
 import { BASE, BASE_DEST, BASE_SOURCE, setupServer, sleep } from '../../client/src/testctx.js'
 import { OpenRampProvider, WithdrawButton, useOpenRamp } from './index.js'
@@ -141,7 +141,7 @@ describe('WithdrawButton', () => {
     expect(a.textContent).toBe('Open')
     await act(async () => modal()!.close())
     await until(() => onError.mock.calls.length === 1)
-    expect((onError.mock.calls[0]![0] as OrkError).code).toBe('CLOSED')
+    expect((onError.mock.calls[0]![0] as OpenRampError).code).toBe('CLOSED')
     expect(a.textContent).toBe('Cash out')
   })
 })

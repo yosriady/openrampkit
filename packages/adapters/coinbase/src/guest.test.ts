@@ -20,7 +20,7 @@ async function ed25519Secret(): Promise<string> {
 
 const DEST = '0x000000000000000000000000000000000000beef'
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 const legOf = (legId: string): PathwayLeg => ({
   adapterId: 'coinbase',
   legId,
@@ -132,7 +132,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
     expect(q).toMatchObject({
       legId: 'guest_apple_pay',
       input: usd('100.75'),
-      output: { amount: '100.000000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      output: { value: '100.000000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
       limits: { min: '5', max: '2500', currency: 'USD' },
     })
     expect(q.fees).toEqual([
@@ -140,7 +140,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
       { kind: 'network', label: 'Network fee', amount: '0.25', currency: 'USD' },
     ])
     // exact output
-    await a.quote({ leg: guestLeg, amountOut: { amount: '20', asset: BASE_USDC } }, ctx)
+    await a.quote({ leg: guestLeg, amountOut: { value: '20', asset: BASE_USDC } }, ctx)
     expect(calls[1]!.body).toMatchObject({ purchaseAmount: '20', isQuote: true })
     expect((calls[1]!.body as Record<string, unknown>).paymentAmount).toBeUndefined()
   })
@@ -158,7 +158,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
   it('quote: USD only; guest errors map to user-facing codes; other errors as usual', async () => {
     const secret = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret, guestCheckout: GUEST })
-    const eur = { amount: '10', asset: { kind: 'fiat' as const, currency: 'EUR' } }
+    const eur = { value: '10', asset: { kind: 'fiat' as const, currency: 'EUR' } }
     await expect(a.quote({ leg: guestLeg, amountIn: eur }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const q = (status: number, body: unknown) => a.quote({ leg: guestLeg, amountIn: usd('10') }, makeCtx({ fetch: fakeFetch([{ method: 'POST', match: '/onramp/orders', status, reply: () => body }]).fetch }))
     await expect(q(429, { errorType: 'guest_transaction_limit', errorMessage: 'weekly' })).rejects.toMatchObject({ status: 422, error: { code: 'AMOUNT_TOO_HIGH' } })
@@ -222,7 +222,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
   it('start: live orders keep the link as is; no link is an error; guest errors are mapped', async () => {
     const secret = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret, guestCheckout: GUEST })
-    const quote = { adapterId: 'coinbase', legId: 'guest_apple_pay', input: usd('10'), output: { amount: '9.8', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'coinbase', legId: 'guest_apple_pay', input: usd('10'), output: { value: '9.8', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
     const live = fakeFetch([{ method: 'POST', match: '/onramp/orders', reply: () => ({ order: ORDER, paymentLink: { url: PAY_URL } }) }])
     const step = await a.start({ leg: guestLeg, quote }, makeCtx({ fetch: live.fetch, session: { livemode: true } }))
     expect(step.surface).toMatchObject({ kind: 'IFRAME', url: PAY_URL })
@@ -254,7 +254,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
     order = { ...ORDER, status: 'ONRAMP_ORDER_STATUS_COMPLETED', txHash: '0xabc' }
     const done = await st()
     expect(checkLegStep(done)).toEqual([])
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { amount: '100.000000', asset: { chain: 'eip155:8453' } } })
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { value: '100.000000', asset: { chain: 'eip155:8453' } } })
     order = { ...ORDER, status: 'ONRAMP_ORDER_STATUS_FAILED' }
     expect(await st()).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'PAYMENT_FAILED' } })
 
@@ -271,7 +271,7 @@ describe('coinbase guest Apple Pay (Headless Onramp API)', () => {
     const ctx = makeWebhookCtx()
     const success = { ...ORDER, eventType: 'onramp.transaction.success', status: 'ONRAMP_ORDER_STATUS_COMPLETED', txHash: '0xfeed', partnerUserRef: 'ork-9' }
     expect(await a.webhook!.parse(JSON.stringify(success), ctx)).toEqual([
-      { ref: 'ork-9', status: 'succeeded', txHash: '0xfeed', output: { amount: '100.000000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      { ref: 'ork-9', status: 'succeeded', txHash: '0xfeed', output: { value: '100.000000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const created = { ...ORDER, eventType: 'onramp.transaction.created', partnerUserRef: 'ork-9' }
     expect(await a.webhook!.parse(JSON.stringify(created), ctx)).toEqual([{ ref: 'ork-9', status: 'awaiting_user' }])

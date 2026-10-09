@@ -57,7 +57,7 @@ function fakeChain() {
 /** Start a same-chain `transfer` session that expects `amount` USDC (0: any amount) */
 async function directSession(a: ReturnType<typeof relay>, fetch: typeof globalThis.fetch, shared: MemoryKV, id: string, amount: string, log = recordingLog()) {
   const ctx = makeCtx({ fetch, shared, session: { id }, log })
-  const q = await a.quote({ leg: transferLeg, amountIn: { amount, asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, ctx)
+  const q = await a.quote({ leg: transferLeg, amountIn: { value: amount, asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, ctx)
   const step = await a.start({ leg: transferLeg, quote: q }, ctx)
   return { ctx, ref: step.ref!, log, status: () => a.status!({ leg: transferLeg, ref: step.ref! }, ctx) }
 }
@@ -74,7 +74,7 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     const log = chain.send(units(10))
     // the 25 USDC session polls first: 10 USDC is not enough for it
     expect(await s2.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash, output: { amount: '10' } })
+    expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash, output: { value: '10' } })
     expect(await s2.status()).toMatchObject({ state: 'PAYMENT' })
     // the completed session checks again: same answer (its own claim)
     expect(await s1.status()).toMatchObject({ state: 'COMPLETED', txHash: log.transactionHash })
@@ -122,7 +122,7 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     chain.send(units(9.9)) // 1% short
     expect(await s.status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     const ok = chain.send(units(9.96)) // 0.4% short: inside the tolerance
-    expect(await s.status()).toMatchObject({ state: 'COMPLETED', txHash: ok.transactionHash, output: { amount: '9.96' } })
+    expect(await s.status()).toMatchObject({ state: 'COMPLETED', txHash: ok.transactionHash, output: { value: '9.96' } })
   })
 
   it('a log used by one session is refused for a replay: by another session, and by a same-chain wallet payment', async () => {
@@ -141,7 +141,7 @@ describe('relay: one Transfer log completes one session (same chain and token)',
     // the same tx hash, submitted to a same-chain wallet leg
     const walletLeg: PathwayLeg = { ...transferLeg, legId: 'wallet' }
     const wctx = makeCtx({ fetch: fakeFetch([wrpc(log)]).fetch, shared, session: { id: 'sess_w' } })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, wctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, wctx)
     const ws = await a.start({ leg: walletLeg, quote: q }, wctx)
     await a.transition!({ leg: walletLeg, ref: ws.ref!, name: 'submit_tx', inputs: { txHash: log.transactionHash } }, wctx)
     expect(await a.status!({ leg: walletLeg, ref: ws.ref! }, wctx)).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
@@ -219,7 +219,7 @@ describe('relay: deposit-address sessions to the same recipient', () => {
 
   async function session(a: ReturnType<typeof relay>, fetch: typeof globalThis.fetch, shared: MemoryKV, id: string, amount: string) {
     const ctx: AdapterContext = makeCtx({ fetch, shared, session: { id } })
-    const q = await a.quote({ leg: transferLeg, amountIn: { amount, asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, ctx)
+    const q = await a.quote({ leg: transferLeg, amountIn: { value: amount, asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, ctx)
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     return { q, step, status: (): Promise<LegStep> => a.status!({ leg: transferLeg, ref: step.ref! }, ctx) }
   }
@@ -289,7 +289,7 @@ describe('relay: deposit-address sessions to the same recipient', () => {
     const log = recordingLog()
     const a = relay()
     const ctx = makeCtx({ fetch, log })
-    const q = await a.quote({ leg: transferLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, ctx)
+    const q = await a.quote({ leg: transferLeg, amountIn: { value: '10', asset: ARB_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, ctx)
     expect(log.warnings.filter((w) => w.includes('2026-11-24'))).toHaveLength(1) // first call warns without a key
     const step = await a.start({ leg: transferLeg, quote: q }, ctx)
     requests = [request('1', units(10), { status: 'pending' })]

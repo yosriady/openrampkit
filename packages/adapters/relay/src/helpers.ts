@@ -1,8 +1,8 @@
 // Pure helpers: chain and token ids, assets, fees, and leg steps. No options and no I/O.
 
-import { awaitPoll, httpErrorToOrk, httpStatus } from '@openrampkit/adapter'
+import { awaitPoll, httpErrorToOpenRamp, httpStatus } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
-import { CHAINS, OrkException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, orkError, sameToken } from '@openrampkit/core'
+import { CHAINS, OpenRampException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, openRampError, sameToken } from '@openrampkit/core'
 import type { Amount, CryptoAsset, Fee, LegStep, StepSub } from '@openrampkit/core'
 import { EVM_NATIVE, PLACEHOLDER_SOLANA_USER, PLACEHOLDER_USER, RELAY_POLL, RELAY_SOLANA_CHAIN_ID, SOLANA_CAIP2, SOLANA_NATIVE } from './config.js'
 import type { RelayAmount, RelayQuoteResponse, RelayRequest } from './types.js'
@@ -11,7 +11,7 @@ import type { RelayAmount, RelayQuoteResponse, RelayRequest } from './types.js'
 export function relayChainId(chain: string): number {
   if (chain === SOLANA_CAIP2 || chain === 'solana') return RELAY_SOLANA_CHAIN_ID
   const id = evmChainId(chain)
-  if (id === undefined) throw new OrkException(orkError('BAD_REQUEST', { message: `Relay does not support chain ${chain}.` }))
+  if (id === undefined) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Relay does not support chain ${chain}.` }))
   return id
 }
 
@@ -63,8 +63,8 @@ export function sameUser(chain: string, a: unknown, b: string) {
 }
 
 export function cryptoAsset(a: Amount | undefined, what: string): CryptoAsset {
-  if (!a || a.asset.kind !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: `Relay needs a crypto ${what}.` }))
-  if (a.asset.chain === '*' || a.asset.token === '*') throw new OrkException(orkError('BAD_REQUEST', { message: 'Choose the token you want to pay with.' }))
+  if (!a || a.asset.kind !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Relay needs a crypto ${what}.` }))
+  if (a.asset.chain === '*' || a.asset.token === '*') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Choose the token you want to pay with.' }))
   return a.asset
 }
 
@@ -99,7 +99,7 @@ export function relayOutput(out: RelayAmount | undefined, expected?: Amount): Am
     exp?.kind === 'crypto' && sameAsset(exp.chain, exp.token, chain, token)
       ? exp
       : { kind: 'crypto', chain, token, symbol: out.currency.symbol, decimals: out.currency.decimals }
-  return { amount: fmt(out), asset }
+  return { value: fmt(out), asset }
 }
 
 /**
@@ -141,13 +141,13 @@ export function etaFrom(q: RelayQuoteResponse, fallback: { min: number; max: num
 }
 
 /**
- * Map a failed Relay HTTP call to an OrkException with a safe message. A 401 or 403 is a setup error
- * (see `httpErrorToOrk`). A 401 with errorCode `UNAUTHORIZED_QUOTE` means Relay requires a valid API key
+ * Map a failed Relay HTTP call to an OpenRampException with a safe message. A 401 or 403 is a setup error
+ * (see `httpErrorToOpenRamp`). A 401 with errorCode `UNAUTHORIZED_QUOTE` means Relay requires a valid API key
  * for `POST /quote/v2` (announced policy from 2026-10-02; a quote with a `referrer` and no key is refused now).
  */
-export function toOrk(e: unknown, log?: Pick<Logger, 'warn'> & Partial<Pick<Logger, 'error'>>): OrkException {
+export function toOpenRamp(e: unknown, log?: Pick<Logger, 'warn'> & Partial<Pick<Logger, 'error'>>): OpenRampException {
   const unauthorizedQuote = httpStatus(e) === 401 && (e as { body?: { errorCode?: unknown } } | undefined)?.body?.errorCode === 'UNAUTHORIZED_QUOTE'
-  return httpErrorToOrk(e, 'Relay', {
+  return httpErrorToOpenRamp(e, 'Relay', {
     what: 'find a route for this pair right now',
     ...(log ? { log } : {}),
     ...(unauthorizedQuote ? { setupHint: 'Relay refused the quote (401 UNAUTHORIZED_QUOTE): Relay quotes need a valid API key. Set relay({ apiKey }), for example from RELAY_API_KEY.' } : {}),
@@ -186,7 +186,7 @@ export function terminalStep(status: string, extra: { ref: string; txHash?: stri
         state: 'FAILED',
         status: 'failed',
         transitions: [],
-        error: orkError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }),
+        error: openRampError('DELIVERY_FAILED', { message: 'Relay could not complete the transfer.', recovery: 'contact_support' }),
         ...extra,
       }
     case 'refund':
@@ -218,13 +218,13 @@ export function settlementOf(ctx: AdapterContext, deliverTo?: { address: string 
 export function recipientOf(ctx: AdapterContext, deliverTo?: { address: string }): string {
   if (deliverTo?.address) return deliverTo.address
   if (ctx.destination.type === 'crypto') return ctx.destination.address
-  throw new OrkException(orkError('BAD_REQUEST', { message: 'Relay legs need a crypto destination.' }))
+  throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Relay legs need a crypto destination.' }))
 }
 
 export function destAsset(ctx: AdapterContext, legTo: CryptoAsset | undefined): CryptoAsset {
   if (legTo && legTo.chain !== '*') return legTo
   const d = ctx.destination
-  if (d.type !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: 'Relay legs need a crypto destination.' }))
+  if (d.type !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Relay legs need a crypto destination.' }))
   return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
 }
 

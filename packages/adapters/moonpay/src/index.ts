@@ -22,7 +22,7 @@ import {
   deliverableToAsset,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   httpStatus,
   legStepFromEvent,
   randomHex,
@@ -31,7 +31,7 @@ import {
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
+import { OpenRampException, USDC, openRampError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type MoonPayDeliverAsset = {
@@ -215,7 +215,7 @@ export function moonpay(opts: MoonPayOptions) {
 
   function def(legId: string): MethodDef {
     const d = byId.get(legId)
-    if (!d) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown MoonPay leg ${legId}` }), 400)
+    if (!d) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown MoonPay leg ${legId}` }), 400)
     return d
   }
 
@@ -232,7 +232,7 @@ export function moonpay(opts: MoonPayOptions) {
     const region = ctx.session.region?.toUpperCase()
     const state = country === 'US' && region?.startsWith('US-') ? region.slice(3) : undefined
     if ((country && d.notAllowedCountries?.includes(country)) || (state && d.notAllowedUSStates?.includes(state))) {
-      throw new OrkException(orkError('REGION_UNSUPPORTED', { message: `MoonPay does not sell ${d.symbol ?? d.currencyCode} on this network in your region.`, recovery: 'choose_other' }), 422)
+      throw new OpenRampException(openRampError('REGION_UNSUPPORTED', { message: `MoonPay does not sell ${d.symbol ?? d.currencyCode} on this network in your region.`, recovery: 'choose_other' }), 422)
     }
   }
 
@@ -249,12 +249,12 @@ export function moonpay(opts: MoonPayOptions) {
     if (!ref) return undefined
     const code = tx.currency?.code ?? tx.currencyCode
     const d = deliver.find((x) => x.currencyCode === code)
-    const output = d && tx.quoteCurrencyAmount !== undefined && tx.quoteCurrencyAmount !== null ? { amount: dec(tx.quoteCurrencyAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
+    const output = d && tx.quoteCurrencyAmount !== undefined && tx.quoteCurrencyAmount !== null ? { value: dec(tx.quoteCurrencyAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
     switch (tx.status) {
       case 'completed':
         return { ref, status: 'succeeded', ...(tx.cryptoTransactionId ? { txHash: tx.cryptoTransactionId } : {}), ...(output ? { output } : {}) }
       case 'failed':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The MoonPay purchase did not complete.', recovery: 'retry_payment' }) }
+        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The MoonPay purchase did not complete.', recovery: 'retry_payment' }) }
       case 'pending':
         return { ref, status: 'processing', ...(output ? { output } : {}) }
       case 'waitingPayment':
@@ -276,7 +276,7 @@ export function moonpay(opts: MoonPayOptions) {
       if (!countries) {
         countries = await fetchJson<MpCountry[]>(ctx.fetch, `${apiUrl}/v3/countries`)
         if (!Array.isArray(countries) || !countries.length) {
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'MoonPay returned no countries.' }), 502)
+          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'MoonPay returned no countries.' }), 502)
         }
         await ctx.shared.put('countries', countries, COUNTRIES_TTL_SEC)
       }
@@ -297,9 +297,9 @@ export function moonpay(opts: MoonPayOptions) {
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
       const fiat = (fiatAsset.kind === 'fiat' ? fiatAsset.currency : opts.baseCurrencyDefault ?? 'USD').toUpperCase()
       const q = new URLSearchParams({ apiKey: opts.publishableKey, baseCurrencyCode: fiat.toLowerCase(), paymentMethod: d.paymentMethod, areFeesIncluded: 'true' })
-      if (input.amountIn) q.set('baseCurrencyAmount', roundTo(input.amountIn.amount, 2))
-      else if (input.amountOut) q.set('quoteCurrencyAmount', input.amountOut.amount)
-      else throw new OrkException(orkError('BAD_REQUEST', { message: 'MoonPay quotes need an amount.' }))
+      if (input.amountIn) q.set('baseCurrencyAmount', roundTo(input.amountIn.value, 2))
+      else if (input.amountOut) q.set('quoteCurrencyAmount', input.amountOut.value)
+      else throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'MoonPay quotes need an amount.' }))
       if (opts.extraFeePercentage !== undefined) q.set('extraFeePercentage', String(opts.extraFeePercentage))
       const address = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
       if (address) q.set('walletAddress', address)
@@ -307,10 +307,10 @@ export function moonpay(opts: MoonPayOptions) {
       try {
         res = await fetchJson<MpQuote>(ctx.fetch, `${apiUrl}/v3/currencies/${encodeURIComponent(target.currencyCode)}/buy_quote?${q}`)
       } catch (e) {
-        throw httpErrorToOrk(e, 'MoonPay', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'MoonPay', { what: 'price this amount', log: ctx.log })
       }
       if (res.quoteCurrencyAmount === undefined || res.totalAmount === undefined) {
-        throw new OrkException(orkError('NO_QUOTES', { message: 'MoonPay did not return a quote for this amount.' }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: 'MoonPay did not return a quote for this amount.' }), 422)
       }
       const fees: Fee[] = []
       if (res.feeAmount) fees.push({ kind: 'provider', label: 'MoonPay fee', amount: dec(res.feeAmount, 2), currency: fiat })
@@ -320,8 +320,8 @@ export function moonpay(opts: MoonPayOptions) {
       return {
         adapterId: 'moonpay',
         legId: d.id,
-        input: { amount: total, asset: { kind: 'fiat', currency: fiat } },
-        output: { amount: dec(res.quoteCurrencyAmount, target.decimals ?? 8), asset: assetOf(target) },
+        input: { value: total, asset: { kind: 'fiat', currency: fiat } },
+        output: { value: dec(res.quoteCurrencyAmount, target.decimals ?? 8), asset: assetOf(target) },
         fees,
         eta: d.eta,
         expiresAt: res.expiresAt && !Number.isNaN(Date.parse(res.expiresAt)) ? res.expiresAt : new Date(Date.now() + 5 * 60_000).toISOString(),
@@ -334,7 +334,7 @@ export function moonpay(opts: MoonPayOptions) {
       const data = (input.quote.data ?? {}) as { currencyCode?: string; paymentMethod?: string; fiat?: string; total?: string }
       const target = deliverAssetFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!walletAddress) throw new OrkException(orkError('BAD_REQUEST', { message: 'MoonPay needs a wallet address to deliver to.' }))
+      if (!walletAddress) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'MoonPay needs a wallet address to deliver to.' }))
       const fiat = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : data.fiat ?? opts.baseCurrencyDefault ?? 'USD'
       // externalTransactionId routes webhooks and status checks back to this leg.
       const ref = `ork_${randomHex(12)}`
@@ -343,7 +343,7 @@ export function moonpay(opts: MoonPayOptions) {
         ['currencyCode', data.currencyCode ?? target.currencyCode],
         ['walletAddress', walletAddress],
         ['baseCurrencyCode', fiat.toLowerCase()],
-        ['baseCurrencyAmount', roundTo(input.quote.input.amount, 2)],
+        ['baseCurrencyAmount', roundTo(input.quote.input.value, 2)],
         ['lockAmount', 'true'],
         ['paymentMethod', data.paymentMethod ?? d.paymentMethod],
         ['externalTransactionId', ref],
@@ -367,7 +367,7 @@ export function moonpay(opts: MoonPayOptions) {
       } catch (e) {
         // No transaction yet: the user has not paid in the widget.
         if (httpStatus(e) === 404) return legStepFromEvent(undefined, input.ref, POLL)
-        throw httpErrorToOrk(e, 'MoonPay', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'MoonPay', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
       const list = Array.isArray(res) ? res : [res]
       // Several transactions can share one external id (a retry in the widget): the newest decides.

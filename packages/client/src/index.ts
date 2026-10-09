@@ -1,7 +1,7 @@
 // Framework-free client. `createOpenRampClient` talks to the app's OpenRampKit server.
 // `DepositController` holds the modal state; UIs render `getSnapshot()` and call its actions.
 
-export { createOpenRampClient, OrkClientError, toOrkError } from './client.js'
+export { createOpenRampClient, OpenRampClientError, toOpenRampError } from './client.js'
 export type { ClientOptions, OpenRampClient } from './client.js'
 export { RampController, RampController as DepositController, RampController as WithdrawController, isValidTargetAddress, withdrawTokens } from './controller.js'
 export type { ControllerOptions, ScreenName, Snapshot, SurfaceSignal, Tab, TargetDraft } from './controller.js'

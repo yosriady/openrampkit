@@ -1,5 +1,5 @@
 // Framework-agnostic modal state: one open modal at a time, opened with `openDeposit` or `openWithdraw`.
-import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { OpenRampEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
 import type { DepositHandle, Messages, ProviderRenderer } from '@openrampkit/web'
 import { loadWeb } from './load.js'
@@ -16,12 +16,12 @@ export type OpenRampConfig = {
   locale?: string
   /** Renderers for PROVIDER_SDK surfaces, e.g. `{ stripe: stripeOnrampRenderer() }` from `@openrampkit/web` */
   providerRenderers?: Record<string, ProviderRenderer>
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
 }
 
 export type BeginDepositOptions = {
   clientSecret: string | (() => Promise<string>)
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: OpenRampEvent) => void
 }
 
 export type BeginWithdrawOptions = BeginDepositOptions
@@ -41,7 +41,7 @@ export function createRampCore(getConfig: () => OpenRampConfig, setOpen: (open: 
     const web = await loadWeb()
     handle?.close()
     const c = getConfig()
-    const onEvent = (e: OrkEvent) => {
+    const onEvent = (e: OpenRampEvent) => {
       getConfig().onEvent?.(e)
       opts.onEvent?.(e)
     }

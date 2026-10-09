@@ -29,14 +29,14 @@ import {
   createAdapter,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   legStepFromEvent,
   randomHex,
   resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
-import { OrkException, USDC, bps, cmp, fromScaled, isDecimal, orkError, roundTo, sub, toScaled } from '@openrampkit/core'
+import { OpenRampException, USDC, bps, cmp, fromScaled, isDecimal, openRampError, roundTo, sub, toScaled } from '@openrampkit/core'
 import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
 export type PeerRail = 'venmo' | 'cashapp' | 'zelle' | 'chime' | 'paypal' | 'revolut' | 'wise'
@@ -189,18 +189,18 @@ export function peer(opts: PeerOptions) {
 
   function def(legId: string): RailDef {
     const d = byRail.get(legId)
-    if (!d) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Peer rail ${legId}` }), 400)
+    if (!d) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Peer rail ${legId}` }), 400)
     return d
   }
 
-  function toOrk(e: unknown, what: string, log: Pick<Logger, 'warn'>): OrkException {
+  function toOpenRamp(e: unknown, what: string, log: Pick<Logger, 'warn'>): OpenRampException {
     const code = (e as { body?: { errorCode?: string } } | undefined)?.body?.errorCode
-    if (code === 'AMOUNT_BELOW_MIN' || code === 'AMOUNT_BELOW_MERCHANT_MIN') return new OrkException(orkError('AMOUNT_TOO_LOW'), 422)
+    if (code === 'AMOUNT_BELOW_MIN' || code === 'AMOUNT_BELOW_MERCHANT_MIN') return new OpenRampException(openRampError('AMOUNT_TOO_LOW'), 422)
     if (code === 'AMOUNT_ABOVE_MERCHANT_MAX' || code === 'MERCHANT_MONTHLY_VOLUME_LIMIT_EXCEEDED' || code === 'MERCHANT_MONTHLY_ORDER_LIMIT_EXCEEDED') {
-      return new OrkException(orkError('AMOUNT_TOO_HIGH', { message: 'Peer cannot take this amount right now.', recovery: 'choose_other' }), 422)
+      return new OpenRampException(openRampError('AMOUNT_TOO_HIGH', { message: 'Peer cannot take this amount right now.', recovery: 'choose_other' }), 422)
     }
-    if (code === 'NO_ELIGIBLE_PAYMENT_RAILS') return new OrkException(orkError('NO_QUOTES', { message: 'Peer: this payment app is not enabled for the merchant.' }), 422)
-    return httpErrorToOrk(e, 'Peer', { what, log })
+    if (code === 'NO_ELIGIBLE_PAYMENT_RAILS') return new OpenRampException(openRampError('NO_QUOTES', { message: 'Peer: this payment app is not enabled for the merchant.' }), 422)
+    return httpErrorToOpenRamp(e, 'Peer', { what, log })
   }
 
   async function payApi<T>(ctx: Pick<AdapterContext, 'fetch'>, method: 'GET' | 'POST', path: string, body?: unknown, extra: Record<string, string> = {}): Promise<T> {
@@ -250,12 +250,12 @@ export function peer(opts: PeerOptions) {
       case 'FULFILLED': {
         const net = dec(payment?.netSettledUsdcAmount) ?? dec(order.netSettledUsdcAmount)
         const txHash = payment?.fulfillTransaction ?? undefined
-        return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(net ? { output: { amount: net, asset: BASE_USDC } } : {}) }
+        return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(net ? { output: { value: net, asset: BASE_USDC } } : {}) }
       }
       case 'PARTIALLY_FULFILLED':
         return { ref, status: 'processing' }
       case 'CANCELLED':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The Peer order was cancelled.', recovery: 'choose_other' }) }
+        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Peer order was cancelled.', recovery: 'choose_other' }) }
       default:
         // CREATED: the user has not paid yet, or a payment attempt expired / failed / was cancelled and
         // the user can still pay (late settlement can still fulfil the order).
@@ -284,13 +284,13 @@ export function peer(opts: PeerOptions) {
 
     async quote(input, ctx) {
       const d = def(input.leg.legId)
-      if (!input.amountIn || input.amountIn.asset.kind !== 'fiat') throw new OrkException(orkError('NO_QUOTES', { message: 'Peer quotes need a fiat amount.' }), 422)
+      if (!input.amountIn || input.amountIn.asset.kind !== 'fiat') throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Peer quotes need a fiat amount.' }), 422)
       const currency = input.amountIn.asset.currency.toUpperCase()
-      if (!d.currencies.includes(currency)) throw new OrkException(orkError('NO_QUOTES', { message: `Peer has no ${currency} on this payment app.` }), 422)
-      const amount = roundTo(input.amountIn.amount, 2)
-      if (currency === 'USD' && cmp(amount, MIN_USDC) < 0) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum on Peer is ${MIN_USDC} USD.` }), 422)
+      if (!d.currencies.includes(currency)) throw new OpenRampException(openRampError('NO_QUOTES', { message: `Peer has no ${currency} on this payment app.` }), 422)
+      const amount = roundTo(input.amountIn.value, 2)
+      if (currency === 'USD' && cmp(amount, MIN_USDC) < 0) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { message: `The minimum on Peer is ${MIN_USDC} USD.` }), 422)
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
 
       let avail: Availability
       try {
@@ -305,12 +305,12 @@ export function peer(opts: PeerOptions) {
           nearbyQuotesCount: 2,
         })
       } catch (e) {
-        throw toOrk(e, 'price this amount', ctx.log)
+        throw toOpenRamp(e, 'price this amount', ctx.log)
       }
       if (!avail.available) {
         const near = [...(avail.nearbySuggestions?.below ?? []), ...(avail.nearbySuggestions?.above ?? [])].map((s) => s.suggestedAmount).filter((s) => isDecimal(s))
         const hint = near.length ? ` Try ${near.slice(0, 3).map((s) => roundTo(s, 2)).join(' or ')} ${currency}.` : ''
-        throw new OrkException(orkError('NO_QUOTES', { message: `Peer has no ${d.rail} liquidity for this amount right now.${hint}` }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: `Peer has no ${d.rail} liquidity for this amount right now.${hint}` }), 422)
       }
 
       // Estimate: the orderbook price that fills the amount (includes the seller's spread), else 1:1 for USD.
@@ -321,7 +321,7 @@ export function peer(opts: PeerOptions) {
         ctx.log.warn('peer: orderbook unavailable; estimating without it', { error: String((e as Error)?.message ?? e).slice(0, 200) })
       }
       if (!gross && currency === 'USD') gross = amount
-      if (!gross) throw new OrkException(orkError('NO_QUOTES', { message: `Peer could not price ${currency} on ${d.rail} right now.` }), 422)
+      if (!gross) throw new OpenRampException(openRampError('NO_QUOTES', { message: `Peer could not price ${currency} on ${d.rail} right now.` }), 422)
 
       const fees: Fee[] = []
       let inputAmount = amount
@@ -340,8 +340,8 @@ export function peer(opts: PeerOptions) {
       return {
         adapterId: 'peer',
         legId: d.rail,
-        input: { amount: inputAmount, asset: { kind: 'fiat', currency } },
-        output: { amount: output, asset: BASE_USDC },
+        input: { value: inputAmount, asset: { kind: 'fiat', currency } },
+        output: { value: output, asset: BASE_USDC },
         fees,
         eta: { min: 120, max: 3600 },
         // Availability is advisory and reserves nothing.
@@ -355,9 +355,9 @@ export function peer(opts: PeerOptions) {
       const d = def(input.leg.legId)
       const data = (input.quote.data ?? {}) as { rail?: string; currency?: string; amount?: string; nonce?: string }
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
       const currency = data.currency ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD')
-      const amount = data.amount ?? roundTo(input.quote.input.amount, 2)
+      const amount = data.amount ?? roundTo(input.quote.input.value, 2)
       const idem = sanitizeKey(ctx.idempotencyKey(`peer-${d.rail}-${data.nonce ?? randomHex(8)}`))
       const saved = await ctx.store.get<{ ref: string; url: string }>(`idem:${idem}`)
       let ref: string
@@ -382,14 +382,14 @@ export function peer(opts: PeerOptions) {
             ...(opts.feePayer ? { feePayer: opts.feePayer } : {}),
             ...(opts.feePayer === 'SPLIT' && opts.buyerFeeShareBps !== undefined ? { buyerFeeShareBps: opts.buyerFeeShareBps } : {}),
             idempotencyKey: idem,
-            notes: { orkSessionId: ctx.session.id, orkUserId: ctx.session.userId, env },
+            notes: { openrampSessionId: ctx.session.id, openrampUserId: ctx.session.userId, env },
           }, { 'idempotency-key': idem })
         } catch (e) {
-          throw toOrk(e, 'start the order', ctx.log)
+          throw toOpenRamp(e, 'start the order', ctx.log)
         }
         if (!res.order?.id || !res.orderToken) {
           // An idempotent replay has no token and we lost the first URL: the user must start again.
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Peer did not return a checkout link. Start again.' }), 502)
+          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Peer did not return a checkout link. Start again.' }), 502)
         }
         ref = res.order.id
         const u = new URL(`${checkoutBase}/`)
@@ -424,7 +424,7 @@ export function peer(opts: PeerOptions) {
       try {
         res = await payApi(ctx, 'GET', `/api/v1/orders/${encodeURIComponent(input.ref)}`)
       } catch (e) {
-        throw toOrk(e, 'find this order', ctx.log)
+        throw toOpenRamp(e, 'find this order', ctx.log)
       }
       return legStepFromEvent(res.order ? eventFrom({ ...res.order, id: input.ref }, res.currentPayment) : undefined, input.ref, POLL)
     },

@@ -37,7 +37,7 @@ It returns an `OpenRamp`:
 
 | Member | Type | Description |
 |---|---|---|
-| `beginDeposit({ clientSecret, onEvent? })` | `Promise<PublicSession>` | Opens the modal. Resolves when the deposit completes. Rejects (with an `OrkError`) when the modal closes first. Rejects on the server. |
+| `beginDeposit({ clientSecret, onEvent? })` | `Promise<PublicSession>` | Opens the modal. Resolves when the deposit completes. Rejects (with an `OpenRampError`) when the modal closes first. Rejects on the server. |
 | `beginWithdraw({ clientSecret, onEvent? })` | `Promise<PublicSession>` | The same for a withdraw session (created with `direction: 'withdraw'`). |
 | `close()` | `() => void` | Closes the modal |
 | `isOpen` | `Readable<boolean>` | A store. Use `$isOpen` in a component. |
@@ -99,8 +99,8 @@ Actions for your own button. On click, the action opens the modal. The action di
 | `ramp` | `OpenRamp` | Required. From `createOpenRamp()`, `setOpenRamp()` or `getOpenRamp()`. |
 | `getClientSecret` | `string \| () => Promise<string>` | Required. A secret, or a function that fetches one on click. |
 | `onComplete` | `(session: PublicSession) => void` | The deposit or withdrawal completed |
-| `onError` | `(error: OrkError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
-| `onEvent` | `(e: OrkEvent) => void` | Browser events for this session (in addition to the ramp's) |
+| `onError` | `(error: OpenRampError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
+| `onEvent` | `(e: OpenRampEvent) => void` | Browser events for this session (in addition to the ramp's) |
 | `disabled` | `boolean` | Keep the element disabled |
 
 For fully custom markup, call the ramp yourself:
@@ -155,4 +155,4 @@ The value is `undefined` when `controller` is `undefined` or `null`.
 
 ## Re-exports
 
-Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenRamp`, `OpenRampConfig`, `BeginDepositOptions`, `BeginWithdrawOptions`, `ButtonActionParams`, `EmbeddedActionParams`, `ActionReturn`, `Readable`.
+Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `OpenRampEvent`, `WalletAdapter`, `OpenRamp`, `OpenRampConfig`, `BeginDepositOptions`, `BeginWithdrawOptions`, `ButtonActionParams`, `EmbeddedActionParams`, `ActionReturn`, `Readable`.

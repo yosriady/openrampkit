@@ -29,7 +29,7 @@ Mounts `<openramp-modal>`, starts a session and returns a handle. Browser only.
 | `messages` | `Partial<Messages>` | none | Overrides the locale catalog key by key |
 | `container` | `HTMLElement` | `document.body` | Where to mount the element |
 | `embedded` | `boolean` | `false` | Render inline, without the overlay |
-| `onEvent` | `(e: OrkEvent) => void` | none | [Browser events](../concepts/events.md#browser-events) |
+| `onEvent` | `(e: OpenRampEvent) => void` | none | [Browser events](../concepts/events.md#browser-events) |
 | `onClose` | `(session?: PublicSession) => void` | none | Called once when the modal closes, with the last session |
 | `fetch` | `typeof fetch` | global | Custom fetch, for tests and demos |
 | `providerRenderers` | `Record<string, ProviderRenderer>` | none | Renderers for `PROVIDER_SDK` surfaces, keyed by the surface `provider`. When set, `PROVIDER_SDK` is added to the surfaces the client can draw. See [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk). |
@@ -41,12 +41,12 @@ type DepositHandle = {
   element: OpenRampModal
   ready: Promise<DepositController>              // once the client secret is known
   readonly controller: DepositController | undefined
-  done: Promise<PublicSession>                   // resolves on COMPLETED; rejects with an OrkError when closed first
+  done: Promise<PublicSession>                   // resolves on COMPLETED; rejects with an OpenRampError when closed first
   close(): void
 }
 ```
 
-When the modal closes before completion, `done` rejects with the step's error if there is one, else the controller's error, else an `OrkError` with code `CLOSED` (`CLOSED_CODE`). If the client secret function throws, the modal shows the error screen.
+When the modal closes before completion, `done` rejects with the step's error if there is one, else the controller's error, else an `OpenRampError` with code `CLOSED` (`CLOSED_CODE`). If the client secret function throws, the modal shows the error screen.
 
 ## openWithdraw(options)
 
@@ -93,7 +93,7 @@ The element renders a controller snapshot and calls its actions. It never talks 
 | `messages` | property | `Partial<Messages>` | Message overrides |
 | `locale` | property and attribute | `string` | BCP 47 locale |
 | `providerRenderers` | property | `Record<string, ProviderRenderer>` | Renderers for `PROVIDER_SDK` surfaces. Without one, the modal links to `params.redirectUrl` when it can. |
-| `error` | property | `OrkError` | Error shown when there is no controller (for example the secret failed to load) |
+| `error` | property | `OpenRampError` | Error shown when there is no controller (for example the secret failed to load) |
 | `open` | property and boolean attribute (reflected) | `boolean` | Show the modal (not embedded) |
 | `embedded` | property and boolean attribute (reflected) | `boolean` | Inline mode: no overlay, no close button, Escape does not close |
 
@@ -171,4 +171,4 @@ Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 | `defineOpenRampModal()` | Registers the element if it is not registered |
 | `DepositController`, `WithdrawController`, `RampController` | Re-exported from `@openrampkit/client` (one class) |
 
-Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `Surface`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.
+Re-exported types: `Snapshot`, `ScreenName`, `SurfaceSignal`, `Tab`, `TargetDraft`, `IframeMessages`, `IframeSignal`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `Surface`, `OpenRampError`, `OpenRampEvent`, `WalletAdapter`, `OpenDepositOptions`, `OpenWithdrawOptions`, `DepositHandle`, `WithdrawHandle`, `CreateControllerOptions`, `ClientSecretSource`.

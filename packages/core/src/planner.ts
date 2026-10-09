@@ -1,7 +1,7 @@
 // Pathway planner. A pure function: no network, no clock. The server feeds it leg specs and user context.
 
 import { DEFAULT_METHOD_PRIORITY, METHODS, currencyForCountry, methodAvailableIn, methodName, normalizeToken, sameToken } from './codes.js'
-import { orkError } from './errors.js'
+import { openRampError } from './errors.js'
 import { isRegionAllowed } from './region.js'
 import type {
   Asset,
@@ -11,7 +11,7 @@ import type {
   Endpoint,
   EndpointMatcher,
   LegSpec,
-  OrkError,
+  OpenRampError,
   Pathway,
   PathwayGroup,
   PathwayLeg,
@@ -49,7 +49,7 @@ export type MethodOption = {
   name: string
   kind: string
   group: PathwayGroup
-  reason?: OrkError
+  reason?: OpenRampError
   providers: string[]
   pathwayIds: string[]
   eta: { min: number; max: number }
@@ -161,16 +161,16 @@ export function planPathways(input: PlannerInput): PlanResult {
   const hops = policy.hopPreference ?? DEFAULT_HOPS
   const appAllowed = (c?: string, r?: string) => (policy.regions ? isRegionAllowed(policy.regions, c, r) : true)
 
-  type Candidate = { method: string; provider: string; legs: PathwayLeg[]; specs: LegSpec[]; reason?: OrkError }
+  type Candidate = { method: string; provider: string; legs: PathwayLeg[]; specs: LegSpec[]; reason?: OpenRampError }
   const candidates: Candidate[] = []
 
-  const legProblem = (l: PlannerLeg, walletCheck = true): OrkError | undefined => {
+  const legProblem = (l: PlannerLeg, walletCheck = true): OpenRampError | undefined => {
     if (!appAllowed(user.country, user.region) || !isRegionAllowed(l.spec.regions, user.country, user.region)) {
-      return orkError('REGION_UNSUPPORTED')
+      return openRampError('REGION_UNSUPPORTED')
     }
-    if (surfaces && !l.spec.surfaces.some((s) => surfaces.has(s))) return orkError('CLIENT_UPGRADE_REQUIRED')
+    if (surfaces && !l.spec.surfaces.some((s) => surfaces.has(s))) return openRampError('CLIENT_UPGRADE_REQUIRED')
     if (walletCheck && l.spec.requires?.includes('wallet') && !user.walletConnected) {
-      return orkError('BAD_REQUEST', { message: 'Connect a wallet to use this method.', recovery: 'choose_other' })
+      return openRampError('BAD_REQUEST', { message: 'Connect a wallet to use this method.', recovery: 'choose_other' })
     }
     return undefined
   }
@@ -193,10 +193,10 @@ export function planPathways(input: PlannerInput): PlanResult {
       if (!endpointMatches(l.spec.to, target)) continue
       let reason = legProblem(l, false)
       if (!reason && app && !withdraw.treasury) {
-        reason = orkError('PROVIDER_UNAVAILABLE', { message: 'Withdrawals are not set up for this app yet.', recovery: 'contact_support' })
+        reason = openRampError('PROVIDER_UNAVAILABLE', { message: 'Withdrawals are not set up for this app yet.', recovery: 'contact_support' })
       }
       if (!reason && !app && !user.walletConnected) {
-        reason = orkError('BAD_REQUEST', { message: 'Connect your wallet to withdraw.', recovery: 'choose_other' })
+        reason = openRampError('BAD_REQUEST', { message: 'Connect your wallet to withdraw.', recovery: 'choose_other' })
       }
       for (const method of methodsOf(l)) {
         candidates.push({
@@ -276,7 +276,7 @@ export function planPathways(input: PlannerInput): PlanResult {
   if (destination.type === 'crypto' && destination.settlement) {
     for (const c of candidates) {
       if (!c.reason && !c.specs[c.specs.length - 1]!.capabilities?.includes('settlement')) {
-        c.reason = orkError('PROVIDER_UNAVAILABLE', { message: 'This method cannot pay into the settlement contract.', recovery: 'choose_other' })
+        c.reason = openRampError('PROVIDER_UNAVAILABLE', { message: 'This method cannot pay into the settlement contract.', recovery: 'choose_other' })
       }
     }
   }

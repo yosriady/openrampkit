@@ -4,7 +4,7 @@
 // start URLs. It works as a client secret for that session until it expires or the app revokes its
 // link id (`sessions.revokePayLink`). It cannot mint or revoke links.
 
-import { OrkException, orkError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
 import { PAY_LINK_GRACE_MS } from './config.js'
 import { hmacHex, randomHex, safeEqual } from './crypto.js'
 import { saveSession } from './outbox.js'
@@ -44,10 +44,10 @@ export function isRevokedPayLink(rec: SessionRecord, secret: string): boolean {
 
 /** Add a link id to the revoked list of `rec`. Throws a 400 when the id is not valid or the list is full. */
 export function revokeOn(rec: SessionRecord, linkId: unknown): void {
-  if (typeof linkId !== 'string' || !LINK_ID.test(linkId)) throw new OrkException(orkError('BAD_REQUEST', { message: '`id` must be a pay link id.' }), 400)
+  if (typeof linkId !== 'string' || !LINK_ID.test(linkId)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: '`id` must be a pay link id.' }), 400)
   const list = rec.revokedPayLinks ?? []
   if (list.includes(linkId)) return
-  if (list.length >= MAX_REVOKED_PAY_LINKS) throw new OrkException(orkError('BAD_REQUEST', { message: 'Too many revoked pay links for this session.' }), 400)
+  if (list.length >= MAX_REVOKED_PAY_LINKS) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Too many revoked pay links for this session.' }), 400)
   rec.revokedPayLinks = [...list, linkId]
 }
 
@@ -65,7 +65,7 @@ export async function revokePayLink(rt: Runtime, sessionId: string, linkId: stri
       await saveSession(rt, rec)
       return true
     } catch (e) {
-      if (!(e instanceof OrkException && e.status === 409) || attempt >= 4) throw e
+      if (!(e instanceof OpenRampException && e.status === 409) || attempt >= 4) throw e
     }
   }
 }
@@ -75,7 +75,7 @@ export async function revokePayLink(rt: Runtime, sessionId: string, linkId: stri
  * expiry plus a grace period (so a payment in progress can finish on the page).
  */
 export async function createPayLink(rt: Runtime, rec: SessionRecord, ttlMinutes?: number): Promise<PayLink> {
-  if (rt.config.payPage === false) throw new OrkException(orkError('NOT_FOUND'), 404)
+  if (rt.config.payPage === false) throw new OpenRampException(openRampError('NOT_FOUND'), 404)
   const max = rec.expiresAt + PAY_LINK_GRACE_MS
   const wanted = ttlMinutes !== undefined && Number.isFinite(ttlMinutes) && ttlMinutes > 0 ? Date.now() + ttlMinutes * 60_000 : max
   const exp = Math.floor(Math.min(wanted, max) / 1000).toString(36)

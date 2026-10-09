@@ -8,9 +8,9 @@ OpenRampKit has two kinds of events with the same envelope:
 ## Envelope
 
 ```ts
-type OrkEvent<T = unknown> = {
+type OpenRampEvent<T = unknown> = {
   id: string            // 'evt_...'
-  type: OrkEventType
+  type: OpenRampEventType
   created: number       // Unix seconds
   livemode: boolean
   sessionId?: string

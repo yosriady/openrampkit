@@ -79,7 +79,7 @@ describe('webhook outbox and sweep', () => {
     expect(r.sessions.changed).toBe(1)
     const pub = await ramp.sessions.retrieve(s.id)
     expect(pub!.status).toBe('completed')
-    expect(pub!.result).toMatchObject({ method: 'vietqr', provider: 'Test provider', input: { amount: '500000', asset: { kind: 'fiat', currency: 'VND' } }, outputConfirmed: true })
+    expect(pub!.result).toMatchObject({ method: 'vietqr', provider: 'Test provider', input: { value: '500000', asset: { kind: 'fiat', currency: 'VND' } }, outputConfirmed: true })
     expect(pub!.result!.txHashes.length).toBeGreaterThan(0)
   })
 

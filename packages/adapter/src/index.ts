@@ -9,7 +9,7 @@ import type {
   LegSpec,
   LegStatus,
   LegStep,
-  OrkError,
+  OpenRampError,
   PathwayLeg,
   Surface,
   Transition,
@@ -106,7 +106,7 @@ export type LegEvent = {
   txHash?: string
   /** The transaction that paid into the leg (see `LegStep.sourceTxHash`) */
   sourceTxHash?: string
-  error?: OrkError
+  error?: OpenRampError
   /**
    * Optional new surface for a non-terminal event, e.g. an offramp `payment_pending` webhook that
    * carries the deposit address: `{ kind: 'WALLET_TX', ... }` with status `awaiting_user`.

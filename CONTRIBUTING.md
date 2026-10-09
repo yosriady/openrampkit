@@ -203,7 +203,7 @@ There is no formatter config yet. Follow the style of the code around your chang
 - No semicolons, single quotes, two spaces of indent, trailing commas in multi-line lists.
 - ESM only, with `.js` extensions in relative imports. Use `import type` for types.
 - Prefer small pure functions. Keep provider logic in adapters, not in the server or the modal.
-- Errors are fields: an `OrkError` has a code, a safe message and a recovery hint. Build one with `orkError(code)` and throw it with `OrkException` (see `packages/core/src/errors.ts`).
+- Errors are fields: an `OpenRampError` has a code, a safe message and a recovery hint. Build one with `openRampError(code)` and throw it with `OpenRampException` (see `packages/core/src/errors.ts`).
 - Use web-standard APIs (`fetch`, `Request`, `Response`, Web Crypto). The server must run on Workers, Node, Bun and Deno.
 - Solidity: run `forge fmt` in `contracts/`. CI checks it.
 

@@ -13,8 +13,8 @@ The full definitions are in `packages/core/src/types.ts`. The concept pages expl
 | `Pathway`, `PathwayLeg`, `PathwayGroup`, `LegQuote`, `Quote`, `PublicLegQuote`, `PublicQuote`, `Fee`, `Amount` | [Pathways and legs](../concepts/pathways.md#quoting) |
 | `Step`, `StateName`, `StepSub` (with `STEP_SUBS` and `isStepSub`), `Transition`, `PollSpec`, `LegStep`, `LegStatus`, `FieldSpec`, `TxRequest` | [Flow state machine](../concepts/flow.md) |
 | `Surface`, `SurfaceKind`, `IframeMessages` | [Surfaces](../concepts/surfaces.md) |
-| `OrkError`, `OrkErrorCode` | [Flow: errors as fields](../concepts/flow.md#errors-as-fields) |
-| `OrkEvent`, `OrkEventType` | [Events](../concepts/events.md) |
+| `OpenRampError`, `OpenRampErrorCode` | [Flow: errors as fields](../concepts/flow.md#errors-as-fields) |
+| `OpenRampEvent`, `OpenRampEventType` | [Events](../concepts/events.md) |
 | `WalletAdapter`, `WalletBalance` | [Wallets (wagmi)](../adapters/wagmi.md) |
 | `WithdrawSource`, `Custody`, `AllowedTargets`, `WithdrawTarget` | [Withdrawals](../guide/withdraw.md) |
 
@@ -127,7 +127,7 @@ type Fee = {
 type Quote = {
   id: string; pathwayId: string; method: string; provider: string
   legs: LegQuote[]
-  input: Amount; output: Amount   // Amount = { amount: string; asset: Asset }
+  input: Amount; output: Amount   // Amount = { value: string; asset: Asset }
   fees: Fee[]
   eta: { min: number; max: number } // seconds
   expiresAt?: string
@@ -195,9 +195,9 @@ Math runs at 18 fraction digits. Extra digits are truncated.
 
 | Export | Description |
 |---|---|
-| `orkError(code, overrides?)` | An `OrkError` with the default message and retryable flag for the code |
-| `OrkException` | `new OrkException(error, status = 400)`: throw it across boundaries; the server turns it into a JSON error response |
-| `isOrkError(value)` | Type guard |
+| `openRampError(code, overrides?)` | An `OpenRampError` with the default message and retryable flag for the code |
+| `OpenRampException` | `new OpenRampException(error, status = 400)`: throw it across boundaries; the server turns it into a JSON error response |
+| `isOpenRampError(value)` | Type guard |
 
 Error codes with `retryable: true` by default: `CONFLICT`, `QUOTE_EXPIRED`, `NO_QUOTES`, `PAYMENT_FAILED`, `RATE_LIMITED`, `PROVIDER_UNAVAILABLE`, `INTERNAL`. Codes for withdrawals: `ADDRESS_REJECTED`, `TARGET_NOT_ALLOWED` and `TARGET_LOCKED`. `CONFLICT` means two requests changed the session at the same time; send the request again.
 
@@ -261,5 +261,5 @@ type PlannerInput = {
 
 | Export | Description |
 |---|---|
-| `createEvent(type, object, { sessionId?, livemode? })` | An `OrkEvent` with a random `evt_` id |
+| `createEvent(type, object, { sessionId?, livemode? })` | An `OpenRampEvent` with a random `evt_` id |
 | `randomId(prefix, bytes = 12)` | `{prefix}_{hex}` |

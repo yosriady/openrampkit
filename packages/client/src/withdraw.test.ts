@@ -1,7 +1,7 @@
 // Withdraw flow of the controller, against the real server handler with the mock adapter (offramp on).
 import { describe, expect, it, vi } from 'vitest'
 import { USDC } from '@openrampkit/core'
-import type { OrkEvent, WithdrawSource } from '@openrampkit/core'
+import type { OpenRampEvent, WithdrawSource } from '@openrampkit/core'
 import type { CreateSessionInput } from '@openrampkit/server'
 import { RampController, WithdrawController, createMockWallet, isValidTargetAddress, withdrawTokens } from './index.js'
 import type { ControllerOptions } from './index.js'
@@ -18,7 +18,7 @@ async function make(opts: {
 } = {}) {
   const srv = setupServer(undefined, opts.config)
   const s = await srv.ramp.sessions.create({ userId: 'u1', direction: 'withdraw', source: BASE_SOURCE, country: 'PH', ...opts.session } as CreateSessionInput)
-  const events: OrkEvent[] = []
+  const events: OpenRampEvent[] = []
   const wallet = opts.wallet === false ? undefined : createMockWallet({ address: USER, delayMs: 0 })
   const c = new WithdrawController({ client: srv.client, clientSecret: s.clientSecret, ...(wallet ? { wallet } : {}), onEvent: (e) => events.push(e), ...opts.ctl })
   return { ...srv, s, c, events, wallet }
@@ -79,7 +79,7 @@ describe('withdraw: to wallet', () => {
 
     c.setAmount('25')
     await c.submitAmount()
-    expect(c.getSnapshot().quotes[0]).toMatchObject({ input: { amount: '25' }, output: { asset: { chain: 'eip155:42161' } } })
+    expect(c.getSnapshot().quotes[0]).toMatchObject({ input: { value: '25' }, output: { asset: { chain: 'eip155:42161' } } })
     // Withdraw quotes never send a pay-with source: the session fixes it.
     expect((await bodyOf(requests, '/quotes'))[0]).toEqual({ method: 'wallet', amount: '25', amountSide: 'source' })
     await c.confirm()
@@ -162,7 +162,7 @@ describe('withdraw: to cash', () => {
     await c.selectMethod('gcash')
     c.setAmount('20')
     await c.submitAmount()
-    expect(c.getSnapshot().quotes[0]!.output).toMatchObject({ amount: '1131.43', asset: { kind: 'fiat', currency: 'PHP' } })
+    expect(c.getSnapshot().quotes[0]!.output).toMatchObject({ value: '1131.43', asset: { kind: 'fiat', currency: 'PHP' } })
     await c.confirm()
     expect(c.getSnapshot().session!.step.surface?.kind).toBe('FORM')
     await c.fire('submit_details', { account_name: 'Juan', phone: '09171234567' })

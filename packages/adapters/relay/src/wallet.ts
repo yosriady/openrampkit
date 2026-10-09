@@ -3,11 +3,11 @@
 
 import { buildSettlementTxs, claimOnce, erc20PaidTo, erc20TransferData, hashSettlementCalls, randomHex, settlementCallsFrom, settlementIntentTypedData, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, SettlementIntent, StartInput } from '@openrampkit/adapter'
-import { OrkException, chainName, evmChainId, isSolanaTx, orkError } from '@openrampkit/core'
+import { OpenRampException, chainName, evmChainId, isSolanaTx, openRampError } from '@openrampkit/core'
 import type { LegStep, TxRequest } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
 import { DEFAULT_RPC_URLS, DIRECT_TX_CLOCK_SKEW_MS, RECORD_TTL_SEC, USED_TTL_SEC, WALLET_QUOTE_REUSE_MS } from './config.js'
-import { POLL_TRANSITION, SUBMIT_TX, caip2FromRelay, cryptoAsset, fitsChain, isNative, isSolana, knownDecimals, requestIdOf, sameUser, settlementOf, toOrk, usedKey } from './helpers.js'
+import { POLL_TRANSITION, SUBMIT_TX, caip2FromRelay, cryptoAsset, fitsChain, isNative, isSolana, knownDecimals, requestIdOf, sameUser, settlementOf, toOpenRamp, usedKey } from './helpers.js'
 import { solanaReceived } from './solana.js'
 import type { SolStatus } from './solana.js'
 import type { RelayQuoteResponse, RelayStep, WalletRecord } from './types.js'
@@ -70,7 +70,7 @@ export function walletLeg(rt: RelayRuntime) {
     const receipt = await rpc<EvmReceipt | null>(ctx, chain, 'eth_getTransactionReceipt', [rec.txHash])
     const extra = { ref, txHash: rec.txHash!, sourceTxHash: rec.txHash! }
     if (!receipt) return { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('DELIVERY_FAILED', { message }), ...extra })
     if (receipt.status !== '0x1') return fail('The transaction failed on chain.')
     // The transaction must be newer than this payment: an older transfer to the same recipient (for
     // example a shared merchant address) must not complete a new session.
@@ -93,7 +93,7 @@ export function walletLeg(rt: RelayRuntime) {
   /** Common end of a same-chain wallet check: the amount, then one transaction for one payment only. */
   async function settleDirect(ctx: AdapterContext, ref: string, rec: WalletRecord, paid: bigint): Promise<LegStep> {
     const extra = { ref, txHash: rec.txHash!, sourceTxHash: rec.txHash! }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('DELIVERY_FAILED', { message }), ...extra })
     if (paid < BigInt(rec.amountBase ?? '0')) return fail('The transaction does not pay the destination the quoted amount.')
     // One transaction can complete one payment only: an old hash must not be reused for a new session.
     const key = usedKey(rec.chain!, rec.txHash!)
@@ -112,7 +112,7 @@ export function walletLeg(rt: RelayRuntime) {
     const sig = rec.txHash!
     const extra = { ref, txHash: sig, sourceTxHash: sig }
     const waiting: LegStep = { state: 'PROCESSING', sub: 'confirming', status: 'processing', transitions: [POLL_TRANSITION], ...extra }
-    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('DELIVERY_FAILED', { message }), ...extra })
+    const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: openRampError('DELIVERY_FAILED', { message }), ...extra })
     const st = await rpc<{ value?: SolStatus[] } | null>(ctx, chain, 'getSignatureStatuses', [[sig], { searchTransactionHistory: true }])
     const s = st?.value?.[0]
     if (!s) return waiting
@@ -180,7 +180,7 @@ export function walletLeg(rt: RelayRuntime) {
     const chain = rec.chain!
     const s = rec.settlement!
     const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
-    if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
+    if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
     const r = await verifySettlement({
       rpcUrl: url,
       contract: s.contract,
@@ -194,7 +194,7 @@ export function walletLeg(rt: RelayRuntime) {
       state: 'FAILED',
       status: 'failed',
       transitions: [],
-      error: orkError('DELIVERY_FAILED', { message }),
+      error: openRampError('DELIVERY_FAILED', { message }),
       ref,
       ...(txHash ? { txHash } : {}),
     })
@@ -244,14 +244,14 @@ export function walletLeg(rt: RelayRuntime) {
     const given = input.source?.address
     const user = fitsChain(origin.chain, given) ? given : undefined
     if (isSolana(origin.chain) && !user) {
-      throw new OrkException(orkError('BAD_REQUEST', { message: 'Connect a Solana wallet to pay from Solana.', recovery: 'choose_other' }))
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Connect a Solana wallet to pay from Solana.', recovery: 'choose_other' }))
     }
     const fresh = typeof data.quotedAt === 'number' && Date.now() - data.quotedAt < WALLET_QUOTE_REUSE_MS
     if (!steps || !fresh || (user && !sameUser(origin.chain, data.user, user))) {
-      if (!data.body) throw new OrkException(orkError('QUOTE_EXPIRED'), 410)
+      if (!data.body) throw new OpenRampException(openRampError('QUOTE_EXPIRED'), 410)
       const body = { ...(data.body as Record<string, unknown>), ...(user ? { user } : {}) }
       const q = await api<RelayQuoteResponse>(ctx, '/quote/v2', body).catch((e) => {
-        throw toOrk(e, ctx.log)
+        throw toOpenRamp(e, ctx.log)
       })
       steps = q.steps ?? []
       requestId = requestIdOf(q)
@@ -264,7 +264,7 @@ export function walletLeg(rt: RelayRuntime) {
         status: 'failed',
         transitions: [],
         ref,
-        error: orkError('PROVIDER_DECLINED', {
+        error: openRampError('PROVIDER_DECLINED', {
           message: unsupported
             ? `This route needs a ${unsupported} step, which is not supported yet. Try another token or "Transfer crypto".`
             : 'Relay returned no transactions for this route.',

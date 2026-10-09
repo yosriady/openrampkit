@@ -103,7 +103,7 @@ async function started(o: Parameters<typeof routes>[0] = {}, opts: Parameters<ty
   const r = routes(o)
   const a = lifi(opts)
   const ctx = makeCtx({ fetch: r.fetch })
-  const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, ctx)
+  const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, ctx)
   const step = await a.start({ leg: walletLeg, quote: q, source: src }, ctx)
   return { a, ctx, q, step, calls: r.calls, ref: step.ref! }
 }
@@ -142,7 +142,7 @@ describe('lifi quote', () => {
   it('quotes exact input with the integrator, fee, slippage, order and API key', async () => {
     const { fetch, calls } = routes({ quote: () => lifiQuote({ integratorFee: '5000' }) })
     const a = lifi({ apiKey: 'k', integrator: 'myapp', feeBps: 25, slippageBps: 50, order: 'CHEAPEST' })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, makeCtx({ fetch }))
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, makeCtx({ fetch }))
     expect(checkLegQuote(q)).toEqual([])
     const url = new URL(calls[0]!.url)
     expect(url.pathname).toBe('/v1/quote')
@@ -160,8 +160,8 @@ describe('lifi quote', () => {
       order: 'CHEAPEST',
     })
     expect(calls[0]!.headers.get('x-lifi-api-key')).toBe('k')
-    expect(q.input.amount).toBe('10')
-    expect(q.output.amount).toBe('9.970218')
+    expect(q.input.value).toBe('10')
+    expect(q.output.value).toBe('9.970218')
     expect(q.data?.minOutput).toBe('9.920367')
     expect(q.fees).toEqual([
       { kind: 'provider', label: 'LIFI Fixed Fee', amount: '0.02', currency: 'USDC' },
@@ -174,20 +174,20 @@ describe('lifi quote', () => {
 
   it('quotes exact output with /quote/toAmount and a placeholder sender', async () => {
     const { fetch, calls } = routes()
-    const q = await lifi().quote({ leg: walletLeg, amountOut: { amount: '10', asset: BASE_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, makeCtx({ fetch }))
+    const q = await lifi().quote({ leg: walletLeg, amountOut: { value: '10', asset: BASE_USDC }, source: { chain: ARB_USDC.chain, token: ARB_USDC.token } }, makeCtx({ fetch }))
     const url = new URL(calls[0]!.url)
     expect(url.pathname).toBe('/v1/quote/toAmount')
     expect(url.searchParams.get('toAmount')).toBe('10000000')
     expect(url.searchParams.get('fromAddress')).toBe('0x000000000000000000000000000000000000dEaD')
-    expect(q.input.amount).toBe('10')
+    expect(q.input.value).toBe('10')
   })
 
   it('looks up unknown decimals once with /token', async () => {
     const { fetch, calls } = routes({ quote: () => lifiQuote({ fromChainId: 8453, fromToken: tok(8453, '0x00000000000000000000000000000000000000c0', 'TKN', 18), fromAmount: '1000000000000000000' }) })
     const ctx = makeCtx({ fetch })
     const tkn = { chain: 'eip155:8453', token: '0x00000000000000000000000000000000000000c0', address: USER }
-    await lifi().quote({ leg: walletLeg, amountIn: { amount: '1', asset: { kind: 'crypto', chain: tkn.chain, token: tkn.token } }, source: tkn }, ctx)
-    await lifi().quote({ leg: walletLeg, amountIn: { amount: '1', asset: { kind: 'crypto', chain: tkn.chain, token: tkn.token } }, source: tkn }, ctx)
+    await lifi().quote({ leg: walletLeg, amountIn: { value: '1', asset: { kind: 'crypto', chain: tkn.chain, token: tkn.token } }, source: tkn }, ctx)
+    await lifi().quote({ leg: walletLeg, amountIn: { value: '1', asset: { kind: 'crypto', chain: tkn.chain, token: tkn.token } }, source: tkn }, ctx)
     expect(calls.filter((c) => c.url.includes('/v1/token')).length).toBe(1)
     expect(new URL(calls.find((c) => c.url.includes('/v1/quote'))!.url).searchParams.get('fromAmount')).toBe('1000000000000000000')
   })
@@ -196,21 +196,21 @@ describe('lifi quote', () => {
     const { fetch } = routes()
     const a = lifi()
     const code = async (p: Promise<unknown>) => (await p.then(() => undefined, (e) => e as { error: { code: string } }))?.error.code
-    expect(await code(a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER } }, makeCtx({ fetch })))).toBe('NO_QUOTES')
+    expect(await code(a.quote({ leg: walletLeg, amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: USER } }, makeCtx({ fetch })))).toBe('NO_QUOTES')
     const settle = makeCtx({ fetch, destination: { type: 'crypto', chain: BASE_USDC.chain, token: BASE_USDC.token, address: DEST, settlement: { contract: OTHER } } })
-    expect(await code(a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, settle))).toBe('NO_QUOTES')
-    expect(await code(a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: { chain: 'tron:mainnet', token: 'x' } }, makeCtx({ fetch })))).toBe('NO_QUOTES')
+    expect(await code(a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, settle))).toBe('NO_QUOTES')
+    expect(await code(a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: { chain: 'tron:mainnet', token: 'x' } }, makeCtx({ fetch })))).toBe('NO_QUOTES')
   })
 
   it('refuses a route to another receiver', async () => {
     const { fetch } = routes({ quote: () => lifiQuote({ toAddress: OTHER }) })
-    await expect(lifi().quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    await expect(lifi().quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
   })
 
   it('maps HTTP 429 to RATE_LIMITED and 400 to NO_QUOTES', async () => {
     for (const [status, want] of [[429, 'RATE_LIMITED'], [400, 'NO_QUOTES']] as const) {
       const { fetch } = fakeFetch([{ match: '/v1/quote', status, reply: () => ({ message: 'No available quotes for the requested transfer', code: 1002 }) }])
-      await expect(lifi().quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: want } })
+      await expect(lifi().quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: want } })
     }
   })
 })
@@ -240,7 +240,7 @@ describe('lifi start', () => {
     const a = lifi()
     const ctx = makeCtx({ fetch })
     const s = { chain: eth.chain, token: 'native', address: USER }
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '0.01', asset: eth }, source: s }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '0.01', asset: eth }, source: s }, ctx)
     const step = await a.start({ leg: walletLeg, quote: q, source: s }, ctx)
     expect(step.surface?.kind === 'WALLET_TX' && step.surface.txs).toEqual([{ to: DIAMOND, data: '0x1794958f00', value: '10000000000000000', chainId: 42161, gas: String(0x2ae892) }])
   })
@@ -249,7 +249,7 @@ describe('lifi start', () => {
     const { fetch, calls } = routes()
     const a = lifi()
     const ctx = makeCtx({ fetch })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: { chain: src.chain, token: src.token } }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: { chain: src.chain, token: src.token } }, ctx)
     await a.start({ leg: walletLeg, quote: q, source: src }, ctx)
     const quotes = calls.filter((c) => c.url.includes('/v1/quote'))
     expect(quotes).toHaveLength(2)
@@ -260,7 +260,7 @@ describe('lifi start', () => {
     const { fetch } = routes()
     const a = lifi()
     const ctx = makeCtx({ fetch })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, ctx)
     await expect(a.start({ leg: walletLeg, quote: q, source: { chain: src.chain, token: src.token } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 
@@ -270,7 +270,7 @@ describe('lifi start', () => {
     const a = lifi()
     const ctx = makeCtx({ fetch })
     const s = { chain: SOLANA_MAINNET, token: SOLANA_USDC_MINT, address: SOL_USER }
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: sol }, source: s }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: sol }, source: s }, ctx)
     expect(new URL(calls[0]!.url).searchParams.get('fromChain')).toBe(String(LIFI_SOLANA_CHAIN_ID))
     const step = await a.start({ leg: walletLeg, quote: q, source: s }, ctx)
     expect(step.surface).toEqual({ kind: 'WALLET_TX', chain: SOLANA_MAINNET, txs: [{ kind: 'solana', type: 'transaction', transaction: 'AQAAAAAAAAAAAAAA' }] })
@@ -294,7 +294,7 @@ describe('lifi status', () => {
     const done = await s.a.status!({ leg: walletLeg, ref: s.ref }, s.ctx)
     expect(checkLegStep(done)).toEqual([])
     // txHash: the delivery. sourceTxHash: the source transaction the wallet sent.
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: OUT_HASH, sourceTxHash: HASH, output: { amount: '9.97', asset: { chain: 'eip155:8453' } } })
+    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: OUT_HASH, sourceTxHash: HASH, output: { value: '9.97', asset: { chain: 'eip155:8453' } } })
     const st = new URL(s.calls.find((c) => c.url.includes('/v1/status'))!.url)
     expect(Object.fromEntries(st.searchParams)).toEqual({ txHash: HASH, fromChain: '42161', toChain: '8453' })
   })
@@ -373,7 +373,7 @@ describe('lifi money checks', () => {
   })
 
   it('without an RPC check, trusts the LI.FI amount but still checks the minimum', async () => {
-    expect(await statusFor({ rpc: { logs: [] } }, { verifyOnChain: false })).toMatchObject({ state: 'COMPLETED', output: { amount: '9.97' } })
+    expect(await statusFor({ rpc: { logs: [] } }, { verifyOnChain: false })).toMatchObject({ state: 'COMPLETED', output: { value: '9.97' } })
   })
 
   it('refuses a source tx hash that another session used (replay)', async () => {
@@ -382,9 +382,9 @@ describe('lifi money checks', () => {
     const a = lifi()
     const ctx1 = makeCtx({ fetch: r.fetch, shared })
     const ctx2 = makeCtx({ fetch: r.fetch, shared, session: { id: 'sess_2' } })
-    const q1 = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, ctx1)
+    const q1 = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, ctx1)
     const s1 = await a.start({ leg: walletLeg, quote: q1, source: src }, ctx1)
-    const q2 = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, ctx2)
+    const q2 = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, ctx2)
     const s2 = await a.start({ leg: walletLeg, quote: q2, source: src }, ctx2)
     await a.transition!({ leg: walletLeg, ref: s1.ref!, name: 'submit_tx', inputs: { txHash: HASH } }, ctx1)
     // The same hash again for the same payment is fine; for another payment it is refused.
@@ -399,7 +399,7 @@ describe('lifi money checks', () => {
     const a = lifi()
     const run = async (id: string, hash: string) => {
       const ctx = makeCtx({ fetch: r.fetch, shared, session: { id } })
-      const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: ARB_USDC }, source: src }, ctx)
+      const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: ARB_USDC }, source: src }, ctx)
       const s = await a.start({ leg: walletLeg, quote: q, source: src }, ctx)
       await a.transition!({ leg: walletLeg, ref: s.ref!, name: 'submit_tx', inputs: { txHash: hash } }, ctx)
       return a.status!({ leg: walletLeg, ref: s.ref! }, ctx)
@@ -417,7 +417,7 @@ describe('lifi conformance', () => {
     const report = await runAdapterConformance(lifi({ apiKey: 'k' }), {
       fetch,
       fixtures: [
-        { leg: walletLeg, quote: { amountIn: { amount: '10', asset: ARB_USDC }, source: src }, start: { source: src }, transitions: [{ name: 'submit_tx', inputs: { txHash: HASH } }], expect: { start: 'PAYMENT', status: 'COMPLETED' } },
+        { leg: walletLeg, quote: { amountIn: { value: '10', asset: ARB_USDC }, source: src }, start: { source: src }, transitions: [{ name: 'submit_tx', inputs: { txHash: HASH } }], expect: { start: 'PAYMENT', status: 'COMPLETED' } },
       ],
     })
     expect(report.problems).toEqual([])
@@ -438,10 +438,10 @@ describe('lifi live API', () => {
   it.runIf(process.env.LIVE === '1')('a small mainnet quote: 1 USDC Arbitrum -> USDC Base (LIFI_API_KEY)', async ({ skip }) => {
     const apiKey = process.env.LIFI_API_KEY
     skip(!apiKey, 'LIFI_API_KEY is not set. Set a key from the LI.FI Partner Portal.')
-    const q = await lifi({ apiKey: apiKey! }).quote({ leg: walletLeg, amountIn: { amount: '1', asset: ARB_USDC }, source: src }, makeCtx({ fetch: globalThis.fetch }))
+    const q = await lifi({ apiKey: apiKey! }).quote({ leg: walletLeg, amountIn: { value: '1', asset: ARB_USDC }, source: src }, makeCtx({ fetch: globalThis.fetch }))
     expect(checkLegQuote(q)).toEqual([])
     expect(q.output.asset).toMatchObject({ chain: BASE_USDC.chain })
-    expect(Number(q.output.amount)).toBeGreaterThan(0.5)
-    expect(Number(q.output.amount)).toBeLessThanOrEqual(1)
+    expect(Number(q.output.value)).toBeGreaterThan(0.5)
+    expect(Number(q.output.value)).toBeLessThanOrEqual(1)
   }, 30_000)
 })

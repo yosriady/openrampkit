@@ -11,7 +11,7 @@ const SECRET = 'meld_webhook_secret'
 const HOOK_URL = 'https://app.test/api/openramp/webhooks/meld'
 const opts = { apiKey: KEY, env: 'sandbox' as const, webhookSecret: SECRET }
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
-const money = (amount: string, currency = 'USD') => ({ amount, asset: { kind: 'fiat' as const, currency } })
+const money = (amount: string, currency = 'USD') => ({ value: amount, asset: { kind: 'fiat' as const, currency } })
 
 const leg = (legId: string, currency = 'USD'): PathwayLeg => ({
   adapterId: 'meld',
@@ -145,7 +145,7 @@ describe('meld adapter', () => {
       countryCode: 'US', sourceCurrencyCode: 'USD', sourceAmount: 100, destinationCurrencyCode: 'USDC_BASE', paymentMethodType: 'CREDIT_DEBIT_CARD',
       walletAddress: '0xabc', serviceProviders: ['TRANSAK', 'BANXA'], subdivision: 'US-CA',
     })
-    expect(quote.output).toEqual({ amount: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(quote.output).toEqual({ value: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(quote.input).toEqual(money('100'))
     expect(quote.fees).toEqual([
       { kind: 'provider', label: 'BANXA fee', amount: '2.5', currency: 'USD' },
@@ -168,7 +168,7 @@ describe('meld adapter', () => {
     await expect(run(401, {})).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(run(429, {})).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
     await expect(run(502, {})).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
-    await expect(meld(opts).quote({ leg: leg('card'), amountOut: { amount: '5', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(meld(opts).quote({ leg: leg('card'), amountOut: { value: '5', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })
 
   it('start: widget session with the chosen provider; REDIRECT to serviceProviderWidgetUrl (or widgetUrl)', async () => {
@@ -211,7 +211,7 @@ describe('meld adapter', () => {
       expect(checkLegStep(s)).toEqual([])
       return s
     }
-    expect(await run([TX('SETTLED')])).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { amount: '96.25' } })
+    expect(await run([TX('SETTLED')])).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { value: '96.25' } })
     for (const st of ['PENDING', 'SETTLING', 'ERROR', 'AUTHORIZED']) expect(await run([TX(st)])).toMatchObject({ state: 'PROCESSING' })
     for (const st of ['PENDING_CREATED', 'TWO_FA_REQUIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
     for (const st of ['FAILED', 'DECLINED', 'CANCELLED', 'AUTHORIZATION_EXPIRED']) expect(await run([TX(st)])).toMatchObject({ state: 'FAILED', error: { code: 'PAYMENT_FAILED' } })
@@ -248,7 +248,7 @@ describe('meld adapter', () => {
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
     const ev = (eventType: string, status?: string, extra: Record<string, unknown> = {}) => ({ eventType, payload: { externalSessionId: 'ork_abc', paymentTransactionId: 'mtx_1', ...(status ? { paymentTransactionStatus: status } : {}), ...extra } })
     expect(await parse(ev('TRANSACTION_CRYPTO_COMPLETE', 'SETTLED'))).toEqual([
-      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { amount: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { value: '96.25', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     expect(calls[0]!.url).toBe('https://api-sb.meld.io/payments/transactions/mtx_1')
     expect(await parse(ev('TRANSACTION_CRYPTO_PENDING', 'PENDING'))).toEqual([{ ref: 'ork_abc', status: 'processing' }])

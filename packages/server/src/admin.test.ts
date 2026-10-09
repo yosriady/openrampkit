@@ -39,7 +39,7 @@ function hookedAdapter() {
   return createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: { amount: amountIn!.amount, asset: { kind: 'fiat', currency: 'SGD' } }, output: { amount: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: { value: amountIn!.value, asset: { kind: 'fiat', currency: 'SGD' } }, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
     },
     async start() {
       const ref = `order-${++n}`
@@ -407,8 +407,8 @@ describe('admin page', () => {
 })
 
 describe('amountOf', () => {
-  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } })
-  const vnd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'VND' } })
+  const usdc = (amount: string) => ({ value: amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } })
+  const vnd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'VND' } })
   const rec = (legs: Array<{ input: ReturnType<typeof usdc> | ReturnType<typeof vnd>; output: ReturnType<typeof usdc>; done?: ReturnType<typeof usdc> }>) =>
     ({ active: { legs: legs.map((l) => ({ quote: { input: l.input, output: l.output }, ...(l.done ? { step: { output: l.done } } : {}) })) } }) as unknown as Parameters<typeof amountOf>[0]
 

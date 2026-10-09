@@ -62,7 +62,7 @@ const opts = (extra: Partial<Parameters<typeof binance>[0]> = {}) => ({
   ...extra,
 })
 
-const eur = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
+const eur = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
 
 function webhookReq(body: string, headers: Record<string, string>) {
   return new Request('https://app.test/api/openramp/webhooks/binance', { method: 'POST', headers, body })
@@ -88,7 +88,7 @@ describe('binance adapter: conformance', () => {
     expect(report.problems).toEqual([])
     expect(report.steps[0]).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: 'https://www.binance.com/en/connect/abc', popup: true, provider: 'Binance' } })
     expect(report.steps[1]).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc' })
-    expect(report.events[0]).toEqual([{ ref: 'ork1', status: 'succeeded', txHash: '0xabc', output: { amount: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
+    expect(report.events[0]).toEqual([{ ref: 'ork1', status: 'succeeded', txHash: '0xabc', output: { value: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
   })
 
   it('declares one exchange leg, REDIRECT, with Binance regions', () => {
@@ -153,7 +153,7 @@ describe('binance adapter: quote', () => {
       adapterId: 'binance',
       legId: 'account',
       input: eur('100'),
-      output: { amount: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      output: { value: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
       fees: [
         { kind: 'provider', label: 'Binance fee', amount: '1', currency: 'EUR' },
         { kind: 'network', label: 'Network fee', amount: '0.5', currency: 'USDC' },
@@ -167,10 +167,10 @@ describe('binance adapter: quote', () => {
     const { fetch, calls } = fakeFetch(routes(20, { quote: () => ok({ ...QUOTE, totalAmount: '50.75', feeAmount: '0', networkFee: null }) }))
     const arb = { kind: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']! }
     const l: PathwayLeg = { ...leg, to: { asset: arb, location: { kind: 'address', address: DEST } } }
-    const q = await binance(opts()).quote({ leg: l, amountOut: { amount: '50.123456789', asset: arb } }, makeCtx({ fetch }))
+    const q = await binance(opts()).quote({ leg: l, amountOut: { value: '50.123456789', asset: arb } }, makeCtx({ fetch }))
     expect(calls[0]!.body).toMatchObject({ amountType: 2, requestedAmount: '50.12345678', network: 'ARBITRUM' })
     expect(q.input).toEqual(eur('50.75'))
-    expect(q.output.amount).toBe('50.12345678')
+    expect(q.output.value).toBe('50.12345678')
     expect(q.fees).toEqual([])
   })
 
@@ -292,7 +292,7 @@ describe('binance adapter: status', () => {
     expect(calls[0]!.body).toEqual({ externalOrderId: 'ork1' })
     expect(step).toMatchObject({ state, status, ref: 'ork1' })
     if (errorCode) expect(step.error?.code).toBe(errorCode)
-    if (code === 20) expect(step).toMatchObject({ txHash: '0xabc', output: { amount: '98.5' } })
+    if (code === 20) expect(step).toMatchObject({ txHash: '0xabc', output: { value: '98.5' } })
   })
 
   it('leaves out the output when the network is not a deliver asset', async () => {

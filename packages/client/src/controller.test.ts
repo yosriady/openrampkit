@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { USDC, combineWallets, orkError } from '@openrampkit/core'
-import type { OrkEvent, PublicSession, StepSub, WalletAdapter } from '@openrampkit/core'
-import { DepositController, OrkClientError, createMockWallet } from './index.js'
+import { USDC, combineWallets, openRampError } from '@openrampkit/core'
+import type { OpenRampEvent, PublicSession, StepSub, WalletAdapter } from '@openrampkit/core'
+import { DepositController, OpenRampClientError, createMockWallet } from './index.js'
 import type { ControllerOptions } from './index.js'
 import { BEEF, POLL, fakeClient, method, plan, quote, session, step } from './testctx.js'
 
@@ -11,7 +11,7 @@ afterEach(() => {
 })
 
 function make(over: Partial<ControllerOptions> = {}, client = fakeClient()) {
-  const events: OrkEvent[] = []
+  const events: OpenRampEvent[] = []
   const c = new DepositController({ client, clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e), ...over })
   const types = () => events.map((e) => e.type)
   return { c, client, events, types }
@@ -134,7 +134,7 @@ describe('start', () => {
   })
 
   it('shows the error screen when loading fails, and retry emits modal.opened once', async () => {
-    const client = fakeClient({ getSession: vi.fn().mockRejectedValueOnce(new OrkClientError(orkError('UNAUTHORIZED'), 401)).mockResolvedValue(session('SELECT_METHOD')) })
+    const client = fakeClient({ getSession: vi.fn().mockRejectedValueOnce(new OpenRampClientError(openRampError('UNAUTHORIZED'), 401)).mockResolvedValue(session('SELECT_METHOD')) })
     const { c, types } = make({}, client)
     await c.start()
     expect(c.getSnapshot()).toMatchObject({ screen: 'error', busy: false, error: { code: 'UNAUTHORIZED' } })
@@ -285,21 +285,21 @@ describe('refreshQuotes', () => {
   })
 
   it('keeps partial errors next to the quotes that worked', async () => {
-    const errors = [orkError('PROVIDER_UNAVAILABLE'), orkError('AMOUNT_TOO_LOW')]
+    const errors = [openRampError('PROVIDER_UNAVAILABLE'), openRampError('AMOUNT_TOO_LOW')]
     const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [quote({ id: 'only' })], errors })) })
     const { c } = await atQuotes({}, client)
     expect(c.getSnapshot()).toMatchObject({ selectedQuoteId: 'only', quoteErrors: errors })
   })
 
   it('no quotes: nothing is selected', async () => {
-    const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [], errors: [orkError('NO_QUOTES')] })) })
+    const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [], errors: [openRampError('NO_QUOTES')] })) })
     const { c } = await atQuotes({}, client)
     expect(c.getSnapshot().selectedQuoteId).toBeUndefined()
     expect(c.getSnapshot().quoteErrors[0]!.code).toBe('NO_QUOTES')
   })
 
   it('a failed request sets the error and clears the loading flag', async () => {
-    const client = fakeClient({ quotes: vi.fn().mockRejectedValue(new OrkClientError(orkError('RATE_LIMITED'), 429)) })
+    const client = fakeClient({ quotes: vi.fn().mockRejectedValue(new OpenRampClientError(openRampError('RATE_LIMITED'), 429)) })
     const { c } = await atQuotes({}, client)
     expect(c.getSnapshot()).toMatchObject({ quotesLoading: false, busy: false, error: { code: 'RATE_LIMITED' } })
   })
@@ -438,7 +438,7 @@ describe('confirm, fire and wallet', () => {
   })
 
   it('confirm failure keeps the quotes screen and shows the error', async () => {
-    const client = fakeClient({ select: vi.fn().mockRejectedValue(new OrkClientError(orkError('QUOTE_EXPIRED'), 409)) })
+    const client = fakeClient({ select: vi.fn().mockRejectedValue(new OpenRampClientError(openRampError('QUOTE_EXPIRED'), 409)) })
     const { c } = await atQuotes({}, client)
     await c.confirm()
     expect(client.select).toHaveBeenCalledWith('ors_1.sig', { quoteId: 'q1' })
@@ -649,7 +649,7 @@ describe('back and restart', () => {
     const client = fakeClient()
     client.transition.mockResolvedValue(session('SELECT_METHOD'))
     const { c } = await atQuotes({}, client)
-    client.plan.mockRejectedValueOnce(new OrkClientError(orkError('SESSION_EXPIRED'), 410))
+    client.plan.mockRejectedValueOnce(new OpenRampClientError(openRampError('SESSION_EXPIRED'), 410))
     await c.restart()
     await vi.waitFor(() => expect(c.getSnapshot().screen).toBe('error'))
     expect(c.getSnapshot().error?.code).toBe('SESSION_EXPIRED')
@@ -793,7 +793,7 @@ describe('terminal states and done', () => {
   })
 
   it('FAILED shows the result but keeps done pending; restart and success resolve it', async () => {
-    const failed = session(step({ state: 'FAILED', error: orkError('PAYMENT_FAILED') }))
+    const failed = session(step({ state: 'FAILED', error: openRampError('PAYMENT_FAILED') }))
     const client = fakeClient({ select: vi.fn().mockResolvedValueOnce(failed).mockResolvedValue(session('COMPLETED')) })
     client.transition.mockResolvedValue(session('SELECT_METHOD'))
     const { c } = await atQuotes({}, client)
@@ -835,7 +835,7 @@ describe('terminal states and done', () => {
   })
 
   it('events carry id, created and livemode; no sessionId before the session loads', () => {
-    const events: OrkEvent[] = []
+    const events: OpenRampEvent[] = []
     const c = new DepositController({ client: fakeClient(), clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e) })
     void c.start()
     expect(events[0]).toMatchObject({ type: 'modal.opened', livemode: false, data: { object: {} } })

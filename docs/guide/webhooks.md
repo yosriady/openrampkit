@@ -113,8 +113,8 @@ The [background sweep](../api/server.md#background-sweep) finds expired sessions
         "result": {
           "method": "vietqr",
           "provider": "Swapped",
-          "input": { "amount": "500000", "asset": { "kind": "fiat", "currency": "VND" } },
-          "output": { "amount": "18.92", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
+          "input": { "value": "500000", "asset": { "kind": "fiat", "currency": "VND" } },
+          "output": { "value": "18.92", "asset": { "kind": "crypto", "chain": "eip155:8453", "token": "0x8335...", "symbol": "USDC", "decimals": 6 } },
           "outputConfirmed": true,
           "fees": [{ "kind": "provider", "label": "Swapped fee", "amount": "9000", "currency": "VND" }],
           "txHashes": ["0x..."],
@@ -155,7 +155,7 @@ async function handle(event: { id: string; type: string; sessionId?: string; dat
     // unique index on credits.session_id: a second insert fails and nothing is credited twice
     const inserted = await tx.credits.insertIfAbsent({ sessionId: event.sessionId, userId, eventId: event.id })
     if (!inserted) return
-    const amount = result.outputConfirmed ? result.output.amount : await verifiedAmount(event.sessionId, result)
+    const amount = result.outputConfirmed ? result.output.value : await verifiedAmount(event.sessionId, result)
     await tx.balances.increment(userId, amount)
   })
 }

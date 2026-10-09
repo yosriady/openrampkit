@@ -16,9 +16,9 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOrk, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOpenRamp, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, orkError } from '@openrampkit/core'
+import { OpenRampException, USDC, openRampError } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type TransakOptions = {
@@ -209,7 +209,7 @@ export function transak(opts: TransakOptions) {
         body: JSON.stringify({ apiKey: opts.apiKey }),
       })
       const token = res.data?.accessToken
-      if (!token) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return an access token.' }), 502)
+      if (!token) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return an access token.' }), 502)
       const rec = { token, expiresAt: res.data?.expiresAt ?? Math.floor(Date.now() / 1000) + 6 * 24 * 3600 }
       await ctx.shared.put('accessToken', rec, Math.max(60, Math.floor(rec.expiresAt - Date.now() / 1000)))
       memToken = rec
@@ -266,13 +266,13 @@ export function transak(opts: TransakOptions) {
     const ref = o.partnerOrderId
     if (!ref) return undefined
     const chain = Object.entries(TRANSAK_NETWORKS).find(([, n]) => n === o.network)?.[0]
-    const output = chain && o.cryptoAmount !== undefined ? { amount: dec(o.cryptoAmount, 6), asset: deliverableToAsset(deliverable.find((d) => d.chain === chain)!) } : undefined
+    const output = chain && o.cryptoAmount !== undefined ? { value: dec(o.cryptoAmount, 6), asset: deliverableToAsset(deliverable.find((d) => d.chain === chain)!) } : undefined
     switch (o.status) {
       case 'COMPLETED':
         return { ref, status: 'succeeded', ...(o.transactionHash ? { txHash: o.transactionHash } : {}), ...(output ? { output } : {}) }
       case 'FAILED':
       case 'CANCELLED':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The Transak order did not complete.', recovery: 'retry_payment' }) }
+        return { ref, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The Transak order did not complete.', recovery: 'retry_payment' }) }
       case 'EXPIRED':
         return { ref, status: 'expired' }
       case 'REFUNDED':
@@ -299,7 +299,7 @@ export function transak(opts: TransakOptions) {
       if (!list) {
         const res = await fetchJson<{ response?: FiatCurrency[] }>(ctx.fetch, `${urls.api}/fiat/public/v1/currencies/fiat-currencies`)
         // A missing list is a failure, not "no methods": throw (the server then uses the static legs) and do not cache it.
-        if (!Array.isArray(res?.response)) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak returned no fiat currency list.' }), 502)
+        if (!Array.isArray(res?.response)) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak returned no fiat currency list.' }), 502)
         list = res.response
         await ctx.shared.put('fiat', list, 60 * 60)
       }
@@ -328,7 +328,7 @@ export function transak(opts: TransakOptions) {
 
     async quote(input, ctx) {
       const fiat = input.amountIn?.asset ?? input.leg.from.asset
-      if (fiat.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Transak quotes need a fiat amount.' }))
+      if (fiat.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Transak quotes need a fiat amount.' }))
       const currency = fiat.currency.toUpperCase()
       const t = target(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const paymentMethod = paymentMethodFor(input.leg.legId, currency)
@@ -340,18 +340,18 @@ export function transak(opts: TransakOptions) {
         isBuyOrSell: 'BUY',
         paymentMethod,
       })
-      if (input.amountIn) q.set('fiatAmount', input.amountIn.amount)
-      else if (input.amountOut) q.set('cryptoAmount', input.amountOut.amount)
+      if (input.amountIn) q.set('fiatAmount', input.amountIn.value)
+      else if (input.amountOut) q.set('cryptoAmount', input.amountOut.value)
       const country = ctx.session.country ?? opts.defaultCountry
       if (country) q.set('quoteCountryCode', country.toUpperCase())
       let res: PriceResponse
       try {
         res = await fetchJson<PriceResponse>(ctx.fetch, `${urls.api}/api/v1/pricing/public/quotes?${q}`, { headers: { 'x-api-key': opts.apiKey } })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Transak', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Transak', { what: 'price this amount', log: ctx.log })
       }
       const r = res.response
-      if (!r) throw new OrkException(orkError('NO_QUOTES', { message: 'Transak did not return a quote.' }), 422)
+      if (!r) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Transak did not return a quote.' }), 422)
       const fees: Fee[] = (r.feeBreakdown ?? [])
         .filter((f) => f.value)
         .map((f) => ({
@@ -363,8 +363,8 @@ export function transak(opts: TransakOptions) {
       return {
         adapterId: 'transak',
         legId: input.leg.legId,
-        input: { amount: dec(r.fiatAmount, 2), asset: { kind: 'fiat', currency } },
-        output: { amount: dec(r.cryptoAmount, 6), asset: t.asset },
+        input: { value: dec(r.fiatAmount, 2), asset: { kind: 'fiat', currency } },
+        output: { value: dec(r.cryptoAmount, 6), asset: t.asset },
         fees,
         eta: legs.find((l) => l.id === input.leg.legId)?.eta ?? { min: 120, max: 1800 },
         expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
@@ -375,7 +375,7 @@ export function transak(opts: TransakOptions) {
     async start(input, ctx) {
       const data = (input.quote.data ?? {}) as { paymentMethod?: string; network?: string }
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!walletAddress) throw new OrkException(orkError('BAD_REQUEST', { message: 'Transak needs a wallet address to deliver to.' }))
+      if (!walletAddress) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Transak needs a wallet address to deliver to.' }))
       const currency = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD'
       const t = target(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const ref = `ork_${randomHex(10)}`
@@ -388,7 +388,7 @@ export function transak(opts: TransakOptions) {
         walletAddress,
         disableWalletAddressForm: true,
         fiatCurrency: currency,
-        fiatAmount: Number(input.quote.input.amount),
+        fiatAmount: Number(input.quote.input.value),
         paymentMethod: data.paymentMethod ?? paymentMethodFor(input.leg.legId, currency),
         hideExchangeScreen: true,
         partnerOrderId: ref,
@@ -407,13 +407,13 @@ export function transak(opts: TransakOptions) {
         widgetUrl = res.data?.widgetUrl
       } catch (e) {
         ctx.log.warn('transak: create widget URL failed', { error: String((e as Error)?.message ?? e).slice(0, 300) })
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak could not start the checkout.' }), 502)
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak could not start the checkout.' }), 502)
       }
       let origin: string
       try {
         origin = new URL(widgetUrl ?? '').origin
       } catch {
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
       }
       return {
         state: 'PAYMENT',
