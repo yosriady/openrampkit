@@ -28,6 +28,12 @@ export interface Logger {
 export interface ScopedKV {
   get<T = unknown>(key: string): Promise<T | undefined>
   put(key: string, value: unknown, ttlSec?: number): Promise<void>
+  /**
+   * Optional: write `value` only when `key` has no live value, as one atomic step. Returns true when
+   * it wrote, false when the key was already set. Stores with no atomic operation leave it out.
+   * Use `claimOnce` instead of calling it directly.
+   */
+  putIfAbsent?(key: string, value: unknown, ttlSec: number): Promise<boolean>
 }
 
 export interface AdapterContext {
@@ -174,6 +180,7 @@ export function timingSafeEqual(a: string, b: string): boolean {
 }
 
 export * from './http.js'
+export * from './claim.js'
 export * from './util.js'
 export * from './evm.js'
 export * from './solana.js'

@@ -74,6 +74,21 @@ describe('durableObjectStore', () => {
     }
   })
 
+  it('kv.putIfAbsent: atomic inside the object, and an expired value counts as absent', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    try {
+      const store = durableObjectStore(fakeNamespace())
+      const results = await Promise.all(['a', 'b', 'c'].map((v) => store.kv.putIfAbsent!('used', v, 10)))
+      expect(results.filter(Boolean)).toHaveLength(1)
+      expect(await store.kv.get('used')).toBe(['a', 'b', 'c'][results.indexOf(true)])
+      vi.setSystemTime(Date.now() + 11_000)
+      expect(await store.kv.putIfAbsent!('used', 'd', 10)).toBe(true)
+      expect(await store.kv.get('used')).toBe('d')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('runs a whole deposit flow', async () => {
     const ramp = createOpenRamp({ secret: 's'.repeat(40), baseUrl: 'https://a.test/api', adapters: [mockAdapter({ settleMs: 0 })], store: durableObjectStore(fakeNamespace()), logger: { debug() {}, info() {}, warn() {}, error() {} } })
     const s = await ramp.sessions.create({ userId: 'u', country: 'ID', destination: { type: 'merchant', currency: 'IDR' } })

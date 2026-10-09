@@ -158,6 +158,12 @@ export interface SessionStore {
   kv: {
     get<T = unknown>(key: string): Promise<T | undefined>
     put(key: string, value: unknown, ttlSec?: number): Promise<void>
+    /**
+     * Optional: write only when the key has no live value, as one atomic step. Returns true when it
+     * wrote. Adapters get it through `ScopedKV.putIfAbsent` (see `claimOnce`). The memory, Redis and
+     * Durable Object stores have it. Workers KV has no atomic operation, so its store leaves it out.
+     */
+    putIfAbsent?(key: string, value: unknown, ttlSec: number): Promise<boolean>
   }
   /**
    * Optional atomic work queue. All built-in stores have one. A store without it gets a fallback that
@@ -255,6 +261,13 @@ export function memoryStore(): SessionStore {
       async put(key, value, ttlSec) {
         kv.set(key, { v: JSON.stringify(value), ...(ttlSec ? { exp: Date.now() + ttlSec * 1000 } : {}) })
       },
+      // No `await` between the read and the write, so this is atomic in one process.
+      async putIfAbsent(key, value, ttlSec) {
+        const e = kv.get(key)
+        if (e && !(e.exp && e.exp < Date.now())) return false
+        kv.set(key, { v: JSON.stringify(value), ...(ttlSec ? { exp: Date.now() + ttlSec * 1000 } : {}) })
+        return true
+      },
     },
     queue: memoryQueue(),
   }
@@ -349,8 +362,10 @@ export function cloudflareKvStore(ns: KVNamespaceLike, opts: { sessionTtlSec?: n
 }
 
 export function scopedKV(store: SessionStore, prefix: string): ScopedKV {
+  const kv = store.kv
   return {
-    get: (key) => store.kv.get(`${prefix}:${key}`),
-    put: (key, value, ttl) => store.kv.put(`${prefix}:${key}`, value, ttl),
+    get: (key) => kv.get(`${prefix}:${key}`),
+    put: (key, value, ttl) => kv.put(`${prefix}:${key}`, value, ttl),
+    ...(kv.putIfAbsent ? { putIfAbsent: (key: string, value: unknown, ttl: number) => kv.putIfAbsent!(`${prefix}:${key}`, value, ttl) } : {}),
   }
 }

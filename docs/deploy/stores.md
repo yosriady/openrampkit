@@ -6,13 +6,15 @@ The store also has two work queues for the [background sweep](../api/server.md#b
 
 Because all state is in the store, any server instance can serve any request.
 
-| Store | Use for | Atomic version check | Atomic queues |
-|---|---|---|---|
-| `memoryStore()` | Local development, tests | Yes, in one process | Yes, in one process |
-| `durableObjectStore(ns)` | **Production on Cloudflare Workers** (built in, no extra service) | Yes (one Durable Object per key) | Yes (one Durable Object per queue) |
-| `redisStore(redis)` | Production on Node, Vercel, Bun, Deno | Yes (Lua script) | Yes (sorted sets and Lua scripts) |
-| `cloudflareKvStore(ns)` | Demos only | Best effort (KV is eventually consistent) | No lost adds (one key per entry); a claim is best effort |
-| Your own | Postgres, DynamoDB | You decide | Your `queue`, or the built-in fallback |
+| Store | Use for | Atomic version check | Atomic queues | `kv.putIfAbsent` |
+|---|---|---|---|---|
+| `memoryStore()` | Local development, tests | Yes, in one process | Yes, in one process | Yes, in one process |
+| `durableObjectStore(ns)` | **Production on Cloudflare Workers** (built in, no extra service) | Yes (one Durable Object per key) | Yes (one Durable Object per queue) | Yes (inside the Durable Object of the key) |
+| `redisStore(redis)` | Production on Node, Vercel, Bun, Deno | Yes (Lua script) | Yes (sorted sets and Lua scripts) | Yes (`SET NX EX` in a Lua script) |
+| `cloudflareKvStore(ns)` | Demos only | Best effort (KV is eventually consistent) | No lost adds (one key per entry); a claim is best effort | No (adapters write, then read back) |
+| Your own | Postgres, DynamoDB | You decide | Your `queue`, or the built-in fallback | Optional (see [A custom store](#a-custom-store)) |
+
+`kv.putIfAbsent(key, value, ttlSec)` writes a value only when the key has no live value, as one atomic step. It returns true when it wrote. Adapters use it through `claimOnce` (see the [adapter API](../api/adapter.md#one-owner-per-record)) to record that a transaction or deposit belongs to one payment only. Without it, two requests at the same time can both take the same transaction.
 
 ::: tip Fewest moving parts
 On Cloudflare, use `durableObjectStore`: the Worker and its Durable Object binding are the whole stack. On Vercel or a Node host, use Redis only when you run more than one instance; one process can use `memoryStore` for a demo, but it loses sessions on restart.
@@ -68,7 +70,7 @@ createOpenRamp({ store: cloudflareKvStore(env.SESSIONS, { sessionTtlSec: 7 * 24 
 
 ## Redis
 
-`redisStore` saves sessions with a server-side Lua script that compares the stored `version` and writes in one step. Other keys use `SET` with `EX`. Each queue is a sorted set (id to due time) and a hash (id to claim token). Only Lua scripts change them, so each queue operation is atomic.
+`redisStore` saves sessions with a server-side Lua script that compares the stored `version` and writes in one step. Other keys use `SET` with `EX`. `kv.putIfAbsent` runs `SET` with `NX` and `EX` in a Lua script, so it works with every `RedisLike` client. Each queue is a sorted set (id to due time) and a hash (id to claim token). Only Lua scripts change them, so each queue operation is atomic.
 
 ```ts
 import { redisStore } from '@openrampkit/server'
@@ -153,6 +155,8 @@ interface SessionStore {
   kv: {
     get<T = unknown>(key: string): Promise<T | undefined>
     put(key: string, value: unknown, ttlSec?: number): Promise<void>
+    /** Optional, but recommended: write only when the key has no live value, atomically. True when it wrote. */
+    putIfAbsent?(key: string, value: unknown, ttlSec: number): Promise<boolean>
   }
   /** Optional, but recommended: see Queues */
   queue?: StoreQueue
@@ -166,6 +170,7 @@ Rules:
 - `kv.put` with `ttlSec` must expire the key after that many seconds. The server uses these TTLs: 2 minutes (rate-limit counters), 24 hours (idempotency replays) and 30 days (provider reference index). Adapters set their own TTLs. To delete an entry, the server writes `null` with a 60-second TTL.
 - `queue`: every operation must be atomic. Queue entries have no TTL: the sweep removes them.
 - `kv.get` must return `undefined` for a missing or expired key.
+- `kv.putIfAbsent`: write only when the key is missing or expired, and return true. When a live value is there, do not write, and return false. The read and the write must be one atomic step. If your store cannot do this, leave it out: adapters then write, then read back. In Postgres: `insert ... on conflict (key) do update ... where openramp_kv.expires_at <= now()`, then check the row count.
 - Store the record as JSON. It holds only JSON values.
 - Keep sessions for at least as long as providers may send webhooks for them (days, not minutes). The built-in stores keep them for 7 days.
 

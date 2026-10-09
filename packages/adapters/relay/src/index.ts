@@ -13,6 +13,7 @@ import {
   POLL,
   awaitPoll,
   buildSettlementTxs,
+  claimOnce,
   createAdapter,
   erc20PaidTo,
   erc20TransferData,
@@ -560,7 +561,7 @@ export function relay(opts: RelayOptions = {}) {
           ambiguous = true
           continue
         }
-        if (!(await claim(ctx, used, owner))) continue
+        if (!(await claimOnce(ctx.shared, used, owner, USED_TTL_SEC))) continue
       }
       if (rec) {
         rec.bound = { key, id: r.id }
@@ -577,17 +578,6 @@ export function relay(opts: RelayOptions = {}) {
   /** Who claims a deposit: the session and the leg ref */
   function ownerOf(ctx: AdapterContext, ref: string): string {
     return `${ctx.session.id}:${ref}`
-  }
-
-  /**
-   * Record `key` as used by `owner` when it is free. Returns false when another owner has it.
-   * ScopedKV has no atomic set-if-absent, so this writes, then reads back to catch most races.
-   */
-  async function claim(ctx: Pick<AdapterContext, 'shared'>, key: string, owner: string): Promise<boolean> {
-    const cur = await ctx.shared.get<string>(key)
-    if (cur) return cur === owner
-    await ctx.shared.put(key, owner, USED_TTL_SEC)
-    return (await ctx.shared.get<string>(key)) === owner
   }
 
   /** Smallest deposit that completes a leg: the expected amount minus the tolerance (bigint math) */
@@ -932,9 +922,7 @@ export function relay(opts: RelayOptions = {}) {
     const key = usedKey(rec.chain!, rec.txHash!)
     // A transfer leg on the same address may have taken a log of this transaction already.
     if (await ctx.shared.get<string>(`${key}:log`)) return fail('This transaction was already used for another payment.')
-    const usedBy = await ctx.shared.get<string>(key)
-    if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
-    if (!usedBy) await ctx.shared.put(key, ref, USED_TTL_SEC)
+    if (!(await claimOnce(ctx.shared, key, ref, USED_TTL_SEC))) return fail('This transaction was already used for another payment.')
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra, ...(rec.output ? { output: rec.output } : {}) }
   }
 
@@ -1167,7 +1155,7 @@ export function relay(opts: RelayOptions = {}) {
             holdAt ??= block
             continue
           }
-          if (!(await claim(ctx, key, owner))) continue
+          if (!(await claimOnce(ctx.shared, key, owner, USED_TTL_SEC))) continue
           await ctx.shared.put(`${usedKey(chain, l.transactionHash)}:log`, owner, USED_TTL_SEC)
         }
         const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6

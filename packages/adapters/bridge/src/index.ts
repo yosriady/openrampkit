@@ -27,7 +27,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, erc20TransferData, fetchJson, httpErrorToOrk, randomHex } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, httpErrorToOrk, randomHex } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   OrkException,
@@ -699,12 +699,8 @@ export function bridge(opts: BridgeOptions) {
   const RANK: Record<string, number> = { payment_processed: 5, refund: 5, refunded: 5, refund_failed: 5, refund_in_flight: 4, payment_submitted: 3, in_review: 2, funds_received: 1, funds_scheduled: 0 }
 
   /** Claim a deposit for this leg. The first leg that sees a deposit keeps it. */
-  async function claim(ref: string, depositId: string, ctx: Pick<AdapterContext, 'shared'>): Promise<boolean> {
-    const k = `dep:${depositId}`
-    const owner = await ctx.shared.get<string>(k)
-    if (owner && owner !== ref) return false
-    if (!owner) await ctx.shared.put(k, ref, REC_TTL_SEC)
-    return true
+  function claim(ref: string, depositId: string, ctx: Pick<AdapterContext, 'shared'>): Promise<boolean> {
+    return claimOnce(ctx.shared, `dep:${depositId}`, ref, REC_TTL_SEC)
   }
 
   function after(ev: VaEvent, rec: LegRec): boolean {

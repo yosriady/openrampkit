@@ -49,6 +49,7 @@ type QueueEntry = { dueAt: number; token?: string }
 type Op =
   | { op: 'get' }
   | { op: 'put'; value: string; ttlSec?: number; expectedVersion?: number }
+  | { op: 'putnx'; value: string; ttlSec?: number }
   | { op: 'qpush'; id: string; dueAt: number }
   | { op: 'qclaim'; now: number; limit: number; leaseMs: number; token: string }
   | { op: 'qack'; id: string; token: string }
@@ -66,8 +67,10 @@ export class OpenRampStore {
     const cur = await this.state.storage.get<Stored>('v')
     const live = cur && (!cur.exp || cur.exp > now) ? cur : undefined
     if (op.op === 'get') return Response.json({ value: live?.value ?? null })
-    if (op.op !== 'put') return Response.json({ ok: false })
-    if (op.expectedVersion !== undefined && live) {
+    if (op.op !== 'put' && op.op !== 'putnx') return Response.json({ ok: false })
+    // putnx writes only when no live value is there. The object handles one request at a time, so this is atomic.
+    if (op.op === 'putnx' && live) return Response.json({ ok: false })
+    if (op.op === 'put' && op.expectedVersion !== undefined && live) {
       const version = (JSON.parse(live.value) as { version?: number }).version
       if (version !== op.expectedVersion) return Response.json({ ok: false })
     }
@@ -143,6 +146,9 @@ export function durableObjectStore(ns: DurableObjectNamespaceLike, opts: { sessi
       },
       async put(key, value, ttlSec) {
         await call(`k:${key}`, { op: 'put', value: JSON.stringify(value), ...(ttlSec ? { ttlSec } : {}) })
+      },
+      async putIfAbsent(key, value, ttlSec) {
+        return (await call<{ ok: boolean }>(`k:${key}`, { op: 'putnx', value: JSON.stringify(value), ...(ttlSec ? { ttlSec } : {}) })).ok
       },
     },
     queue: {

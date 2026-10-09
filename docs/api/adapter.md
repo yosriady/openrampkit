@@ -99,6 +99,8 @@ interface AdapterContext {
 interface ScopedKV {
   get<T = unknown>(key: string): Promise<T | undefined>
   put(key: string, value: unknown, ttlSec?: number): Promise<void>
+  /** Optional: write only when the key has no live value, as one atomic step. True when it wrote. */
+  putIfAbsent?(key: string, value: unknown, ttlSec: number): Promise<boolean>
 }
 
 type WebhookContext = Pick<AdapterContext, 'log' | 'shared' | 'fetch'>
@@ -109,7 +111,26 @@ type RouteContext = Pick<AdapterContext, 'fetch' | 'log' | 'shared'> & {
 }
 ```
 
+`putIfAbsent` is set when the server's store has an atomic operation for it: `memoryStore`, `redisStore` and `durableObjectStore` have it, `cloudflareKvStore` does not. Do not call it directly. Use `claimOnce`.
+
 `ctx.session.locale` is `en` when the app did not set one. `ctx.session.ip` is the end user's IP from the latest browser request, when known.
+
+## One owner per record
+
+```ts
+claimOnce(shared: ScopedKV, key: string, owner: string, ttlSec: number): Promise<boolean>
+```
+
+Records `key` as used by `owner`, for example a transaction hash, a log, or a provider deposit that can complete one payment only. Returns true when `owner` holds the key after the call. It also returns true when `owner` held the key before, so a retry gets the same answer. Returns false when another owner holds the key. The stored value is the `owner` string, with the TTL `ttlSec`.
+
+When `shared.putIfAbsent` is set, the claim is atomic: when two claims run at the same time, exactly one wins. When it is not set, `claimOnce` reads the key, writes it when it is free, then reads it back. This catches most races, but not all.
+
+```ts
+const key = `txused:${chain}:${txHash.toLowerCase()}`
+if (!(await claimOnce(ctx.shared, key, `${ctx.session.id}:${ref}`, 90 * 24 * 3600))) {
+  return fail('This transaction was already used for another payment.')
+}
+```
 
 ## HTTP helpers
 

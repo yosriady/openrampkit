@@ -17,7 +17,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch), so it runs on Cloudflare Workers.
 
-import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, createAdapter, evmRpc, fetchJson, httpErrorToOrk, httpStatus, randomHex, topicAddress } from '@openrampkit/adapter'
+import { ERC20_TRANSFER_TOPIC, POLL, awaitPoll, claimOnce, createAdapter, evmRpc, fetchJson, httpErrorToOrk, httpStatus, randomHex, topicAddress } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   CHAINS,
@@ -545,17 +545,6 @@ export function lifi(opts: LifiOptions = {}) {
     return `txused:${chain}:${key(hash)}`
   }
 
-  /**
-   * Record `k` as used by `owner` when it is free. Returns false when another owner has it.
-   * ScopedKV has no atomic set-if-absent, so this writes, then reads back to catch most races.
-   */
-  async function claim(ctx: Pick<AdapterContext, 'shared'>, k: string, owner: string): Promise<boolean> {
-    const cur = await ctx.shared.get<string>(k)
-    if (cur) return cur === owner
-    await ctx.shared.put(k, owner, USED_TTL_SEC)
-    return (await ctx.shared.get<string>(k)) === owner
-  }
-
   // ---------- status ----------
 
   const fail = (ref: string, message: string, txHash?: string, recovery?: 'contact_support'): LegStep => ({
@@ -611,7 +600,7 @@ export function lifi(opts: LifiOptions = {}) {
         const v = BigInt(l.data)
         if (v < min) continue
         const k = `${srcKey(rec.toChain, outHash)}:${BigInt(l.logIndex ?? '0x0').toString()}`
-        if (!(await claim(ctx, k, owner))) {
+        if (!(await claimOnce(ctx.shared, k, owner, USED_TTL_SEC))) {
           taken = true
           continue
         }
@@ -707,7 +696,7 @@ export function lifi(opts: LifiOptions = {}) {
       if (!ok) throw new OrkException(orkError('BAD_REQUEST', { message: 'A transaction hash is required.' }))
       if (rec.txHash && key(rec.txHash) !== key(txHash)) throw new OrkException(orkError('BAD_REQUEST', { message: 'This payment already has a transaction.' }), 409)
       // One source transaction pays one session only: refuse a hash that another payment holds.
-      if (!(await claim(ctx, srcKey(rec.fromChain, txHash), ownerOf(ctx, input.ref)))) {
+      if (!(await claimOnce(ctx.shared, srcKey(rec.fromChain, txHash), ownerOf(ctx, input.ref), USED_TTL_SEC))) {
         throw new OrkException(orkError('BAD_REQUEST', { message: 'This transaction was already used for another payment.' }), 409)
       }
       await ctx.store.put(`w:${input.ref}`, { ...rec, txHash } satisfies WalletRecord, RECORD_TTL_SEC)

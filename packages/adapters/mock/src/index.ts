@@ -1,7 +1,7 @@
 // Mock provider adapter for local development, demos and tests.
 // It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
 
-import { POLL as POLLS, awaitPoll, buildSettlementTxs, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, settlementCallsFrom, solanaPaidTo, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
 import { CHAINS, OrkException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, minorUnits, mulRatio, nativeDecimals, normalizeToken, orkError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
 import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
@@ -465,9 +465,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     }
     // One transaction completes one payment only.
     const usedKey = `txused:${asset.chain}:${txHash.toLowerCase()}`
-    const usedBy = await ctx.shared.get<string>(usedKey)
-    if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
-    if (!usedBy) await ctx.shared.put(usedKey, ref, ORDER_TTL_SEC)
+    if (!(await claimOnce(ctx.shared, usedKey, ref, ORDER_TTL_SEC))) return fail('This transaction was already used for another payment.')
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash }
   }
 
@@ -495,6 +493,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     const fail = (message: string): LegStep => ({ state: 'FAILED', status: 'failed', transitions: [], error: orkError('PAYMENT_FAILED', { message }), ref, txHash: sig })
     // One signature completes one payment only. Solana signatures are case-sensitive.
     const usedKey = `txused:${asset.chain}:${sig}`
+    // Fail early (before the RPC calls) when another payment has it. The claim at the end is the real check.
     const usedBy = await ctx.shared.get<string>(usedKey)
     if (usedBy && usedBy !== ref) return fail('This transaction was already used for another payment.')
     const st = await rpc<{ value?: SolanaSignatureStatus[] } | null>('getSignatureStatuses', [[sig], { searchTransactionHistory: true }])
@@ -510,7 +509,7 @@ export function mockAdapter(opts: MockOptions = {}) {
     if (solanaPaidTo(tx, o.payTo!, asset.token) < BigInt(toBaseUnits(o.input!.amount, asset.decimals ?? 6))) {
       return fail('The transaction does not pay the destination the quoted amount.')
     }
-    if (!usedBy) await ctx.shared.put(usedKey, ref, ORDER_TTL_SEC)
+    if (!(await claimOnce(ctx.shared, usedKey, ref, ORDER_TTL_SEC))) return fail('This transaction was already used for another payment.')
     return { state: 'COMPLETED', status: 'succeeded', transitions: [], output: o.output, ref, txHash: sig }
   }
 

@@ -24,6 +24,20 @@ redis.call('SET', KEYS[1], ARGV[2], 'EX', tonumber(ARGV[3]))
 return 1
 `
 
+// Write a kv value only when the key is not set (SET NX, with EX when there is a TTL). Through EVAL,
+// so it works with every `RedisLike` client without a new method.
+// KEYS[1] = kv key. ARGV[1] = JSON value, ARGV[2] = ttl seconds ('0' = no TTL). Returns 1 when it wrote.
+export const KV_PUT_IF_ABSENT_SCRIPT = `
+local ok
+if tonumber(ARGV[2]) > 0 then
+  ok = redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2]))
+else
+  ok = redis.call('SET', KEYS[1], ARGV[1], 'NX')
+end
+if ok then return 1 end
+return 0
+`
+
 // Queue scripts. Each queue is a sorted set (id -> due time in ms) and a hash (id -> claim token).
 // Both keys share a hash tag, so they live in one slot on Redis Cluster.
 // KEYS[1] = sorted set, KEYS[2] = token hash.
@@ -118,6 +132,10 @@ export function redisStore(redis: RedisLike, opts: RedisStoreOptions = {}): Sess
       },
       async put(key, value, ttlSec) {
         await redis.set(`${p}k:${key}`, JSON.stringify(value), ttlSec ? { ex: Math.max(1, Math.ceil(ttlSec)) } : undefined)
+      },
+      async putIfAbsent(key, value, ttlSec) {
+        const ex = ttlSec ? Math.max(1, Math.ceil(ttlSec)) : 0
+        return Number(await redis.eval(KV_PUT_IF_ABSENT_SCRIPT, [`${p}k:${key}`], [JSON.stringify(value), String(ex)])) === 1
       },
     },
     queue: redisQueue(redis, p),

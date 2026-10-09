@@ -80,6 +80,21 @@ Every call gets an `AdapterContext`:
 
 Webhook handlers and `catalog()` get a smaller context: `fetch`, `log` and `shared`. `routes()` also gets `baseUrl` and `applyEvent(event)`.
 
+### One transaction, one payment
+
+A transaction hash, a log or a provider deposit must complete one payment only. Record it in `ctx.shared` with `claimOnce` from `@openrampkit/adapter`. Do not write your own get-then-put: two requests at the same time can both see a free key.
+
+```ts
+import { claimOnce } from '@openrampkit/adapter'
+
+const owner = `${ctx.session.id}:${ref}`
+if (!(await claimOnce(ctx.shared, `txused:${chain}:${txHash.toLowerCase()}`, owner, 90 * 24 * 3600))) {
+  // another payment has this transaction
+}
+```
+
+`claimOnce` returns true for the first owner, and again for the same owner on a retry. It returns false for every other owner. On a store with `putIfAbsent` (memory, Redis, Durable Objects), the claim is atomic. On Workers KV, it is best effort. See [`claimOnce`](../api/adapter.md#one-owner-per-record).
+
 ## quote()
 
 ```ts
