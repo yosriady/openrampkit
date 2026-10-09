@@ -16,16 +16,16 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOrk, randomHex, requireDeliverAsset, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, deliverableToAsset, fetchJson, httpErrorToOrk, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, orkError } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
 export type TransakOptions = {
   apiKey: string
   apiSecret: string
-  /** Default 'production' */
-  env?: 'staging' | 'production'
+  /** Default 'production'. 'sandbox' uses the Transak staging hosts. 'staging' is a deprecated alias of 'sandbox'. */
+  env?: AdapterEnv | 'staging'
   /** Your web domain (or mobile package name), registered with Transak. Required by the widget session API. */
   referrerDomain: string
   /** Default 'IFRAME' */
@@ -185,7 +185,8 @@ function decodeClaims(token: string): Record<string, unknown> | undefined {
 type TokenRecord = { token: string; expiresAt: number }
 
 export function transak(opts: TransakOptions) {
-  const urls = URLS[opts.env ?? 'production']
+  const env = resolveEnv('transak', opts.env === 'staging' ? undefined : opts.env, { value: opts.env === 'staging' ? 'sandbox' : undefined, option: "env: 'staging'" }, 'production')
+  const urls = URLS[env === 'sandbox' ? 'staging' : 'production']
   const surfaceKind = opts.surface ?? 'IFRAME'
   /** In-memory copy for webhook verification (webhook handlers get no KV today) */
   let memToken: TokenRecord | undefined
@@ -289,6 +290,7 @@ export function transak(opts: TransakOptions) {
 
   return createAdapter({
     id: 'transak',
+    env,
     name: 'Transak',
     legs,
 

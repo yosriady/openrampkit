@@ -25,7 +25,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#onramper).
 |---|---|---|---|
 | `apiKey` | `string` | required | Sent as `Authorization` (no prefix) |
 | `secretKey` | `string` | required | Ed25519 private key for "Signature V2". Give Onramper the public key at onboarding. |
-| `env` | `'sandbox' \| 'production'` | required | Sandbox is `https://api-stg.onramper.com` |
+| `env` | `'sandbox' \| 'production'` | required | Sandbox is `https://api-stg.onramper.com`. The server checks `env` against `livemode`. |
 | `webhookSecret` | `string` | none | Verifies webhooks, and is sent as `x-onramper-secret` for status reads |
 | `onramps` | `string[]` | all | Only these onramps, e.g. `['moonpay', 'banxa']` |
 | `deliverAssets` | `OnramperDeliverAsset[]` | USDC on Base, Ethereum, Polygon, Arbitrum | Assets to buy, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |

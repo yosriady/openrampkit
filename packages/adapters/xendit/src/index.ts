@@ -3,8 +3,8 @@
 // No crypto: the destination is `{ type: 'merchant', currency }`.
 // Docs: https://docs.xendit.co/apidocs/create-payment-request , payment webhook, get payment request.
 
-import { createAdapter, fetchJson, httpErrorToOrk, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import { createAdapter, fetchJson, httpErrorToOrk, resolveEnv, timingSafeEqual, webhookBodyKey } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, add, bps as applyBps, cmp, minorUnits, orkError, roundTo, sub } from '@openrampkit/core'
 import type { Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StateName, Surface } from '@openrampkit/core'
 
@@ -22,6 +22,18 @@ export type XenditOptions = {
   expiryMinutes?: number
   /** Limit which methods to offer */
   methods?: string[]
+  /**
+   * 'sandbox' (test mode) or 'production' (live mode). Default: from the key prefix (`xnd_development_`:
+   * sandbox; `xnd_production_`: production). A value that does not agree with the key throws.
+   */
+  env?: AdapterEnv
+}
+
+/** The Xendit mode of a secret key, from its prefix */
+export function xenditKeyEnv(key: string): AdapterEnv | undefined {
+  if (key.startsWith('xnd_development_')) return 'sandbox'
+  if (key.startsWith('xnd_production_')) return 'production'
+  return undefined
 }
 
 type Channel = { country: string; currency: string; method: string; code: string; min: string; max: string; kind: 'qr' | 'ewallet' }
@@ -80,6 +92,9 @@ const STATUS: Record<XenditPaymentRequest['status'], { status: LegStatus; state:
 const legId = (c: Channel) => `${c.country.toLowerCase()}-${c.method}`
 
 export function xendit(opts: XenditOptions) {
+  const keyEnv = xenditKeyEnv(opts.secretKey)
+  const env = resolveEnv('xendit', opts.env, undefined, keyEnv)
+  if (opts.env && keyEnv && opts.env !== keyEnv) throw new Error(`xendit: env is '${opts.env}', but secretKey is a ${keyEnv === 'sandbox' ? 'test mode (xnd_development_)' : 'live mode (xnd_production_)'} key`)
   const api = (opts.apiUrl ?? 'https://api.xendit.co').replace(/\/$/, '')
   const channels = XENDIT_CHANNELS.filter((c) => !opts.methods || opts.methods.includes(c.method))
   const byLeg = new Map(channels.map((c) => [legId(c), c]))
@@ -207,6 +222,7 @@ export function xendit(opts: XenditOptions) {
 
   return createAdapter({
     id: 'xendit',
+    ...(env ? { env } : {}),
     name: 'Xendit',
     legs,
 

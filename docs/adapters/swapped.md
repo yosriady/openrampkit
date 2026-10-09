@@ -20,7 +20,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#swapped).
 |---|---|---|---|
 | `publicKey` | `string` | required | Public key (`pk_...`). Used as `apiKey` in the widget URL and the merchant APIs. |
 | `secretKey` | `string` | required | Secret key (`sk_...`). Signs widget URLs and verifies order notifications. |
-| `env` | `'sandbox' \| 'production'` | `'production'` | Sandbox uses `https://sandbox.swapped.com` (BTC and ETH testnets and test cards only) |
+| `env` | `'sandbox' \| 'production'` | `'production'` | Sandbox uses `https://sandbox.swapped.com` (BTC and ETH testnets and test cards only). The server checks `env` against `livemode`. |
 | `widgetUrl` | `string` | `https://widget.swapped.com` or the sandbox URL | Widget base URL |
 | `apiUrl` | `string` | same as `widgetUrl` | Merchant API base URL |
 | `markup` | `number` | none | Your markup in percent, 0 to 5 (0.5 means 0.5%) |

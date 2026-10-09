@@ -15,7 +15,7 @@ import { OpenRampModal, TAG_NAME } from './index.js'
 
 const ADAPTERS = [
   moonpay({ publishableKey: 'pk_test_x', secretKey: 'sk_test_x', env: 'sandbox' }),
-  transak({ apiKey: 'k', apiSecret: 's', referrerDomain: 'app.test', env: 'staging' }),
+  transak({ apiKey: 'k', apiSecret: 's', referrerDomain: 'app.test', env: 'sandbox' }),
   meld({ apiKey: 'k', env: 'sandbox' }),
   onramper({ apiKey: 'pk_test_x', secretKey: 'x', env: 'sandbox' }),
 ]

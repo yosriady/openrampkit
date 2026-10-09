@@ -26,9 +26,10 @@ import {
   legStepFromEvent,
   randomHex,
   requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 
@@ -37,7 +38,8 @@ export type MeldDeliverAsset = { chain: string; token: string; currencyCode: str
 export type MeldOptions = {
   /** Meld API key (sent as `Authorization: BASIC <apiKey>`) */
   apiKey: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Only quote these service providers (e.g. ['TRANSAK', 'BANXA']). Default: every provider on your account. */
   serviceProviders?: string[]
   /** Webhook profile secret (GET /notifications/webhooks). Needed to accept webhooks. */
@@ -200,7 +202,8 @@ function base64url(b64: string): string {
 }
 
 export function meld(opts: MeldOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
+  const env = resolveEnv('meld', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
   const headers = { authorization: `BASIC ${opts.apiKey}`, 'meld-version': opts.version ?? '2026-02-03' }
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
   const toChains: Record<string, string[]> = {}
@@ -264,6 +267,7 @@ export function meld(opts: MeldOptions) {
 
   return createAdapter({
     id: 'meld',
+    env,
     name: 'Meld',
     legs: staticLegs,
 

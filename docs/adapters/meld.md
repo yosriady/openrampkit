@@ -23,7 +23,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#meld).
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | `string` | required | Sent as `Authorization: BASIC <apiKey>` |
-| `env` | `'sandbox' \| 'production'` | required | Sandbox is `https://api-sb.meld.io` |
+| `env` | `'sandbox' \| 'production'` | required | Sandbox is `https://api-sb.meld.io`. The server checks `env` against `livemode`. |
 | `serviceProviders` | `string[]` | all on your account | Only quote these providers, e.g. `['TRANSAK', 'BANXA']` |
 | `webhookSecret` | `string` | none | Webhook profile secret. Without it, webhooks are rejected. |
 | `webhookUrl` | `string` | the request URL | The URL registered in the Meld profile (the signature covers it). Set it when a proxy rewrites URLs. |

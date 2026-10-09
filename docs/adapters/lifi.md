@@ -20,7 +20,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#lifi).
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | `string` | none | Sent as `x-lifi-api-key`. Get it in the LI.FI Partner Portal. Keep it on the server. |
-| `baseUrl` | `string` | `https://li.quest/v1` | The LI.FI API |
+| `baseUrl` | `string` | `https://li.quest/v1` | The LI.FI API. There is no sandbox: `adapter.env` is always `production`. |
 | `integrator` | `string` | none | LI.FI `integrator`: your app name, for attribution and fees |
 | `feeBps` | `number` | none | Your fee in basis points. The adapter sends it as LI.FI `fee` (a fraction: 25 bps is `0.0025`). It needs `integrator`. The factory throws without it. |
 | `slippageBps` | `number` | none (LI.FI picks) | LI.FI `slippage` in basis points (50 is 0.5%) |

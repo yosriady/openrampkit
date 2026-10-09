@@ -22,7 +22,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#transak).
 | `apiKey` | `string` | required | Partner API key |
 | `apiSecret` | `string` | required | Partner API secret |
 | `referrerDomain` | `string` | required | Your web domain (or mobile package name), registered with Transak |
-| `env` | `'staging' \| 'production'` | `'production'` | Staging uses the `-stg` hosts |
+| `env` | `'sandbox' \| 'production'` | `'production'` | `sandbox` uses the Transak staging (`-stg`) hosts. `'staging'` is a deprecated alias of `'sandbox'`. The server checks `env` against `livemode`. |
 | `surface` | `'IFRAME' \| 'REDIRECT'` | `'IFRAME'` | How the widget opens (see the warning below) |
 | `defaultCountry` | `string` | none | Country for quotes when the session has none |
 

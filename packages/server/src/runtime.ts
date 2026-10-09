@@ -46,6 +46,7 @@ export function createRuntime(config: OpenRampConfig): Runtime {
     ;(config.logger ?? consoleLogger).warn('treasury has no `address`: quotes for app-custody withdrawals use a placeholder sender. Set treasury.address.')
   }
   warnNoResultChannel(config.adapters, config.logger ?? consoleLogger)
+  checkAdapterEnvs(config.adapters, config.livemode ?? false, config.logger ?? consoleLogger)
   const base = config.baseUrl.replace(/\/$/, '')
   const adapters = new Map(config.adapters.map((a) => [a.id, a]))
   return {
@@ -72,6 +73,27 @@ export function createRuntime(config: OpenRampConfig): Runtime {
         // A metrics failure must never break a payment.
       }
     },
+  }
+}
+
+/**
+ * Check each adapter's provider environment (`adapter.env`) against `livemode`:
+ * - `livemode: true` with an adapter in `sandbox`: throw. Live sessions must never use test providers
+ *   (a test payment would complete a live session).
+ * - `livemode: false` with an adapter in `production`: warn. Test sessions then call providers that move real money.
+ * An adapter with no `env` follows each session's `livemode` and is not checked.
+ */
+function checkAdapterEnvs(adapters: Adapter[], livemode: boolean, log: Logger): void {
+  if (livemode) {
+    const sandbox = adapters.filter((a) => a.env === 'sandbox').map((a) => a.id)
+    if (sandbox.length) {
+      throw new Error(`OpenRamp: livemode is true, but these adapters use their sandbox environment: ${sandbox.join(', ')}. Set env: 'production' with live keys, or remove them.`)
+    }
+    return
+  }
+  const production = adapters.filter((a) => a.env === 'production').map((a) => a.id)
+  if (production.length) {
+    log.warn(`OpenRamp: livemode is false, but these adapters use their production environment and can move real money: ${production.join(', ')}. Set env: 'sandbox' for tests, or livemode: true in production.`, { adapters: production })
   }
 }
 

@@ -25,7 +25,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#moonpay).
 |---|---|---|---|
 | `publishableKey` | `string` | required | Publishable key |
 | `secretKey` | `string` | required | Secret key. Signs widget URLs. |
-| `env` | `'sandbox' \| 'production'` | required | Sandbox uses `https://buy-sandbox.moonpay.com` |
+| `env` | `'sandbox' \| 'production'` | required | Sandbox uses `https://buy-sandbox.moonpay.com`. The server checks `env` against `livemode`. |
 | `webhookKey` | `string` | none | Webhook API key from the dashboard. Without it, webhooks are rejected. |
 | `surface` | `'redirect' \| 'iframe'` | `'redirect'` | How the widget opens |
 | `methods` | `string[]` | all | Leg ids to offer |

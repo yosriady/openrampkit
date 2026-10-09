@@ -37,6 +37,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#stripe).
 | `surface` | `'sdk' \| 'redirect'` | `'sdk'` | `PROVIDER_SDK` or a `REDIRECT` to the Stripe-hosted onramp |
 | `methods` | `string[]` | all | Leg ids: `card`, `apple_pay`, `google_pay`, `ach` |
 | `apiUrl` | `string` | `https://api.stripe.com` | API base URL |
+| `env` | `'sandbox' \| 'production'` | from the key prefix | `sk_test_` or `rk_test_` is `sandbox`; `sk_live_` or `rk_live_` is `production`. A value that does not agree with the key throws. The server checks `env` against `livemode`. |
 
 ## Legs
 

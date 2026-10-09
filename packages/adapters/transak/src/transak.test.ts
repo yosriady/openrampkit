@@ -78,7 +78,7 @@ describe('transak adapter', () => {
 
   it('catalog: methods and limits per fiat currency from the public list', async () => {
     const { fetch } = routes()
-    const a = transak({ apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test', env: 'staging' })
+    const a = transak({ apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test', env: 'sandbox' })
     const eur = await a.catalog!({ country: 'DE', currency: 'EUR', direction: 'deposit' }, { fetch, log: silentLog, shared: memoryKV() })
     expect(eur.map((l) => [l.id, l.methods![0]])).toEqual([
       ['card', 'card'],
@@ -93,7 +93,7 @@ describe('transak adapter', () => {
 
   it('quote: public pricing API with fees; start: access token + server-side widget URL (IFRAME)', async () => {
     const { fetch, calls } = routes()
-    const a = transak({ apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test', env: 'staging' })
+    const a = transak({ apiKey: 'K', apiSecret: 'S', referrerDomain: 'app.test', env: 'sandbox' })
     const shared = memoryKV()
     const ctx = makeCtx({ fetch, shared, session: { country: 'DE', email: 'a@b.co' } })
     const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx)
@@ -271,7 +271,7 @@ describe('transak errors and edge cases', () => {
       const { fetch, calls } = routes()
       const shared = memoryKV()
       await shared.put('accessToken', { token: 'STORED', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
-      const a = transak({ ...opts, env: 'staging' })
+      const a = transak({ ...opts, env: 'sandbox' })
       const quote = { ...QUOTE, input: { amount: '100', asset: { kind: 'fiat' as const, currency } }, data: {} }
       await a.start({ leg: { ...cardLeg, legId }, quote }, makeCtx({ fetch, shared }))
       const session = calls.find((c) => c.url.includes('/auth/session'))!
@@ -283,7 +283,7 @@ describe('transak errors and edge cases', () => {
     const { fetch, calls } = routes()
     const shared = memoryKV()
     await shared.put('accessToken', { token: 'STORED', expiresAt: Math.floor(Date.now() / 1000) + 86400 })
-    const a = transak({ ...opts, surface: 'REDIRECT', env: 'staging' })
+    const a = transak({ ...opts, surface: 'REDIRECT', env: 'sandbox' })
     expect(a.legs[0]!.surfaces).toEqual(['REDIRECT'])
     const ctx = makeCtx({ fetch, shared, session: { email: undefined, country: undefined, ip: '203.0.113.7' } })
     const step = await a.start({ leg: { ...cardLeg, legId: 'bank_transfer' }, quote: { ...QUOTE, input: { amount: '100', asset: BASE_USDC } } }, ctx)

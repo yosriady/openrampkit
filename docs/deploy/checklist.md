@@ -10,7 +10,7 @@ Go through this list before real money moves.
 - [ ] `admin.token` (if you use the [admin tools](../guide/admin.md)) is another random value of at least 32 characters, kept on the server only.
 - [ ] You got each provider key from the correct environment (sandbox or live). See [Get provider keys](../guide/provider-keys.md).
 - [ ] Provider keys are server-side only. No adapter or server import reaches your client bundle.
-- [ ] You use live provider keys in production and sandbox keys elsewhere. Set `livemode: true` in production, so events carry `livemode` and adapters such as Coinbase leave sandbox mode.
+- [ ] You use live provider keys in production and sandbox keys elsewhere. Set `livemode: true` in production, so events carry `livemode` and adapters such as Coinbase leave sandbox mode. Set each adapter's `env` to `production`: with `livemode: true`, the server does not start when an adapter is in `sandbox`.
 - [ ] You know how to rotate each secret. Rotating `secret` breaks start URLs made in the last 10 minutes and every open pay link; rotating `webhooks.secret` needs your backend updated at the same time.
 
 ## Sessions

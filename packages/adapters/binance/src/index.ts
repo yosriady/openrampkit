@@ -273,6 +273,8 @@ export function binance(opts: BinanceOptions) {
   }
 
   return createAdapter({
+    // Binance has no sandbox: every call is real.
+    env: 'production',
     id: ID,
     name: NAME,
     legs,

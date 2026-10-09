@@ -670,6 +670,8 @@ export function lifi(opts: LifiOptions = {}) {
 
   return createAdapter({
     id: 'lifi',
+    // LI.FI has no sandbox host: quotes and routes are for mainnet.
+    env: 'production',
     name: 'LI.FI',
     legs,
 

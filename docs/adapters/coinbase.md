@@ -32,7 +32,8 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#coinbase).
 | `onrampApiUrl` | `string` | `https://api.developer.coinbase.com` | Onramp API (config, status) |
 | `defaultCountry` | `string` | `'US'` | Country when the session has none |
 | `defaultSubdivision` | `string` | none | US state for quotes when the session has no region (Coinbase needs `subdivision` for US quotes) |
-| `sandbox` | `boolean` | `!session.livemode` | Prefix `partnerUserRef` with `sandbox-` |
+| `env` | `'sandbox' \| 'production'` | none: each session's `livemode` decides | `'sandbox'` prefixes `partnerUserRef` with `sandbox-`. The server checks it against `livemode`. |
+| `sandbox` | `boolean` | none | Deprecated. `true` is `env: 'sandbox'`, `false` is `env: 'production'`. |
 | `accountBalance` | `'FIAT_WALLET' \| 'CRYPTO_WALLET'` | `'FIAT_WALLET'` | The balance that the `coinbase_account` leg selects first. The user can pick another balance on the Coinbase page. |
 | `guestCheckout` | `{ domain, verifiedContact? }` | none | Turns on the `guest_apple_pay` leg. See [Guest Apple Pay](#guest-apple-pay). |
 

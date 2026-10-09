@@ -47,6 +47,8 @@ export function relay(opts: RelayOptions = {}) {
   return createAdapter({
     id: 'relay',
     name: 'Relay',
+    // Relay has no sandbox: the testnets API (api.testnets.relay.link) is the test environment.
+    env: /testnets/.test(opts.baseUrl ?? '') ? 'sandbox' : 'production',
     legs,
 
     async quote(input, ctx) {

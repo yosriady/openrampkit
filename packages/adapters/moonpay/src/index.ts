@@ -27,9 +27,10 @@ import {
   legStepFromEvent,
   randomHex,
   requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
@@ -55,7 +56,8 @@ export type MoonPayOptions = {
   secretKey: string
   /** Webhook API key from the dashboard (Developers page). Needed to accept webhooks. */
   webhookKey?: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Fiat currency when the quote has none. Default 'USD'. */
   baseCurrencyDefault?: string
   /** How the widget opens. Default 'redirect' (a popup). */
@@ -187,7 +189,7 @@ function parseSigHeader(header: string): Record<string, string> {
 }
 
 export function moonpay(opts: MoonPayOptions) {
-  const env = opts.env
+  const env = resolveEnv('moonpay', opts.env, undefined, 'production')
   const apiUrl = (opts.apiUrl ?? 'https://api.moonpay.com').replace(/\/+$/, '')
   const widgetUrl = (opts.widgetUrl ?? (env === 'sandbox' ? 'https://buy-sandbox.moonpay.com' : 'https://buy.moonpay.com')).replace(/\/+$/, '')
   const widgetOrigin = new URL(widgetUrl).origin
@@ -265,6 +267,7 @@ export function moonpay(opts: MoonPayOptions) {
 
   return createAdapter({
     id: 'moonpay',
+    env,
     name: 'MoonPay',
     legs,
 

@@ -30,10 +30,11 @@ import {
   providerSetupError,
   randomHex,
   requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo, sub } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
@@ -52,7 +53,8 @@ export type OnramperOptions = {
   secretKey: string
   /** Webhook secret from your Onramper CSM: verifies webhooks and is sent as `x-onramper-secret` for status reads. */
   webhookSecret?: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Only these onramps (e.g. ['moonpay', 'banxa']) */
   onramps?: string[]
   /** Assets Onramper may deliver, most preferred first. Default: USDC on Base, Ethereum, Polygon, Arbitrum. */
@@ -214,7 +216,8 @@ export function onramperSetupError(e: unknown, log: Pick<Logger, 'error'>, what:
 }
 
 export function onramper(opts: OnramperOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
+  const env = resolveEnv('onramper', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
   const toChains: Record<string, string[]> = {}
   for (const d of deliver) (toChains[d.chain] ??= []).push(d.chain.startsWith('eip155:') ? d.token.toLowerCase() : d.token)
@@ -270,6 +273,7 @@ export function onramper(opts: OnramperOptions) {
 
   return createAdapter({
     id: 'onramper',
+    env,
     name: 'Onramper',
     legs: staticLegs,
 

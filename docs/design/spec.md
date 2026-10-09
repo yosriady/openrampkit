@@ -125,7 +125,7 @@ Adapters work like wagmi connectors. A provider package exports a factory. The a
 ```ts
 import { createAdapter } from '@openrampkit/adapter'
 
-export const transak = (opts: { apiKey: string; apiSecret: string; env: 'sandbox' | 'production' }) =>
+export const transak = (opts: { apiKey: string; apiSecret: string; env?: 'sandbox' | 'production' }) =>
   createAdapter({
     id: 'transak',
     name: 'Transak',

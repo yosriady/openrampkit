@@ -22,7 +22,7 @@ const openramp = createOpenRamp({
 | `baseUrl` | `string` | required | Public URL where the handler is mounted, e.g. `https://app.example.com/api/openramp`. Its path is stripped from incoming requests. It also builds the return URL, the webhook URLs and the start URLs. |
 | `adapters` | `Adapter[]` | required | Provider adapters |
 | `store` | `SessionStore` | `memoryStore()` | Where sessions live. Use a shared store in production. See [Session stores](../deploy/stores.md). |
-| `livemode` | `boolean` | `false` | Marks sessions and events as live. Adapters may switch to sandbox when it is false (Coinbase). |
+| `livemode` | `boolean` | `false` | Marks sessions and events as live. Adapters may switch to sandbox when it is false (Coinbase without `env`). The server checks each `adapter.env` at start: with `true`, a `sandbox` adapter stops the start; with `false`, a `production` adapter gets a warning. See [Sandbox and production](../guide/provider-keys.md#sandbox-and-production). |
 | `policy.maxLegs` | `1 \| 2` | `2` | Longest pathway |
 | `policy.regions` | `RegionPolicy` | allow all | App-wide region policy, applied on top of each leg's policy |
 | `policy.methodPriority` | `Record<country, string[]>` | built-in | Method order per country |

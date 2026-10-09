@@ -19,6 +19,7 @@ interface Adapter {
   id: string
   name: string
   apiVersion: number
+  readonly env?: 'sandbox' | 'production'   // AdapterEnv. Undefined: follows each session's livemode
   legs: LegSpec[]
   catalog?(input: CatalogInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<LegSpec[]>
   quote(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote>
@@ -42,6 +43,7 @@ interface Adapter {
 
 | Member | Called by the server |
 |---|---|
+| `env` | At start: checked against `livemode` (a `sandbox` adapter stops a live server; a `production` adapter in a test server gets a warning) |
 | `legs` | At plan time, when there is no `catalog` or it fails |
 | `catalog` | At plan time, with `{ country?, currency, direction }` |
 | `quote` | `POST /quotes`, once per leg of each quoted pathway |
@@ -283,6 +285,14 @@ import {
 | `webhookCtx` | Default `makeWebhookCtx({ fetch })` |
 
 Per fixture, `quote` is the `QuoteInput` without `leg`; `start` is `true` (default), `false`, or extra `StartInput` fields; `transitions` is a list of `{ name, inputs? }`; `status` defaults to true when the adapter has `status()`; `expect` is `{ start?: StateName; status?: StateName }`.
+
+## Environment helpers
+
+| Export | Description |
+|---|---|
+| `AdapterEnv` | `'sandbox' \| 'production'`: the type of the `env` option and of `adapter.env` |
+| `resolveEnv(adapter, env, legacy, fallback)` | The `env` of an adapter: `env` when set; else the value of a deprecated option (`legacy`), with a one-time warning; else `fallback`. Throws on a value that is not `sandbox` or `production`. |
+| `warnDeprecatedOnce(key, message)` | Writes a deprecation warning once per process. Returns true the first time. |
 
 ## Other exports
 

@@ -21,6 +21,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#xendit).
 | `webhookToken` | `string` | required | Webhook verification token from Dashboard > Settings > Webhooks |
 | `forUserId` | `string` | none | Sub-account id for xenPlatform (sent as `for-user-id`) |
 | `apiUrl` | `string` | `https://api.xendit.co` | API base URL |
+| `env` | `'sandbox' \| 'production'` | from the key prefix | `xnd_development_` is `sandbox`; `xnd_production_` is `production`. A value that does not agree with the key throws. The server checks `env` against `livemode`. |
 | `fees` | `Record<method, { bps?: number; fixed?: string }>` | none | Fee model for quotes (Xendit does not return fees) |
 | `expiryMinutes` | `number` | `15` | Countdown shown on QR codes |
 | `methods` | `string[]` | all | Offer only these methods |

@@ -37,6 +37,23 @@ describe('config validation', () => {
     expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), mockAdapter()] })).toThrow(/twice/)
   })
 
+  it('checks adapter.env against livemode: refuses a sandbox adapter in a live server, warns on the reverse', () => {
+    const warnings: string[] = []
+    const logger = { ...quiet, warn: (m: string) => void warnings.push(m) }
+    const prod = createAdapter({ ...mockAdapter(), id: 'prod', env: 'production' })
+    const follows = createAdapter({ ...mockAdapter(), id: 'follows', env: undefined })
+    // The mock is a sandbox adapter.
+    expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), prod], livemode: true, logger })).toThrow(/livemode is true, but these adapters use their sandbox environment: mock\./)
+    // Live server, production and session-following adapters: fine, no warning
+    createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [prod, follows], livemode: true, logger })
+    expect(warnings.filter((w) => w.includes('environment'))).toEqual([])
+    // Test server with a production adapter: one warning that names it
+    createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), prod, follows], logger })
+    const env = warnings.filter((w) => w.includes('production environment'))
+    expect(env).toHaveLength(1)
+    expect(env[0]).toContain(': prod.')
+  })
+
   it('warns at start for an adapter with legs but no status() and no configured webhook', () => {
     const warnings: string[] = []
     const logger = { ...quiet, warn: (m: string) => void warnings.push(m) }

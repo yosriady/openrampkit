@@ -20,7 +20,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | `string` | none | Sent as `x-api-key`. Needed for `GET /requests/v3` (status of deposit-address legs) and higher rate limits. |
-| `baseUrl` | `string` | `https://api.relay.link` | Use `https://api.testnets.relay.link` for testnets |
+| `baseUrl` | `string` | `https://api.relay.link` | Use `https://api.testnets.relay.link` for testnets. `adapter.env` is `sandbox` for the testnets host, else `production`. |
 | `appFee` | `{ bps: number; recipient: string }` | none | Your fee in basis points. It accrues as a claimable balance at Relay. |
 | `referrer` | `string` | none | Relay `referrer`, for attribution |
 | `refundTo` | `'origin' \| string` | `'origin'` | Where Relay refunds failed deposit-address requests. `'origin'` turns on automatic refund to the original sender. |

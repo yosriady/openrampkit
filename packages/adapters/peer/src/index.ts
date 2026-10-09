@@ -32,9 +32,10 @@ import {
   httpErrorToOrk,
   legStepFromEvent,
   randomHex,
+  resolveEnv,
   timingSafeEqual,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
 import { OrkException, USDC, bps, cmp, fromScaled, isDecimal, orkError, roundTo, sub, toScaled } from '@openrampkit/core'
 import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
 
@@ -47,8 +48,11 @@ export type PeerOptions = {
   apiKey: string
   /** Webhook signing secret (`responseObject.secret` from POST /api/v1/webhooks) */
   webhookSecret: string
-  /** Which key you pass. Sandbox and live use the same hosts with separate keys, webhooks and secrets. */
-  env: 'sandbox' | 'live'
+  /**
+   * Which key you pass: 'sandbox' or 'production'. Sandbox and production use the same hosts with separate keys,
+   * webhooks and secrets. 'live' is a deprecated alias of 'production'.
+   */
+  env: AdapterEnv | 'live'
   /** Rails to offer. Default: all of venmo, cashapp, zelle, chime, paypal, revolut, wise. */
   rails?: string[]
   /** Who pays the Peer fee and the seller's spread. Default: the merchant setting (we assume MERCHANT for estimates). */
@@ -158,6 +162,7 @@ export function peer(opts: PeerOptions) {
   if ((opts as { enabled?: unknown } | undefined)?.enabled !== true) throw new Error(PEER_OPT_IN_ERROR)
   if (!opts.apiKey) throw new Error('peer: apiKey is required')
   if (!opts.webhookSecret) throw new Error('peer: webhookSecret is required (Peer reports settlement only by webhook)')
+  const env = resolveEnv('peer', opts.env === 'live' ? undefined : opts.env, { value: opts.env === 'live' ? 'production' : undefined, option: "env: 'live'" }, undefined)
   const api = (opts.apiUrl ?? 'https://api.pay.peer.xyz').replace(/\/+$/, '')
   const checkoutBase = (opts.checkoutUrl ?? 'https://pay.peer.xyz').replace(/\/+$/, '')
   const checkoutOrigin = new URL(checkoutBase).origin
@@ -260,6 +265,7 @@ export function peer(opts: PeerOptions) {
 
   return createAdapter({
     id: 'peer',
+    env,
     name: 'Peer',
     legs,
 
@@ -376,7 +382,7 @@ export function peer(opts: PeerOptions) {
             ...(opts.feePayer ? { feePayer: opts.feePayer } : {}),
             ...(opts.feePayer === 'SPLIT' && opts.buyerFeeShareBps !== undefined ? { buyerFeeShareBps: opts.buyerFeeShareBps } : {}),
             idempotencyKey: idem,
-            notes: { orkSessionId: ctx.session.id, orkUserId: ctx.session.userId, env: opts.env },
+            notes: { orkSessionId: ctx.session.id, orkUserId: ctx.session.userId, env },
           }, { 'idempotency-key': idem })
         } catch (e) {
           throw toOrk(e, 'start the order', ctx.log)

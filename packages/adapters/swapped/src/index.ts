@@ -26,10 +26,11 @@ import {
   legStepFromEvent,
   randomHex,
   requireDeliverAsset,
+  resolveEnv,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, evmChainId, orkError, roundTo, toBaseUnits } from '@openrampkit/core'
 import type { Amount, Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, Surface, Transition, TxRequest } from '@openrampkit/core'
 
@@ -50,7 +51,7 @@ export type SwappedOptions = {
   /** Secret key (sk_...). Signs widget URLs and verifies order notifications. */
   secretKey: string
   /** Default 'production'. Sandbox uses https://sandbox.swapped.com (BTC/ETH testnets and test cards only). */
-  env?: 'sandbox' | 'production'
+  env?: AdapterEnv
   /** Widget base URL. Default https://widget.swapped.com (production) or https://sandbox.swapped.com (sandbox). */
   widgetUrl?: string
   /** Merchant API base URL. Default: same as `widgetUrl`. */
@@ -184,7 +185,7 @@ export function swappedMethodId(group: string): string {
 const dec = decimalFrom
 
 export function swapped(opts: SwappedOptions) {
-  const env = opts.env ?? 'production'
+  const env = resolveEnv('swapped', opts.env, undefined, 'production')
   const widgetUrl = (opts.widgetUrl ?? (env === 'sandbox' ? 'https://sandbox.swapped.com' : 'https://widget.swapped.com')).replace(/\/+$/, '')
   const apiUrl = (opts.apiUrl ?? widgetUrl).replace(/\/+$/, '')
   const widgetOrigin = new URL(widgetUrl).origin
@@ -425,6 +426,7 @@ export function swapped(opts: SwappedOptions) {
 
   return createAdapter({
     id: 'swapped',
+    env,
     name: 'Swapped',
     legs: staticLegs,
 

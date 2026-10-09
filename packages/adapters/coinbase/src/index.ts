@@ -18,8 +18,8 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, requireDeliverAsset, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, createAdapter, deliverableToAsset, fetchJson, hmacSha256, httpErrorToOrk, legStepFromEvent, randomHex, requireDeliverAsset, resolveEnv, timingSafeEqual } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
 import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
 import type { Asset, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec } from '@openrampkit/core'
 import { cdpJwt, importCdpKey } from './jwt.js'
@@ -47,7 +47,12 @@ export type CoinbaseOptions = {
    * Used only when the session has no region (ISO 3166-2, from `CreateSessionInput.region` or geo headers).
    */
   defaultSubdivision?: string
-  /** Use sandbox transactions (partnerUserRef prefixed with "sandbox-"). Default: !session.livemode */
+  /**
+   * 'sandbox': sandbox transactions (partnerUserRef prefixed with "sandbox-"). 'production': real ones.
+   * Default: each session's `livemode` decides.
+   */
+  env?: AdapterEnv
+  /** @deprecated Use `env`. `true` is `env: 'sandbox'`, `false` is `env: 'production'`. */
   sandbox?: boolean
   /**
    * Coinbase `paymentMethod` of the `coinbase_account` leg: the user's fiat balance (`FIAT_WALLET`, default)
@@ -216,6 +221,7 @@ export function coinbase(opts: CoinbaseOptions) {
   const cdpApi = new URL(opts.cdpApiUrl ?? 'https://api.cdp.coinbase.com')
   const onrampApi = new URL(opts.onrampApiUrl ?? 'https://api.developer.coinbase.com')
   let keyPromise: Promise<CdpKey> | undefined
+  const env = resolveEnv('coinbase', opts.env, { value: opts.sandbox === undefined ? undefined : opts.sandbox ? 'sandbox' : 'production', option: 'sandbox' }, undefined)
   const key = () => (keyPromise ??= importCdpKey(opts.apiKeySecret))
 
   async function cdp<T>(ctx: Pick<AdapterContext, 'fetch'>, base: URL, method: 'GET' | 'POST', path: string, query = '', body?: unknown): Promise<T> {
@@ -302,7 +308,7 @@ export function coinbase(opts: CoinbaseOptions) {
   }
 
   function partnerUserRef(ctx: AdapterContext): string {
-    const sandbox = opts.sandbox ?? !ctx.session.livemode
+    const sandbox = env ? env === 'sandbox' : !ctx.session.livemode
     // Must be under 50 characters
     return `${sandbox ? 'sandbox-' : ''}ork-${randomHex(10)}`
   }
@@ -505,6 +511,7 @@ export function coinbase(opts: CoinbaseOptions) {
 
   return createAdapter({
     id: 'coinbase',
+    ...(env ? { env } : {}),
     name: 'Coinbase',
     legs,
 

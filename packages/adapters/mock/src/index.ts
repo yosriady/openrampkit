@@ -514,6 +514,8 @@ export function mockAdapter(opts: MockOptions = {}) {
   }
 
   return createAdapter({
+    // Test data only: the server refuses to start a live server with it.
+    env: 'sandbox',
     id,
     name,
     legs,

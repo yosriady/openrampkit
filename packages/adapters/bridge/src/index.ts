@@ -27,8 +27,8 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOrk, importRsaPublicKey, randomHex, rsaVerify } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, findDeliverAsset, httpErrorToOrk, importRsaPublicKey, randomHex, resolveEnv, rsaVerify } from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   OrkException,
   USDC,
@@ -61,7 +61,7 @@ export type BridgeOptions = {
   /** The webhook endpoint's public key (PEM), from POST /v0/webhooks or the dashboard */
   webhookPublicKey: string
   /** Default 'production' (https://api.bridge.xyz). 'sandbox' uses https://api.sandbox.bridge.xyz. */
-  env?: 'sandbox' | 'production'
+  env?: AdapterEnv
   /** API base URL without `/v0`. Overrides `env`. */
   apiUrl?: string
   /** Your fee in percent of each deposit and payout, as a decimal string ('0.5' = 0.5%). Sent as `developer_fee_percent`. */
@@ -292,7 +292,8 @@ export async function verifyBridgeSignature(key: CryptoKey, header: string, rawB
 // ---------- the adapter ----------
 
 export function bridge(opts: BridgeOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api.sandbox.bridge.xyz' : 'https://api.bridge.xyz')).replace(/\/+$/, '')
+  const env = resolveEnv('bridge', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api.sandbox.bridge.xyz' : 'https://api.bridge.xyz')).replace(/\/+$/, '')
   const pick = <T extends { id: string }>(list: T[]) => list.filter((r) => !opts.legs || opts.legs.includes(r.id))
   const depositRails = pick(BRIDGE_DEPOSIT_RAILS)
   const payoutRails = opts.withdraw === false ? [] : pick(BRIDGE_PAYOUT_RAILS)
@@ -937,6 +938,7 @@ export function bridge(opts: BridgeOptions) {
 
   return createAdapter({
     id: 'bridge',
+    env,
     name: 'Bridge',
     legs,
 

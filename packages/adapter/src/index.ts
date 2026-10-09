@@ -117,10 +117,22 @@ export type LegEvent = {
 
 export type CatalogInput = { country?: string; currency: string; direction: Direction }
 
+/**
+ * The provider environment that an adapter calls: test keys and no real money (`sandbox`), or real
+ * money (`production`). Every first-party adapter takes it as the `env` option.
+ */
+export type AdapterEnv = 'sandbox' | 'production'
+
 export interface Adapter {
   id: string
   name: string
   apiVersion: number
+  /**
+   * The provider environment this adapter calls, from its options (or its keys). Undefined when the
+   * adapter follows each session's `livemode`. The server refuses to start with `livemode: true` and an
+   * adapter in `sandbox`, and warns for an adapter in `production` when `livemode` is false.
+   */
+  readonly env?: AdapterEnv
   /** Static leg declarations */
   legs: LegSpec[]
   /** Optional live catalog: returns legs refined for this user (methods, limits, assets) */
@@ -192,6 +204,39 @@ export function createAdapter(def: AdapterDefinition): Adapter {
 }
 
 // ---------- helpers for adapter authors ----------
+
+const deprecationsShown = new Set<string>()
+
+/**
+ * Write a deprecation warning once per process (adapters have no logger when they are built).
+ * Returns true the first time for `key`.
+ */
+export function warnDeprecatedOnce(key: string, message: string): boolean {
+  if (deprecationsShown.has(key)) return false
+  deprecationsShown.add(key)
+  console.warn(`[openrampkit] Deprecated: ${message}`)
+  return true
+}
+
+/**
+ * The `env` of an adapter from its options. `legacy` is the value of an older option (for example
+ * peer's `env: 'live'` or coinbase's `sandbox: true`), already mapped to an `AdapterEnv`; it is used only
+ * when `env` is not set, with a one-time warning. Returns `fallback` when neither is set.
+ */
+export function resolveEnv<F extends AdapterEnv | undefined>(
+  adapter: string,
+  env: AdapterEnv | undefined,
+  legacy: { value: AdapterEnv | undefined; option: string } | undefined,
+  fallback: F,
+): AdapterEnv | F {
+  if (env !== undefined && env !== 'sandbox' && env !== 'production') throw new Error(`${adapter}: env must be 'sandbox' or 'production', not ${JSON.stringify(env)}`)
+  if (env) return env
+  if (legacy?.value) {
+    warnDeprecatedOnce(`${adapter}:${legacy.option}`, `${adapter}: the option ${legacy.option} is deprecated. Use env: '${legacy.value}'.`)
+    return legacy.value
+  }
+  return fallback
+}
 
 export async function hmacSha256(secret: string, message: string, encoding: 'hex' | 'base64' = 'hex'): Promise<string> {
   const enc = new TextEncoder()

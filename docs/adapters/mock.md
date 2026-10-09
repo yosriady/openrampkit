@@ -3,7 +3,7 @@
 `@openrampkit/adapter-mock` is a test provider for local development, demos and tests. It moves no money. It exercises every common surface: a hosted redirect checkout, QR codes, a deposit address and a wallet transaction.
 
 ::: warning Test mode only
-Anyone who knows an order ref can mark a mock payment as paid on the mock checkout page. So the mock refuses live sessions: with `livemode: true`, `quote()` and `start()` fail with `PROVIDER_UNAVAILABLE`. Do not configure it in production.
+Anyone who knows an order ref can mark a mock payment as paid on the mock checkout page. So the mock is a sandbox adapter (`env: 'sandbox'`): a server with `livemode: true` does not start with it. It also refuses live sessions: with `livemode: true`, `quote()` and `start()` fail with `PROVIDER_UNAVAILABLE`. Do not configure it in production.
 :::
 
 ```ts

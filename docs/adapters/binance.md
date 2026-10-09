@@ -64,7 +64,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#binance).
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `apiUrl` | `string` | required | API base URL. Binance gives it to partners. It is not public. |
+| `apiUrl` | `string` | required | API base URL. Binance gives it to partners. It is not public. There is no sandbox: `adapter.env` is always `production`. |
 | `clientId` | `string` | required | `X-Tesla-ClientId` |
 | `accessToken` | `string` | required | `X-Tesla-SignAccessToken` |
 | `privateKey` | `string` | required | Your RSA private key: PKCS#8 PEM (`BEGIN PRIVATE KEY`) or base64 DER. Escaped newlines (`\n`) are accepted. |
