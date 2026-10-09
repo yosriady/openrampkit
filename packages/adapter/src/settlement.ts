@@ -7,6 +7,7 @@ import type { ContractCall, EvmTxRequest } from '@openrampkit/core'
 import { evmRpc } from './evm.js'
 import type { Logger } from './index.js'
 import { hexToBytes, keccak256 } from './keccak.js'
+import { bytesToHex } from './util.js'
 
 export { OPEN_RAMP_SETTLEMENT_ABI } from './settlement-abi.js'
 export { keccak256 } from './keccak.js'
@@ -118,7 +119,7 @@ export function isEvmAddress(a: unknown): a is string {
 export function sessionIdToBytes32(sessionId: string): string {
   const b = new TextEncoder().encode(sessionId)
   if (!b.length || b.length > 32) throw new OrkException(orkError('BAD_REQUEST', { message: 'A settlement session id must be 1 to 32 bytes.' }), 400)
-  return `0x${[...b].map((x) => x.toString(16).padStart(2, '0')).join('').padEnd(64, '0')}`
+  return `0x${bytesToHex(b).padEnd(64, '0')}`
 }
 
 export function bytes32ToSessionId(word: string): string {

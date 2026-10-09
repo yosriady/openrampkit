@@ -2,6 +2,8 @@
 // Ed25519 over a canonical string, sent in x-onramper-signature / -timestamp / -nonce headers.
 // Web-standard only: WebCrypto Ed25519, atob/btoa, TextEncoder.
 
+import { bytesToBase64, bytesToHex } from '@openrampkit/adapter'
+
 const enc = new TextEncoder()
 
 function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
@@ -9,16 +11,6 @@ function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(bin.length)
   for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
   return out
-}
-
-function bytesToB64(bytes: Uint8Array): string {
-  let bin = ''
-  for (const b of bytes) bin += String.fromCharCode(b)
-  return btoa(bin)
-}
-
-function hex(bytes: ArrayBuffer): string {
-  return [...new Uint8Array(bytes)].map((b) => b.toString(16).padStart(2, '0')).join('')
 }
 
 /** PKCS#8 prefix for an Ed25519 private key (RFC 8410): wraps a 32-byte seed */
@@ -45,11 +37,11 @@ export async function importEd25519Key(key: string): Promise<CryptoKey> {
 /** base64 Ed25519 signature of `message` */
 export async function ed25519Sign(key: CryptoKey, message: string | Uint8Array): Promise<string> {
   const data = typeof message === 'string' ? enc.encode(message) : new Uint8Array(message)
-  return bytesToB64(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, key, data)))
+  return bytesToBase64(new Uint8Array(await crypto.subtle.sign({ name: 'Ed25519' }, key, data)))
 }
 
 export async function sha256Hex(s: string): Promise<string> {
-  return hex(await crypto.subtle.digest('SHA-256', enc.encode(s)))
+  return bytesToHex(await crypto.subtle.digest('SHA-256', enc.encode(s)))
 }
 
 /**

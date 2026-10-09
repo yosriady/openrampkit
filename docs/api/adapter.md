@@ -152,8 +152,30 @@ Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 | `legStepFromEvent(event, ref, poll)` | No event, `pending` or `awaiting_user`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`: those states. `processing`: `PROCESSING`. |
 | `decimalFrom(n, digits = 8)` | Provider number to an exact decimal string; missing or non-finite gives `'0'` |
 | `randomHex(bytes = 8)` | Random hex string |
+| `bytesToHex(bytes)` | Lowercase hex of a `Uint8Array` or `ArrayBuffer`, no `0x` |
+| `base64ToBytes(b64)`, `bytesToBase64(bytes)` | Standard base64 (not base64url). `base64ToBytes` ignores whitespace and throws on other characters. |
 | `hmacSha256(secret, message, 'hex' \| 'base64')` | WebCrypto HMAC |
 | `timingSafeEqual(a, b)` | Constant-time string compare (the same function as in `@openrampkit/core`) |
+
+## RSA signatures
+
+For providers that sign webhooks with RSA (RSASSA-PKCS1-v1_5 with SHA-256, also known as SHA256withRSA), for example Binance and Bridge.
+
+| Export | Description |
+|---|---|
+| `rsaVerify(publicKey, data, signatureB64)` | Checks a base64 signature of `data` (a string is UTF-8 encoded; a `Uint8Array` is used as given). WebCrypto hashes `data` with SHA-256 first. `publicKey` is an SPKI key as PEM or base64, or a `CryptoKey`. Returns false for a wrong or malformed signature. Throws when the key string is not a valid public key. |
+| `importRsaPublicKey(key)` | Imports an SPKI public key (PEM or base64) once, for many `rsaVerify` calls |
+| `rsaKeyDer(key, 'public' \| 'private')` | The DER bytes of a PEM or base64 key. Accepts `\n` escapes from environment variables. Throws for a PKCS#1 PEM (`RSA PUBLIC KEY`, `RSA PRIVATE KEY`): convert it with `openssl rsa -pubout` or `openssl pkcs8 -topk8`. |
+
+```ts
+import { importRsaPublicKey, rsaVerify } from '@openrampkit/adapter'
+
+let key: Promise<CryptoKey> | undefined
+async function verify(rawBody: string, signature: string) {
+  key ??= importRsaPublicKey(opts.webhookPublicKey)
+  return rsaVerify(await key, rawBody, signature)
+}
+```
 
 ## EVM helpers
 

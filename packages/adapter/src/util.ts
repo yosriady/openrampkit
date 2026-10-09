@@ -21,11 +21,31 @@ export function awaitPoll(poll: PollSpec, name = 'poll'): Transition {
   return { name, kind: 'AWAIT', poll }
 }
 
+/** Lowercase hex of `bytes`, two digits per byte, no `0x` */
+export function bytesToHex(bytes: Uint8Array | ArrayBuffer): string {
+  return [...new Uint8Array(bytes)].map((x) => x.toString(16).padStart(2, '0')).join('')
+}
+
+/** Standard base64 to bytes. Whitespace is ignored. Throws on characters that are not base64. */
+export function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
+  const bin = atob(b64.replace(/\s+/g, ''))
+  const out = new Uint8Array(bin.length)
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
+  return out
+}
+
+/** Bytes to standard base64 (with padding) */
+export function bytesToBase64(bytes: Uint8Array): string {
+  let bin = ''
+  for (const b of bytes) bin += String.fromCharCode(b)
+  return btoa(bin)
+}
+
 /** Hex string of `bytes` random bytes (WebCrypto) */
 export function randomHex(bytes = 8): string {
   const b = new Uint8Array(bytes)
   crypto.getRandomValues(b)
-  return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
+  return bytesToHex(b)
 }
 
 /**

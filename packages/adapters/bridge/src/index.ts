@@ -27,7 +27,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, httpErrorToOrk, randomHex } from '@openrampkit/adapter'
+import { POLL as POLLS, awaitPoll, claimOnce, createAdapter, erc20TransferData, fetchJson, httpErrorToOrk, importRsaPublicKey, randomHex, rsaVerify } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
   OrkException,
@@ -267,17 +267,9 @@ export function parseBridgeSignature(header: string): { t?: string; v0: string[]
   return out
 }
 
-function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64)
-  const out = new Uint8Array(new ArrayBuffer(bin.length))
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
-}
-
-/** Import an SPKI public key in PEM form ("-----BEGIN PUBLIC KEY-----"). Accepts `\n` escapes from env files. */
+/** Import an SPKI public key in PEM form ("-----BEGIN PUBLIC KEY-----") or base64. Accepts `\n` escapes from env files. */
 export async function importBridgePublicKey(pem: string): Promise<CryptoKey> {
-  const body = pem.replace(/\\n/g, '\n').replace(/-----(BEGIN|END) PUBLIC KEY-----/g, '').replace(/\s+/g, '')
-  return crypto.subtle.importKey('spki', b64ToBytes(body), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify'])
+  return importRsaPublicKey(pem)
 }
 
 /**
@@ -289,16 +281,8 @@ export async function verifyBridgeSignature(key: CryptoKey, header: string, rawB
   const ts = Number(t)
   if (!t || !v0.length || !Number.isFinite(ts)) return false
   if (Math.abs(now - ts) > WEBHOOK_TOLERANCE_MS) return false
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${t}.${rawBody}`))
-  for (const sig of v0) {
-    let bytes: Uint8Array<ArrayBuffer>
-    try {
-      bytes = b64ToBytes(sig)
-    } catch {
-      continue
-    }
-    if (await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, key, bytes, digest)) return true
-  }
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${t}.${rawBody}`)))
+  for (const sig of v0) if (await rsaVerify(key, digest, sig)) return true
   return false
 }
 

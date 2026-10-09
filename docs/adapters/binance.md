@@ -76,7 +76,7 @@ The Binance docs show 1024-bit keys. The adapter accepts 1024-bit and 2048-bit k
 
 `BinanceDeliverAsset` is `{ chain, token, cryptoCurrency, network, symbol?, decimals? }`. `cryptoCurrency` is the Binance coin (`USDC`). `network` is the Binance network code (`BASE`, `ARBITRUM`, `ETH`, `OPTIMISM`, `BSC`, `SOL`).
 
-The helpers `importRsaPrivateKey`, `importRsaPublicKey`, `rsaSign` and `rsaVerify` are exported.
+The helpers `importRsaPrivateKey`, `importRsaPublicKey`, `rsaSign` and `rsaVerify` are exported. `importRsaPublicKey` and `rsaVerify` are the shared ones from [`@openrampkit/adapter`](../api/adapter.md#rsa-signatures).
 
 ## Legs
 

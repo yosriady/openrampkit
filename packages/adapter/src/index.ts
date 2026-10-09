@@ -14,6 +14,7 @@ import type {
   Surface,
   Transition,
 } from '@openrampkit/core'
+import { bytesToBase64, bytesToHex } from './util.js'
 
 export const ADAPTER_API_VERSION = 1
 
@@ -166,10 +167,8 @@ export async function hmacSha256(secret: string, message: string, encoding: 'hex
   const enc = new TextEncoder()
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(message)))
-  if (encoding === 'hex') return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('')
-  let bin = ''
-  for (const b of sig) bin += String.fromCharCode(b)
-  return btoa(bin)
+  if (encoding === 'hex') return bytesToHex(sig)
+  return bytesToBase64(sig)
 }
 
 /** Constant-time string compare. The one implementation lives in `@openrampkit/core`. */
@@ -177,6 +176,7 @@ export { timingSafeEqual } from '@openrampkit/core'
 
 export * from './http.js'
 export * from './claim.js'
+export * from './rsa.js'
 export * from './util.js'
 export * from './evm.js'
 export * from './solana.js'
