@@ -398,6 +398,84 @@ describe('provider events that carry a surface', () => {
     expect(t.hooks.filter((h) => h.type === 'withdrawal.reversed')).toHaveLength(1)
   })
 
+  it('the treasury sends at most once per session when the provider fails after the send, then sends the webhook again', async () => {
+    const sent: string[] = []
+    const treasury = { send: vi.fn(async (i: TreasurySendInput) => (sent.push(i.idempotencyKey), { hash: TX })) }
+    // The provider API fails once when the server reports the hash (after the treasury sent).
+    const base = eventOfframp()
+    let fail = true
+    const flaky = {
+      ...base,
+      async transition(...args: Parameters<NonNullable<typeof base.transition>>) {
+        if (fail) {
+          fail = false
+          throw new Error('provider API 500')
+        }
+        return base.transition!(...args)
+      },
+    }
+    const t = make({ treasury }, [flaky])
+    const s = await t.create({ source: SRC_APP })
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10', false)
+    const post = () => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(PENDING) }))
+    expect((await post()).status).toBe(500)
+    expect(sent).toHaveLength(1)
+    // The provider sends the webhook again. The funds left: the user never sees a WALLET_TX to sign.
+    expect((await post()).status).toBe(200)
+    const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
+    expect(now.body.step.state).toBe('PROCESSING')
+    expect(now.body.step.surface).toBeUndefined()
+    // No new payment can start, so the treasury cannot send a second time.
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'bank_transfer', amount: '10' })
+    if (q.status === 200) await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })
+    await post()
+    expect(sent).toHaveLength(1)
+  })
+
+  it('a failure after the treasury sent, inside select, leaves no state that starts a second payment', async () => {
+    const sent: string[] = []
+    let refuse = true
+    const treasury = {
+      send: vi.fn(async (i: TreasurySendInput) => {
+        // The first withdrawal is refused (an empty hot wallet): the session is FAILED.
+        if (refuse) {
+          refuse = false
+          throw new Error('hot wallet empty')
+        }
+        sent.push(i.idempotencyKey)
+        return { hash: TX }
+      }),
+    }
+    const base = mockAdapter({ settleMs: 0, crypto: true, offramp: true })
+    let failReport = false
+    const flaky = {
+      ...base,
+      async transition(...args: Parameters<NonNullable<typeof base.transition>>) {
+        if (failReport) {
+          failReport = false
+          throw new Error('provider API 500')
+        }
+        return base.transition!(...args)
+      },
+    }
+    const t = make({ treasury }, [flaky])
+    const s = await t.create({ source: SRC_APP })
+    const first = await run(t, s, TO_ARB, 'wallet', '30', false)
+    expect(first.session.step.state).toBe('FAILED')
+    // The second try: the treasury sends, then the provider fails when the server reports the hash.
+    failReport = true
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '30' })
+    expect((await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })).status).toBe(500)
+    expect(sent).toHaveLength(1)
+    // The saved session shows the payment in progress, not the old FAILED state.
+    expect((await t.ramp.sessions.retrieve(s.id))!.step.state).toBe('PROCESSING')
+    const again = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '30' })
+    if (again.status === 200) expect((await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: again.body.quotes[0]!.id })).status).toBe(409)
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    expect(sent).toHaveLength(1)
+  })
+
   it('without a transition to report the hash, the treasury step waits in PROCESSING', async () => {
     const treasury = { send: vi.fn(async () => ({ hash: TX })) }
     const t = make({ treasury }, [eventOfframp()])

@@ -156,7 +156,8 @@ function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
 /**
  * Withdraw with `custody: 'app'`: when the first leg asks for a WALLET_TX, the app's treasury signs
  * it instead of the user, and the leg reports the hash at once. Returns the leg's next step, or
- * undefined when this step is not for the treasury (or it already sent this step).
+ * undefined when this step is not for the treasury. A step that the treasury already sent is never
+ * sent again: it becomes a `processing` step that waits for the provider.
  */
 async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
   if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0 || rec.reversal) return undefined
@@ -165,7 +166,12 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   const leg = act.legs[i]!
   const { chain, txs } = ls.surface
   const key = `${rec.id}:${i}:${(await sha256Hex(`${leg.ref ?? ''}|${chain}|${JSON.stringify(txs)}`)).slice(0, 24)}`
-  if (leg.treasurySent?.includes(key)) return undefined
+  // The funds of this step left (or may have left): no WALLET_TX for the user, wait for the provider.
+  const { surface: _sent, ...rest } = ls
+  const sending: LegStep = { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }] }
+  // Already sent, but its result was not saved (a failure or a conflict after the send): do not send
+  // again, and do not show the step to the user.
+  if (leg.treasurySent?.includes(key)) return sending
   const failed = (message: string): LegStep => ({
     state: 'FAILED',
     status: 'failed',
@@ -177,8 +183,14 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   if (!treasury) return failed('Withdrawals are not set up for this app yet.')
   // Mark and save before sending: at most one send per step from our side. When two requests start
   // this step at the same time, the version check fails one of the saves (409), so only one sends.
-  // The key lets the app dedupe retries.
+  // The key lets the app dedupe retries. The saved session shows the leg as `processing`: when the
+  // process stops or a later save fails after the send, the session cannot start a new payment (a
+  // second send) and shows no WALLET_TX. The sweep then polls the provider.
   leg.treasurySent = [...(leg.treasurySent ?? []), key]
+  if (leg.step?.status !== 'processing') addTimeline(rec, 'leg.processing', { index: i, adapterId: leg.adapterId, ...(leg.ref ? { ref: leg.ref } : {}) })
+  leg.step = sending
+  rec.step = composeStep(rt, rec)
+  rec.status = sessionStatusFor(rec.step.state, true)
   await saveSession(rt, rec)
   let hash: string
   try {
@@ -196,8 +208,7 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
     )
   }
   // No transition to report the hash: wait for the provider to see the transfer.
-  const { surface: _sent, ...rest } = ls
-  return { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }], txHash: hash }
+  return { ...sending, txHash: hash }
 }
 
 /** Same asset: the same currency, or the same chain and token. Provider data is not trusted to be well formed. */
