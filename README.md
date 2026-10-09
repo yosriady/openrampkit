@@ -93,7 +93,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 
 **Adapters**
 - 13 provider adapters plus a mock adapter. Write your own with `createAdapter()` and test it with the conformance kit.
-- Two wallet adapters: `wagmiWallet()` for EVM and `solanaWallet()` for Solana (Wallet Standard).
+- Three wallet adapters: `wagmiWallet()` for EVM, `privyWallet()` for Privy embedded wallets and `solanaWallet()` for Solana (Wallet Standard).
 
 **Destinations and chains**
 - Deposit to a token on any chain that an adapter supports: Ethereum, Base, Arbitrum, Optimism, Polygon, BNB Chain, Monad, HyperEVM, Tempo and Solana.
@@ -277,6 +277,7 @@ Read more: [Architecture](https://openrampkit-getformo.vercel.app/concepts/archi
 | [`@openrampkit/svelte`](packages/svelte) | Svelte 5 and 4, SvelteKit: `createOpenRamp`, stores, `use:depositButton` and other actions |
 | [`@openrampkit/solid`](packages/solid) | Solid and SolidStart: `OpenRampProvider`, buttons, `OpenRampEmbedded`, primitives |
 | [`@openrampkit/wagmi`](packages/wagmi) | `wagmiWallet()`: a wallet adapter for wagmi apps (EVM chains, including Tempo) |
+| [`@openrampkit/privy`](packages/privy) | `privyWallet()`: a wallet adapter for Privy embedded wallets (EVM chains) |
 | [`@openrampkit/solana`](packages/solana) | `solanaWallet()`: a wallet adapter for Solana (Wallet Standard, `@solana/kit`) |
 | [`@openrampkit/mcp`](packages/mcp) | MCP server and `openrampkit-mcp` CLI for AI agents: deposit and payout sessions with pay links |
 | `@openrampkit/adapter-*` | Provider adapters. See [Adapters](#adapters). |

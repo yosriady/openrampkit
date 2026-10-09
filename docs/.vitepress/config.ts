@@ -95,6 +95,7 @@ export default withMermaid(
               { text: 'Bridge', link: '/adapters/bridge' },
               { text: 'Mock', link: '/adapters/mock' },
               { text: 'Wallets (wagmi)', link: '/adapters/wagmi' },
+              { text: 'Wallets (Privy)', link: '/adapters/privy' },
               { text: 'Wallets (Solana)', link: '/guide/solana#pay-from-a-solana-wallet' },
               { text: 'Writing an adapter', link: '/adapters/writing-an-adapter' },
             ],

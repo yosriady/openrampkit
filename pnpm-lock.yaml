@@ -373,6 +373,12 @@ importers:
         specifier: workspace:*
         version: link:../server
 
+  packages/privy:
+    dependencies:
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../core
+
   packages/react:
     dependencies:
       '@openrampkit/client':
