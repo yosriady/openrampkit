@@ -54,6 +54,7 @@ export default withMermaid(
               { text: 'Admin and observability', link: '/guide/admin' },
               { text: 'Testing with mocks', link: '/guide/testing' },
               { text: 'Security', link: '/guide/security' },
+              { text: 'Releases and versions', link: '/guide/releases' },
               { text: 'Contributing', link: 'https://github.com/yosriady/openrampkit/blob/main/CONTRIBUTING.md' },
             ],
           },

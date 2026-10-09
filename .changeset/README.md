@@ -1,4 +1,5 @@
 # Changesets
 
 Add a changeset for every user-facing change: `pnpm changeset`.
-Release: `pnpm changeset version` (bumps versions and changelogs), then `pnpm release` (builds and publishes to npm).
+
+Do not release by hand. The Release workflow (`.github/workflows/release.yml`) opens the **Version packages** pull request and publishes to npm when a maintainer merges it. Read `docs/guide/releases.md`.
