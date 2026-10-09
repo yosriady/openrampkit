@@ -155,6 +155,11 @@ export type Fee = {
   label: string
   amount: string
   currency: string
+  /**
+   * The provider takes this fee in the exchange rate, not on top. With amount '0', the provider did not
+   * say how much it is: a UI must not show "No fees" for such a quote.
+   */
+  inRate?: boolean
 }
 
 /** Amount on one side of a leg or pathway */

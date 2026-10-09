@@ -97,7 +97,11 @@ type WithdrawTarget =
 ### Fee and Quote
 
 ```ts
-type Fee = { kind: 'provider' | 'network' | 'app' | 'swap' | 'other'; label: string; amount: string; currency: string }
+type Fee = {
+  kind: 'provider' | 'network' | 'app' | 'swap' | 'other'; label: string; amount: string; currency: string
+  /** The fee is in the exchange rate. With amount '0', the provider did not say how much: do not show "No fees". */
+  inRate?: boolean
+}
 
 type Quote = {
   id: string; pathwayId: string; method: string; provider: string

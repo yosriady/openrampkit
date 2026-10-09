@@ -162,7 +162,9 @@ export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'wit
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
   if (Number(q.input.amount) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
-  sub.push(fees ? m.fees(fees) : m.noFees)
+  // A fee in the rate with no known amount: say nothing rather than "No fees".
+  if (fees) sub.push(m.fees(fees))
+  else if (!q.fees.some((f) => f.inRate)) sub.push(m.noFees)
   return sub.join(' · ')
 }
 

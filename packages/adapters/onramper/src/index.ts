@@ -23,13 +23,15 @@ import {
   fetchJson,
   hmacSha256,
   httpErrorToOrk,
+  httpStatus,
   legStepFromEvent,
+  providerMessage,
   randomHex,
   timingSafeEqual,
   webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
+import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
+import { OrkException, USDC, cmp, orkError, roundTo, sub } from '@openrampkit/core'
 import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
 
@@ -177,6 +179,37 @@ const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '
 
 const dec = decimalFrom
 
+/** Symbols of stablecoins worth one USD: a USD amount and their payout are in comparable units. */
+const USD_STABLES = new Set(['USDC', 'USDT', 'USDG', 'PYUSD'])
+
+/**
+ * A 401 or 403 from Onramper means our setup is wrong (API key, Signature V2 public key, IP allowlist),
+ * not the user's input. A retry cannot fix it. The operator gets an error log that says what to do; the
+ * user gets a neutral message and can choose another method.
+ * Codes from https://docs.onramper.com/docs/error-codes-troubleshooting (read 2026-10-09). The live staging
+ * answer for an API key without a public key was `{"errorId":4011,"message":"No V2 signing key is registered for this API key..."}`.
+ */
+export function onramperSetupError(e: unknown, log: Pick<Logger, 'error'>, what: string): OrkException | undefined {
+  const status = httpStatus(e)
+  if (status !== 401 && status !== 403) return undefined
+  const body = (e as { body?: { errorId?: unknown; code?: unknown; errorCode?: unknown } } | undefined)?.body
+  const detail = providerMessage(e)
+  const text = [body?.code, body?.errorCode, detail].filter((x) => typeof x === 'string').join(' ')
+  let hint: string
+  if (body?.errorId === 4011 || /signing key|public key|PUBLIC_KEY_NOT_CONFIGURED/i.test(text)) {
+    hint =
+      'Onramper has no Signature V2 public key for this API key. Register the Ed25519 public key that matches secretKey with Onramper (in the Onramper dashboard, or through your Onramper account manager or support). Each environment (staging pk_test_, production pk_prod_) needs its own key pair.'
+  } else if (/SIGNATURE|TIMESTAMP|NONCE/i.test(text)) {
+    hint = 'Onramper refused the Signature V2. Make sure secretKey matches the public key registered for this API key and environment, and that the server clock is correct.'
+  } else if (status === 403) {
+    hint = 'Onramper refused the request (403). Make sure the server egress IPs and your domains are on your Onramper allowlist.'
+  } else {
+    hint = 'Onramper refused the API key (401). Make sure apiKey is correct: pk_test_ with env sandbox, pk_prod_ with env production.'
+  }
+  log.error(`onramper: cannot ${what}. ${hint}`, { status, ...(typeof body?.errorId === 'number' ? { errorId: body.errorId } : {}), ...(detail ? { message: detail.slice(0, 200) } : {}) })
+  return new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' }), 502)
+}
+
 export function onramper(opts: OnramperOptions) {
   const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
@@ -295,7 +328,7 @@ export function onramper(opts: OnramperOptions) {
       try {
         res = await get<OrQuote[] | { message?: string }>(ctx, `/quotes/${encodeURIComponent(fiat)}/${encodeURIComponent(target.cryptoId)}?${q}`)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Onramper', { what: 'price this amount', log: ctx.log })
+        throw onramperSetupError(e, ctx.log, 'price this amount') ?? httpErrorToOrk(e, 'Onramper', { what: 'price this amount', log: ctx.log })
       }
       const list = Array.isArray(res) ? res : []
       const ok = list.filter((x) => x.ramp && !x.errors?.length && typeof x.payout === 'number' && x.payout > 0 && (!opts.onramps || opts.onramps.includes(x.ramp)))
@@ -311,6 +344,8 @@ export function onramper(opts: OnramperOptions) {
           rate: dec(x.rate, 8),
           transactionFee: dec(x.transactionFee, 2),
           networkFee: dec(x.networkFee, 2),
+          // Some onramps (for example guardarian) send no fee fields: their fees are in the rate.
+          feesInRate: x.transactionFee === undefined && x.networkFee === undefined,
           ...(x.quoteId ? { quoteId: x.quoteId } : {}),
           ...(x.recommendations?.length ? { recommendations: x.recommendations } : {}),
         }))
@@ -320,10 +355,19 @@ export function onramper(opts: OnramperOptions) {
       const fees: Fee[] = []
       if (best.transactionFee !== '0') fees.push({ kind: 'provider', label: `${best.ramp} fee`, amount: best.transactionFee, currency: cur })
       if (best.networkFee !== '0') fees.push({ kind: 'network', label: 'Network fee', amount: best.networkFee, currency: cur })
+      const inputAmount = roundTo(input.amountIn.amount, 2)
+      if (best.feesInRate) {
+        // No fee fields and no reference rate in the response. For USD to a USD stablecoin, the cost is the
+        // difference between what the user pays and what arrives. Otherwise the amount is not known: a line
+        // with amount '0' and `inRate` keeps the UI from saying "No fees".
+        const comparable = cur === 'USD' && USD_STABLES.has((target.symbol ?? '').toUpperCase())
+        const diff = comparable ? roundTo(sub(inputAmount, best.payout), 2) : '0'
+        if (!comparable || cmp(diff, '0') > 0) fees.push({ kind: 'provider', label: `${best.ramp} fee (included in rate)`, amount: diff, currency: cur, inRate: true })
+      }
       return {
         adapterId: 'onramper',
         legId: input.leg.legId,
-        input: { amount: roundTo(input.amountIn.amount, 2), asset: { kind: 'fiat', currency: cur } },
+        input: { amount: inputAmount, asset: { kind: 'fiat', currency: cur } },
         output: { amount: best.payout, asset: assetOf(target) },
         fees,
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
@@ -365,7 +409,7 @@ export function onramper(opts: OnramperOptions) {
         const headers = await signV2(await key(), { apiKey: opts.apiKey, method: 'POST', path, body, timestamp: new Date().toISOString(), nonce: crypto.randomUUID() })
         res = await fetchJson(ctx.fetch, `${api}${path}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Onramper', { what: 'start the purchase', log: ctx.log })
+        throw onramperSetupError(e, ctx.log, 'start the purchase') ?? httpErrorToOrk(e, 'Onramper', { what: 'start the purchase', log: ctx.log })
       }
       if (!res.redirectUrl) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper did not return a checkout URL.' }), 502)
       if (res.sessionId) await ctx.store.put(`s:${ref}`, { sessionId: res.sessionId }, TX_TTL_SEC)

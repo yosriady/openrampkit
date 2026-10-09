@@ -61,6 +61,9 @@ The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) bui
 
 - Quote: `GET /quotes/{fiat}/{crypto}` returns one item per onramp. The best payout is the leg quote; the list is in `quote.data.providers`. Quotes expire after 5 minutes.
 - Start: `POST /checkout/v2/intent`, signed with Ed25519 (headers `x-onramper-signature`, `-timestamp`, `-nonce`). The checkout is single-use, expires after 10 minutes, and is bound to the end user's IP (`endUserIpHash`). Without `ctx.session.ip`, start fails with `PROVIDER_UNAVAILABLE`.
+- Fees: the best onramp's `transactionFee` and `networkFee`, in the fiat currency. Some onramps (for example guardarian) send no fee fields: their fees are in the rate. The response has no mid or reference rate. Then the adapter adds one fee line `{onramp} fee (included in rate)` with `inRate: true`:
+  - USD to a USD stablecoin (USDC, USDT): the amount is the input minus the payout. Example: USD 100 in, 95.2 USDC out, fee 4.80 USD.
+  - Other pairs: the amount is `0`, because the cost is not known. The web UI then does not show "No fees".
 - Reference: `partnerContext`, `ork_{random}`.
 - Status: `GET /transactions/{transactionId}`. The transaction id is learnt from the first webhook, so until a webhook arrives (or without `webhookSecret`), status reports "still paying".
 
@@ -70,6 +73,19 @@ The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) bui
 | `paid`, `pending` | `processing` |
 | `new` | `awaiting_user` |
 | `failed`, `canceled`, `cancelled` | `failed` |
+
+### Setup errors
+
+`401` and `403` from Onramper mean that the setup is wrong, not the user's input. The quote or start fails with `PROVIDER_UNAVAILABLE`, `retryable: false` and recovery `choose_other`. The user sees "Onramper is not set up for this app yet. Try another method." The adapter writes an error log for the operator that says what to do:
+
+| Onramper answer | Operator log says |
+|---|---|
+| `401` `errorId: 4011` "No V2 signing key is registered for this API key", or `PUBLIC_KEY_NOT_CONFIGURED` | Register the Ed25519 public key that matches `secretKey` with Onramper. Use one key pair for each environment. |
+| `401` `SIGNATURE_*`, `TIMESTAMP_*`, `NONCE_*` | Make sure `secretKey` matches the registered public key, and that the server clock is correct. |
+| `403` (for example `IP_BLOCKED`, `DOMAIN_NOT_WHITELISTED`) | Put the server egress IPs and your domains on the Onramper allowlist. |
+| Other `401` | Make sure `apiKey` is correct (`pk_test_` with `env: 'sandbox'`, `pk_prod_` with `env: 'production'`). |
+
+Source for the codes: [Onramper error codes and troubleshooting](https://docs.onramper.com/docs/error-codes-troubleshooting). A `5xx` stays `PROVIDER_UNAVAILABLE` and retryable.
 
 ## Webhooks
 

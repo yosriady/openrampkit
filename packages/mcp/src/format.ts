@@ -37,7 +37,7 @@ export function quoteView(q: Quote) {
     provider: q.provider,
     pay: amountText(q.input),
     receive: amountText(q.output),
-    fees: q.fees.map((f) => `${f.amount} ${f.currency} ${f.label}`),
+    fees: q.fees.map((f) => (f.inRate && Number(f.amount) === 0 ? `${f.label}: amount not given` : `${f.amount} ${f.currency} ${f.label}`)),
     eta: eta(q.eta),
     ...(q.badges?.length ? { badges: q.badges } : {}),
     ...(q.expiresAt ? { expires_at: q.expiresAt } : {}),

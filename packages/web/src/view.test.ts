@@ -180,6 +180,10 @@ describe('quotes', () => {
   it('quoteSubtitle', () => {
     expect(quoteSubtitle(quote({ id: 'a' }), en)).toBe('You pay $100.00 · Fees $2.50')
     expect(quoteSubtitle(quote({ id: 'a', input: { amount: '0', asset: { kind: 'fiat', currency: 'USD' } }, fees: [] }), en)).toBe('No fees')
+    // Fees in the rate: a known amount shows; an unknown amount never says "No fees"
+    const inRate = (amount: string) => [{ kind: 'provider' as const, label: 'guardarian fee (included in rate)', amount, currency: 'EUR', inRate: true }]
+    expect(quoteSubtitle(quote({ id: 'a', input: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } }, fees: inRate('0') }), en)).toBe('You pay €100.00')
+    expect(quoteSubtitle(quote({ id: 'a', fees: inRate('4.8').map((f) => ({ ...f, currency: 'USD' })) }), en)).toBe('You pay $100.00 · Fees $4.80')
   })
 
   it('nextQuoteId wraps both ways', () => {

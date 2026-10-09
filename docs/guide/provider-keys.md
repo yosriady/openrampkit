@@ -281,6 +281,8 @@ onramper({
 
 - Without `webhookSecret`, the adapter cannot learn the transaction id, and status stays "still paying".
 - The checkout is bound to the user's IP. Without a client IP header, start fails.
+- Register the public key before the first start. Without it, start gets `401` `{"errorId":4011,"message":"No V2 signing key is registered for this API key..."}`. The [Onramper key setup page](https://docs.onramper.com/docs/get-set-up-keys-onboarding) says to send the public key (PEM) to your Onramper account manager or support. Use one key pair for staging and another for production. The adapter logs this as a setup error and does not retry.
+- Onramper also wants the server egress IPs and your domains on its allowlist. A server call from another IP gets `403`.
 - The adapter does not accept a PEM with `\n` escapes. A PEM with real new lines works. For a one-line env var, use the base64 DER form: `openssl pkey -in onramper-private.pem -outform DER | base64`.
 
 ## Coinbase {#coinbase}

@@ -4,7 +4,7 @@ import { checkAdapterShape, checkLegQuote, checkLegStep, webhookBodyKey } from '
 import { createOpenRamp } from '@openrampkit/server'
 import { USDC, isRegionAllowed } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
-import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
+import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 import { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, onramper, onramperMethodId, onramperPaymentType } from './index.js'
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
@@ -241,6 +241,59 @@ describe('onramper adapter', () => {
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(401, { errorId: 4011, message: 'Invalid signature' }), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(200, {}), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' } }))).resolves.toMatchObject({ state: 'PAYMENT' })
+  })
+
+  it('start: 401 "No V2 signing key" is a setup error: not retryable, operator log names the public key, user message is neutral', async () => {
+    const a = onramper(opts)
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { amount: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
+    const run = async (status: number, body: unknown) => {
+      const log = recordingLog()
+      const e = await a
+        .start({ leg: leg('card'), quote, deliverTo: { address: '0xd16e' } }, makeCtx({ log, session: { ip: '1.2.3.4' }, fetch: fakeFetch([{ method: 'POST', match: '/checkout/v2/intent', status, reply: () => body }]).fetch }))
+        .catch((x) => x)
+      return { error: e.error, logs: log.errors }
+    }
+    // Live staging answer (2026-10-09)
+    const noKey = await run(401, { errorId: 4011, message: 'No V2 signing key is registered for this API key. Please contact Onramper support.' })
+    expect(noKey.error).toEqual({ code: 'PROVIDER_UNAVAILABLE', message: 'Onramper is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' })
+    expect(noKey.logs).toHaveLength(1)
+    expect(noKey.logs[0]).toMatch(/Register the Ed25519 public key that matches secretKey/)
+    // Documented code (Error codes & troubleshooting)
+    expect((await run(401, { code: 'PUBLIC_KEY_NOT_CONFIGURED', message: 'Public key not configured' })).logs[0]).toMatch(/Ed25519 public key/)
+    expect((await run(401, { code: 'SIGNATURE_INVALID', message: 'Invalid signature' })).logs[0]).toMatch(/refused the Signature V2/)
+    expect((await run(401, { code: 'PARTNER_NOT_FOUND' })).logs[0]).toMatch(/refused the API key/)
+    const ip = await run(403, { code: 'IP_BLOCKED' })
+    expect(ip.error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: false })
+    expect(ip.logs[0]).toMatch(/allowlist/)
+    // A provider outage stays retryable
+    expect((await run(503, {})).error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true })
+  })
+
+  it('quote: an API key refused (401) is a setup error, not retryable', async () => {
+    const log = recordingLog()
+    const e = await onramper(opts)
+      .quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ log, fetch: fakeFetch([{ match: '/quotes/', status: 401, reply: () => ({ message: 'Unauthorized' }) }]).fetch }))
+      .catch((x) => x)
+    expect(e.error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: false, recovery: 'choose_other' })
+    expect(log.errors[0]).toMatch(/onramper: cannot price this amount/)
+  })
+
+  it('quote: an onramp with no fee fields gets a fee line in the rate, never "no fees"', async () => {
+    // Live staging shape (2026-10-09): guardarian sends no networkFee or transactionFee
+    const guardarian = { rate: 1.0504, payout: 95.2, ramp: 'guardarian', paymentMethod: 'creditcard', quoteId: 'g1', recommendations: [] }
+    const usd = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/usd/usdc_base', reply: () => [guardarian] }]).fetch }))
+    expect(checkLegQuote(usd)).toEqual([])
+    // USD to USDC: comparable units, so the cost is 100 - 95.2
+    expect(usd.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: '4.80', currency: 'USD', inRate: true }])
+    // EUR to USDC: no reference rate in the response, so the amount is not known
+    const eur = await onramper(opts).quote({ leg: leg('card', 'EUR'), amountIn: money('100', 'EUR') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/eur/usdc_base', reply: () => [guardarian] }]).fetch }))
+    expect(eur.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: '0', currency: 'EUR', inRate: true }])
+    // Explicit fee fields (also zero) keep the old lines
+    const zero = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/', reply: () => [{ ...guardarian, transactionFee: 0, networkFee: 0 }] }]).fetch }))
+    expect(zero.fees).toEqual([])
+    // A payout at or above the input in USD: no cost to show
+    const par = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/', reply: () => [{ ...guardarian, payout: 100 }] }]).fetch }))
+    expect(par.fees).toEqual([])
   })
 
   it('webhook: X-Onramper-Webhook-Signature (good, bad, missing, no secret); parse maps statuses and keeps the transaction id', async () => {
