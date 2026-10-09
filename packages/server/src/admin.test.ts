@@ -23,7 +23,7 @@ const DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip15
 const SRC = { chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6, custody: 'user_wallet' as const }
 const HOOKS = { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }
 const STATE: Record<LegStatus, LegStep['state']> = {
-  pending: 'PROCESSING', awaiting_user: 'PAYMENT', processing: 'PROCESSING', succeeded: 'COMPLETED', failed: 'FAILED', refunded: 'REFUNDED', expired: 'EXPIRED',
+  pending: 'PROCESSING', awaiting_user: 'PAYMENT', processing: 'PROCESSING', succeeded: 'COMPLETED', failed: 'FAILED', refunded: 'REFUNDED', expired: 'EXPIRED', reversed: 'REVERSED',
 }
 
 /** A card provider with webhooks. Each start makes a new order ref. */
@@ -386,6 +386,10 @@ describe('admin page', () => {
     expect(html).not.toMatch(/<link[^>]*stylesheet/)
     expect(html).not.toMatch(/https?:\/\/(?!app\.test)/)
     expect(html).toContain('sessionStorage')
+    // Reversed sessions: a filter, a stats card and a detail row
+    expect(html).toContain('<option>reversed</option>')
+    expect(html).toContain('Reversed after success')
+    expect(html).toContain("['Reversal', s.reversal")
     expect(html).not.toMatch(/[\u2013\u2014]/)
     expect(html).not.toContain(TOKEN)
     // A new nonce per request

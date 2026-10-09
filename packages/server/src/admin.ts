@@ -8,7 +8,7 @@
 // `StoreQueue.range` reads them, latest first. The sweep removes days older than `admin.indexDays`.
 
 import { add, isTerminal, OrkException, orkError } from '@openrampkit/core'
-import type { Amount, Direction, Fee, OrkError, StateName } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Direction, Fee, OrkError, StateName } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { json, readJson } from './http.js'
 import { sessionStatusFor } from './legs.js'
@@ -17,7 +17,7 @@ import { replayDeadLetters, saveSession } from './outbox.js'
 import { adminPage } from './admin-page.js'
 import { claimToken, OPEN_QUEUE, OUTBOX_QUEUE, queueOf } from './queue.js'
 import type { Runtime } from './runtime.js'
-import type { ActivePayment, OutboxEvent, PaymentAttempt, QueueItem, Resolution, SessionRecord, TimelineEntry } from './store.js'
+import type { ActivePayment, OutboxEvent, PaymentAttempt, QueueItem, Resolution, Reversal, SessionRecord, TimelineEntry } from './store.js'
 import { addTimeline } from './timeline.js'
 
 const DAY_MS = 24 * 60 * 60_000
@@ -180,6 +180,8 @@ export type AdminLeg = {
   input: Amount
   output: Amount
   outputConfirmed: boolean
+  /** The reported output is short of the quote beyond the tolerance, or not comparable with it */
+  amountMismatch?: Omit<AmountMismatch, 'legIndex'>
   fees: Fee[]
   started: boolean
   lastCheckedAt?: string
@@ -219,6 +221,8 @@ export type AdminSession = AdminSessionSummary & {
   txHashes: string[]
   timeline: Array<Omit<TimelineEntry, 'at'> & { at: string }>
   resolution?: Omit<Resolution, 'at'> & { at: string }
+  /** Set when the provider refunded or reversed a leg after it succeeded */
+  reversal?: Omit<Reversal, 'at'> & { at: string }
 }
 
 function currencyOf(a: Amount): string {
@@ -290,6 +294,7 @@ function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
         input: l.quote.input,
         output: l.step?.output ?? l.quote.output,
         outputConfirmed: !!l.step?.output,
+        ...(l.amountMismatch ? { amountMismatch: l.amountMismatch } : {}),
         fees: l.quote.fees,
         started: l.started,
         ...(l.lastCheckedAt ? { lastCheckedAt: iso(l.lastCheckedAt)! } : {}),
@@ -334,6 +339,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     txHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h)),
     timeline: (rec.timeline ?? []).map((t) => ({ ...t, at: iso(t.at)! })),
     ...(rec.resolution ? { resolution: { ...rec.resolution, at: iso(rec.resolution.at)! } } : {}),
+    ...(rec.reversal ? { reversal: { ...rec.reversal, at: iso(rec.reversal.at)! } } : {}),
   }
 }
 
@@ -341,7 +347,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
 
 export type AdminListOptions = {
   direction?: Direction
-  /** A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`) or a step state (`PAYMENT`, ...) */
+  /** A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
   state?: string
   /** Only sessions created at least this many minutes ago */
   olderThan?: number

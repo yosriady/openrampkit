@@ -42,7 +42,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);verti
 th{font-size:12px;color:var(--muted);font-weight:600}
 tbody tr:last-child td{border-bottom:0}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px}
-.chip.completed{color:var(--ok)}.chip.failed,.chip.refunded{color:var(--bad)}.chip.expired{color:var(--muted)}.chip.stuck{color:var(--warn)}
+.chip.completed{color:var(--ok)}.chip.failed,.chip.refunded,.chip.reversed{color:var(--bad)}.chip.expired{color:var(--muted)}.chip.stuck{color:var(--warn)}
 .muted{color:var(--muted)}
 .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;white-space:normal}
 #status{min-height:20px;margin:8px 0;color:var(--muted)}
@@ -142,6 +142,7 @@ async function loadStats() {
     card('Open or processing', (s.byStatus.open || 0) + (s.byStatus.processing || 0)),
     card('Stuck after ' + s.stuck.afterMinutes + ' min', s.stuck.count, s.stuck.count ? 'warn' : ''),
     card('Failed or refunded', failed, failed ? 'bad' : ''),
+    card('Reversed after success', s.byStatus.reversed || 0, s.byStatus.reversed ? 'bad' : ''),
     card('Dead letters', s.outbox.deadLetters, s.outbox.deadLetters ? 'bad' : ''),
     card('Webhook failures', s.webhookFailures, s.webhookFailures ? 'warn' : ''),
     card('Outbox queue', s.outbox.queued),
@@ -202,7 +203,7 @@ function legsTable(p) {
     h('tbody', null, p.legs.map((l, i) => h('tr', null,
       h('td', null, String(i)), h('td', null, l.adapterId),
       h('td', null, chip(l.status, l.status === 'succeeded' ? 'completed' : l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
-      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)')),
+      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.amountMismatch ? h('div', null, chip(l.amountMismatch.reason === 'short' ? 'short by ' + l.amountMismatch.shortfall : l.amountMismatch.reason.replace('_', ' '), 'failed')) : ''),
       h('td', { class: 'mono' }, l.ref || '-'), h('td', { class: 'mono' }, l.txHash || '-'),
     ))),
   ))
@@ -235,6 +236,7 @@ function renderDetail(s) {
       ['Error', s.step.error ? s.step.error.code + ': ' + s.step.error.message : undefined],
       ['Amount', s.amount ? s.amount + ' ' + (s.currency || '') : undefined], ['User', s.userId], ['Country', s.country],
       ['Created', time(s.createdAt)], ['Updated', time(s.updatedAt)], ['Expires', time(s.expiresAt)], ['Live', s.livemode ? 'yes' : 'no (test)'],
+      ['Reversal', s.reversal ? 'Leg ' + s.reversal.index + ' (' + s.reversal.adapterId + ') ' + s.reversal.status + ' at ' + time(s.reversal.at) + ' (was ' + s.reversal.previous + ')' : undefined],
       ['Resolution', s.resolution ? s.resolution.state + ' at ' + time(s.resolution.at) + ' (was ' + s.resolution.previous + '): ' + s.resolution.note : undefined],
       ['Tx hashes', s.txHashes.join(', ') || undefined],
     ]),
@@ -345,7 +347,7 @@ const BODY = `<div id="demo" class="banner" role="note" hidden></div>
 <form id="find" class="row" role="search"><label for="find-value">Find by session id, tx hash, or provider:ref<input id="find-value" type="search" size="40"></label><button type="submit">Find</button></form>
 <div class="row" role="group" aria-label="Filters">
 <label for="f-direction">Direction<select id="f-direction"><option value="">All</option><option value="deposit">Deposit</option><option value="withdraw">Withdraw</option></select></label>
-<label for="f-state">State<select id="f-state"><option value="">All</option><option>open</option><option>processing</option><option>completed</option><option>failed</option><option>expired</option><option>refunded</option></select></label>
+<label for="f-state">State<select id="f-state"><option value="">All</option><option>open</option><option>processing</option><option>completed</option><option>failed</option><option>expired</option><option>refunded</option><option>reversed</option></select></label>
 <label class="inline" for="f-stuck"><input id="f-stuck" type="checkbox">Stuck only</label>
 </div>
 <div class="table-wrap"><table><caption class="sr">Recent sessions, newest first</caption>

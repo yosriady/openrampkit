@@ -1,11 +1,12 @@
 // HTTP routes. Every route takes the runtime and returns a Response; errors are thrown as OrkException.
 
+import { claimWebhook, releaseWebhook } from '@openrampkit/adapter'
 import { OrkException, isTerminal, orkError } from '@openrampkit/core'
 import type { SurfaceKind } from '@openrampkit/core'
 import { safeEqual } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
 import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
-import { applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
+import { adapterMoveAllowed, applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
 import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
 import { saveSession } from './outbox.js'
@@ -98,6 +99,13 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return errorResponse(orkError('BAD_REQUEST', { message: 'This session was closed by the operator.' }), 409)
   }
 
+  // A session with a completed payment (also one reversed after it completed) is final for the
+  // browser: no new plan, quote, target, payment or transition, with the client secret or a pay link.
+  if (method === 'POST' && action !== 'pay-link' && (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED')) {
+    const message = rec.step.state === 'REVERSED' ? 'This payment was reversed. Start a new session.' : rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.'
+    return errorResponse(orkError('BAD_REQUEST', { message }), 409)
+  }
+
   if (action === 'step' && method === 'GET') {
     if (await refreshActive(rt, rec)) await saveSession(rt, rec)
     return json(publicSession(rec))
@@ -160,7 +168,7 @@ async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (rec.direction !== 'withdraw') return errorResponse(orkError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
   if (rec.targetLocked) return errorResponse(orkError('TARGET_LOCKED'), 409)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
-  if (rec.step.state === 'COMPLETED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
   const body = await readJson<Record<string, unknown>>(req)
   const target = parseTarget(body)
   checkAllowed(rec, target)
@@ -184,6 +192,8 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (!stored) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (stored.quote.expiresAt && Date.parse(stored.quote.expiresAt) < Date.now()) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
+  // A completed (or completed, then reversed) payment stays the session's payment.
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED') return errorResponse(orkError('BAD_REQUEST', { message: 'This session already has a completed payment.' }), 409)
   const bounds = boundsError(rec, stored.quote.input)
   if (bounds) return errorResponse(bounds, 422)
   const walletAddress = walletAddressOf(body.walletAddress)
@@ -203,6 +213,8 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     if (rec.step.state === 'COMPLETED') {
       return errorResponse(orkError('BAD_REQUEST', { message: rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.' }), 409)
     }
+    // The payment completed and the provider took it back. The app decides what happens next.
+    if (rec.step.state === 'REVERSED') return errorResponse(orkError('BAD_REQUEST', { message: 'This payment was reversed. Start a new session.' }), 409)
     // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
     // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).
     archiveActive(rec)
@@ -226,6 +238,11 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     { leg: act.pathway.legs[act.index]!, ref: leg.ref ?? '', name, ...(body.inputs ? { inputs: body.inputs } : {}) },
     adapterContext(rt, rec, a, act.pathway, act.index),
   )
+  // A transition moves the leg only forward, like a provider event (see `adapterMoveAllowed`).
+  if (leg.step && !adapterMoveAllowed(leg.step, ls)) {
+    rt.log.warn('transition would move the leg back; refused', { sessionId: rec.id, adapter: a.id, name, from: leg.step.status, to: ls.status })
+    return errorResponse(orkError('BAD_REQUEST', { message: 'This step can no longer change.' }), 409)
+  }
   await setLegStep(rt, rec, act.index, ls)
   await saveSession(rt, rec)
   return json(publicSession(rec))
@@ -259,12 +276,27 @@ async function webhookRoute(rt: Runtime, req: Request, adapterId: string): Promi
     rt.metric('webhook.verify_failed', 1, { adapter: a.id })
     return errorResponse(orkError('UNAUTHORIZED'), 401)
   }
+  // Replay protection for providers that sign with no timestamp: one delivery per key in 7 days.
+  const key = a.webhook.replayKey ? await a.webhook.replayKey(req, raw, ctx) : undefined
+  const claim = key ? await claimWebhook(ctx.shared, key) : undefined
+  if (key && !claim) {
+    rt.log.info('provider webhook already received; ignored as a replay', { adapter: a.id })
+    rt.metric('webhook.replayed', 1, { adapter: a.id })
+    return json({ received: true, duplicate: true })
+  }
   let retry = false
-  for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
-    const r = await applyEvent(rt, a.id, ev)
-    if (r === 'unknown' || r === 'conflict') retry = true
+  try {
+    for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
+      const r = await applyEvent(rt, a.id, ev)
+      if (r === 'unknown' || r === 'conflict') retry = true
+    }
+  } catch (e) {
+    if (key && claim) await releaseWebhook(ctx.shared, key, claim)
+    throw e
   }
   if (retry) {
+    // Give the key back, so the provider's retry of this body applies.
+    if (key && claim) await releaseWebhook(ctx.shared, key, claim)
     return json({ error: orkError('PROVIDER_UNAVAILABLE', { message: 'The event could not be applied yet. Send it again later.' }) }, 503, { 'retry-after': '30' })
   }
   return json({ received: true })

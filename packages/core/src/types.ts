@@ -140,8 +140,14 @@ export type LegSpec = {
   eta: { min: number; max: number }
   surfaces: SurfaceKind[]
   requires?: Array<'provider_account' | 'provider_kyc' | 'wallet' | 'otp'>
-  /** `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`) */
-  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement'>
+  /**
+   * `settlement`: the leg can pay into an OpenRampSettlement contract (destination `settlement`).
+   * `surface_after_processing`: a provider event may move the leg from `processing` back to
+   * `awaiting_user` with a new surface, once, before the leg has a transaction. Only for a leg that
+   * learns where the user must pay after it started (for example an offramp that gets its deposit
+   * address in a webhook). The surface kind must be one of `surfaces`.
+   */
+  capabilities?: Array<'webhooks' | 'polling' | 'refunds' | 'exact_output' | 'saved_methods' | 'settlement' | 'surface_after_processing'>
 }
 
 export type Fee = {
@@ -214,6 +220,7 @@ export type OrkErrorCode =
   | 'PROVIDER_DECLINED'
   | 'KYC_REJECTED'
   | 'PAYMENT_FAILED'
+  | 'PAYMENT_REVERSED'
   | 'DELIVERY_FAILED'
   | 'RATE_LIMITED'
   | 'PROVIDER_UNAVAILABLE'
@@ -251,6 +258,8 @@ export type StateName =
   | 'FAILED'
   | 'EXPIRED'
   | 'REFUNDED'
+  /** The payment completed, then the provider took it back (a refund or a chargeback after success) */
+  | 'REVERSED'
   | 'BLOCKED'
 
 /** An EVM transaction for the wallet to send */
@@ -362,6 +371,8 @@ export type LegStatus =
   | 'failed'
   | 'refunded'
   | 'expired'
+  /** The provider took back a payment (a chargeback or a reversal) */
+  | 'reversed'
 
 export type Step = {
   sessionId: string
@@ -391,7 +402,8 @@ export type LegStep = {
 
 // ---------- Sessions ----------
 
-export type SessionStatus = 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
+/** `reversed`: the payment completed, then the provider refunded it or took it back. Take back or freeze the credit. */
+export type SessionStatus = 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
 
 export type PublicSession = {
   id: string
@@ -434,6 +446,30 @@ export type SessionResult = {
   outputConfirmed: boolean
   fees: Fee[]
   txHashes: string[]
+  /**
+   * Set when a provider reported less output than the quote, by more than the server's tolerance
+   * (`policy.outputToleranceBps`), or an output that is not comparable with the quote (another asset,
+   * or not a number). `received` is the reported output. Check it before you credit.
+   */
+  amountMismatch?: AmountMismatch
+}
+
+/**
+ * A leg's reported output that the server cannot accept as a full delivery:
+ * - `short`: less than the quote, by more than the tolerance.
+ * - `asset_mismatch`: in another asset (another token, chain or currency) than the quote.
+ * - `invalid_amount`: the reported or the quoted amount is not a decimal number.
+ */
+export type AmountMismatch = {
+  reason: 'short' | 'asset_mismatch' | 'invalid_amount'
+  /** Index of the leg in the pathway */
+  legIndex: number
+  /** The quoted output of the leg */
+  expected: Amount
+  /** The output that the provider reported */
+  received: Amount
+  /** `expected - received` for `short`. The full expected amount for the other reasons. */
+  shortfall: string
 }
 
 // ---------- Events ----------
@@ -444,11 +480,13 @@ export type OrkEventType =
   | 'session.failed'
   | 'session.expired'
   | 'session.refunded'
+  | 'session.reversed'
   | 'session.late_payment'
   | 'leg.succeeded'
   | 'leg.failed'
   | 'withdrawal.completed'
   | 'withdrawal.failed'
+  | 'withdrawal.reversed'
   | 'step.changed'
   | 'modal.opened'
   | 'modal.closed'

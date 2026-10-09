@@ -26,6 +26,7 @@ import {
   legStepFromEvent,
   randomHex,
   timingSafeEqual,
+  webhookBodyKey,
 } from '@openrampkit/adapter'
 import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
 import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
@@ -398,10 +399,12 @@ export function onramper(opts: OnramperOptions) {
         }
         const sig = req.headers.get('x-onramper-webhook-signature')
         if (!sig) return false
-        // Onramper signs the body only (no timestamp), so replays cannot be told apart; parse() is idempotent.
+        // Onramper signs the body only (no timestamp). `replayKey` lets the server drop a replayed body.
         const expected = await hmacSha256(opts.webhookSecret, rawBody, 'hex')
         return timingSafeEqual(sig.trim().toLowerCase(), expected)
       },
+      // The same signed body is the same event: the server keeps the hash for 7 days and drops a repeat.
+      replayKey: async (_req, rawBody) => webhookBodyKey(rawBody),
       async parse(rawBody, ctx) {
         let tx: OrTransaction
         try {
@@ -414,7 +417,7 @@ export function onramper(opts: OnramperOptions) {
         // Keep the transaction id so status() can poll it.
         if (tx.transactionId) await ctx.shared.put(`tx:${tx.partnerContext}`, tx.transactionId, TX_TTL_SEC)
         const ev = eventFrom(tx)
-        return ev ? [ev] : []
+        return ev ? [{ ...ev, eventId: (await webhookBodyKey(rawBody)).slice(0, 32) }] : []
       },
     },
 

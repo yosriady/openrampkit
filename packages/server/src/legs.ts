@@ -1,9 +1,9 @@
 // The leg state machine: start legs, apply adapter steps and provider events, advance through the pathway.
 
 import type { LegEvent } from '@openrampkit/adapter'
-import { OrkException, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
-import type { LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
-import { DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
+import { OrkException, bps, cmp, isDecimal, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isTerminal, isWebUrl, orkError, sub } from '@openrampkit/core'
+import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
+import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
@@ -22,6 +22,7 @@ const LEG_STATUS_TO_STATE: Record<LegStatus, StateName> = {
   failed: 'FAILED',
   refunded: 'REFUNDED',
   expired: 'EXPIRED',
+  reversed: 'REVERSED',
 }
 
 /** Build the session step from the active leg. A finished leg that is not the last shows as PROCESSING. */
@@ -36,6 +37,17 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
       status: l.step?.status ?? ('pending' as const),
       ...(l.step?.txHash ? { txHash: l.step.txHash } : {}),
     })),
+  }
+  // A refund or a chargeback after success ends the session, whatever the other legs do.
+  if (rec.reversal) {
+    return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: orkError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), progress, legIndex: act.index }
+  }
+  // A leg before the last delivered another asset (or no valid amount): the next leg cannot take it,
+  // so it does not start. An operator checks the funds (`admin.resolve`).
+  const cur = act.legs[act.index]!
+  if (act.index < act.legs.length - 1 && cur.step?.status === 'succeeded' && deliveredWrongAsset(cur)) {
+    const error = orkError('DELIVERY_FAILED', { message: 'The provider delivered another asset than the quote. Contact support.', recovery: 'contact_support', legId: cur.legId })
+    return { sessionId: rec.id, state: 'FAILED', transitions: [], error, progress, legIndex: act.index }
   }
   if (act.legs.every((l) => l.step?.status === 'succeeded')) {
     return { sessionId: rec.id, state: 'COMPLETED', transitions: [], progress, legIndex: act.index }
@@ -99,16 +111,46 @@ export function sessionStatusFor(state: StateName, hasActive: boolean): SessionS
   if (state === 'FAILED' || state === 'BLOCKED') return 'failed'
   if (state === 'EXPIRED') return 'expired'
   if (state === 'REFUNDED') return 'refunded'
+  if (state === 'REVERSED') return 'reversed'
   return hasActive ? 'processing' : 'open'
 }
 
 async function settleStatus(rt: Runtime, rec: SessionRecord) {
   const before = rec.status
   rec.status = sessionStatusFor(rec.step.state, !!rec.active)
-  if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded'].includes(rec.status)) {
-    await notify(rt, rec, `session.${rec.status}`)
-    if (rec.direction === 'withdraw' && (rec.status === 'completed' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`)
+  if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded', 'reversed'].includes(rec.status)) {
+    const extra = rec.status === 'reversed' ? reversalDetail(rec) : undefined
+    await notify(rt, rec, `session.${rec.status}`, extra)
+    if (rec.direction === 'withdraw' && ['completed', 'failed', 'reversed'].includes(rec.status)) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
   }
+}
+
+/** The extra fields of `session.reversed` and `withdrawal.reversed`. No time: the event id must not change. */
+function reversalDetail(rec: SessionRecord): Record<string, unknown> | undefined {
+  const r = rec.reversal
+  return r ? { index: r.index, adapterId: r.adapterId, legId: r.legId, legStatus: r.status, previous: r.previous } : undefined
+}
+
+/**
+ * The provider took back the money of leg `i` of the active payment. The session becomes REVERSED (a
+ * final state), and the server sends `session.reversed` (and `withdrawal.reversed`) once. The caller
+ * saves the session with `saveSession`, so the events go out with the change.
+ */
+async function reverse(rt: Runtime, rec: SessionRecord, i: number, status: 'refunded' | 'reversed'): Promise<void> {
+  const leg = rec.active!.legs[i]!
+  rec.reversal = { at: Date.now(), index: i, adapterId: leg.adapterId, legId: leg.legId, status, previous: rec.step.state }
+  rt.log.warn('the provider took back a payment; the session is REVERSED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status, previous: rec.step.state })
+  rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status })
+  rec.step = composeStep(rt, rec)
+  rec.status = 'reversed'
+  const extra = reversalDetail(rec)
+  await notify(rt, rec, 'session.reversed', extra)
+  if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
+}
+
+/** True when a leg's new status takes back money: a chargeback, or a refund after the leg succeeded. */
+function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
+  return after === 'reversed' || (after === 'refunded' && before === 'succeeded')
 }
 
 /**
@@ -117,7 +159,7 @@ async function settleStatus(rt: Runtime, rec: SessionRecord) {
  * undefined when this step is not for the treasury (or it already sent this step).
  */
 async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
-  if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0) return undefined
+  if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0 || rec.reversal) return undefined
   if (ls.surface?.kind !== 'WALLET_TX' || ls.status !== 'awaiting_user') return undefined
   const act = rec.active!
   const leg = act.legs[i]!
@@ -158,12 +200,76 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   return { ...rest, state: 'PROCESSING', status: 'processing', transitions: [{ name: 'poll', kind: 'AWAIT', poll: DEFAULT_POLL }], txHash: hash }
 }
 
+/** Same asset: the same currency, or the same chain and token. Provider data is not trusted to be well formed. */
+function sameAsset(a: Asset, b: Asset): boolean {
+  if (a.kind === 'fiat' && b.kind === 'fiat') return typeof a.currency === 'string' && typeof b.currency === 'string' && a.currency.toUpperCase() === b.currency.toUpperCase()
+  if (a.kind === 'crypto' && b.kind === 'crypto') return typeof a.token === 'string' && typeof b.token === 'string' && a.chain === b.chain && a.token.toLowerCase() === b.token.toLowerCase()
+  return false
+}
+
+/**
+ * Compare a leg's reported output with its quote. When the provider reports less than the quote by
+ * more than `policy.outputToleranceBps`, the leg keeps its result but gets `amountMismatch`, and the
+ * timeline gets `leg.amount_mismatch`. `result.amountMismatch` then shows it in every webhook.
+ */
+function checkOutput(rt: Runtime, rec: SessionRecord, i: number, got: Amount): void {
+  const leg = rec.active!.legs[i]!
+  const expected = leg.quote.output
+  // Fail closed: an output that cannot be compared with the quote never counts as a full delivery.
+  let reason: AmountMismatch['reason'] | undefined
+  let shortfall = expected.amount
+  if (!got?.asset || !sameAsset(expected.asset, got.asset)) reason = 'asset_mismatch'
+  else if (typeof got.amount !== 'string' || !isDecimal(got.amount) || !isDecimal(expected.amount)) reason = 'invalid_amount'
+  else {
+    const tolerance = Math.max(0, rt.config.policy?.outputToleranceBps ?? DEFAULT_OUTPUT_TOLERANCE_BPS)
+    if (cmp(got.amount, sub(expected.amount, bps(expected.amount, tolerance))) >= 0) {
+      delete leg.amountMismatch
+      return
+    }
+    reason = 'short'
+    shortfall = sub(expected.amount, got.amount)
+  }
+  leg.amountMismatch = { reason, expected, received: got, shortfall }
+  addTimeline(rec, 'leg.amount_mismatch', { index: i, adapterId: leg.adapterId, reason, expected: expected.amount, received: String(got?.amount) })
+  rt.log.warn('provider reported an output that is not the quoted delivery', { sessionId: rec.id, adapterId: leg.adapterId, index: i, reason, expected: expected.amount, received: String(got?.amount) })
+  rt.metric('leg.amount_mismatch', 1, { adapter: leg.adapterId, reason })
+}
+
+/** True when leg `l` delivered something that the next leg cannot take: another asset, or no valid amount. */
+function deliveredWrongAsset(l: ActiveLeg): boolean {
+  return !!l.amountMismatch && l.amountMismatch.reason !== 'short'
+}
+
+/** How long after expiry a late payment can still move a session on (`latePayments.graceHours`) */
+export function lateGraceMs(rt: Runtime): number {
+  return Math.max(0, rt.config.latePayments?.graceHours ?? DEFAULT_LATE_GRACE_HOURS) * 60 * 60_000
+}
+
+/** True when an expired session is still inside its grace window. `graceHours: 0` means never. */
+export function inLateGrace(rt: Runtime, rec: SessionRecord): boolean {
+  const grace = lateGraceMs(rt)
+  return grace > 0 && Date.now() <= rec.expiresAt + grace
+}
+
+/**
+ * True when an adapter step (a status poll or a transition) may replace the leg step `cur`. The leg
+ * moves only forward (`isLegalLegMove`), with one exception: a review step (`processing` in `KYC` or
+ * `AUTH`, for example Bridge's KYC review) can end with a step for the user, before any money moved.
+ */
+export function adapterMoveAllowed(cur: LegStep, next: LegStep): boolean {
+  if (cur.status === next.status) return !isLegTerminal(cur.status)
+  if (isLegalLegMove(cur.status, next.status)) return true
+  return cur.status === 'processing' && next.status === 'awaiting_user' && (cur.state === 'KYC' || cur.state === 'AUTH') && !cur.txHash
+}
+
 /** Record a leg's new step, index its provider ref, notify, and start the next leg when this one succeeds. */
 export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<void> {
   const act = rec.active!
   const leg = act.legs[i]!
   const wrapped = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
-  if (leg.step?.status !== wrapped.status) {
+  const before = leg.step?.status
+  const wasExpired = rec.step.state === 'EXPIRED'
+  if (before !== wrapped.status) {
     addTimeline(rec, `leg.${wrapped.status}`, {
       index: i,
       adapterId: leg.adapterId,
@@ -172,21 +278,51 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
       ...(wrapped.error ? { error: wrapped.error.code } : {}),
     })
   }
+  const prevOutput = leg.step?.output
   leg.step = wrapped
+  if (wrapped.output && wrapped.output.amount !== prevOutput?.amount) checkOutput(rt, rec, i, wrapped.output)
   if (wrapped.ref && wrapped.ref !== leg.ref) {
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)
   }
+  // A refund or a chargeback after success. This also applies to a session that an operator closed:
+  // the app must learn that the money went back.
+  if (!rec.reversal && (isReversal(before, wrapped.status) || wrapped.state === 'REVERSED')) {
+    await reverse(rt, rec, i, wrapped.status === 'refunded' ? 'refunded' : 'reversed')
+    return
+  }
   // An operator closed this session (`admin.resolve`). Keep the leg data for the record, but do not
   // send from the treasury, start the next leg, notify or change the session state.
   if (rec.resolution) return
+  // The session is REVERSED, and that is final. Keep the leg data, but move no more funds: no
+  // treasury send, no next leg, no leg events, no other session state.
+  if (rec.reversal) {
+    rec.step = composeStep(rt, rec)
+    return
+  }
+  // The session EXPIRED. Only money that arrives on the leg that was waiting at expiry, inside the
+  // grace window (`latePayments`), moves it on. Anything else changes the leg data only.
+  if (wasExpired && (i !== act.index || !inLateGrace(rt, rec) || (wrapped.status !== 'processing' && wrapped.status !== 'succeeded'))) {
+    if (wrapped.status === 'succeeded' && before !== 'succeeded') {
+      rt.log.warn('a payment arrived after the grace window of an expired session; the session stays EXPIRED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
+      const scope = act.n ? `a${act.n}` : undefined
+      await notify(rt, rec, 'session.late_payment', { reason: 'after_grace', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+    }
+    return
+  }
   const sent = await treasuryStep(rt, rec, i, wrapped)
   if (sent) return setLegStep(rt, rec, i, sent)
   // Leg events of a later attempt get their own key (and so their own event id).
   const scope = act.n ? `a${act.n}` : undefined
   if (wrapped.status === 'succeeded') await notify(rt, rec, 'leg.succeeded', { index: i, adapterId: leg.adapterId, legId: leg.legId }, scope)
+  // The session expired while the user still had to pay, and the payment arrived after all (a
+  // webhook, or the grace poll of the sweep). The session goes on and can complete.
+  if (wasExpired && wrapped.status === 'succeeded') {
+    rt.log.warn('a payment arrived after the session expired; the session goes on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
+    await notify(rt, rec, 'session.late_payment', { reason: 'after_expiry', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+  }
   if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error }, scope)
-  if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1) {
+  if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1 && !deliveredWrongAsset(leg)) {
     act.index = i + 1
     await startLeg(rt, rec, act.index)
     return
@@ -196,6 +332,8 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
 }
 
 export async function startLeg(rt: Runtime, rec: SessionRecord, i: number): Promise<void> {
+  // A reversed session moves no more funds.
+  if (rec.reversal) return
   const act = rec.active!
   const leg = act.legs[i]!
   const a = rt.adapter(leg.adapterId)
@@ -270,9 +408,10 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
 }
 
 /** Ask the active leg's adapter for status (rate-limited). Returns true when the session changed. */
-export async function refreshActive(rt: Runtime, rec: SessionRecord, force = false): Promise<boolean> {
+export async function refreshActive(rt: Runtime, rec: SessionRecord, force = false, opts: { late?: boolean } = {}): Promise<boolean> {
   const act = rec.active
-  if (!act || isTerminal(rec.step.state)) return false
+  // `late`: the sweep polls an EXPIRED session in its grace window (`latePayments`).
+  if (!act || (isTerminal(rec.step.state) && !(opts.late && rec.step.state === 'EXPIRED' && !rec.resolution && !rec.reversal && inLateGrace(rt, rec)))) return false
   const leg = act.legs[act.index]!
   if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) return false
   const a = rt.adapter(leg.adapterId)
@@ -282,6 +421,11 @@ export async function refreshActive(rt: Runtime, rec: SessionRecord, force = fal
   try {
     const ls = await a.status({ leg: act.pathway.legs[act.index]!, ref: leg.ref }, adapterContext(rt, rec, a, act.pathway, act.index))
     if (ls.status !== leg.step.status || ls.state !== leg.step.state || ls.sub !== leg.step.sub) {
+      if (!adapterMoveAllowed(leg.step, ls)) {
+        rt.log.warn('status check would move the leg back; ignored', { sessionId: rec.id, adapter: a.id, from: leg.step.status, to: ls.status })
+        rt.metric('event.out_of_order', 1, { adapter: a.id })
+        return false
+      }
       await setLegStep(rt, rec, act.index, { ...ls, ...(ls.surface ? {} : leg.step.surface ? { surface: leg.step.surface } : {}) })
       return true
     }
@@ -317,7 +461,8 @@ export function legStepFromEvent(cur: LegStep | undefined, ev: LegEvent): LegSte
 /**
  * What happened to a provider event:
  * - `applied`: the session changed.
- * - `ignored`: verified, and nothing to do (for example a repeat of a terminal status).
+ * - `ignored`: verified, and nothing to do (for example a repeat of a terminal status, an event that
+ *   would move the leg back, or an event id that the session already applied).
  * - `unknown`: no session for this ref yet (the ref index can lag), or the session is gone.
  * - `conflict`: the session changed at the same time on every try.
  * The webhook route answers 503 for `unknown` and `conflict`, so the provider sends the event again.
@@ -336,14 +481,26 @@ const MONEY_MOVED: LegStatus[] = ['processing', 'succeeded', 'refunded']
 async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
   const att = rec.attempts![k]!
   const leg = att.legs[i]!
-  if (leg.step?.status !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+  const before = leg.step?.status
+  if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
   leg.step = ls
+  if (isReversal(before, ls.status)) {
+    // The session moved on from this attempt, so its state stays. The app may have credited this
+    // payment by hand (`session.late_payment`), so it gets `session.reversed` with `attempt`.
+    rt.log.warn('the provider took back a payment of an earlier attempt', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
+    rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status: ls.status })
+    const extra = { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, legStatus: ls.status, previous: rec.step.state }
+    await notify(rt, rec, 'session.reversed', extra)
+    if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
+    return
+  }
   if (!MONEY_MOVED.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
-  if (rec.step.state === 'COMPLETED' || underway || rec.resolution) {
+  // A REVERSED or EXPIRED session: an earlier attempt never becomes its payment again.
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
-      await notify(rt, rec, 'session.late_payment', { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+      await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
     }
     return
   }
@@ -392,7 +549,27 @@ export async function refreshAttempts(rt: Runtime, rec: SessionRecord): Promise<
   return false
 }
 
-/** Apply a provider event (webhook or adapter route) to the session that owns `ev.ref`. Idempotent. */
+/**
+ * The one move back that a provider event may make: from `processing` to `awaiting_user` with a new
+ * surface. Only when the leg's spec opts in (capability `surface_after_processing`), the surface kind
+ * is one the spec declares, the leg has no transaction yet, and the leg did not move back before.
+ * For example, an offramp learns its deposit address from a webhook and now needs a WALLET_TX.
+ */
+export function surfaceMoveBack(rt: Runtime, leg: ActiveLeg, cur: LegStep, ev: LegEvent): boolean {
+  if (cur.status !== 'processing' || ev.status !== 'awaiting_user' || !ev.surface || cur.txHash || leg.surfaceReopened) return false
+  // Fail closed: a leg with no static spec (for example from a live catalog only) does not opt in.
+  const spec = rt.adapters.get(leg.adapterId)?.legs.find((l) => l.id === leg.legId)
+  return !!spec?.capabilities?.includes('surface_after_processing') && spec.surfaces.includes(ev.surface.kind)
+}
+
+/** Most provider event ids kept per session (see `SessionRecord.providerEvents`) */
+const MAX_PROVIDER_EVENTS = 50
+
+/**
+ * Apply a provider event (webhook or adapter route) to the session that owns `ev.ref`. Idempotent.
+ * The leg moves only forward (see `isLegalLegMove`): an event that would move it back is ignored. An
+ * event with an `eventId` that this session already applied is ignored too.
+ */
 export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): Promise<ApplyResult> {
   const sid = await rt.store.kv.get<string>(`ref:${adapterId}:${ev.ref}`)
   if (!sid) {
@@ -410,12 +587,31 @@ export async function applyEvent(rt: Runtime, adapterId: string, ev: LegEvent): 
       rt.log.warn('event for a ref that no leg of the session has now; ignored', { adapterId, ref: ev.ref, sessionId: sid })
       return 'ignored'
     }
-    const cur = found.act.legs[found.i]!.step
-    if (cur && isLegTerminal(cur.status)) return 'ignored'
+    const seen = ev.eventId ? `${adapterId}:${ev.ref}:${ev.eventId}` : undefined
+    if (seen && rec.providerEvents?.includes(seen)) {
+      rt.log.info('provider event already applied; ignored', { adapterId, ref: ev.ref, eventId: ev.eventId, sessionId: sid })
+      return 'ignored'
+    }
+    const leg = found.act.legs[found.i]!
+    const cur = leg.step
+    const back = !!cur && surfaceMoveBack(rt, leg, cur, ev)
+    if (cur && !back && !isLegalLegMove(cur.status, ev.status)) {
+      // A repeat of a final status is normal (providers send events more than once). A move back is not.
+      if (cur.status !== ev.status) {
+        rt.log.warn('provider event would move the leg back; ignored', { adapterId, ref: ev.ref, sessionId: sid, from: cur.status, to: ev.status })
+        rt.metric('event.out_of_order', 1, { adapter: adapterId })
+      }
+      return 'ignored'
+    }
+    if (back) {
+      leg.surfaceReopened = true
+      addTimeline(rec, 'leg.surface_after_processing', { index: found.i, adapterId, surface: ev.surface!.kind })
+    }
     try {
       const ls = legStepFromEvent(cur, ev)
       if (found.k === -1) await setLegStep(rt, rec, found.i, ls)
       else await applyToAttempt(rt, rec, found.k, found.i, ls)
+      if (seen) rec.providerEvents = [...(rec.providerEvents ?? []), seen].slice(-MAX_PROVIDER_EVENTS)
       await saveSession(rt, rec)
       // A session that became active again (or was dropped from the list) must be polled by the sweep.
       if (!isTerminal(rec.step.state)) await trackOpenSession(rt, rec.id)

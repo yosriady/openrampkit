@@ -68,6 +68,7 @@ export const th: Messages = {
     FAILED: 'ชำระเงินไม่สำเร็จ',
     EXPIRED: 'หมดอายุ',
     REFUNDED: 'คืนเงินแล้ว',
+    REVERSED: 'ถูกเรียกคืน',
     BLOCKED: 'ไม่พร้อมใช้งาน',
   },
   provider: 'ผู้ให้บริการ',
@@ -111,6 +112,7 @@ export const th: Messages = {
     succeeded: 'เสร็จแล้ว',
     failed: 'ไม่สำเร็จ',
     refunded: 'คืนเงินแล้ว',
+    reversed: 'ถูกเรียกคืน',
     expired: 'หมดอายุ',
   },
 
@@ -122,6 +124,7 @@ export const th: Messages = {
     FAILED: 'ชำระเงินไม่สำเร็จ',
     EXPIRED: 'เซสชันหมดอายุ',
     REFUNDED: 'คืนเงินแล้ว',
+    REVERSED: 'การชำระเงินถูกเรียกคืน',
     BLOCKED: 'ไม่พร้อมใช้งาน',
   },
   failedBody: 'การชำระเงินไม่สำเร็จ',

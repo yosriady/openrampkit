@@ -73,7 +73,8 @@ The live catalog (`GET /supported/payment-types/{fiat}`, cached for an hour) bui
 
 Ask your Onramper contact to send webhooks to `{baseUrl}/webhooks/onramper`.
 
-- Verification: `X-Onramper-Webhook-Signature` is the hex HMAC-SHA256 of the raw body with `webhookSecret`. There is no timestamp, so replays cannot be told apart; parsing is idempotent.
+- Verification: `X-Onramper-Webhook-Signature` is the hex HMAC-SHA256 of the raw body with `webhookSecret`. The signature has no timestamp.
+- Replay protection: the adapter gives the SHA-256 of the raw body as the replay key (`webhook.replayKey`). The server keeps each key for 7 days in the adapter's shared store (`claimWebhook`, built on `claimOnce`). A repeat of the same body in that time gets `200` with `{ "received": true, "duplicate": true }` and changes nothing. When the server cannot apply the event yet (it answers `503`), it gives the key back, so the provider's retry still applies. The key is also the event id (`eventId`), so a session drops the same event twice.
 - The adapter finds the leg by `partnerContext`.
 
 ## Verified vs TO VERIFY

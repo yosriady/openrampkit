@@ -30,7 +30,7 @@ type PublicSession = {
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only
   targetLocked?: boolean          // withdraw only: the app set and locked the target
-  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
+  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string
   locale?: string
@@ -55,8 +55,25 @@ type SessionResult = {
   outputConfirmed: boolean // true when output comes from the provider or the chain; false when it is the quote
   fees: Fee[]             // the fees of every leg's quote
   txHashes: string[]      // transaction hashes the legs reported, in leg order
+  amountMismatch?: AmountMismatch // a leg reported less than its quote (see below)
+}
+
+type AmountMismatch = {
+  reason: 'short' | 'asset_mismatch' | 'invalid_amount'
+  legIndex: number   // the leg
+  expected: Amount   // its quoted output
+  received: Amount   // the output the provider reported
+  shortfall: string  // short: expected minus received. Other reasons: the full expected amount.
 }
 ```
+
+The server compares each leg's reported output with the leg's quote. It fails closed:
+
+- `short`: the provider reports less than the quote by more than `policy.outputToleranceBps` (default 100, that is 1%). The leg keeps its result. The next leg starts (it takes what arrived), and the session can complete.
+- `asset_mismatch`: the output is in another asset (another token, chain or currency) than the quote.
+- `invalid_amount`: the reported or the quoted amount is not a decimal number.
+
+For `asset_mismatch` and `invalid_amount`, `outputConfirmed` is `false` on the last leg. On a leg before the last, the next leg does not start: the step becomes `FAILED` with `DELIVERY_FAILED` (recovery `contact_support`), and an operator checks the funds. When more than one leg has a mismatch, `amountMismatch` shows the last one. The timeline gets `leg.amount_mismatch` with the reason.
 
 ### Withdraw types
 
@@ -177,7 +194,8 @@ Compares two strings in constant time for a given length, for tokens and signatu
 | `TRANSITION_TABLE` | `Record<StateName, { next: StateName[]; terminal: boolean }>` |
 | `TABLE_VERSION` | `1` |
 | `isTerminal(state)`, `isLegalMove(from, to)` | |
-| `TERMINAL_LEG_STATUSES`, `isLegTerminal(status)` | `succeeded`, `failed`, `refunded`, `expired` |
+| `TERMINAL_LEG_STATUSES`, `isLegTerminal(status)` | `succeeded`, `failed`, `refunded`, `expired`, `reversed` |
+| `LEG_STATUS_RANK`, `isLegalLegMove(from, to)` | The order of leg statuses. A provider event moves a leg only to a status of the same or a higher rank. See [Leg status](../concepts/flow.md#leg-status). |
 | `validateStep(step)` | Problems with a step's shape (AWAIT on a terminal state, duplicate transition names) |
 
 ## Planner and ranking

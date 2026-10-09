@@ -645,7 +645,7 @@ describe('other surfaces (fake client)', () => {
 })
 
 describe('result and error screens', () => {
-  async function mountResult(state: 'FAILED' | 'EXPIRED' | 'COMPLETED', err = orkError('PAYMENT_FAILED')) {
+  async function mountResult(state: 'FAILED' | 'EXPIRED' | 'COMPLETED' | 'REVERSED', err = orkError('PAYMENT_FAILED')) {
     const client = fakeClient({
       getSession: vi.fn(async () =>
         session(step({ state, ...(state === 'COMPLETED' ? {} : { error: err }), progress: { legs: [{ adapterId: 'a', legId: 'a', status: 'succeeded' }, { adapterId: 'b', legId: 'b', status: 'succeeded' }] } })),
@@ -674,6 +674,15 @@ describe('result and error screens', () => {
   it('EXPIRED: no retry, only Close', async () => {
     const h = await mountResult('EXPIRED', orkError('SESSION_EXPIRED'))
     expect(h.$('.result-title')!.textContent).toBe('Session expired')
+    expect(() => h.button('Try again')).toThrow()
+    expect(h.button('Close').className).not.toContain('secondary')
+  })
+
+  it('REVERSED: says the payment was reversed, no retry, only Close', async () => {
+    const h = await mountResult('REVERSED', orkError('PAYMENT_REVERSED'))
+    expect(h.$('.result-title')!.textContent).toBe('Payment reversed')
+    expect(h.text()).toContain('The provider refunded or reversed this payment after it completed.')
+    expect(h.$('.result-icon.failure')).not.toBeNull()
     expect(() => h.button('Try again')).toThrow()
     expect(h.button('Close').className).not.toContain('secondary')
   })

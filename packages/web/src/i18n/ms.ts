@@ -67,6 +67,7 @@ export const ms: Messages = {
     FAILED: 'Pembayaran gagal',
     EXPIRED: 'Tamat tempoh',
     REFUNDED: 'Dibayar balik',
+    REVERSED: 'Ditarik balik',
     BLOCKED: 'Tidak tersedia',
   },
   provider: 'penyedia',
@@ -110,6 +111,7 @@ export const ms: Messages = {
     succeeded: 'selesai',
     failed: 'gagal',
     refunded: 'dibayar balik',
+    reversed: 'ditarik balik',
     expired: 'tamat tempoh',
   },
 
@@ -121,6 +123,7 @@ export const ms: Messages = {
     FAILED: 'Pembayaran gagal',
     EXPIRED: 'Sesi tamat tempoh',
     REFUNDED: 'Pembayaran dibayar balik',
+    REVERSED: 'Pembayaran ditarik balik',
     BLOCKED: 'Tidak tersedia',
   },
   failedBody: 'Pembayaran tidak berjaya.',

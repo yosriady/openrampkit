@@ -128,15 +128,19 @@ If the pathway has two legs and your leg is the first, deliver to `input.deliver
 webhook: {
   verify(req: Request, rawBody: string, ctx): Promise<boolean>
   parse(rawBody: string, ctx): Promise<LegEvent[]>
+  replayKey?(req: Request, rawBody: string, ctx): Promise<string | undefined>
 }
 type LegEvent = {
   ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  eventId?: string           // the provider event id, when the provider has one
   surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
   transitions?: Transition[] // goes with surface; default: an AWAIT poll
 }
 ```
 
-The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. `parse` must be idempotent: the same body must give the same events. `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
+The server calls `verify` first and answers 401 when it returns false. Then it applies each event to the session that owns `ref`. When the provider signs the body with no timestamp, a captured webhook could be sent again later. Add `replayKey` and return the provider event id, or `webhookBodyKey(rawBody)` (the SHA-256 of the body). The server keeps the key for 7 days and ignores a repeat (`200`, no change). It gives the key back when it answers `503`, so a provider retry still applies.
+
+Events move a leg only forward. When your leg learns where the user must pay after it started (for example a deposit address in a webhook, while the leg is `processing`), add `'surface_after_processing'` to the leg's `capabilities` and the surface kind to its `surfaces`. The server then allows one move from `processing` back to `awaiting_user` with that surface, before the leg has a transaction. `parse` must be idempotent: the same body must give the same events. Set `eventId` when the provider gives an event id: the server drops an event whose id the session already applied. The server ignores an event that would move a leg back (for example `pending` after `processing`). See [Leg status](../concepts/flow.md#leg-status). `parse` also gets `ctx.url`, the full webhook request URL (Meld reads it). The [fiat onramp flow](../concepts/flows.md#fiat-onramp-with-redirect-or-iframe) shows where each adapter method runs.
 
 ## Withdraw legs
 

@@ -1,6 +1,7 @@
 import type { ScopedKV } from '@openrampkit/adapter'
 import type {
   AllowedTargets,
+  AmountMismatch,
   Destination,
   Direction,
   LegQuote,
@@ -9,6 +10,7 @@ import type {
   PlanResult,
   Quote,
   SessionStatus,
+  StateName,
   Step,
   WithdrawSource,
 } from '@openrampkit/core'
@@ -24,6 +26,10 @@ export type ActiveLeg = {
   lastCheckedAt?: number
   /** Withdraw with app custody: idempotency keys of WALLET_TX steps already sent by the treasury */
   treasurySent?: string[]
+  /** Set when the reported output is short of the quote beyond the tolerance, or not comparable with it */
+  amountMismatch?: Omit<AmountMismatch, 'legIndex'>
+  /** Set when a provider event moved the leg from `processing` back to `awaiting_user` (allowed once) */
+  surfaceReopened?: boolean
 }
 
 export type StoredQuote = {
@@ -112,6 +118,24 @@ export type SessionRecord = {
   timeline?: TimelineEntry[]
   /** Set when an operator forced a final state with `admin.resolve`. Provider events then change the legs only. */
   resolution?: Resolution
+  /** Set when a provider refunded or reversed a leg after it succeeded. The session is then `REVERSED`. */
+  reversal?: Reversal
+  /** Provider event ids applied to this session (`adapterId:ref:eventId`), newest last. At most 50. */
+  providerEvents?: string[]
+}
+
+/** A refund or a chargeback after a leg succeeded (see `SessionRecord.reversal`) */
+export type Reversal = {
+  /** When the server learnt it (ms) */
+  at: number
+  /** The leg that the provider took back */
+  index: number
+  adapterId: string
+  legId: string
+  /** The new leg status */
+  status: 'refunded' | 'reversed'
+  /** The session state before the reversal, e.g. COMPLETED */
+  previous: StateName
 }
 
 /** One entry of the session timeline */

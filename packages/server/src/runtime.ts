@@ -140,14 +140,20 @@ export function sessionResult(rec: SessionRecord): SessionResult {
   const first = act.legs[0]!
   const last = act.legs[act.legs.length - 1]!
   const reported = last.step?.output
+  // The last leg with a shortfall: what arrived at the end is what matters most.
+  let k = act.legs.length - 1
+  while (k >= 0 && !act.legs[k]!.amountMismatch) k--
+  const mismatch = k === -1 ? undefined : act.legs[k]!.amountMismatch!
   return {
     method: act.pathway.method,
     provider: act.pathway.provider,
     input: first.quote.input,
     output: reported ?? last.quote.output,
-    outputConfirmed: !!reported,
+    // An output in another asset (or not a number) is not a confirmed delivery of the quote.
+    outputConfirmed: !!reported && (!last.amountMismatch || last.amountMismatch.reason === 'short'),
     fees: act.legs.flatMap((l) => l.quote.fees),
     txHashes: act.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h),
+    ...(mismatch ? { amountMismatch: { legIndex: k, ...mismatch } } : {}),
   }
 }
 

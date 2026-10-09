@@ -9,6 +9,7 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
   PROVIDER_DECLINED: 'The provider declined this payment. Try another method.',
   KYC_REJECTED: 'The provider could not verify your identity.',
   PAYMENT_FAILED: 'The payment did not go through. You can try again.',
+  PAYMENT_REVERSED: 'The provider refunded or reversed this payment after it completed.',
   DELIVERY_FAILED: 'The funds could not be delivered. Contact support.',
   RATE_LIMITED: 'Too many requests. Wait a moment and try again.',
   PROVIDER_UNAVAILABLE: 'The provider is not available right now.',

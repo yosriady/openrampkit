@@ -67,6 +67,7 @@ export const vi: Messages = {
     FAILED: 'Thanh toán thất bại',
     EXPIRED: 'Đã hết hạn',
     REFUNDED: 'Đã hoàn tiền',
+    REVERSED: 'Đã thu hồi',
     BLOCKED: 'Không khả dụng',
   },
   provider: 'nhà cung cấp',
@@ -110,6 +111,7 @@ export const vi: Messages = {
     succeeded: 'hoàn tất',
     failed: 'thất bại',
     refunded: 'đã hoàn tiền',
+    reversed: 'đã thu hồi',
     expired: 'đã hết hạn',
   },
 
@@ -121,6 +123,7 @@ export const vi: Messages = {
     FAILED: 'Thanh toán thất bại',
     EXPIRED: 'Phiên đã hết hạn',
     REFUNDED: 'Đã hoàn tiền',
+    REVERSED: 'Thanh toán đã bị thu hồi',
     BLOCKED: 'Không khả dụng',
   },
   failedBody: 'Thanh toán không thành công.',

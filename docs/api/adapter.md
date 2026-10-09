@@ -30,6 +30,8 @@ interface Adapter {
   webhook?: {
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
+    // Optional: the same key for every delivery of one provider event. The server ignores a repeat for 7 days.
+    replayKey?(req: Request, rawBody: string, ctx: WebhookContext): Promise<string | undefined>
   }
   health?(ctx: Pick<AdapterContext, 'fetch' | 'log'>): Promise<{ ok: boolean; detail?: string }>
   routes?(req: Request, subpath: string, ctx: RouteContext): Promise<Response | undefined>
@@ -73,6 +75,7 @@ type TransitionInput = { leg: PathwayLeg; ref: string; name: string; inputs?: Re
 
 type LegEvent = {
   ref: string; status: LegStatus; output?: Amount; txHash?: string; error?: OrkError
+  eventId?: string           // provider event id: the server drops an id that the session already applied
   surface?: Surface          // non-terminal events only: a new surface, e.g. a WALLET_TX once an offramp knows its deposit address
   transitions?: Transition[] // goes with surface; default: an AWAIT poll
 }
@@ -132,6 +135,16 @@ if (!(await claimOnce(ctx.shared, key, `${ctx.session.id}:${ref}`, 90 * 24 * 360
 }
 ```
 
+### Webhook replay keys
+
+```ts
+webhookBodyKey(rawBody: string): Promise<string>       // SHA-256 of the body, hex
+claimWebhook(shared, key, ttlSec = WEBHOOK_REPLAY_TTL_SEC): Promise<string | undefined>
+releaseWebhook(shared, key, token, ttlSec = WEBHOOK_REPLAY_TTL_SEC): Promise<void>
+```
+
+The server uses these with `webhook.replayKey`. `claimWebhook` returns a token for the first delivery of a key, and `undefined` for a repeat within `WEBHOOK_REPLAY_TTL_SEC` (7 days). It is built on `claimOnce`. `releaseWebhook` gives the key back (only with the token), so the next delivery can take it. The server releases a key when it cannot apply the events yet and answers `503`. An adapter only returns the key from `replayKey`: it does not call these functions.
+
 ## HTTP helpers
 
 | Export | Description |
@@ -149,7 +162,7 @@ Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 |---|---|
 | `POLL` | `onchain` (2.5 s start, 10 s max, 30 min), `checkout` (4 s, 15 s, 60 min), `dev` (1.5 s, 5 s, 15 min) |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
-| `legStepFromEvent(event, ref, poll)` | No event, `pending` or `awaiting_user`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`: those states. `processing`: `PROCESSING`. |
+| `legStepFromEvent(event, ref, poll)` | No event, `pending` or `awaiting_user`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`, `reversed`: those states. `processing`: `PROCESSING`. |
 | `decimalFrom(n, digits = 8)` | Provider number to an exact decimal string; missing or non-finite gives `'0'` |
 | `minWithToleranceBps(expectedBase, bps)` | The smallest amount (integer base units, as a string) that still counts as `expectedBase` when it can be up to `bps` basis points lower: `expected - floor(expected * bps / 10000)`, with bigint math. `minWithToleranceBps('999', 50)` is `'995'`. |
 | `randomHex(bytes = 8)` | Random hex string |

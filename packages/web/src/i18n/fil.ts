@@ -68,6 +68,7 @@ export const fil: Messages = {
     FAILED: 'Hindi natuloy ang bayad',
     EXPIRED: 'Nag-expire',
     REFUNDED: 'Na-refund',
+    REVERSED: 'Binawi',
     BLOCKED: 'Hindi available',
   },
   provider: 'provider',
@@ -111,6 +112,7 @@ export const fil: Messages = {
     succeeded: 'tapos na',
     failed: 'hindi natuloy',
     refunded: 'na-refund',
+    reversed: 'binawi',
     expired: 'nag-expire',
   },
 
@@ -122,6 +124,7 @@ export const fil: Messages = {
     FAILED: 'Hindi natuloy ang bayad',
     EXPIRED: 'Nag-expire ang session',
     REFUNDED: 'Na-refund ang bayad',
+    REVERSED: 'Binawi ang bayad',
     BLOCKED: 'Hindi available',
   },
   failedBody: 'Hindi natuloy ang bayad.',

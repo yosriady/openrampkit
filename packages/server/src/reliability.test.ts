@@ -25,6 +25,7 @@ const STATE: Record<LegStatus, LegStep['state']> = {
   failed: 'FAILED',
   refunded: 'REFUNDED',
   expired: 'EXPIRED',
+  reversed: 'REVERSED',
 }
 
 /** A card provider with webhooks. Each start makes a new order ref; `status` answers from `statusOf`. */

@@ -84,10 +84,13 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
 | `leg.failed` | One leg failed | `index`, `adapterId`, `error` |
 | `session.completed` | Every leg succeeded. **Credit here.** | |
 | `session.failed` | The step became `FAILED` or `BLOCKED` | |
-| `session.refunded` | The step became `REFUNDED` | |
-| `session.expired` | The session passed its expiry before the payment went on (no payment started, or the leg still waits for the user), or a leg expired | |
+| `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed | |
+| `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). **Take back or freeze the credit.** | `index`, `adapterId`, `legId`, `legStatus`, `previous`, and `attempt` for an earlier attempt |
+| `session.expired` | The session passed its expiry before the payment went on (no payment started, or the leg still waits for the user), or a leg expired. A late payment can still complete it (see `session.late_payment`). | |
+| `session.late_payment` | A payment arrived late: after the session expired, or on an earlier attempt | `reason`, `index`, `adapterId`, `legId`, `txHash`, `attempt` |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` | |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` | |
+| `withdrawal.reversed` | Withdraw sessions: sent after `session.reversed` | Same as `session.reversed` |
 
 The [background sweep](../api/server.md#background-sweep) finds expired sessions and sends `session.expired`. A request that loads an expired session (for example a browser poll) also sends it. Without a scheduled sweep, a session that nobody loads again never sends `session.expired`.
 
@@ -134,9 +137,13 @@ Webhooks are delivered **at least once**. A retry after a timeout can send the s
 
 1. **Credit only on `session.completed`.** `leg.succeeded` on the first leg of a two-leg pathway does not mean the funds arrived.
 2. **Deduplicate by event id and by session id.** Store the event id (`openramp-id`, also `event.id`) and drop an event you already handled. Store the session id with a unique constraint when you credit, so a session is credited once.
-3. **Handle `session.late_payment`.** The user can leave a payment (the `restart` transition) after they paid it, for example by bank transfer. When the provider reports that payment later, the session completes with it (you get `session.completed`). When the session already completed with another payment, or another payment is in progress, you get `session.late_payment` instead. Refund or credit it by hand.
+3. **Handle `session.late_payment`.** It has a `reason`:
+   - `after_expiry`: the session expired while the user still had to pay (for example a bank transfer), and the payment arrived later. The server keeps polling such a payment for `latePayments.graceHours` (default 72), and a provider webhook also counts. The session goes on, and you get `session.completed` when it completes. Credit on `session.completed` as usual, also after `session.expired`.
+   - `after_grace`: the payment arrived after the grace window. The session stays `EXPIRED` and you get no `session.completed`. Refund or credit it by hand.
+   - `earlier_attempt`: the user left a payment (the `restart` transition) after they paid it. When the provider reports that payment later, the session completes with it (you get `session.completed`). When the session already completed, expired or was reversed, or another payment is in progress, you get `session.late_payment` instead. Refund or credit it by hand.
 4. **Check the session state.** For extra safety, call `openramp.sessions.retrieve(event.sessionId)` and confirm `status === 'completed'` before you credit.
 5. **Credit `result.output` when it is confirmed.** `session.result.output` is what arrived. When `outputConfirmed` is `true`, the provider or the chain reported it. When it is `false`, it is the quote: check the amount yourself before you credit it (on chain with `result.txHashes`, or at the provider), or credit the amount you expected on your order. For merchant destinations, the provider's report is the source of truth.
+6. **Check `result.amountMismatch`.** When it is set, a provider reported less than the quote by more than `policy.outputToleranceBps` (default 1%) (`reason: 'short'`), or an output in another asset (`asset_mismatch`) or with no valid amount (`invalid_amount`). `received` is what the provider reported, and `shortfall` is the difference. Credit what arrived, not the quote, or hold the credit for review. A shortfall on a leg before the last one can make the last leg deliver less too.
 
 ```ts
 async function handle(event: { id: string; type: string; sessionId?: string; data: { object: any } }) {
@@ -154,6 +161,29 @@ async function handle(event: { id: string; type: string; sessionId?: string; dat
 ```
 
 For a withdrawal, `result.input` is what left, and `result.output` is what the user received (or the estimate). See [Withdrawals](./withdraw.md#events).
+
+## Refunds and chargebacks after success
+
+A provider can take back a payment after `session.completed`: a refund, or a card chargeback. Then you get `session.reversed`, and `session.status` is `reversed`. You credited the user on `session.completed`, so take the credit back, or freeze it until you check the case:
+
+```ts
+if (event.type === 'session.reversed' && event.sessionId) {
+  const { userId, legStatus } = event.data.object
+  await db.transaction(async (tx) => {
+    // Once per session: a unique index on reversals.session_id
+    const inserted = await tx.reversals.insertIfAbsent({ sessionId: event.sessionId, userId, eventId: event.id, legStatus })
+    if (!inserted) return
+    const credit = await tx.credits.find({ sessionId: event.sessionId })
+    if (credit) await tx.balances.decrement(userId, credit.amount) // or freeze the balance and alert support
+  })
+}
+```
+
+- `session.reversed` comes at most once per session, with a stable event id. Deduplicate it like the other events.
+- `legStatus` is `refunded` (the provider refunded the user) or `reversed` (a chargeback or a returned payout).
+- When the data has `attempt`, the reversal is for an earlier attempt that the user left with `restart`. The session state does not change. Take back only a credit that you gave by hand for that attempt (after `session.late_payment`).
+- For a withdrawal you also get `withdrawal.reversed`. The payout did not reach the user, so give the funds back to the user's balance, or contact the user.
+- The modal shows "Payment reversed" when the user still has it open.
 
 ::: warning Same-chain wallet transfers
 When the source token is the same as the destination token on the same chain, the Relay adapter sends a plain transfer without Relay. It checks the transaction receipt on chain: the transaction succeeded and paid the recipient at least the quoted amount. It does not check that the transaction is new or that the user sent it. Store `result.txHashes` with a unique constraint, so one transaction cannot complete two sessions.

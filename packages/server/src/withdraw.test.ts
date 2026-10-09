@@ -315,6 +315,8 @@ function eventOfframp() {
         regions: { allow: ['*'], deny: [] },
         eta: { min: 60, max: 600 },
         surfaces: ['WALLET_TX'],
+        // It learns the deposit address from a webhook after the leg started.
+        capabilities: ['webhooks', 'surface_after_processing'],
       },
     ],
     async quote({ leg, amountIn }) {
@@ -381,6 +383,19 @@ describe('provider events that carry a surface', () => {
     // A replayed webhook for the same step does not send twice.
     await post()
     expect(treasury.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('a payout returned after success sends session.reversed and withdrawal.reversed', async () => {
+    const t = make({}, [eventOfframp()])
+    const s = await t.create()
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10')
+    const post = (ev: LegEvent) => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(ev) }))
+    await post({ ref: 'order_1', status: 'succeeded' })
+    await post({ ref: 'order_1', status: 'reversed' })
+    const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
+    expect(now.body).toMatchObject({ status: 'reversed', step: { state: 'REVERSED' } })
+    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['withdrawal.completed', 'session.reversed', 'withdrawal.reversed']))
+    expect(t.hooks.filter((h) => h.type === 'withdrawal.reversed')).toHaveLength(1)
   })
 
   it('without a transition to report the hash, the treasury step waits in PROCESSING', async () => {

@@ -895,6 +895,7 @@ export function bridge(opts: BridgeOptions) {
       failed: { state: 'FAILED', status: 'failed', transitions: [], ...extra, ...(ev.error ? { error: ev.error } : {}) },
       refunded: { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra },
       expired: { state: 'EXPIRED', status: 'expired', transitions: [], ...extra },
+      reversed: { state: 'REVERSED', status: 'reversed', transitions: [], ...extra },
     }
     return map[ev.status]
   }

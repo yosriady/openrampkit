@@ -97,6 +97,11 @@ export type TransitionInput = {
 export type LegEvent = {
   ref: string
   status: LegStatus
+  /**
+   * Optional provider event id (or another value that is the same for each delivery of one event).
+   * The server keeps the recent ids of each session and drops an event whose id it already applied.
+   */
+  eventId?: string
   output?: Amount
   txHash?: string
   error?: OrkError
@@ -132,6 +137,15 @@ export interface Adapter {
   webhook?: {
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
+    /**
+     * Optional replay protection. Return a key that is the same for every delivery of one provider
+     * event: the provider event id, or `webhookBodyKey(rawBody)` when the provider signs the body with
+     * no timestamp. The server calls it after `verify`. It remembers each key for 7 days in the
+     * adapter's shared store (`claimWebhook`), and answers a repeat with `200` and applies nothing.
+     * When an event of the delivery cannot be applied yet (the server answers `503`), the server gives
+     * the key back, so the provider's retry still applies.
+     */
+    replayKey?(req: Request, rawBody: string, ctx: WebhookContext): Promise<string | undefined>
   }
   health?(ctx: Pick<AdapterContext, 'fetch' | 'log'>): Promise<{ ok: boolean; detail?: string }>
   /**
