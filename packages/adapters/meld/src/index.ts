@@ -17,25 +17,31 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
-  hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
-  timingSafeEqual,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
+import { OpenRampException, USDC, cmp, openRampError, roundTo } from '@openrampkit/core'
+import type { Amount, Asset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode } from '@openrampkit/core'
 
 export type MeldDeliverAsset = { chain: string; token: string; currencyCode: string; symbol?: string; decimals?: number }
 
 export type MeldOptions = {
   /** Meld API key (sent as `Authorization: BASIC <apiKey>`) */
   apiKey: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Only quote these service providers (e.g. ['TRANSAK', 'BANXA']). Default: every provider on your account. */
   serviceProviders?: string[]
   /** Webhook profile secret (GET /notifications/webhooks). Needed to accept webhooks. */
@@ -84,6 +90,39 @@ type MeldTransaction = {
 type MeldPaymentMethod = { paymentMethod: string; name?: string; paymentType?: string }
 
 const POLL: PollSpec = POLLS.checkout
+
+/**
+ * Meld transaction status -> leg status (and a step detail). A status that is not in the table is
+ * logged once and gives no event: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('Meld', {
+  // The user is still in the provider page (2FA too)
+  PENDING_CREATED: { status: 'requires_action' },
+  TWO_FA_REQUIRED: { status: 'requires_action' },
+  PENDING: { status: 'processing', detail: 'processing' },
+  TWO_FA_PROVIDED: { status: 'processing', detail: 'processing' },
+  ACCEPTED: { status: 'processing', detail: 'processing' },
+  AUTHORIZED: { status: 'processing', detail: 'processing' },
+  SETTLING: { status: 'processing', detail: 'settling' },
+  PARTIALLY_SETTLED: { status: 'processing', detail: 'settling' },
+  // ERROR is temporary at Meld: the provider may retry.
+  ERROR: { status: 'processing', detail: 'delayed' },
+  SETTLED: { status: 'succeeded' },
+  FAILED: { status: 'failed' },
+  DECLINED: { status: 'failed' },
+  CANCELLED: { status: 'failed' },
+  AUTHORIZATION_EXPIRED: { status: 'failed' },
+  REFUNDED: { status: 'refunded' },
+})
+
+/** Meld webhook event type -> the transaction status, for an event without `paymentTransactionStatus` */
+const EVENT_STATUS = statusMap<string>('Meld webhook', {
+  TRANSACTION_CRYPTO_PENDING: 'PENDING',
+  TRANSACTION_CRYPTO_TRANSFERRING: 'SETTLING',
+  TRANSACTION_CRYPTO_COMPLETE: 'SETTLED',
+  TRANSACTION_CRYPTO_FAILED: 'FAILED',
+})
+
 const CATALOG_TTL_SEC = 60 * 60
 const WEBHOOK_TOLERANCE_SEC = 5 * 60
 
@@ -193,12 +232,9 @@ const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '
 
 const dec = decimalFrom
 
-function base64url(b64: string): string {
-  return b64.replace(/\+/g, '-').replace(/\//g, '_')
-}
-
 export function meld(opts: MeldOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
+  const env = resolveEnv('meld', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-sb.meld.io' : 'https://api.meld.io')).replace(/\/+$/, '')
   const headers = { authorization: `BASIC ${opts.apiKey}`, 'meld-version': opts.version ?? '2026-02-03' }
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
   const toChains: Record<string, string[]> = {}
@@ -214,7 +250,6 @@ export function meld(opts: MeldOptions) {
     eta: { min: 60, max: 1800 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const staticLegs = STATIC.map((s) => leg(s.id, { from: { asset: { kind: 'fiat', currencies: s.currencies }, location: ['user_account'] }, regions: { allow: s.countries ?? ['*'], deny: [] }, eta: s.eta }))
@@ -223,69 +258,62 @@ export function meld(opts: MeldOptions) {
     return fetchJson<T>(ctx.fetch, `${api}${path}`, { method, headers, ...(body !== undefined ? { body: JSON.stringify(body) } : {}) })
   }
 
-  function deliverFor(asset: CryptoAsset | undefined): MeldDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return deliver[0]!
+  /** The asset Meld delivers for `asset`. NO_QUOTES when Meld does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): MeldDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Meld')
   }
 
-  function assetOf(d: MeldDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
-  function eventFrom(ref: string, status: string | undefined, tx?: MeldTransaction): LegEvent | undefined {
+  /**
+   * The event for a Meld transaction status, or undefined for an unknown status (logged once; the leg
+   * keeps its current step). `providerRef` is the Meld transaction id, when known.
+   */
+  function eventFrom(ref: string, status: string | undefined, tx: MeldTransaction | undefined, providerRef: string | undefined, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
+    const m = STATUS(status, log)
+    if (!m) return undefined
+    const ev: LegEvent = { ref, status: m.status }
+    if (providerRef) ev.providerRef = providerRef
+    // A status poll while the user is in the provider page: no surface, the UI keeps the current one.
+    if (m.status === 'requires_action') ev.action = { kind: 'payment', transitions: [awaitPoll(POLL)] }
+    if (m.detail) ev.detail = { code: m.detail, providerStatus: status }
+    if (m.status === 'failed') ev.error = openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' })
     const d = deliver.find((x) => x.currencyCode === tx?.destinationCurrencyCode)
-    const output = d && tx?.destinationAmount !== undefined ? { amount: dec(tx.destinationAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
-    const txHash = tx?.cryptoDetails?.blockchainTransactionId ?? undefined
-    switch (status) {
-      case 'SETTLED':
-        return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(output ? { output } : {}) }
-      case 'PENDING_CREATED':
-      case 'TWO_FA_REQUIRED':
-        return { ref, status: 'awaiting_user' }
-      // ERROR is temporary at Meld: the provider may retry.
-      case 'PENDING':
-      case 'SETTLING':
-      case 'TWO_FA_PROVIDED':
-      case 'ERROR':
-      case 'ACCEPTED':
-      case 'AUTHORIZED':
-      case 'PARTIALLY_SETTLED':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'FAILED':
-      case 'DECLINED':
-      case 'CANCELLED':
-      case 'AUTHORIZATION_EXPIRED':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
-      case 'REFUNDED':
-        return { ref, status: 'refunded' }
-      default:
-        return undefined
+    if ((m.status === 'succeeded' || m.status === 'processing') && d && tx?.destinationAmount !== undefined) {
+      ev.output = { value: dec(tx.destinationAmount, d.decimals ?? 8), asset: assetOf(d) }
     }
+    // The provider's on-chain delivery to the wallet
+    const hash = tx?.cryptoDetails?.blockchainTransactionId
+    if (m.status === 'succeeded' && hash) ev.transactions = [{ role: 'destination', ...(d ? { chain: d.chain } : {}), hash }]
+    return ev
   }
 
   return createAdapter({
     id: 'meld',
+    env,
     name: 'Meld',
     legs: staticLegs,
 
     async catalog(input, ctx) {
       const country = input.country?.toUpperCase()
       const key = `pm:${country ?? '*'}:${input.currency.toUpperCase()}`
-      let methods = await ctx.shared.get<MeldPaymentMethod[]>(key)
-      if (!methods) {
-        const q = new URLSearchParams({ categories: 'CRYPTO_ONRAMP', fiatCurrencies: input.currency.toUpperCase() })
-        if (country) q.set('countries', country)
-        if (opts.serviceProviders?.length) q.set('serviceProviders', opts.serviceProviders.join(','))
-        methods = await call<MeldPaymentMethod[]>(ctx, 'GET', `/service-providers/properties/payment-methods?${q}`)
-        // An empty or odd answer is a failure: throw so the server keeps the static legs, and do not cache it.
-        if (!Array.isArray(methods) || !methods.length) {
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Meld returned no payment methods.' }), 502)
-        }
-        await ctx.shared.put(key, methods, CATALOG_TTL_SEC)
-      }
+      const methods = await cachedJson(
+        ctx.shared,
+        key,
+        CATALOG_TTL_SEC,
+        async () => {
+          const q = new URLSearchParams({ categories: 'CRYPTO_ONRAMP', fiatCurrencies: input.currency.toUpperCase() })
+          if (country) q.set('countries', country)
+          if (opts.serviceProviders?.length) q.set('serviceProviders', opts.serviceProviders.join(','))
+          const list = await call<MeldPaymentMethod[]>(ctx, 'GET', `/service-providers/properties/payment-methods?${q}`)
+          // An empty or odd answer is a failure: throw so the server keeps the static legs, and do not cache it.
+          if (!Array.isArray(list) || !list.length) {
+            throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld returned no payment methods.' }), 502)
+          }
+          return list
+        },
+        { valid: (m) => Array.isArray(m) && m.length > 0 },
+      )
       const ids = [...new Set(methods.map((m) => meldMethodId(m.paymentMethod)))]
       return ids.map((id) => {
         const s = STATIC.find((x) => x.id === id)
@@ -298,9 +326,9 @@ export function meld(opts: MeldOptions) {
     },
 
     async quote(input, ctx) {
-      if (!input.amountIn) throw new OrkException(orkError('NO_QUOTES', { message: 'Meld quotes need a fiat amount.' }), 422)
+      if (!input.amountIn) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Meld quotes need a fiat amount.' }), 422)
       const fiatAsset = input.amountIn.asset
-      if (fiatAsset.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Meld quotes need a fiat amount.' }))
+      if (fiatAsset.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Meld quotes need a fiat amount.' }))
       const fiat = fiatAsset.currency.toUpperCase()
       const target = deliverFor(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
@@ -310,7 +338,7 @@ export function meld(opts: MeldOptions) {
       const body = {
         countryCode: country,
         sourceCurrencyCode: fiat,
-        sourceAmount: Number(roundTo(input.amountIn.amount, 2)),
+        sourceAmount: Number(roundTo(input.amountIn.value, 2)),
         destinationCurrencyCode: target.currencyCode,
         paymentMethodType,
         ...(wallet ? { walletAddress: wallet } : {}),
@@ -321,11 +349,11 @@ export function meld(opts: MeldOptions) {
       try {
         res = await call(ctx, 'POST', '/payments/crypto/quote', body)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Meld', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Meld', { what: 'price this amount', log: ctx.log })
       }
       const quotes = (res.quotes ?? []).filter((q) => q.serviceProvider && typeof q.destinationAmount === 'number' && q.destinationAmount > 0 && typeof q.sourceAmount === 'number')
       if (!quotes.length) {
-        throw new OrkException(orkError('NO_QUOTES', { message: res.message ? `Meld: ${res.message}`.slice(0, 200) : 'No Meld provider can serve this amount.' }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: res.message ? `Meld: ${res.message}`.slice(0, 200) : 'No Meld provider can serve this amount.' }), 422)
       }
       const providers = quotes
         .map((q) => ({
@@ -337,28 +365,32 @@ export function meld(opts: MeldOptions) {
         }))
         .sort((a, b) => cmp(b.destinationAmount, a.destinationAmount))
       const best = quotes.find((q) => q.serviceProvider === providers[0]!.serviceProvider)!
+      // Meld states each fee in the source fiat, inside `sourceAmount` (it also returns `sourceAmountWithoutFees`): all `included`.
+      const fiatFee = (n: number): Amount => ({ value: dec(n, 2), asset: { kind: 'fiat', currency: fiat } })
       const fees: Fee[] = []
-      if (best.transactionFee) fees.push({ kind: 'provider', label: `${best.serviceProvider} fee`, amount: dec(best.transactionFee, 2), currency: fiat })
-      if (best.networkFee) fees.push({ kind: 'network', label: 'Network fee', amount: dec(best.networkFee, 2), currency: fiat })
-      if (best.partnerFee) fees.push({ kind: 'app', label: 'App fee', amount: dec(best.partnerFee, 2), currency: fiat })
+      if (best.transactionFee) fees.push({ kind: 'provider', label: `${best.serviceProvider} fee`, amount: fiatFee(best.transactionFee), included: true })
+      if (best.networkFee) fees.push({ kind: 'network', label: 'Network fee', amount: fiatFee(best.networkFee), included: true })
+      if (best.partnerFee) fees.push({ kind: 'app', label: 'App fee', amount: fiatFee(best.partnerFee), included: true })
       return {
         adapterId: 'meld',
         legId: input.leg.legId,
-        input: { amount: dec(best.sourceAmount, 2), asset: { kind: 'fiat', currency: fiat } },
-        output: { amount: providers[0]!.destinationAmount, asset: assetOf(target) },
+        input: { value: dec(best.sourceAmount, 2), asset: { kind: 'fiat', currency: fiat } },
+        output: { value: providers[0]!.destinationAmount, asset: assetOf(target) },
         fees,
+        // An estimate: the provider Meld routes to sets the rate when it executes the order.
+        guarantee: 'estimate',
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: { serviceProvider: best.serviceProvider, providers, paymentMethodType, currencyCode: target.currencyCode, fiat, country },
       }
     },
 
     async start(input, ctx) {
       const data = (input.quote.data ?? {}) as { serviceProvider?: string; paymentMethodType?: string; currencyCode?: string; fiat?: string; country?: string }
-      if (!data.serviceProvider) throw new OrkException(orkError('QUOTE_EXPIRED', { recovery: 'requote' }), 409)
+      if (!data.serviceProvider) throw new OpenRampException(openRampError('QUOTE_EXPIRED', { recovery: 'requote' }), 409)
       const target = deliverFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Meld needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Meld needs a wallet address to deliver to.' }))
       const ref = `ork_${randomHex(12)}`
       const body = {
         sessionType: 'BUY',
@@ -367,7 +399,7 @@ export function meld(opts: MeldOptions) {
           countryCode: data.country ?? (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase(),
           sourceCurrencyCode: data.fiat ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD'),
           // A string here (the quote API takes a number)
-          sourceAmount: roundTo(input.quote.input.amount, 2),
+          sourceAmount: roundTo(input.quote.input.value, 2),
           destinationCurrencyCode: data.currencyCode ?? target.currencyCode,
           serviceProvider: data.serviceProvider,
           paymentMethodType: data.paymentMethodType ?? meldCode(input.leg.legId),
@@ -381,15 +413,14 @@ export function meld(opts: MeldOptions) {
       try {
         res = await call(ctx, 'POST', '/crypto/session/widget', body)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Meld', { what: 'start the purchase', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Meld', { what: 'start the purchase', log: ctx.log })
       }
       const url = res.serviceProviderWidgetUrl || res.widgetUrl
-      if (!url) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Meld did not return a widget URL.' }), 502)
+      if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Meld did not return a widget URL.' }), 502)
+      // No providerRef yet: Meld gives the transaction id once the user starts paying (`res.id` is the widget session).
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'REDIRECT', url, popup: true, provider: data.serviceProvider },
-        transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
+        action: { kind: 'payment', surface: { kind: 'REDIRECT', url, popup: true, provider: data.serviceProvider }, transitions: [awaitPoll(POLL)] },
         ref,
       }
     },
@@ -399,27 +430,34 @@ export function meld(opts: MeldOptions) {
       try {
         res = await call(ctx, 'GET', `/payments/transactions?externalSessionIds=${encodeURIComponent(input.ref)}`)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Meld', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Meld', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
       const tx = res.transactions?.[0]
-      return legStepFromEvent(tx ? eventFrom(input.ref, tx.status, tx) : undefined, input.ref, POLL)
+      // No transaction yet, or an unknown status: a payment poll. The server ignores it when the leg is
+      // already further (it never moves a leg back), so the leg keeps its current step.
+      return legStepFromEvent(tx ? eventFrom(input.ref, tx.status, tx, tx.id, ctx.log) : undefined, input.ref, POLL)
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('meld: webhookSecret is not set; rejecting webhook')
           return false
         }
-        const sig = req.headers.get('meld-signature')
-        const ts = req.headers.get('meld-signature-timestamp')
-        if (!sig || !ts) return false
-        const when = Date.parse(ts)
-        // TO VERIFY: Meld documents no tolerance window; we reject timestamps more than 5 minutes off.
-        if (Number.isNaN(when) || Math.abs(Date.now() - when) > WEBHOOK_TOLERANCE_SEC * 1000) return false
         const url = opts.webhookUrl ?? req.url
-        const expected = base64url(await hmacSha256(opts.webhookSecret, `${ts}.${url}.${rawBody}`, 'base64'))
-        return timingSafeEqual(sig.trim(), expected)
+        // TO VERIFY: Meld documents no tolerance window; we reject timestamps more than 5 minutes off.
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          // Meld sends base64url with padding; the helper compares without padding
+          header: req.headers.get('meld-signature')?.trim().replace(/=+$/, ''),
+          timestamp: req.headers.get('meld-signature-timestamp'),
+          toleranceSec: WEBHOOK_TOLERANCE_SEC,
+          message: (ts) => `${ts}.${url}.${rawBody}`,
+          encoding: 'base64url',
+        })
       },
       async parse(rawBody, ctx) {
         let ev: { eventType?: string; payload?: { externalSessionId?: string; paymentTransactionId?: string; paymentTransactionStatus?: string } }
@@ -433,8 +471,7 @@ export function meld(opts: MeldOptions) {
         const p = ev.payload ?? {}
         // PENDING_CREATED events may come without the session ids; later events carry them.
         if (!p.externalSessionId) return []
-        let status = p.paymentTransactionStatus
-        if (!status) status = ev.eventType === 'TRANSACTION_CRYPTO_COMPLETE' ? 'SETTLED' : ev.eventType === 'TRANSACTION_CRYPTO_FAILED' ? 'FAILED' : 'PENDING'
+        const status = p.paymentTransactionStatus || EVENT_STATUS(ev.eventType, ctx.log)
         // The event has no amounts: read the transaction for the output and the tx hash (the docs advise it).
         let tx: MeldTransaction | undefined
         if (status === 'SETTLED' && p.paymentTransactionId) {
@@ -444,7 +481,7 @@ export function meld(opts: MeldOptions) {
             ctx.log.warn('meld: could not read the settled transaction', { error: String((e as Error)?.message ?? e).slice(0, 200) })
           }
         }
-        const out = eventFrom(p.externalSessionId, status, tx)
+        const out = eventFrom(p.externalSessionId, status, tx, p.paymentTransactionId ?? tx?.id, ctx.log)
         return out ? [out] : []
       },
     },

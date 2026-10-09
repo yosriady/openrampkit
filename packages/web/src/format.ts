@@ -54,8 +54,8 @@ export function formatToken(amount: string, symbol?: string, locale?: string): s
 
 /** `locale` is a BCP 47 tag (for example `m.locale`). Undefined uses the runtime default. */
 export function formatAmount(a: Amount, locale?: string): string {
-  if (a.asset.kind === 'fiat') return formatFiat(a.amount, a.asset.currency, locale ? { locale } : {})
-  return formatToken(a.amount, a.asset.symbol ?? '', locale)
+  if (a.asset.kind === 'fiat') return formatFiat(a.value, a.asset.currency, locale ? { locale } : {})
+  return formatToken(a.value, a.asset.symbol ?? '', locale)
 }
 
 /** Currency symbol for an ISO code, e.g. USD -> $, PHP -> ₱. Falls back to the code. */
@@ -70,15 +70,30 @@ export function currencySymbol(currency: string, locale?: string): string {
   }
 }
 
-/** Sum fees per currency, e.g. "$1.20 + 0.0001 ETH". */
+/** A key for an asset: the fiat currency, or the chain and the token */
+function feeAssetKey(a: Amount['asset']): string {
+  return a.kind === 'fiat' ? `fiat:${a.currency.toUpperCase()}` : `crypto:${a.chain}:${a.token.toLowerCase()}`
+}
+
+/**
+ * Sum the fees that have an amount, per asset, e.g. "$1.20 + 0.0001 ETH". Fees with no amount
+ * (`amount: null`, the provider does not say) are left out: see `hasUnstatedFee`.
+ */
 export function formatFees(fees: Fee[], locale?: string): string | undefined {
-  const byCur = new Map<string, string>()
+  const byAsset = new Map<string, Amount>()
   for (const f of fees) {
-    if (!f.amount || Number(f.amount) === 0) continue
-    byCur.set(f.currency, add(byCur.get(f.currency) ?? '0', f.amount))
+    if (!f.amount || !Number(f.amount.value)) continue
+    const k = feeAssetKey(f.amount.asset)
+    const cur = byAsset.get(k)
+    byAsset.set(k, { value: add(cur?.value ?? '0', f.amount.value), asset: f.amount.asset })
   }
-  if (!byCur.size) return undefined
-  return [...byCur].map(([cur, amt]) => formatFiat(amt, cur, locale ? { locale } : {})).join(' + ')
+  if (!byAsset.size) return undefined
+  return [...byAsset.values()].map((a) => formatAmount(a, locale)).join(' + ')
+}
+
+/** True when a provider takes a fee but does not say how much (`amount: null`) */
+export function hasUnstatedFee(fees: Fee[]): boolean {
+  return fees.some((f) => f.amount === null)
 }
 
 export function formatEta(eta: { min: number; max: number }, m: Messages): string {

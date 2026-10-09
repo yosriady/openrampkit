@@ -13,12 +13,12 @@ export function createMockFetch({ country = 'US' } = {}) {
   let lastAmount = '0'
 
   const session = () => ({
-    id: 'ses_demo', direction: 'deposit', destination: DEST, status: 'open', country, currency,
+    id: 'ses_demo', direction: 'deposit', destination: DEST, status: 'requires_payment_method', country, currency,
     step, expiresAt: new Date(Date.now() + 3600e3).toISOString(), livemode: false,
   })
   const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } })
-  const usdc = (amount) => ({ amount, asset: { kind: 'crypto', chain: DEST.chain, token: DEST.token, symbol: 'USDC', decimals: 6 } })
-  const fiat = (amount) => ({ amount, asset: { kind: 'fiat', currency } })
+  const usdc = (amount) => ({ value: amount, asset: { kind: 'crypto', chain: DEST.chain, token: DEST.token, symbol: 'USDC', decimals: 6 } })
+  const fiat = (amount) => ({ value: amount, asset: { kind: 'fiat', currency } })
   const rate = { USD: 1, PHP: 58, VND: 25400, IDR: 16200, THB: 36 }[currency] ?? 1
 
   const method = (m, name, kind, group, providers, eta, extra = {}) => ({ method: m, name, kind, group, providers, pathwayIds: [`pw_${m}`], eta, ...extra })
@@ -48,13 +48,13 @@ export function createMockFetch({ country = 'US' } = {}) {
     const amt = Number(body.amount) || 0
     if (m === 'transfer') {
       const sym = body.source?.token === 'native' ? 'ETH' : 'USDC'
-      return { quotes: [{ id: 'q_transfer', pathwayId: 'pw_transfer', method: m, provider: 'Relay', legs: [], input: { amount: '0', asset: { kind: 'crypto', chain: body.source?.chain, token: body.source?.token, symbol: sym } }, output: usdc('0'), fees: [{ kind: 'network', label: 'Network', amount: '0.02', currency: 'USD' }], eta: { min: 20, max: 60 }, badges: ['fastest'] }], errors: [] }
+      return { quotes: [{ id: 'q_transfer', pathwayId: 'pw_transfer', method: m, provider: 'Relay', legs: [], input: { value: '0', asset: { kind: 'crypto', chain: body.source?.chain, token: body.source?.token, symbol: sym } }, output: usdc('0'), fees: [{ kind: 'network', label: 'Network', amount: '0.02', currency: 'USD' }], eta: { min: 20, max: 60 }, badges: ['fastest'] }], errors: [] }
     }
     if (m !== 'wallet' && amt < 20 * rate) return { quotes: [], errors: [{ code: 'AMOUNT_TOO_LOW', message: 'The amount is below the minimum for this method.', retryable: false }] }
     const usd = m === 'wallet' ? amt : amt / rate
     const mk = (id, provider, feePct, eta, badges) => ({
       id, pathwayId: `pw_${m}`, method: m, provider, legs: [],
-      input: m === 'wallet' ? { amount: String(amt), asset: { kind: 'crypto', chain: body.source?.chain, token: body.source?.token, symbol: 'USDC' } } : fiat(String(amt)),
+      input: m === 'wallet' ? { value: String(amt), asset: { kind: 'crypto', chain: body.source?.chain, token: body.source?.token, symbol: 'USDC' } } : fiat(String(amt)),
       output: usdc((usd * (1 - feePct)).toFixed(2)),
       fees: [{ kind: 'provider', label: 'Provider fee', amount: (usd * feePct * rate).toFixed(2), currency: m === 'wallet' ? 'USD' : currency }],
       eta, expiresAt: new Date(Date.now() + 60e3).toISOString(), badges,
@@ -74,7 +74,7 @@ export function createMockFetch({ country = 'US' } = {}) {
     const base = { sessionId: 'ses_demo', legIndex: 0 }
     switch (q.method) {
       case 'card':
-        return { ...base, state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://example.com/checkout', popup: true, provider: q.provider }, transitions: [AWAIT, { name: 'completed', kind: 'SURFACE_RESULT', expects: 'completed' }, ...devButtons], progress: progress('awaiting_user', 'pending') }
+        return { ...base, state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://example.com/checkout', popup: true, provider: q.provider }, transitions: [AWAIT, { name: 'completed', kind: 'SURFACE_RESULT', expects: 'completed' }, ...devButtons], progress: progress('requires_action', 'pending') }
       case 'apple_pay':
         return { ...base, state: 'PAYMENT', surface: { kind: 'IFRAME', url: 'https://example.com/', origin: 'https://example.com', height: 420, provider: 'Coinbase' }, transitions: [AWAIT, ...devButtons] }
       case 'wallet':
@@ -86,7 +86,7 @@ export function createMockFetch({ country = 'US' } = {}) {
       case 'gcash': case 'momo': case 'gopay':
         return { ...base, state: 'AUTH', surface: { kind: 'OTP', channel: 'sms', to: '+63 917 *** 1234' }, transitions: [{ name: 'verify', kind: 'SUBMIT', label: 'Verify', inputs: [{ id: 'code', label: 'Code', type: 'text', required: true }] }] }
       default:
-        return { ...base, state: 'PAYMENT', surface: { kind: 'QR', payload: '00020101021228580011ph.ppmi.p2m0111DEMOPHM2XXX0315777148000000000520460165303608540' + q.input.amount + '5802PH5913OPENRAMP DEMO6006MANILA6304ABCD', amount: q.input.amount, currency, reference: 'ORK-DEMO-42', method: q.method, expiresAt: new Date(Date.now() + 15 * 60e3).toISOString() }, transitions: [AWAIT, ...devButtons], progress: progress('awaiting_user', 'pending') }
+        return { ...base, state: 'PAYMENT', surface: { kind: 'QR', payload: '00020101021228580011ph.ppmi.p2m0111DEMOPHM2XXX0315777148000000000520460165303608540' + q.input.value + '5802PH5913OPENRAMP DEMO6006MANILA6304ABCD', amount: q.input.value, currency, reference: 'ORK-DEMO-42', method: q.method, expiresAt: new Date(Date.now() + 15 * 60e3).toISOString() }, transitions: [AWAIT, ...devButtons], progress: progress('requires_action', 'pending') }
     }
   }
 
@@ -110,7 +110,7 @@ export function createMockFetch({ country = 'US' } = {}) {
       // Recover the method from the quote id made in quotes()
       const map = { q_transak: ['card', 'Transak'], q_coinbase: ['card', 'Coinbase'], q_relay: ['wallet', 'Relay'], q_transfer: ['transfer', 'Relay'] }
       const [m, provider] = map[body.quoteId] ?? [body.quoteId.slice(2), 'Swapped']
-      selected = { method: m, provider, input: { amount: lastAmount } }
+      selected = { method: m, provider, input: { value: lastAmount } }
       step = startStep(selected)
       return json(session())
     }
@@ -121,7 +121,7 @@ export function createMockFetch({ country = 'US' } = {}) {
       else if (name === 'verify') {
         if (String(body.inputs?.code ?? '') !== '123456') {
           step = { ...step, error: { code: 'BAD_REQUEST', message: 'That code is not right. Use 123456 in this demo.', retryable: true } }
-        } else step = { ...startStep({ method: 'qrph', input: { amount: lastAmount } }), legIndex: 0 }
+        } else step = { ...startStep({ method: 'qrph', input: { value: lastAmount } }), legIndex: 0 }
       } else step = processing()
       return json(session())
     }

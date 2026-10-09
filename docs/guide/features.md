@@ -28,7 +28,7 @@ This page lists every feature of OpenRampKit, with a link to its documentation. 
 | App custody | Your treasury hook sends the transaction (`custody: 'app'`), once per step | [custody: 'app'](./withdraw.md#custody-app) |
 | Allowed targets | Limit the chains or currencies that a user can pick | [Allowed targets](./withdraw.md#allowed-targets) |
 | Address screening | Your `screenAddress` hook refuses an address. An error also refuses it. | [Screen addresses](./withdraw.md#screen-addresses) |
-| Withdraw events | `withdrawal.completed` and `withdrawal.failed` next to the session events | [Events](./withdraw.md#events) |
+| Withdraw events | The same `session.*` events as a deposit. `data.object.session.direction` is `withdraw`. | [Events](./withdraw.md#events) |
 
 See the [withdraw flow](../concepts/flows.md#withdraw).
 
@@ -58,7 +58,7 @@ See the [withdraw flow](../concepts/flows.md#withdraw).
 | Iframe message protocol | Provider pages can signal completion. The modal checks origin and source. | [Iframe flow](../concepts/flows.md#iframe-message-protocol), [IFRAME](../concepts/surfaces.md#iframe) |
 | Provider SDK renderers | Mount a provider's own UI, for example the Stripe onramp element | [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk), [Stripe](../adapters/stripe.md) |
 | Restart | "Choose another method" leaves a payment that waits for the user | [Transitions](../concepts/flow.md#transitions) |
-| Errors as fields | `OrkError` with a code, a safe message and a recovery hint | [Errors as fields](../concepts/flow.md#errors-as-fields) |
+| Errors as fields | `OpenRampError` with a code, a safe message and a recovery hint | [Errors as fields](../concepts/flow.md#errors-as-fields) |
 | Web component | `<openramp-modal>` in Shadow DOM, for any framework or none | [Web component](./web-component.md), [@openrampkit/web](../api/web.md) |
 | Embedded mode | Render the widget inline in your page | [Embedded mode](./web-component.md#embedded-mode) |
 | Framework wrappers | React, Vue, Svelte and Solid | [React](../api/react.md), [Vue](../api/vue.md), [Svelte](../api/svelte.md), [Solid](../api/solid.md) |
@@ -110,7 +110,7 @@ See the [agent flow](../concepts/flows.md#ai-agent-via-mcp).
 
 | Feature | What it does | Read more |
 |---|---|---|
-| 10 provider adapters and a mock | Relay, Swapped, Xendit, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Peer, Mock | [Adapters](../adapters/) |
+| 13 provider adapters and a mock | Relay, LI.FI, Swapped, Xendit, Coinbase, Transak, MoonPay, Stripe, Meld, Onramper, Bridge, Binance, Peer, Mock | [Adapters](../adapters/) |
 | `createAdapter()` | Write an adapter for any provider | [Writing an adapter](../adapters/writing-an-adapter.md), [@openrampkit/adapter](../api/adapter.md) |
 | Conformance kit | `runAdapterConformance()` checks an adapter's shape, quotes, steps and webhooks | [@openrampkit/adapter](../api/adapter.md) |
 | Mock adapter and mock wallet | Test every flow with no provider account | [Testing with mocks](./testing.md) |

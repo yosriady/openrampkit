@@ -22,7 +22,7 @@ export async function POST(req: Request) {
       custody: body.custody === 'app' ? 'app' : 'user_wallet',
     },
     // Where the user may send it: these networks, and cash in any currency.
-    allowedTargets: {
+    allowedDestinations: {
       crypto: { chains: ['eip155:8453', 'eip155:42161', 'eip155:10', 'eip155:137', 'eip155:1'] },
       fiat: {},
     },

@@ -58,11 +58,13 @@ openssl rsa -in binance.pem -pubout -out binance-public.pem               # send
 
 The Binance docs show 1024-bit keys. The adapter accepts 1024-bit and 2048-bit keys. Ask Binance which size they accept.
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#binance).
+
 ## Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
-| `apiUrl` | `string` | required | API base URL. Binance gives it to partners. It is not public. |
+| `apiUrl` | `string` | required | API base URL. Binance gives it to partners. It is not public. There is no sandbox: `adapter.env` is always `production`. |
 | `clientId` | `string` | required | `X-Tesla-ClientId` |
 | `accessToken` | `string` | required | `X-Tesla-SignAccessToken` |
 | `privateKey` | `string` | required | Your RSA private key: PKCS#8 PEM (`BEGIN PRIVATE KEY`) or base64 DER. Escaped newlines (`\n`) are accepted. |
@@ -70,13 +72,13 @@ The Binance docs show 1024-bit keys. The adapter accepts 1024-bit and 2048-bit k
 | `webhookPartnerCode` | `string` | none | When set, a webhook must have this value in `X-BN-Connect-For`. TO VERIFY: the client id or the partner code. |
 | `payMethodCode` | `string \| null` | `'BUY_WALLET'` | Binance payment method. `BUY_WALLET` is the fiat balance in the Binance account. `null` lets the user choose on the Binance page (card and P2P too). |
 | `method` | `string` | `'exchange'` | Method id of the leg |
-| `deliverAssets` | `BinanceDeliverAsset[]` | USDC on Base, Arbitrum, Ethereum, Optimism, BNB Chain, Solana | Assets Binance may send, most preferred first |
+| `deliverAssets` | `BinanceDeliverAsset[]` | USDC on Base, Arbitrum, Ethereum, Optimism, BNB Chain, Solana | Assets Binance may send, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `regions` | `RegionPolicy` | `BINANCE_REGIONS` | Where the leg is offered |
 | `timeoutMs` | `number` | `8000` | Request timeout |
 
 `BinanceDeliverAsset` is `{ chain, token, cryptoCurrency, network, symbol?, decimals? }`. `cryptoCurrency` is the Binance coin (`USDC`). `network` is the Binance network code (`BASE`, `ARBITRUM`, `ETH`, `OPTIMISM`, `BSC`, `SOL`).
 
-The helpers `importRsaPrivateKey`, `importRsaPublicKey`, `rsaSign` and `rsaVerify` are exported.
+The helpers `importRsaPrivateKey`, `importRsaPublicKey`, `rsaSign` and `rsaVerify` are exported. `importRsaPublicKey` and `rsaVerify` are the shared ones from [`@openrampkit/adapter`](../api/adapter.md#rsa-signatures).
 
 ## Legs
 
@@ -134,16 +136,25 @@ The webhook has three headers:
 
 The adapter verifies the signature with `binancePublicKey`. A missing header, a changed body, a changed timestamp or a signature from another key gives 401. Events are idempotent: the same body gives the same events.
 
+## Quotes, fees and references
+
+- **Guarantee**: `estimate`. Binance sets the final price on its page. The quote expires after 5 minutes (`quoteExpiresAt(5)`).
+- **Fees**: `feeAmount` is a `provider` fee, in the fiat currency or in the delivered coin. Its `amount` is `null` when Binance names another currency. `networkFee` is a `network` fee in the delivered coin. Both fees have `included: true`.
+- **`providerRef`**: the leg ref. Binance knows the order by our `externalOrderId`, so the two values are the same.
+- **Transactions**: `withdrawTxHash` is the `destination` transaction, on the chain of the delivered coin.
+
 ## Status mapping
 
 | Binance status | Leg status |
 |---|---|
 | 0 `INIT` | No change (the user has not paid) |
-| 1, 2, 3, 4, 6, 10, 11, 15 (buying, converting, withdrawing) | `processing` |
+| 1, 2, 3, 4, 6, 15 (buying, converting) | `processing`, detail code `processing` |
+| 10, 11 (withdrawing) | `processing`, detail code `settling` |
 | 20 `COMPLETED` | `succeeded`, with `withdrawTxHash` and `cryptoAmount` |
 | 93 `SWAP_ABANDONED`, 96 `WITHDRAW_ABANDONED` | `failed`, `PAYMENT_FAILED`. The crypto stays in the Binance account. |
 | 98 `WITHDRAW_FAILED` | `failed`, `DELIVERY_FAILED`. The crypto stays in the Binance account. |
 | 94, 95, 97, 99 | `failed`, `PAYMENT_FAILED` |
+| other | No change. The adapter logs the unknown code once (`statusMap`), and the leg keeps its step. |
 
 ## What is not verified
 

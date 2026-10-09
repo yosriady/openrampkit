@@ -14,7 +14,7 @@ const openramp = createOpenRamp({
 
 ## createOpenRamp(config)
 
-`createOpenRamp` throws at startup when `secret` or `admin.token` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version, or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
+`createOpenRamp` throws at startup when `secret` or `admin.token` is shorter than 32 characters, when `webhooks.secret` or `tasksToken` is shorter than 16 characters, when an adapter targets another API version (the adapter API is version 2), or when two adapters share an id. It logs a warning when `treasury` has no `address`: then quotes for app-custody withdrawals use a placeholder sender.
 
 | Option | Type | Default | Description |
 |---|---|---|---|
@@ -22,11 +22,13 @@ const openramp = createOpenRamp({
 | `baseUrl` | `string` | required | Public URL where the handler is mounted, e.g. `https://app.example.com/api/openramp`. Its path is stripped from incoming requests. It also builds the return URL, the webhook URLs and the start URLs. |
 | `adapters` | `Adapter[]` | required | Provider adapters |
 | `store` | `SessionStore` | `memoryStore()` | Where sessions live. Use a shared store in production. See [Session stores](../deploy/stores.md). |
-| `livemode` | `boolean` | `false` | Marks sessions and events as live. Adapters may switch to sandbox when it is false (Coinbase). |
+| `livemode` | `boolean` | `false` | Marks sessions and events as live. Adapters may switch to sandbox when it is false (Coinbase without `env`). The server checks each `adapter.env` at start: with `true`, a `sandbox` adapter stops the start; with `false`, a `production` adapter gets a warning. See [Sandbox and production](../guide/provider-keys.md#sandbox-and-production). |
 | `policy.maxLegs` | `1 \| 2` | `2` | Longest pathway |
 | `policy.regions` | `RegionPolicy` | allow all | App-wide region policy, applied on top of each leg's policy |
 | `policy.methodPriority` | `Record<country, string[]>` | built-in | Method order per country |
 | `policy.disabledMethods` | `string[]` | none | Methods never offered |
+| `policy.maxAttempts` | `number` | `10` | The most payment attempts of one session. A failed attempt that leaves no attempt makes the session `failed` (final). |
+| `policy.outputToleranceBps` | `number` | `100` (1%) | How much less than the quote a provider may report as a leg's output before the delivery is `short` (`result.delivery`). A quote with a `minOutput` uses that minimum instead. See [SessionResult](./core.md#sessionresult). |
 | `policy.hopPreference` | `CryptoAsset[]` | USDC on Base, Arbitrum, Polygon, Optimism, Ethereum | Hop assets for two-leg pathways, most preferred first. See [Hops](../concepts/pathways.md#hops). |
 | `webhooks` | `{ url: string; secret: string; retryHours?: number; maxAttempts?: number }` | none | Signed webhooks to your backend. `secret` must have at least 16 characters (use 32 random bytes). `sweep()` retries failed deliveries for `retryHours` (default `24`), or until `maxAttempts` attempts in all when you set it. Then the event is a dead letter. See [Delivery](../guide/webhooks.md#delivery). |
 | `tasksToken` | `string` | none | Bearer token for `POST /tasks/sweep` and `GET /health?deep=1`. At least 16 characters. Without it, those two are off. |
@@ -40,9 +42,10 @@ const openramp = createOpenRamp({
 | `timeouts.webhook` | `number` (ms) | `4000` | Per outgoing webhook |
 | `limits.providerCallsPerMinute` | `number` | `60` | Per session: requests to `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` in one minute. More get `429 RATE_LIMITED`. |
 | `screenAddress` | `(address, chain) => Promise<boolean>` | none | Withdraw: check a "To wallet" address. `false` or an error refuses it (fail closed). See [Screen addresses](../guide/withdraw.md#screen-addresses). |
-| `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. See [Custody](../guide/withdraw.md#custody-app). |
+| `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. Throw `TreasuryRefusedError` (exported) to refuse when nothing was sent; any other error makes the failure final. See [Custody](../guide/withdraw.md#custody-app). |
 | `payPage` | `false \| { scriptUrl?, title? }` | on, script from esm.sh | The hosted pay page `GET /pay/:credential`. `false` turns it off. See [The pay link](../guide/agents.md#the-pay-link). |
 | `admin` | `{ token?, stuckAfterMinutes?, indexDays?, page? }` | none | Admin tools. With `admin`, the server keeps a time index of new sessions. With `token` (at least 32 characters), the routes `/admin/*` and the dashboard `GET /admin` are on. See [Admin and observability](../guide/admin.md). |
+| `latePayments` | `{ graceHours?, pollMinutes? }` | `{ graceHours: 72, pollMinutes: 10 }` | After the sweep expires a session whose payment still waits, it keeps polling that payment for `graceHours`, every `pollMinutes`. A late payment completes the session and sends `session.late_payment`. `graceHours: 0` turns it off. See [Background sweep](#background-sweep). |
 | `telemetry` | `{ onMetric(name, value, tags) }` | none | A plain metrics callback: quote latency, start errors, webhook failures, outbox depth, sweep lag. See [Metrics](../guide/admin.md#metrics). |
 
 The default geo lookup reads `cf-ipcountry` or `x-vercel-ip-country` (ignoring `XX`), and `x-vercel-ip-country-region` for the region (as `{country}-{region}`).
@@ -56,9 +59,10 @@ openramp.handle(req)          // Promise<Response>. Mount at baseUrl.
 openramp.fetch(req)           // Same as handle, for `export default openramp` on Workers, Bun, Deno
 openramp.nextHandlers()       // { GET, POST, OPTIONS } for a Next.js App Router catch-all route
 
-await openramp.sessions.create(input)  // Promise<CreatedSession>
-await openramp.sessions.retrieve(id)   // Promise<PublicSession | null>
-await openramp.sessions.refresh(id)    // Promise<PublicSession | null>: ask the active leg's adapter for status now
+await openramp.sessions.create(input)  // Promise<CreatedSession>; with externalId: Promise<CreatedSession | ExistingSession>
+await openramp.sessions.retrieve(id)   // Promise<Session | null>: the backend view (PublicSession plus userId and metadata)
+await openramp.sessions.refresh(id)    // Promise<Session | null>: ask the active leg's adapter for status now
+await openramp.sessions.cancel(id, { reason? })        // Promise<Session | null>: cancel before money moved (reason default 'requested_by_app'); 409 otherwise (see POST /sessions/:id/cancel)
 await openramp.sessions.payLink(id, { ttlMinutes? }) // Promise<PayLink | null>: { id, url, expiresAt }, a signed link to the pay page
 await openramp.sessions.revokePayLink(id, linkId)    // Promise<boolean>: make one pay link stop working; false when the session does not exist
 
@@ -70,7 +74,7 @@ await openramp.webhooks.replay(sessionId)    // Promise<number>: send the dead l
 await openramp.admin.list({ direction?, state?, olderThan?, stuck?, limit?, cursor? }) // Promise<AdminListResult>
 await openramp.admin.get(id)                  // Promise<AdminSession | null>: legs, attempts, outbox, refs, timeline
 await openramp.admin.findByRef(provider, ref) // Promise<AdminSession | null>
-await openramp.admin.findByTx(chain, txHash)  // Promise<AdminSessionSummary[]>
+await openramp.admin.findByTx(chain, txHash)  // Promise<AdminSessionSummary[]>: a transaction of any role, in any attempt
 await openramp.admin.stats({ since? })        // Promise<AdminStats>
 await openramp.admin.resolve(id, state, note) // Promise<AdminSession>: force a final state, with an audit note and a webhook
 await openramp.admin.replayWebhooks(id)       // Promise<{ queued: number }>
@@ -97,16 +101,17 @@ Users close tabs, and webhook deliveries fail. `openramp.sweep()` does the backg
 - from a scheduler that runs your code (a [Cloudflare Cron Trigger](../deploy/cloudflare-workers.md#cron-trigger), a [Vercel Cron Job](../deploy/nextjs.md#background-sweep), or any cron), or
 - over HTTP with `POST {baseUrl}/tasks/sweep` and `Authorization: Bearer {tasksToken}` (see [HTTP routes](./http.md#post-tasks-sweep)).
 
-Each run does three things:
+Each run does four things:
 
 1. **Retries failed webhooks.** Each event is saved in its session record (the outbox), and the session id goes on the outbox queue. A delivery that fails (no 2xx answer, or a timeout) stays there. The sweep sends it again when it is due. The wait starts at 30 seconds and doubles after each failed attempt, up to 2 hours. After `webhooks.retryHours` (default 24), or `webhooks.maxAttempts` attempts when you set it, the event becomes a dead letter in the session record. The server logs `webhook moved to dead letter after retries` as an error. `openramp.webhooks.replay(sessionId)` sends the dead letters again.
 2. **Refreshes open payments.** For each open session with an active payment, it asks the active leg's adapter for status, like `sessions.refresh(id)`. This settles legs without provider webhooks (Relay) after the user leaves. It also asks for the status of earlier attempts that the user left with `restart` and that still wait. When one of them was paid, the session completes with it.
-3. **Expires idle sessions.** A session past its expiry moves to `EXPIRED` when no payment started, or when the active leg still waits for the user (`awaiting_user`). The server sends `session.expired`. A leg that the provider is processing is not expired: the sweep refreshes it instead.
+3. **Expires idle sessions.** A session past its expiry moves to `EXPIRED` when no payment started, or when the active leg still waits for the user (`requires_action`). The server sends `session.expired`. A leg that the provider is processing is not expired: the sweep refreshes it instead.
+4. **Polls late payments.** A bank transfer or a deposit to an address can arrive after the session expired. When the expired session's active leg has a provider ref and the adapter has `status()`, the session goes on the grace list. The sweep polls it every `latePayments.pollMinutes` (default 10) for `latePayments.graceHours` (default 72). When the payment arrives, the session moves on from `EXPIRED`: it completes (or the next leg starts), and the server sends `session.late_payment` (with `reason: 'after_expiry'`) and then `session.succeeded`. Set `graceHours: 0` to turn it off. A provider webhook for the waiting leg has the same effect inside the grace window. Only money that arrives on the leg that waited at expiry moves the session on. After the window (or with `graceHours: 0`), a late payment changes the leg data only: the session stays `EXPIRED`, and the server sends `session.late_payment` with `reason: 'after_grace'`. A failure event, an event for an earlier attempt, or a browser request does not change an expired session.
 
 ```ts
 type SweepResult = {
   webhooks: { retried: number; delivered: number; dropped: number; pending: number }
-  sessions: { checked: number; changed: number; expired: number; open: number }
+  sessions: { checked: number; changed: number; expired: number; open: number; grace: number } // grace: expired sessions polled for a late payment
 }
 ```
 
@@ -126,20 +131,20 @@ The server tracks only the sessions it creates. A session goes back on the open-
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `userId` | `string` | required | Your user id. Passed to adapters and echoed in webhooks. |
+| `userId` | `string` | required | Your user id. Passed to adapters, and in the backend view of the session (`session.userId`) in webhooks. |
+| `externalId` | `string` | none | Your own id for the session (for example an order id): 1 to 256 printable characters, unique per app. See [externalId](#externalid). It is in the backend view (`session.externalId`) and the admin views, never in the browser view. |
 | `direction` | `'deposit' \| 'withdraw'` | `'deposit'` | See [Withdrawals](../guide/withdraw.md) |
-| `destination` | `Destination` | required for a deposit | Where the money goes. See below. A withdraw session must not have one (`400`): the user picks the target, or the app sets `target`. |
+| `destination` | `Destination` | required for a deposit | Where the money goes. See below. Withdraw: optional. The app sets the destination at creation: `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }` (the same shape as the body of [`POST /sessions/:id/target`](./http.md#post-sessions-id-target)). The server checks the format, `allowedDestinations` and `screenAddress`. A refused destination throws (`400`, `403` or `503`) and no session is made. Without it, the user picks the destination. |
 | `source` | `WithdrawSource` | required for a withdrawal | `{ chain, token, symbol?, decimals?, custody }`: the asset that leaves, and who holds it (`'user_wallet'` or `'app'`) |
-| `allowedTargets` | `AllowedTargets` | any target | Withdraw only: `{ crypto?: { chains? }, fiat?: { currencies? } }`. See [Allowed targets](../guide/withdraw.md#allowed-targets). |
-| `target` | `WithdrawTarget` | none | Withdraw only: set the target at creation. Same shape as the body of [`POST /sessions/:id/target`](./http.md#post-sessions-id-target): `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. The server checks the format, `allowedTargets` and `screenAddress`, and stores it as the destination. A refused target throws (`400`, `403` or `503`) and no session is made. |
-| `lockTarget` | `boolean` | `false` | Withdraw with `target` only. Nobody can change the target: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`. The session shows `targetLocked: true`, and the modal skips the target screen. See [Locked targets](../guide/withdraw.md#locked-targets). |
+| `allowedDestinations` | `AllowedDestinations` | any destination | Withdraw only: `{ crypto?: { chains? }, fiat?: { currencies? } }`. See [Allowed targets](../guide/withdraw.md#allowed-targets). |
+| `lockDestination` | `boolean` | `false` | Withdraw with `destination` only (a deposit destination is always locked). Nobody can change the destination: `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED`. The session shows `destinationLocked: true`, and the modal skips the target screen. See [Locked targets](../guide/withdraw.md#locked-targets). |
 | `country` | `string` | none | ISO 3166-1 alpha-2. Picks the currency and local methods. |
 | `region` | `string` | none | ISO 3166-2, e.g. `US-NY` |
 | `email` | `string` | none | Prefilled at providers that support it |
 | `locale` | `string` | none | BCP 47. Picks the modal language; adapters get `en` when unset. |
 | `amountBounds` | `{ min?, max?, currency }` | none | Shown on the amount screen and enforced by the server on what the user pays (see below) |
 | `allowedMethods` | `string[]` | all | Only these methods are planned and quoted |
-| `metadata` | `Record<string, string>` | none | Echoed in every webhook. At most 50 keys. A key has at most 40 characters, a value at most 500. |
+| `metadata` | `Record<string, string>` | none | In the backend view of the session (`session.metadata`) in every webhook. At most 50 keys. A key has at most 40 characters, a value at most 500. |
 | `ttlMinutes` | `number` | `30` | Session lifetime. More than 0 and at most 10080 (7 days). |
 
 The server checks the input and throws a `400` (`BAD_REQUEST`) when a field is not valid:
@@ -176,9 +181,25 @@ Provider limits still apply.
 
 ```ts
 type CreatedSession = { id: string; clientSecret: string; expiresAt: string }
+type ExistingSession = { id: string; expiresAt: string; existing: true } // a repeated externalId: no client secret
 ```
 
 Give `clientSecret` to the browser. Keep `id` if you want to look the session up later.
+
+### externalId
+
+`externalId` lets your backend send a create again (for example after a timeout) and get the same session. The rules keep a session, and its client secret, with the caller that made it:
+
+| The create repeats an `externalId` of | Result |
+|---|---|
+| a session that is not final, with the same `userId` and the same input (all fields; the server compares a hash) | `{ id, expiresAt, existing: true }`. No client secret. |
+| a session of another `userId` | `409 EXTERNAL_ID_CONFLICT`. No lookup: the answer has no session id, status or secret. |
+| a session with other input (destination, amount bounds, metadata, ...) | `409 EXTERNAL_ID_CONFLICT` |
+| a final session (`succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) | `409 EXTERNAL_ID_CONFLICT` |
+
+- The server keeps only a hash of each client secret, so it never gives a secret again. Use the secret from the first create (keep it with your order), or make a pay link with `openramp.sessions.payLink(id)`.
+- Two creates at the same time make one session: one gets the client secret, the other gets `existing: true`.
+- Nothing looks a session up by `externalId` from the outside: there is no public or admin route for it. Only your server, with the input of the first create, gets the session id back.
 
 ## verifyWebhook
 
@@ -186,9 +207,15 @@ Give `clientSecret` to the browser. Keep `id` if you want to look the session up
 import { verifyWebhook } from '@openrampkit/server'
 
 await verifyWebhook(secret, headers, rawBody, toleranceSec = 300) // Promise<boolean>
+generateWebhookSecret()                                            // 'whsec_...': a new Standard Webhooks secret (32 random bytes)
+await signWebhook(secret, id, timestamp, body)                     // 'v1,<base64>': the signature the server sends
 ```
 
-Use it in a service that does not have the `openramp` instance. See [Webhooks to your backend](../guide/webhooks.md).
+The webhooks follow [Standard Webhooks](https://www.standardwebhooks.com). `verifyWebhook` reads the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers. Use it in a service that does not have the `openramp` instance. See [Webhooks to your backend](../guide/webhooks.md).
+
+`WebhookEvent`, `WebhookEventOf`, `WebhookEventType`, `Session` and `ClientEvent` are also exported from `@openrampkit/server` (they come from `@openrampkit/core`).
+
+Every response of the handler has the header `openramp-version: 1` (the same as `apiVersion` in webhook events).
 
 ## Stores
 
@@ -207,6 +234,9 @@ import { memoryStore, durableObjectStore, OpenRampStore, cloudflareKvStore, redi
 | `fromNodeRedisV4(client)` | Wraps a node-redis v4+ client for `redisStore` |
 | `scopedKV(store, prefix)` | A prefixed key-value view, as adapters get |
 | `VersionConflictError` | Thrown by `put` on a version mismatch |
+| `SESSION_SCHEMA` | The record schema that this server writes in `SessionRecord.schema` (now `3`) |
+| `migrateRecord(rec)` | Brings a stored record up to `SESSION_SCHEMA`, in place. The server runs it on every store read. See [Record schema](../deploy/stores.md#record-schema). |
+| `migratingStore(store)` | `store`, with `migrateRecord` on every `get`. The server wraps `config.store` with it. |
 
 Types: `SessionStore`, `SessionRecord`, `StoreQueue`, `QueueItem`, `TimelineEntry`, `Resolution`, `ActiveLeg`, `StoredQuote`, `DurableObjectNamespaceLike`, `DurableObjectStateLike`, `KVNamespaceLike`, `RedisLike`, `NodeRedisLike`, `NodeRedisV4Like`, `RedisStoreOptions`. See [Session stores](../deploy/stores.md) for the interface and a custom store.
 

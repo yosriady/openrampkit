@@ -1,18 +1,19 @@
-// HTTP routes. Every route takes the runtime and returns a Response; errors are thrown as OrkException.
+// HTTP routes. Every route takes the runtime and returns a Response; errors are thrown as OpenRampException.
 
-import { OrkException, isTerminal, orkError } from '@openrampkit/core'
+import { claimWebhook, releaseWebhook } from '@openrampkit/adapter'
+import { OpenRampException, isFinalStatus, isTerminal, openRampError } from '@openrampkit/core'
 import type { SurfaceKind } from '@openrampkit/core'
-import { safeEqual } from './crypto.js'
+import { safeEqual, sha256Hex } from './crypto.js'
 import { MAX_WEBHOOK_BODY_BYTES } from './config.js'
 import { clientIp, errorResponse, geoOf, json, readJson, readText, withIdempotency } from './http.js'
-import { applyEvent, archiveActive, beginPayment, refreshActive, setLegStep, startSignature } from './legs.js'
+import { adapterMoveAllowed, applyEvent, archiveActive, beginPayment, moneyMayHaveMoved, refreshActive, setLegStep, startSignature } from './legs.js'
 import { plan, quotes, boundsError } from './planning.js'
 import type { QuotesBody } from './planning.js'
 import { saveSession } from './outbox.js'
 import { trackOpenSession } from './queue.js'
 import { adapterContext, publicSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
-import { createSession, loadAuthed } from './sessions.js'
+import { cancelSession, createSession, loadAuthed } from './sessions.js'
 import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
 import { adminRoute } from './admin.js'
@@ -24,7 +25,7 @@ import { CAIP2, checkAllowed, isValidToken, parseTarget, screenTarget, targetDes
 const RETURN_PAGE =
   '<!doctype html><meta charset="utf-8"><title>Payment</title><body style="font-family:system-ui;padding:32px">You can close this tab and go back to the app.<script>setTimeout(()=>window.close(),800)</script>'
 
-const inProgress = () => errorResponse(orkError('BAD_REQUEST', { message: 'A payment is already in progress.' }), 409)
+const inProgress = () => errorResponse(openRampError('BAD_REQUEST', { message: 'A payment is already in progress.' }), 409)
 
 const WALLET_ADDRESS = /^[\x21-\x7e]{8,128}$/
 const AMOUNT = /^\d{1,30}(\.\d{1,36})?$/
@@ -32,19 +33,37 @@ const AMOUNT = /^\d{1,30}(\.\d{1,36})?$/
 /** A wallet address from the browser: optional, else a printable string of 8 to 128 characters. */
 function walletAddressOf(v: unknown): string | undefined {
   if (v === undefined || v === null || v === '') return undefined
-  if (typeof v !== 'string' || !WALLET_ADDRESS.test(v)) throw new OrkException(orkError('BAD_REQUEST', { message: '`walletAddress` is not valid.' }), 400)
+  if (typeof v !== 'string' || !WALLET_ADDRESS.test(v)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: '`walletAddress` is not valid.' }), 400)
   return v
 }
 
 /** Check the body of `POST /sessions/:id/quotes`. Throws a 400 when it is not valid. */
 function checkQuotesBody(body: QuotesBody): void {
-  const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
   if (typeof body?.method !== 'string' || !body.method || body.method.length > 64 || typeof body.amount !== 'string') throw bad('method and amount are required.')
   if (!AMOUNT.test(body.amount)) throw bad('`amount` must be a decimal string, e.g. "25.50".')
   if (body.amountSide !== undefined && body.amountSide !== 'source' && body.amountSide !== 'destination') throw bad('`amountSide` must be "source" or "destination".')
   if (body.source !== undefined) {
     const { chain, token } = (body.source ?? {}) as { chain?: unknown; token?: unknown }
     if (typeof chain !== 'string' || !CAIP2.test(chain) || typeof token !== 'string' || !isValidToken(chain, token)) throw bad('`source` must have a CAIP-2 `chain` and a token address or "native".')
+  }
+}
+
+/** Why a session with a final status takes no change */
+function finalMessage(rec: SessionRecord): string {
+  switch (rec.status) {
+    case 'succeeded':
+      return rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.'
+    case 'reversed':
+      return 'This payment was reversed. Start a new session.'
+    case 'refunded':
+      return 'This payment was refunded. Start a new session.'
+    case 'canceled':
+      return 'This session was canceled. Start a new session.'
+    case 'expired':
+      return 'This session expired. Start a new session.'
+    default:
+      return 'This session failed. Start a new session.'
   }
 }
 
@@ -68,34 +87,63 @@ export async function route(rt: Runtime, req: Request): Promise<Response> {
   if (head === 'health' && method === 'GET') return healthRoute(rt, req)
   if (head === 'tasks' && id === 'sweep' && method === 'POST') return sweepRoute(rt, req)
   if (head === 'admin') return adminRoute(rt, req, method, parts.slice(1))
-  return errorResponse(orkError('NOT_FOUND'), 404)
+  return errorResponse(openRampError('NOT_FOUND'), 404)
 }
 
-/** POST /sessions: browser-created sessions, only through the app's `authorize` hook. */
+/**
+ * POST /sessions: browser-created sessions, only through the app's `authorize` hook. An
+ * `Idempotency-Key` is scoped to the user that `authorize` returns.
+ */
 async function createSessionRoute(rt: Runtime, req: Request): Promise<Response> {
-  if (!rt.config.authorize) return errorResponse(orkError('NOT_FOUND'), 404)
-  const body = await readJson<unknown>(req, {})
+  if (!rt.config.authorize) return errorResponse(openRampError('NOT_FOUND'), 404)
+  const body = await readJson<unknown>(req.clone(), {})
   const input = await rt.config.authorize(req, body)
-  if (!input) return errorResponse(orkError('UNAUTHORIZED'), 401)
-  return json(await createSession(rt, { ...geoOf(rt, req), ...input }), 201)
+  if (!input) return errorResponse(openRampError('UNAUTHORIZED'), 401)
+  const scopeId = `create:${(await sha256Hex(String(input.userId))).slice(0, 32)}`
+  return withIdempotency(rt, scopeId, 'sessions', req, async () => {
+    const created = await createSession(rt, { ...geoOf(rt, req), ...input })
+    // A repeated externalId: the existing session, with no client secret
+    return json(created, created.existing ? 200 : 201)
+  })
 }
 
 async function sessionRoute(rt: Runtime, req: Request, method: string, id: string, action?: string, arg?: string): Promise<Response> {
   const rec = await loadAuthed(rt, req, id)
   const ip = clientIp(req)
   if (ip) rec.ip = ip
+  // `Idempotency-Key` on every POST, scoped to the session and the route
+  if (method === 'POST') return withIdempotency(rt, rec.id, [action ?? '', arg ?? ''].filter(Boolean).join('/'), req, () => sessionAction(rt, req, rec, method, action, arg))
+  return sessionAction(rt, req, rec, method, action, arg)
+}
+
+async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, method: string, action?: string, arg?: string): Promise<Response> {
 
   if (!action && method === 'GET') return json(publicSession(rec))
 
   // Past the deadline, a session cannot start (or restart) a payment. A payment in progress can still finish.
   const restart = action === 'transitions' && arg === 'restart'
   if (method === 'POST' && (CHANGES_BEFORE_PAYMENT.has(action ?? '') || restart) && Date.now() > rec.expiresAt) {
-    return errorResponse(orkError('SESSION_EXPIRED'), 410)
+    return errorResponse(openRampError('SESSION_EXPIRED'), 410)
+  }
+
+  // The user cancels: allowed while no payment is under way.
+  if (action === 'cancel' && method === 'POST' && !arg) {
+    if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(openRampError('UNAUTHORIZED'), 403)
+    await cancelSession(rt, rec, 'requested_by_user')
+    await saveSession(rt, rec)
+    return json(publicSession(rec))
   }
 
   // An operator closed this session (`admin.resolve`): the browser cannot change it.
   if (method === 'POST' && rec.resolution && action !== 'pay-link') {
-    return errorResponse(orkError('BAD_REQUEST', { message: 'This session was closed by the operator.' }), 409)
+    return errorResponse(openRampError('BAD_REQUEST', { message: 'This session was closed by the operator.' }), 409)
+  }
+
+  // A final session (succeeded, failed, canceled, refunded or reversed) takes no new plan, quote, target,
+  // payment or transition, with the client secret or a pay link. An expired session is refused above
+  // (410) for the routes before payment; a late payment can still move it on.
+  if (method === 'POST' && action !== 'pay-link' && isFinalStatus(rec.status) && rec.status !== 'expired') {
+    return errorResponse(openRampError('BAD_REQUEST', { message: finalMessage(rec) }), 409)
   }
 
   if (action === 'step' && method === 'GET') {
@@ -119,14 +167,14 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
 
   if (action === 'pay-link' && method === 'POST') {
     // A pay link cannot mint or revoke pay links: only the client secret can.
-    if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(orkError('UNAUTHORIZED'), 403)
+    if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(openRampError('UNAUTHORIZED'), 403)
     if (arg === 'revoke') {
       const body = await readJson<{ id?: unknown }>(req, {})
       revokeOn(rec, body.id)
       await saveSession(rt, rec)
       return json({ revoked: true })
     }
-    if (arg) return errorResponse(orkError('NOT_FOUND'), 404)
+    if (arg) return errorResponse(openRampError('NOT_FOUND'), 404)
     const body = await readJson<{ ttlMinutes?: number }>(req, {})
     return json(await createPayLink(rt, rec, typeof body.ttlMinutes === 'number' ? body.ttlMinutes : undefined), 201)
   }
@@ -140,27 +188,24 @@ async function sessionRoute(rt: Runtime, req: Request, method: string, id: strin
     return json(result)
   }
 
-  if (action === 'select' && method === 'POST') return withIdempotency(rt, rec.id, 'select', req, () => selectRoute(rt, req, rec))
+  if (action === 'select' && method === 'POST') return selectRoute(rt, req, rec)
 
-  if (action === 'transitions' && arg && method === 'POST') {
-    const name = decodeURIComponent(arg)
-    return withIdempotency(rt, rec.id, `transitions/${name}`, req, () => transitionRoute(rt, req, rec, name))
-  }
-  return errorResponse(orkError('NOT_FOUND'), 404)
+  if (action === 'transitions' && arg && method === 'POST') return transitionRoute(rt, req, rec, decodeURIComponent(arg))
+  return errorResponse(openRampError('NOT_FOUND'), 404)
 }
 
 /**
  * POST /sessions/:id/target (withdraw only): the user picks where the funds go.
  * Body: `{ type: 'crypto', chain, token, address }` or `{ type: 'fiat', currency }`, plus the
  * optional plan fields of `/plan` (`walletConnected`, `walletAddress`, `surfaces`).
- * Checks the format, the app's `allowedTargets` and `screenAddress`, then returns the plan.
- * A target that the app locked at creation (`lockTarget`) cannot change: 409 `TARGET_LOCKED`.
+ * Checks the format, the app's `allowedDestinations` and `screenAddress`, then returns the plan.
+ * A target that the app locked at creation (`lockDestination`) cannot change: 409 `DESTINATION_LOCKED`.
  */
 async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
-  if (rec.direction !== 'withdraw') return errorResponse(orkError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
-  if (rec.targetLocked) return errorResponse(orkError('TARGET_LOCKED'), 409)
+  if (rec.direction !== 'withdraw') return errorResponse(openRampError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
+  if (rec.destinationLocked) return errorResponse(openRampError('DESTINATION_LOCKED'), 409)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
-  if (rec.step.state === 'COMPLETED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED' || rec.status === 'expired') return errorResponse(openRampError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
   const body = await readJson<Record<string, unknown>>(req)
   const target = parseTarget(body)
   checkAllowed(rec, target)
@@ -181,9 +226,11 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   const body = await readJson<{ quoteId: string; walletAddress?: string }>(req)
   // Own keys only: a quote id such as `__proto__` must not find an inherited value.
   const stored = typeof body?.quoteId === 'string' && Object.hasOwn(rec.quotes, body.quoteId) ? rec.quotes[body.quoteId] : undefined
-  if (!stored) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
-  if (stored.quote.expiresAt && Date.parse(stored.quote.expiresAt) < Date.now()) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
+  if (!stored) return errorResponse(openRampError('QUOTE_EXPIRED'), 410)
+  if (stored.quote.expiresAt && Date.parse(stored.quote.expiresAt) < Date.now()) return errorResponse(openRampError('QUOTE_EXPIRED'), 410)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
+  // A completed (or completed, then reversed) payment stays the session's payment.
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED') return errorResponse(openRampError('BAD_REQUEST', { message: 'This session already has a completed payment.' }), 409)
   const bounds = boundsError(rec, stored.quote.input)
   if (bounds) return errorResponse(bounds, 422)
   const walletAddress = walletAddressOf(body.walletAddress)
@@ -196,18 +243,22 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
 async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, name: string): Promise<Response> {
   const body = await readJson<{ inputs?: Record<string, unknown> }>(req, {})
   if (name === 'restart') {
-    // Allowed before payment starts, while waiting for payment, or after a terminal state.
-    if (rec.active && !isTerminal(rec.step.state) && rec.step.state !== 'PAYMENT') {
-      return errorResponse(orkError('BAD_REQUEST', { message: 'This payment can no longer be changed.' }), 409)
+    // Allowed when no payment is in progress (also after a failed attempt), or while the user still has
+    // to pay (PAYMENT). Never after a final status: `session.failed` is never followed by success.
+    if (isFinalStatus(rec.status)) return errorResponse(openRampError('BAD_REQUEST', { message: finalMessage(rec) }), 409)
+    if (rec.status !== 'requires_payment_method' && rec.step.state !== 'PAYMENT') {
+      return errorResponse(openRampError('BAD_REQUEST', { message: 'This payment can no longer be changed.' }), 409)
     }
-    if (rec.step.state === 'COMPLETED') {
-      return errorResponse(orkError('BAD_REQUEST', { message: rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.' }), 409)
+    // While the user still has to pay: only before any money moved (no submitted transaction, no
+    // treasury send, no provider status past requires_action).
+    if (rec.status !== 'requires_payment_method' && rec.active && moneyMayHaveMoved(rec.active)) {
+      return errorResponse(openRampError('BAD_REQUEST', { message: 'Money of this payment may be on its way. It cannot be changed now.' }), 409)
     }
     // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
     // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).
     archiveActive(rec)
     addTimeline(rec, 'payment.restarted')
-    rec.status = 'open'
+    rec.status = 'requires_payment_method'
     rec.step = { sessionId: rec.id, state: 'SELECT_METHOD', transitions: [], expiresAt: new Date(rec.expiresAt).toISOString() }
     // The sweep polls the session again (it left the list when it reached a terminal state).
     await trackOpenSession(rt, rec.id)
@@ -215,17 +266,22 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     return json(publicSession(rec))
   }
   const act = rec.active
-  if (!act) return errorResponse(orkError('BAD_REQUEST', { message: 'Nothing to continue.' }), 409)
+  if (!act) return errorResponse(openRampError('BAD_REQUEST', { message: 'Nothing to continue.' }), 409)
   if (!rec.step.transitions.some((t) => t.name === name && t.kind !== 'AWAIT')) {
-    return errorResponse(orkError('BAD_REQUEST', { message: `Transition ${name} is not allowed now.` }), 409)
+    return errorResponse(openRampError('BAD_REQUEST', { message: `Transition ${name} is not allowed now.` }), 409)
   }
   const leg = act.legs[act.index]!
   const a = rt.adapter(leg.adapterId)
-  if (!a.transition) return errorResponse(orkError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
+  if (!a.transition) return errorResponse(openRampError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
   const ls = await a.transition(
     { leg: act.pathway.legs[act.index]!, ref: leg.ref ?? '', name, ...(body.inputs ? { inputs: body.inputs } : {}) },
     adapterContext(rt, rec, a, act.pathway, act.index),
   )
+  // A transition moves the leg only forward, like a provider event (see `adapterMoveAllowed`).
+  if (leg.step && !adapterMoveAllowed(leg.step, ls)) {
+    rt.log.warn('transition would move the leg back; refused', { sessionId: rec.id, adapter: a.id, name, from: leg.step.status, to: ls.status })
+    return errorResponse(openRampError('BAD_REQUEST', { message: 'This step can no longer change.' }), 409)
+  }
   await setLegStep(rt, rec, act.index, ls)
   await saveSession(rt, rec)
   return json(publicSession(rec))
@@ -234,8 +290,8 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
 /** GET /start/:sessionId.token.sig: verify the signed token, then 302 to the provider. */
 async function startRoute(rt: Runtime, param: string): Promise<Response> {
   const [sid, token, sig] = param.split('.')
-  if (!sid || !token || !sig) return errorResponse(orkError('NOT_FOUND'), 404)
-  if (!safeEqual(sig, await startSignature(rt, sid, token))) return errorResponse(orkError('UNAUTHORIZED'), 401)
+  if (!sid || !token || !sig) return errorResponse(openRampError('NOT_FOUND'), 404)
+  if (!safeEqual(sig, await startSignature(rt, sid, token))) return errorResponse(openRampError('UNAUTHORIZED'), 401)
   const entry = (await rt.store.get(sid))?.startUrls[token]
   if (!entry || entry.exp < Date.now()) return new Response('This link expired. Go back to the app and try again.', { status: 410 })
   return new Response(null, {
@@ -252,20 +308,35 @@ async function startRoute(rt: Runtime, param: string): Promise<Response> {
  */
 async function webhookRoute(rt: Runtime, req: Request, adapterId: string): Promise<Response> {
   const a = rt.adapters.get(adapterId)
-  if (!a?.webhook) return errorResponse(orkError('NOT_FOUND'), 404)
+  if (!a?.webhook) return errorResponse(openRampError('NOT_FOUND'), 404)
   const raw = await readText(req, MAX_WEBHOOK_BODY_BYTES)
   const ctx = { log: rt.log, fetch: rt.fetch, shared: scopedKV(rt.store, `a:${a.id}`) }
   if (!(await a.webhook.verify(req, raw, ctx))) {
     rt.metric('webhook.verify_failed', 1, { adapter: a.id })
-    return errorResponse(orkError('UNAUTHORIZED'), 401)
+    return errorResponse(openRampError('UNAUTHORIZED'), 401)
+  }
+  // Replay protection for providers that sign with no timestamp: one delivery per key in 7 days.
+  const key = a.webhook.replayKey ? await a.webhook.replayKey(req, raw, ctx) : undefined
+  const claim = key ? await claimWebhook(ctx.shared, key) : undefined
+  if (key && !claim) {
+    rt.log.info('provider webhook already received; ignored as a replay', { adapter: a.id })
+    rt.metric('webhook.replayed', 1, { adapter: a.id })
+    return json({ received: true, duplicate: true })
   }
   let retry = false
-  for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
-    const r = await applyEvent(rt, a.id, ev)
-    if (r === 'unknown' || r === 'conflict') retry = true
+  try {
+    for (const ev of await a.webhook.parse(raw, { ...ctx, url: req.url })) {
+      const r = await applyEvent(rt, a.id, ev)
+      if (r === 'unknown' || r === 'conflict') retry = true
+    }
+  } catch (e) {
+    if (key && claim) await releaseWebhook(ctx.shared, key, claim)
+    throw e
   }
   if (retry) {
-    return json({ error: orkError('PROVIDER_UNAVAILABLE', { message: 'The event could not be applied yet. Send it again later.' }) }, 503, { 'retry-after': '30' })
+    // Give the key back, so the provider's retry of this body applies.
+    if (key && claim) await releaseWebhook(ctx.shared, key, claim)
+    return json({ error: openRampError('PROVIDER_UNAVAILABLE', { message: 'The event could not be applied yet. Send it again later.' }) }, 503, { 'retry-after': '30' })
   }
   return json({ received: true })
 }
@@ -284,7 +355,7 @@ async function adapterRoute(rt: Runtime, req: Request, adapterId: string, subpat
         },
       })
     : undefined
-  return res ?? errorResponse(orkError('NOT_FOUND'), 404)
+  return res ?? errorResponse(openRampError('NOT_FOUND'), 404)
 }
 
 /** Bearer check for operational routes. False when no `tasksToken` is configured. */
@@ -296,8 +367,8 @@ async function hasTasksToken(rt: Runtime, req: Request): Promise<boolean> {
 
 /** POST /tasks/sweep: retry webhooks, refresh open payments, expire sessions. Needs `tasksToken`. */
 async function sweepRoute(rt: Runtime, req: Request): Promise<Response> {
-  if (!rt.config.tasksToken) return errorResponse(orkError('NOT_FOUND'), 404)
-  if (!(await hasTasksToken(rt, req))) return errorResponse(orkError('UNAUTHORIZED'), 401)
+  if (!rt.config.tasksToken) return errorResponse(openRampError('NOT_FOUND'), 404)
+  if (!(await hasTasksToken(rt, req))) return errorResponse(openRampError('UNAUTHORIZED'), 401)
   const limit = Number(new URL(req.url).searchParams.get('limit') ?? '') || undefined
   return json(await sweep(rt, limit ? { limit } : {}))
 }
@@ -309,7 +380,7 @@ async function sweepRoute(rt: Runtime, req: Request): Promise<Response> {
 async function healthRoute(rt: Runtime, req: Request): Promise<Response> {
   const deep = new URL(req.url).searchParams.get('deep') === '1'
   if (!deep) return json({ ok: true, adapters: [...rt.adapters.keys()] })
-  if (!(await hasTasksToken(rt, req))) return errorResponse(orkError('UNAUTHORIZED'), 401)
+  if (!(await hasTasksToken(rt, req))) return errorResponse(openRampError('UNAUTHORIZED'), 401)
   const checks = await Promise.all(
     [...rt.adapters.values()].map(async (a) => ({
       id: a.id,
@@ -325,5 +396,5 @@ async function checkRate(rt: Runtime, sessionId: string): Promise<void> {
   const key = `rl:${sessionId}:${Math.floor(Date.now() / 60_000)}`
   const n = ((await rt.store.kv.get<number>(key)) ?? 0) + 1
   await rt.store.kv.put(key, n, 120)
-  if (n > max) throw new OrkException(orkError('RATE_LIMITED'), 429)
+  if (n > max) throw new OpenRampException(openRampError('RATE_LIMITED'), 429)
 }

@@ -7,17 +7,17 @@
 // every built-in store, so sessions made at the same time are never lost. Nothing claims these queues;
 // `StoreQueue.range` reads them, latest first. The sweep removes days older than `admin.indexDays`.
 
-import { add, isTerminal, OrkException, orkError } from '@openrampkit/core'
-import type { Amount, Direction, Fee, OrkError, StateName } from '@openrampkit/core'
+import { add, isTerminal, OpenRampException, openRampError, stateFor } from '@openrampkit/core'
+import type { Amount, Delivery, Direction, Fee, OpenRampError, StateName, StepDetail, Transaction } from '@openrampkit/core'
 import { safeEqual, sha256Hex } from './crypto.js'
 import { json, readJson } from './http.js'
-import { sessionStatusFor } from './legs.js'
+import { legTransactions, sessionStatusFor } from './legs.js'
 import { notify } from './notify.js'
 import { replayDeadLetters, saveSession } from './outbox.js'
 import { adminPage } from './admin-page.js'
 import { claimToken, OPEN_QUEUE, OUTBOX_QUEUE, queueOf } from './queue.js'
 import type { Runtime } from './runtime.js'
-import type { ActivePayment, OutboxEvent, PaymentAttempt, QueueItem, Resolution, SessionRecord, TimelineEntry } from './store.js'
+import type { ActivePayment, OutboxEvent, PaymentAttempt, QueueItem, Resolution, Reversal, SessionRecord, TimelineEntry } from './store.js'
 import { addTimeline } from './timeline.js'
 
 const DAY_MS = 24 * 60 * 60_000
@@ -35,8 +35,8 @@ const MAX_NOTE = 500
 const FINAL_STATES = ['COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED'] as const
 type FinalState = (typeof FINAL_STATES)[number]
 
-const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
-const notFound = () => new OrkException(orkError('NOT_FOUND'), 404)
+const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
+const notFound = () => new OpenRampException(openRampError('NOT_FOUND'), 404)
 
 const dayOf = (ms: number) => Math.floor(ms / DAY_MS)
 const indexName = (day: number) => `${INDEX_PREFIX}${new Date(day * DAY_MS).toISOString().slice(0, 10)}`
@@ -92,7 +92,7 @@ function decodeCursor(s: string | undefined): Cursor | undefined {
 async function* indexEntries(rt: Runtime, newest: number, oldest: number, after?: Cursor): AsyncGenerator<{ d: number; e: QueueItem }> {
   const q = queueOf(rt.store)
   if (!q.range) {
-    throw new OrkException(orkError('INTERNAL', { message: 'The store queue has no `range`. The admin index needs it (see Session stores).' }), 501)
+    throw new OpenRampException(openRampError('INTERNAL', { message: 'The store queue has no `range`. The admin index needs it (see Session stores).' }), 501)
   }
   for (let d = after ? Math.min(after.d, dayOf(newest)) : dayOf(newest); d >= dayOf(oldest); d--) {
     let last: Cursor | undefined = after && d === after.d ? after : undefined
@@ -159,6 +159,8 @@ export type AdminSessionSummary = {
   method?: string
   provider?: string
   userId: string
+  /** The app's own id (`externalId` at create) */
+  externalId?: string
   livemode: boolean
   createdAt: string
   updatedAt: string
@@ -175,11 +177,18 @@ export type AdminLeg = {
   ref?: string
   status: string
   state?: StateName
-  txHash?: string
-  error?: Pick<OrkError, 'code' | 'message'>
+  /** The provider's own order id (`LegStep.providerRef`) */
+  providerRef?: string
+  /** Every transaction of the leg (see `Transaction.role`) */
+  transactions: Transaction[]
+  /** The provider's own status, from the step detail */
+  providerStatus?: string
+  error?: Pick<OpenRampError, 'code' | 'message'>
   input: Amount
   output: Amount
   outputConfirmed: boolean
+  /** The check of the reported output against the quote */
+  delivery?: Omit<Delivery, 'legIndex'>
   fees: Fee[]
   started: boolean
   lastCheckedAt?: string
@@ -206,19 +215,22 @@ export type AdminSession = AdminSessionSummary & {
   expiresAt: string
   destination?: SessionRecord['destination']
   source?: SessionRecord['source']
-  allowedTargets?: SessionRecord['allowedTargets']
-  targetLocked: boolean
+  allowedDestinations?: SessionRecord['allowedDestinations']
+  destinationLocked: boolean
   amountBounds?: SessionRecord['amountBounds']
   allowedMethods?: string[]
   revokedPayLinks: number
-  step: { state: StateName; sub?: string; legIndex?: number; error?: Pick<OrkError, 'code' | 'message'> }
+  step: { state: StateName; detail?: StepDetail; legIndex?: number; error?: Pick<OpenRampError, 'code' | 'message'> }
   payment?: AdminPayment
   attempts: AdminPayment[]
   outbox: AdminOutboxEvent[]
   providerRefs: Array<{ adapterId: string; ref: string; attempt: number; active: boolean }>
-  txHashes: string[]
+  /** Every transaction of every payment attempt, oldest attempt first */
+  transactions: Array<Transaction & { attempt: number }>
   timeline: Array<Omit<TimelineEntry, 'at'> & { at: string }>
   resolution?: Omit<Resolution, 'at'> & { at: string }
+  /** Set when the provider refunded or reversed a leg after it succeeded */
+  reversal?: Omit<Reversal, 'at'> & { at: string }
 }
 
 function currencyOf(a: Amount): string {
@@ -235,10 +247,10 @@ const isPositive = (v: string) => /^\d*\.?\d+$/.test(v) && /[1-9]/.test(v)
 export function amountOf(rec: SessionRecord): Amount | undefined {
   const legs = rec.active?.legs ?? []
   const input = legs[0]?.quote.input
-  if (input && isPositive(input.amount)) return input
+  if (input && isPositive(input.value)) return input
   const last = legs[legs.length - 1]
   const out = last?.step?.output ?? last?.quote.output
-  if (out && isPositive(out.amount)) return out
+  if (out && isPositive(out.value)) return out
   return input
 }
 
@@ -250,9 +262,10 @@ function summarize(rt: Runtime, rec: SessionRecord, now: number): AdminSessionSu
     direction: rec.direction,
     status: rec.status,
     state: rec.step.state,
-    ...(input ? { amount: input.amount, currency: currencyOf(input) } : {}),
+    ...(input ? { amount: input.value, currency: currencyOf(input) } : {}),
     ...(act ? { method: act.pathway.method, provider: act.pathway.provider } : {}),
     userId: rec.userId,
+    ...(rec.externalId ? { externalId: rec.externalId } : {}),
     livemode: rec.livemode,
     createdAt: iso(rec.createdAt)!,
     updatedAt: iso(rec.updatedAt ?? rec.createdAt)!,
@@ -267,9 +280,10 @@ function isStuck(rt: Runtime, rec: SessionRecord, now: number): boolean {
   return !isTerminal(rec.step.state) && now - rec.createdAt > stuckAfterMs(rt)
 }
 
-const errorView = (e?: OrkError) => (e ? { code: e.code, message: e.message } : undefined)
+const errorView = (e?: OpenRampError) => (e ? { code: e.code, message: e.message } : undefined)
 
 function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
+  const txs = (i: number) => legTransactions(p, i)
   return {
     attempt: p.n ?? 0,
     method: p.pathway.method,
@@ -277,19 +291,22 @@ function paymentView(p: ActivePayment | PaymentAttempt): AdminPayment {
     pathwayId: p.pathway.id,
     legIndex: p.index,
     ...('endedAt' in p ? { endedAt: iso(p.endedAt)! } : {}),
-    legs: p.legs.map((l) => {
+    legs: p.legs.map((l, i) => {
       const error = errorView(l.step?.error)
       return {
         adapterId: l.adapterId,
         legId: l.legId,
         ...(l.ref ? { ref: l.ref } : {}),
         status: l.step?.status ?? 'pending',
-        ...(l.step ? { state: l.step.state } : {}),
-        ...(l.step?.txHash ? { txHash: l.step.txHash } : {}),
+        ...(l.step ? { state: stateFor(l.step) } : {}),
+        ...(l.step?.providerRef ? { providerRef: l.step.providerRef } : {}),
+        transactions: txs(i),
+        ...(l.step?.detail?.providerStatus ? { providerStatus: l.step.detail.providerStatus } : {}),
         ...(error ? { error } : {}),
         input: l.quote.input,
         output: l.step?.output ?? l.quote.output,
         outputConfirmed: !!l.step?.output,
+        ...(l.delivery ? { delivery: l.delivery } : {}),
         fees: l.quote.fees,
         started: l.started,
         ...(l.lastCheckedAt ? { lastCheckedAt: iso(l.lastCheckedAt)! } : {}),
@@ -316,14 +333,14 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     expiresAt: iso(rec.expiresAt)!,
     ...(rec.destination ? { destination: rec.destination } : {}),
     ...(rec.source ? { source: rec.source } : {}),
-    ...(rec.allowedTargets ? { allowedTargets: rec.allowedTargets } : {}),
-    targetLocked: !!rec.targetLocked,
+    ...(rec.allowedDestinations ? { allowedDestinations: rec.allowedDestinations } : {}),
+    destinationLocked: !!rec.destinationLocked,
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     ...(rec.allowedMethods ? { allowedMethods: rec.allowedMethods } : {}),
     revokedPayLinks: rec.revokedPayLinks?.length ?? 0,
     step: {
       state: rec.step.state,
-      ...(rec.step.sub ? { sub: rec.step.sub } : {}),
+      ...(rec.step.detail ? { detail: rec.step.detail } : {}),
       ...(rec.step.legIndex !== undefined ? { legIndex: rec.step.legIndex } : {}),
       ...(stepError ? { error: stepError } : {}),
     },
@@ -331,9 +348,10 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     attempts: (rec.attempts ?? []).map(paymentView),
     outbox: (rec.outbox ?? []).map(outboxView),
     providerRefs: payments.flatMap(({ p, active }) => p.legs.filter((l) => l.ref).map((l) => ({ adapterId: l.adapterId, ref: l.ref!, attempt: p.n ?? 0, active }))),
-    txHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h)),
+    transactions: payments.flatMap(({ p }) => p.legs.flatMap((_, i) => legTransactions(p, i).map((t) => ({ ...t, attempt: p.n ?? 0 })))),
     timeline: (rec.timeline ?? []).map((t) => ({ ...t, at: iso(t.at)! })),
     ...(rec.resolution ? { resolution: { ...rec.resolution, at: iso(rec.resolution.at)! } } : {}),
+    ...(rec.reversal ? { reversal: { ...rec.reversal, at: iso(rec.reversal.at)! } } : {}),
   }
 }
 
@@ -341,7 +359,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
 
 export type AdminListOptions = {
   direction?: Direction
-  /** A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`) or a step state (`PAYMENT`, ...) */
+  /** A session status (`requires_payment_method`, `requires_action`, `processing`, `succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
   state?: string
   /** Only sessions created at least this many minutes ago */
   olderThan?: number
@@ -388,9 +406,10 @@ export async function adminFindByRef(rt: Runtime, provider: string, ref: string)
 }
 
 /**
- * Sessions with a leg transaction `txHash`. No store index has transaction hashes, so this reads the
+ * Sessions with a leg transaction of any role (approval, source, hop, destination, settlement, refund)
+ * that has this hash, in any payment attempt. No store index has transaction hashes, so this reads the
  * time index (at most `MAX_SCAN` sessions of the last `admin.indexDays` days). `chain` (CAIP-2) is
- * optional; when set, the leg's input or output must be on that chain.
+ * optional; when set, the transaction must be on that chain.
  */
 export async function adminFindByTx(rt: Runtime, chain: string | undefined, txHash: string): Promise<AdminSessionSummary[]> {
   if (!txHash) throw bad('`tx` is required.')
@@ -398,12 +417,8 @@ export async function adminFindByTx(rt: Runtime, chain: string | undefined, txHa
   const now = Date.now()
   const out: AdminSessionSummary[] = []
   await visitSessions(rt, indexEntries(rt, now, now - indexDays(rt) * DAY_MS), MAX_SCAN, (rec) => {
-    const legs = [...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])].flatMap((p) => p.legs)
-    const hit = legs.some((l) => {
-      if (l.step?.txHash?.toLowerCase() !== want) return false
-      if (!chain) return true
-      return [l.quote.input.asset, l.quote.output.asset].some((a) => a.kind === 'crypto' && a.chain === chain)
-    })
+    const payments = [...(rec.attempts ?? []), ...(rec.active ? [rec.active] : [])]
+    const hit = payments.some((p) => p.legs.some((_, i) => legTransactions(p, i).some((t) => t.hash.toLowerCase() === want && (!chain || t.chain === chain))))
     if (hit) out.push(summarize(rt, rec, now))
   })
   return out
@@ -420,8 +435,8 @@ export type AdminStats = {
   byStatus: Record<string, number>
   byState: Record<string, number>
   byDirection: Record<Direction, { total: number; byStatus: Record<string, number> }>
-  /** What users paid in completed sessions, per direction and currency */
-  completedVolume: Array<{ direction: Direction; currency: string; amount: string; count: number }>
+  /** What users paid in succeeded sessions, per direction and currency */
+  succeededVolume: Array<{ direction: Direction; currency: string; amount: string; count: number }>
   stuck: { count: number; afterMinutes: number; oldest?: { id: string; ageMs: number } }
   /** `queued`: sessions on the outbox queue now (all time). The rest count events of the scanned sessions. */
   outbox: { queued: number; pendingEvents: number; deadLetters: number; sessionsWithDeadLetters: number }
@@ -447,7 +462,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
     byStatus: {},
     byState: {},
     byDirection: { deposit: { total: 0, byStatus: {} }, withdraw: { total: 0, byStatus: {} } },
-    completedVolume: [],
+    succeededVolume: [],
     stuck: { count: 0, afterMinutes: stuckAfterMs(rt) / 60_000 },
     outbox: { queued: 0, pendingEvents: 0, deadLetters: 0, sessionsWithDeadLetters: 0 },
     webhookFailures: 0,
@@ -465,12 +480,12 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
     inc(dir.byStatus, rec.status)
     if (rec.resolution) stats.resolved++
     const input = amountOf(rec)
-    if (rec.status === 'completed' && input) {
+    if (rec.status === 'succeeded' && input) {
       const currency = currencyOf(input)
       const key = `${rec.direction}|${currency}`
       const v = volume.get(key) ?? { direction: rec.direction, currency, amount: '0', count: 0 }
       try {
-        v.amount = add(v.amount, input.amount)
+        v.amount = add(v.amount, input.value)
         v.count++
       } catch {
         // An amount that is not a decimal string is left out.
@@ -491,7 +506,7 @@ export async function adminStats(rt: Runtime, opts: { since?: number | string | 
   })
   stats.scanned = r.scanned
   stats.truncated = !r.done
-  stats.completedVolume = [...volume.values()].sort((a, b) => b.count - a.count)
+  stats.succeededVolume = [...volume.values()].sort((a, b) => b.count - a.count)
   const q = queueOf(rt.store)
   ;[stats.outbox.queued, stats.openQueue] = await Promise.all([q.size(OUTBOX_QUEUE), q.size(OPEN_QUEUE)])
   rt.metric('sessions.stuck', stats.stuck.count, {})
@@ -506,7 +521,7 @@ function finalState(v: unknown): FinalState {
 
 /**
  * Force a final state, with an audit note in the record (`resolution` and the timeline), and send the
- * matching webhook (`session.completed`, `session.failed`, ... and `withdrawal.*` for a withdrawal).
+ * matching webhook (`session.succeeded`, `session.failed`, `session.refunded` or `session.expired`).
  * The webhook data has `resolution: { by: 'admin', state, note, at }`. Later provider events still
  * update the legs, but not the session state.
  */
@@ -517,7 +532,7 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
   for (let attempt = 0; attempt < 5; attempt++) {
     const rec = await rt.store.get(id)
     if (!rec || typeof rec.secretHash !== 'string') throw notFound()
-    if (rec.step.state === target) throw new OrkException(orkError('BAD_REQUEST', { message: `The session is already ${target}.` }), 409)
+    if (rec.step.state === target) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `The session is already ${target}.` }), 409)
     const now = Date.now()
     const previous = rec.step.state
     rec.resolution = { state: target, note: text, at: now, previous }
@@ -525,25 +540,24 @@ export async function adminResolve(rt: Runtime, id: string, state: string, note:
       sessionId: rec.id,
       state: target,
       transitions: [],
-      ...(rec.step.progress ? { progress: rec.step.progress } : {}),
       ...(rec.step.legIndex !== undefined ? { legIndex: rec.step.legIndex } : {}),
-      ...(target === 'FAILED' ? { error: orkError('PAYMENT_FAILED', { message: 'The operator closed this payment.', recovery: 'contact_support' }) } : {}),
-      ...(target === 'EXPIRED' ? { error: orkError('SESSION_EXPIRED') } : {}),
+      ...(target === 'FAILED' ? { error: openRampError('PAYMENT_FAILED', { message: 'The operator closed this payment.', recovery: 'contact_support' }) } : {}),
+      ...(target === 'EXPIRED' ? { error: openRampError('SESSION_EXPIRED') } : {}),
     }
     rec.status = sessionStatusFor(target, !!rec.active)
+    if (rec.status === 'failed' && rec.step.error) rec.lastError = rec.step.error
     addTimeline(rec, 'admin.resolved', { state: target, previous, note: text })
-    const extra = { resolution: { by: 'admin', state: target, note: text, at: iso(now) } }
-    await notify(rt, rec, `session.${rec.status}`, extra)
-    if (rec.direction === 'withdraw' && (rec.status === 'completed' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
+    const extra = { resolution: { by: 'admin', state: target, note: text, at: iso(now) }, ...(rec.status === 'failed' && rec.lastError ? { error: rec.lastError } : {}) }
+    await notify(rt, rec, `session.${rec.status as 'succeeded' | 'failed' | 'refunded' | 'expired'}`, extra)
     try {
       await saveSession(rt, rec)
       rt.log.info('admin resolved a session', { sessionId: rec.id, state: target, previous })
       return adminView(rt, rec)
     } catch (e) {
-      if (!(e instanceof OrkException && e.status === 409)) throw e
+      if (!(e instanceof OpenRampException && e.status === 409)) throw e
     }
   }
-  throw new OrkException(orkError('CONFLICT'), 409)
+  throw new OpenRampException(openRampError('CONFLICT'), 409)
 }
 
 /** Send the dead letters of a session again (`webhooks.replay`). */
@@ -576,13 +590,13 @@ const send = (body: unknown, status = 200) => json(body, status, NO_STORE)
 
 /** `/admin` and `/admin/*`. Off (404) without `admin.token`. */
 export async function adminRoute(rt: Runtime, req: Request, method: string, rest: string[]): Promise<Response> {
-  if (!rt.config.admin?.token) return send({ error: orkError('NOT_FOUND') }, 404)
+  if (!rt.config.admin?.token) return send({ error: openRampError('NOT_FOUND') }, 404)
   const [head, id, action] = rest
   if (!head && method === 'GET') {
-    if (rt.config.admin.page === false) return send({ error: orkError('NOT_FOUND') }, 404)
+    if (rt.config.admin.page === false) return send({ error: openRampError('NOT_FOUND') }, 404)
     return adminPage(rt)
   }
-  if (!(await authorized(rt, req))) return send({ error: orkError('UNAUTHORIZED', { message: 'The admin token is missing or wrong.' }) }, 401)
+  if (!(await authorized(rt, req))) return send({ error: openRampError('UNAUTHORIZED', { message: 'The admin token is missing or wrong.' }) }, 401)
   const url = new URL(req.url)
   const p = url.searchParams
   if (head === 'stats' && !id && method === 'GET') return send(await adminStats(rt, p.get('since') ? { since: /^\d+$/.test(p.get('since')!) ? Number(p.get('since')) : p.get('since')! } : {}))
@@ -611,7 +625,7 @@ export async function adminRoute(rt: Runtime, req: Request, method: string, rest
     const sid = decodeURIComponent(id)
     if (!action && method === 'GET') {
       const s = await adminGet(rt, sid)
-      return s ? send(s) : send({ error: orkError('NOT_FOUND') }, 404)
+      return s ? send(s) : send({ error: openRampError('NOT_FOUND') }, 404)
     }
     if (action === 'resolve' && method === 'POST') {
       const body = await readJson<{ state?: unknown; note?: unknown }>(req)
@@ -619,5 +633,5 @@ export async function adminRoute(rt: Runtime, req: Request, method: string, rest
     }
     if (action === 'replay' && method === 'POST') return send(await adminReplay(rt, sid))
   }
-  return send({ error: orkError('NOT_FOUND') }, 404)
+  return send({ error: openRampError('NOT_FOUND') }, 404)
 }

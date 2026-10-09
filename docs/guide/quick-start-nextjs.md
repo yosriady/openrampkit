@@ -127,7 +127,7 @@ export async function POST(req: Request) {
   const body = await req.text() // the raw body, not req.json()
   if (!(await openramp.webhooks.verify(req, body))) return new Response('bad signature', { status: 401 })
   const event = JSON.parse(body) as { id: string; type: string; sessionId?: string }
-  if (event.type === 'session.completed') {
+  if (event.type === 'session.succeeded') {
     // credit the user once per session; see the webhooks guide
   }
   return new Response('ok')

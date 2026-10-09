@@ -97,7 +97,7 @@ When the provider is done, it sends the user to `returnUrl` (default `{baseUrl}/
 Sessions expire after `ttlMinutes` (default 30). The server moves a session to `EXPIRED` with `SESSION_EXPIRED` and sends `session.expired` in these cases:
 
 - A request finds an **open** session (no payment started) after its expiry.
-- The background sweep finds a session after its expiry with no payment started, or with a leg that still waits for the user (`awaiting_user`, for example an unpaid QR code).
+- The background sweep finds a session after its expiry with no payment started, or with a leg that still waits for the user (`requires_action`, for example an unpaid QR code).
 
 A leg that the provider is processing does not expire this way: the provider decides the outcome. A leg can also end as `expired` on its own (the provider says so). Then the step is `EXPIRED`, and the server sends `session.expired` too.
 

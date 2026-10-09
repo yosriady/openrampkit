@@ -1,0 +1,154 @@
+name: Release
+
+# How releases work (read docs/guide/releases.md):
+# 1. A push to main with pending changesets opens or updates the "Version packages" pull request.
+# 2. A maintainer merges that pull request. The versions in package.json are now new and not on npm.
+# 3. The `publish` job builds, tests and publishes them to npm with provenance, then tags them and
+#    makes GitHub releases.
+#
+# npm authentication, in this order:
+# - Secret NPM_TOKEN (a granular npm token). Needed for the first release, because npm can add a
+#   trusted publisher only to a package that exists.
+# - Repository variable NPM_TRUSTED_PUBLISHING = 'true' and no NPM_TOKEN: npm trusted publishing (OIDC).
+# - Neither: the job logs a warning and publishes nothing.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  version:
+    name: Version pull request
+    # Forks have no npm access and must not open release pull requests.
+    if: github.repository == 'yosriady/openrampkit'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write # push the changeset-release/main branch
+      pull-requests: write # open and update the "Version packages" pull request
+    outputs:
+      has-changesets: ${{ steps.changesets.outputs.hasChangesets }}
+      unpublished: ${{ steps.unpublished.outputs.count }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          # No dependency cache in this workflow: a cache entry written by another workflow on main
+          # must never reach a job that can push or publish. Install fresh from the lockfile.
+      - run: pnpm install --frozen-lockfile
+      - name: Open or update the "Version packages" pull request
+        id: changesets
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          title: Version packages
+          commit: Version packages
+          # Commits through the GitHub API, so GitHub signs them.
+          commitMode: github-api
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Find package versions that are not on npm
+        id: unpublished
+        if: steps.changesets.outputs.hasChangesets == 'false'
+        run: node scripts/unpublished-packages.mjs
+
+  verify:
+    name: Verify before publish
+    needs: version
+    # Only after the version pull request is merged: no changesets are left and some versions are new.
+    if: needs.version.outputs.has-changesets == 'false' && needs.version.outputs.unpublished != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # No secrets and no id-token here: tests and their dependencies never see a credential.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+      - run: pnpm install --frozen-lockfile
+      - name: Build, test and smoke test the packed packages
+        run: |
+          pnpm build
+          pnpm typecheck
+          pnpm test
+          pnpm smoke
+
+  publish:
+    name: Publish to npm
+    needs: [version, verify]
+    if: needs.version.outputs.has-changesets == 'false' && needs.version.outputs.unpublished != '0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Put NPM_TOKEN in this environment and allow only the main branch to deploy to it.
+    environment:
+      name: npm
+      url: https://www.npmjs.com/org/openrampkit
+    permissions:
+      contents: write # push git tags and create GitHub releases
+      id-token: write # npm provenance and npm trusted publishing (OIDC)
+    steps:
+      - name: Check npm credentials
+        id: npm
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TRUSTED_PUBLISHING: ${{ vars.NPM_TRUSTED_PUBLISHING }}
+        run: |
+          if [ -n "$NPM_TOKEN" ]; then
+            echo "auth=token" >> "$GITHUB_OUTPUT"
+            echo "npm auth: NPM_TOKEN secret."
+          elif [ "$NPM_TRUSTED_PUBLISHING" = "true" ]; then
+            echo "auth=oidc" >> "$GITHUB_OUTPUT"
+            echo "npm auth: trusted publishing (OIDC)."
+          else
+            echo "auth=none" >> "$GITHUB_OUTPUT"
+            echo "::warning title=npm publish skipped::The NPM_TOKEN secret is not set and the NPM_TRUSTED_PUBLISHING variable is not 'true'. Nothing was published. Read docs/guide/releases.md."
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: steps.npm.outputs.auth != 'none'
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        if: steps.npm.outputs.auth != 'none'
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.npm.outputs.auth != 'none'
+        with:
+          node-version: 22
+          # No dependency cache in this workflow: a cache entry written by another workflow on main
+          # must never reach a job that can push or publish. Install fresh from the lockfile.
+      - if: steps.npm.outputs.auth != 'none'
+        run: pnpm install --frozen-lockfile
+      # Tests ran in the `verify` job. Here: build the packages to publish, nothing else.
+      - name: Build
+        if: steps.npm.outputs.auth != 'none'
+        run: pnpm build
+      - name: Publish to npm with provenance
+        if: steps.npm.outputs.auth != 'none'
+        uses: changesets/action@a45c4d594aa4e2c509dc14a9f2b3b67ba3780d0d # v1.9.0
+        with:
+          # `pnpm release` runs `changeset publish`. It publishes only the versions that are not on npm.
+          publish: pnpm release
+          commitMode: github-api
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Empty with trusted publishing. Then pnpm gets a short-lived token through OIDC.
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+          # pnpm 11 reads pnpm_config_*; npm reads NPM_CONFIG_*.
+          pnpm_config_provenance: 'true'
+          NPM_CONFIG_PROVENANCE: 'true'

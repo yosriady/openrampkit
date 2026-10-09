@@ -14,6 +14,7 @@ Thank you for your help. Contributions of all sizes are welcome. New provider ad
 - [Write an adapter](#write-an-adapter)
 - [Tests](#tests)
 - [Changesets](#changesets)
+- [Releases](#releases)
 - [Commits and pull requests](#commits-and-pull-requests)
 - [Code style](#code-style)
 - [Docs style](#docs-style)
@@ -101,6 +102,7 @@ Run these from the repo root.
 | `pnpm solana:key` | Create or show the Solana devnet key of the playground (`--airdrop` asks for devnet SOL) |
 | `pnpm solana:settle` | One real payment on Solana devnet with that key |
 | `pnpm changeset` | Add a changeset |
+| `pnpm release:plan` | Show the packages and versions of the next release |
 
 To run one test file: `pnpm vitest run packages/server/src/withdraw.test.ts`.
 
@@ -156,8 +158,24 @@ CI runs on each push to `main` and on each pull request: typecheck, `pnpm covera
 We use [Changesets](https://github.com/changesets/changesets) for versions and changelogs.
 
 - When you change a published package (`packages/**`), run `pnpm changeset`. Pick the packages and the bump, then write one or two sentences for users.
-- Use `patch` for fixes and `minor` for new features. All packages are `0.x`, so a breaking change is also `minor`. Say clearly in the changeset what breaks.
+- Use `patch` for fixes and `minor` for new features. All packages are `0.x`, so a breaking change is also `minor`. Say clearly in the changeset what breaks. Do not use `major`.
 - Changes to docs, examples, tests and CI do not need a changeset.
+- All `@openrampkit/*` packages have one version (a `fixed` group in `.changeset/config.json`). A changeset for one package bumps all of them.
+- Examples, the playground and the docs are private. Changesets does not version them, and they never go to npm.
+- To see the next versions, run `pnpm release:plan`.
+
+## Releases
+
+Releases run only in GitHub Actions ([.github/workflows/release.yml](.github/workflows/release.yml)). Do not publish from your computer. `pnpm release` stops with an error outside the Release workflow.
+
+1. Pull requests with changesets merge into `main`.
+2. The Release workflow opens or updates the **Version packages** pull request. It bumps the versions and writes the changelogs.
+3. A maintainer merges the **Version packages** pull request.
+4. The Release workflow builds, tests and smoke tests the packages. Then it publishes the new versions to npm with provenance, pushes the git tags and makes the GitHub releases.
+
+If the npm credentials are not set, the publish job writes a warning and publishes nothing. For the stability policy, provenance and the one-time setup (npm organization, `NPM_TOKEN`, trusted publishing), read [Releases and versions](docs/guide/releases.md).
+
+Dependency updates come from Renovate ([renovate.json](renovate.json)), once a week. Each workflow action is pinned to a full commit SHA with a version comment. When you add an action, pin it the same way, and give the job only the permissions it needs.
 
 ## Commits and pull requests
 
@@ -185,7 +203,7 @@ There is no formatter config yet. Follow the style of the code around your chang
 - No semicolons, single quotes, two spaces of indent, trailing commas in multi-line lists.
 - ESM only, with `.js` extensions in relative imports. Use `import type` for types.
 - Prefer small pure functions. Keep provider logic in adapters, not in the server or the modal.
-- Errors are fields: an `OrkError` has a code, a safe message and a recovery hint. Build one with `orkError(code)` and throw it with `OrkException` (see `packages/core/src/errors.ts`).
+- Errors are fields: an `OpenRampError` has a code, a safe message and a recovery hint. Build one with `openRampError(code)` and throw it with `OpenRampException` (see `packages/core/src/errors.ts`).
 - Use web-standard APIs (`fetch`, `Request`, `Response`, Web Crypto). The server must run on Workers, Node, Bun and Deno.
 - Solidity: run `forge fmt` in `contracts/`. CI checks it.
 

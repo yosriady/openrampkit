@@ -5,7 +5,7 @@ import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
 import { isAddressTransfer, isWebUrl, methodName } from '@openrampkit/core'
-import type { FieldSpec, MethodOption, OrkError, Quote, Step, Surface, Transition } from '@openrampkit/core'
+import type { FieldSpec, MethodOption, OpenRampError, Payment, PublicQuote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
 import { resolveMessages } from './messages.js'
@@ -21,6 +21,7 @@ import {
   iframeOrigin,
   groupMethods,
   liveText,
+  mainTx,
   methodSubtitle,
   methodTabs,
   nextQuoteId,
@@ -30,6 +31,7 @@ import {
   screenTitle,
   sourceForChain,
   stepKey,
+  stepLabel,
   transferChains,
   transferTokens,
 } from './view.js'
@@ -88,7 +90,7 @@ export class OpenRampModal extends LitElement {
    */
   declare locale: string | undefined
   /** Error shown when there is no controller (for example the client secret could not load) */
-  declare error: OrkError | undefined
+  declare error: OpenRampError | undefined
   declare open: boolean
   declare embedded: boolean
   /**
@@ -337,7 +339,7 @@ export class OpenRampModal extends LitElement {
     return screenOf(this._snap, this.error)
   }
 
-  private get _selectedQuote(): Quote | undefined {
+  private get _selectedQuote(): PublicQuote | undefined {
     const s = this._snap
     return s?.quotes.find((q) => q.id === s.selectedQuoteId)
   }
@@ -514,7 +516,7 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  private _renderErrorNotice(error: OrkError | undefined, id?: string) {
+  private _renderErrorNotice(error: OpenRampError | undefined, id?: string) {
     if (!error) return nothing
     return html`<div class="notice error" role="alert" id=${id ?? nothing}>${icons.alert}<span>${error.message}</span></div>`
   }
@@ -869,7 +871,7 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  private _renderQuoteRow(m: Messages, s: Snapshot, q: Quote) {
+  private _renderQuoteRow(m: Messages, s: Snapshot, q: PublicQuote) {
     const selected = q.id === s.selectedQuoteId
     return html`<button
       class="row"
@@ -890,7 +892,7 @@ export class OpenRampModal extends LitElement {
         <span class="row-sub wrap">${quoteSubtitle(q, m, s.direction)}</span>
       </span>
       <span class="row-end">
-        ${Number(q.output.amount) > 0 ? html`<strong>${formatAmount(q.output, m.locale)}</strong>` : nothing}
+        ${Number(q.output.value) > 0 ? html`<strong>${formatAmount(q.output, m.locale)}</strong>` : nothing}
         ${formatEta(q.eta, m)}
       </span>
     </button>`
@@ -908,8 +910,9 @@ export class OpenRampModal extends LitElement {
     // FORM and OTP surfaces use the first SUBMIT transition as their submit button.
     const extra = formSurface ? submits.slice(1) : submits
     const hasPrimary = !!surface && ['REDIRECT', 'DEEPLINK', 'WALLET_TX', 'FORM', 'OTP'].includes(surface.kind)
-    const showProgress = !!step.progress && (step.progress.legs.length > 1 || step.state === 'PROCESSING')
-    const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined].filter((e): e is OrkError => !!e)
+    const payment = s.session!.payment
+    const showProgress = !!payment && (payment.legs.length > 1 || step.state === 'PROCESSING')
+    const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined].filter((e): e is OpenRampError => !!e)
 
     return html`
       ${surface ? this._renderSurface(m, s, step, surface, submits[0]) : this._renderProcessing(m, step, s.direction === 'withdraw')}
@@ -930,7 +933,7 @@ export class OpenRampModal extends LitElement {
           </div>`
         : nothing}
       ${errors.map((e, i) => this._renderErrorNotice(e, i === 0 ? 'ork-step-error' : undefined))}
-      ${showProgress ? this._renderProgress(m, step) : nothing}
+      ${showProgress ? this._renderProgress(m, payment!) : nothing}
       ${awaiting && surface && !errors.length ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.checkingStatus}</div>` : nothing}
       ${step.state === 'PAYMENT' && !(s.surfaceClosed && surface?.kind === 'IFRAME')
         ? html`<div class="stack">
@@ -943,21 +946,21 @@ export class OpenRampModal extends LitElement {
   private _renderProcessing(m: Messages, step: Step, withdraw = false) {
     return html`<div class="center">
       <span class="spinner large" aria-hidden="true"></span>
-      <div class="secondary-text">${step.sub ? titleCase(step.sub.toLowerCase()) : m.stepTitle[step.state] ?? m.checkingStatus}</div>
+      <div class="secondary-text">${stepLabel(m, step)}</div>
       ${withdraw && step.state === 'PROCESSING' ? html`<p class="secondary-text">${m.sendingBody}</p>` : nothing}
     </div>`
   }
 
-  private _renderProgress(m: Messages, step: Step) {
+  private _renderProgress(m: Messages, payment: Payment) {
     return html`<ol class="progress" aria-label=${m.progressLabel}>
-      ${step.progress!.legs.map(
+      ${payment.legs.map(
         (l, i) => html`<li>
           <span class="dot ${l.status}" aria-hidden="true">${l.status === 'succeeded' ? icons.check : i + 1}</span>
           <span>
             <span class="sr-only">${i + 1}.</span>
-            <strong>${l.provider ?? titleCase(l.adapterId)}</strong>:
+            <strong>${l.provider || titleCase(l.adapterId)}</strong>:
             <span class="leg-status">${m.legStatus[l.status] ?? l.status}</span>
-            ${l.txHash ? html`<span class="muted"> ${shortAddress(l.txHash)}</span>` : nothing}
+            ${mainTx(l) ? html`<span class="muted"> ${shortAddress(mainTx(l)!)}</span>` : nothing}
           </span>
         </li>`,
       )}
@@ -1197,10 +1200,12 @@ export class OpenRampModal extends LitElement {
           <h3 class="result-title">${withdraw ? m.withdrawSuccessTitle : m.successTitle}</h3>
           <p class="secondary-text">${q ? (s.session!.destination?.type === 'crypto' && s.session!.destination.calls?.length ? m.youDeposited(formatAmount(q.output, m.locale)) : m.youReceived(formatAmount(q.output, m.locale))) : withdraw ? m.withdrawSuccessBody : m.successBody}</p>
         </div>
-        ${step.progress && step.progress.legs.length > 1 ? this._renderProgress(m, step) : nothing}
+        ${s.session!.payment && s.session!.payment.legs.length > 1 ? this._renderProgress(m, s.session!.payment) : nothing}
         <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>`
     }
-    const retry = step.state === 'FAILED' || step.state === 'BLOCKED'
+    // A failed attempt: the session is back to `requires_payment_method`, so the user can try again.
+    // A final failure (status `failed`) offers no retry.
+    const retry = s.session!.status === 'requires_payment_method'
     return html`<div class="center">
         <span class="result-icon failure" aria-hidden="true">${icons.x}</span>
         <h3 class="result-title">${withdraw && step.state === 'FAILED' ? m.withdrawFailedTitle : m.failedTitle[step.state] ?? m.failedBody}</h3>
@@ -1215,7 +1220,7 @@ export class OpenRampModal extends LitElement {
       </div>`
   }
 
-  private _renderError(m: Messages, error: OrkError | undefined, canRetry: boolean) {
+  private _renderError(m: Messages, error: OpenRampError | undefined, canRetry: boolean) {
     return html`<div class="center">
         <span class="result-icon failure" aria-hidden="true">${icons.alert}</span>
         <h3 class="result-title">${m.errorTitle}</h3>

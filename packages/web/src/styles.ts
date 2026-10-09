@@ -554,7 +554,10 @@ export const styles = css`
     font-size: 16px;
     font-weight: 650;
     cursor: pointer;
-    transition: filter 120ms, transform 120ms, opacity 120ms;
+    /* Do not transition filter. In WebKit, a filter transition that runs together with the opacity
+       transition (the hover brightness goes away as the clicked button turns disabled) can crash the
+       page. The hover brightness changes at once. */
+    transition: transform 120ms, opacity 120ms;
     text-decoration: none;
   }
   .btn:hover:not(:disabled) {
@@ -787,7 +790,7 @@ export const styles = css`
     color: var(--ork-color-background);
   }
   .dot.processing,
-  .dot.awaiting_user {
+  .dot.requires_action {
     background: var(--ork-color-accent-soft);
     border-color: var(--ork-color-accent);
     color: var(--ork-color-text);

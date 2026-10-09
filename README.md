@@ -35,7 +35,7 @@ OpenRampKit gives your app one deposit and withdraw modal, a server that you hos
 New here? These seven steps show the whole project.
 
 1. **Try the live demo.** Open the [playground](https://openrampkit-getformo.vercel.app/playground/). It runs the real server in your browser tab, with mock providers. You need no account and no key. Change **User country** to see the local methods of each market.
-2. **Watch a deposit compare quotes.** With country **VN**, click **Use Cash**, then **VietQR**. Type an amount and click **Continue**. Several providers quote the same route, and the best one shows **Best price**. Click **Confirm**, then **Simulate payment**. The right panel shows the widget events and the signed `session.completed` webhook.
+2. **Watch a deposit compare quotes.** With country **VN**, click **Use Cash**, then **VietQR**. Type an amount and click **Continue**. Several providers quote the same route, and the best one shows **Best price**. Click **Confirm**, then **Simulate payment**. The right panel shows the widget events and the signed `session.succeeded` webhook.
 3. **See the onchain settlement.** `OpenRampSettlement` is live at [`0x1219…7Af5` on Arbitrum Sepolia](https://arbitrum-sepolia.blockscout.com/address/0x12196D55b9009145c9CBAe7e256f3d32F9e27Af5) (same address on Robinhood Chain Testnet and Tempo Testnet). This [`Settled` transaction](https://sepolia.arbiscan.io/tx/0xf370773565bd5340b17f1a00e969fdd15f84229d73be10346c7f0ab197aa4fdf) pays 25 test USDC into an ERC-4626 vault in one transaction. All links are in [contracts/deployments.md](contracts/deployments.md).
 4. **Read the design.** The [architecture](https://openrampkit-getformo.vercel.app/concepts/architecture) page shows the components, the trust boundaries and the data model. The [flows](https://openrampkit-getformo.vercel.app/concepts/flows) page has a sequence diagram for each key flow: local QR, two-leg pathway, wallet payment, onchain settlement, withdraw, webhooks and MCP.
 5. **Check the tests and CI.** [CI](https://github.com/yosriady/openrampkit/actions/workflows/ci.yml) runs typecheck, unit tests with coverage, a package smoke test, an Anvil chain test and Foundry tests on each push. Unit tests sit next to the code (`packages/*/src/*.test.ts`). Browser tests are in [examples/next-demo/e2e](examples/next-demo/e2e) and [examples/playground/e2e](examples/playground/e2e). Contract tests are in [contracts/test](contracts/test).
@@ -86,13 +86,13 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 **Server**
 - One web-standard `Request -> Response` handler. It runs on Cloudflare Workers, Next.js, Node 20+, Bun and Deno.
 - Holds provider secrets. Fixes the user, the destination and the amount limits when your backend creates the session.
-- Receives provider webhooks. Sends signed webhooks (HMAC-SHA256) to your backend, with retries.
+- Receives provider webhooks. Sends signed webhooks ([Standard Webhooks](https://www.standardwebhooks.com), HMAC-SHA256) to your backend, with retries.
 - A background `sweep()` retries webhooks, checks open payments after the user leaves, and expires idle sessions.
 - Session stores: memory (dev), Cloudflare Durable Objects, Cloudflare KV, Redis, or your own.
 - Signed, expiring pay links (`sessions.payLink()`) to a hosted page.
 
 **Adapters**
-- 10 provider adapters plus a mock adapter. Write your own with `createAdapter()` and test it with the conformance kit.
+- 13 provider adapters plus a mock adapter. Write your own with `createAdapter()` and test it with the conformance kit.
 - Three wallet adapters: `wagmiWallet()` for EVM, `privyWallet()` for Privy embedded wallets and `solanaWallet()` for Solana (Wallet Standard).
 
 **Destinations and chains**
@@ -108,7 +108,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 
 **Withdraw**
 - To a wallet on any chain (Relay), or to cash (Swapped payouts: bank transfer, Skrill, Pix, Interac).
-- User wallet custody, or app custody with your own treasury hook. Address checks, `allowedTargets` and `screenAddress` (fails closed).
+- User wallet custody, or app custody with your own treasury hook. Address checks, `allowedDestinations` and `screenAddress` (fails closed).
 
 **i18n**
 - English by default. Override any string with `messages`. Optional built-in translations (vi, id, th, ms, fil) turn on only when your app sets `locale`.
@@ -212,18 +212,20 @@ await done // resolves on COMPLETED
 
 ### 5. Credit the user from the webhook
 
-Credit balances from the signed `session.completed` webhook, not from the browser.
+Credit balances from the signed `session.succeeded` webhook, not from the browser. The webhook secret is a Standard Webhooks secret (`whsec_...`, from `generateWebhookSecret()`).
 
 ```ts
 // app/api/hooks/route.ts
+import type { WebhookEvent } from '@openrampkit/server'
 import { openramp } from '@/lib/openramp'
 
 export async function POST(req: Request) {
   const body = await req.text() // the raw body
   if (!(await openramp.webhooks.verify(req, body))) return new Response('bad signature', { status: 401 })
-  const event = JSON.parse(body)
-  if (event.type === 'session.completed') {
-    // credit the user once per session
+  const event = JSON.parse(body) as WebhookEvent
+  if (event.type === 'session.succeeded') {
+    const { session } = event.data.object // the backend view: session.userId, session.result
+    // credit the user one time per session; credit the full amount only when session.result.delivery?.status is 'ok'
   }
   return new Response('ok')
 }
@@ -251,13 +253,13 @@ sequenceDiagram
     B->>P: User pays (bank app, card page, wallet)
     P->>C: Deliver funds to the destination
     P-->>S: Provider webhook or status check
-    S-->>A: Signed session.completed webhook
+    S-->>A: Signed session.succeeded webhook
     A->>A: Credit the user
 ```
 
 - **The server fixes the destination.** The browser holds only a client secret for one session.
 - **Server-driven steps.** The server tells the modal what to show next: a QR code, a redirect, a deposit address or a wallet transaction. The modal has no provider logic.
-- **Errors are fields.** A failed quote or payment is an `OrkError` with a code, a safe message and a recovery hint.
+- **Errors are fields.** A failed quote or payment is an `OpenRampError` with a code, a safe message and a recovery hint.
 
 Read more: [Architecture](https://openrampkit-getformo.vercel.app/concepts/architecture), [Pathways and legs](https://openrampkit-getformo.vercel.app/concepts/pathways), [Sessions and security](https://openrampkit-getformo.vercel.app/concepts/sessions), [Surfaces](https://openrampkit-getformo.vercel.app/concepts/surfaces).
 
@@ -295,7 +297,6 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Faster Payments, pay by bank (UK), Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
 | `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |
 | `xendit` | [`adapter-xendit`](packages/adapters/xendit) | QRIS, QR Ph, PromptPay, PayNow and e-wallets into your own merchant account | Working. Merchant destination only |
-| `kotani` | [`adapter-kotani`](packages/adapters/kotani) | Kotani Pay: M-Pesa and mobile money in Africa (KE, GH, UG, TZ, ZM, RW, CM, CI, SN, CD), bank checkout (ZA; NG TO VERIFY) to USDC and USDT. Mobile money payouts for withdrawals | New. Self-serve sandbox. Some details TO VERIFY |
 | `meld` | [`adapter-meld`](packages/adapters/meld) | Aggregator: card, UPI, Pix, SEPA, SEPA Instant, ACH, iDEAL, Bancontact, BLIK, PayID, SPEI, PSE, Khipu, M-Pesa, mobile money and more | New. In progress |
 | `onramper` | [`adapter-onramper`](packages/adapters/onramper) | Aggregator: card, SEPA, SEPA Instant, ACH, Pix, UPI, IMPS, iDEAL, Bancontact, Faster Payments, SPEI, Khipu and more | New. In progress |
 | `bridge` | [`adapter-bridge`](packages/adapters/bridge) | Bridge virtual bank accounts (ACH, wire, SEPA, SPEI, Pix, Faster Payments) into USDC, and payouts to a US bank or IBAN | New. Needs a Bridge account and user KYC |
@@ -482,7 +483,7 @@ Design notes: [scope](docs/design/scope.md), [spec](docs/design/spec.md), [marke
 Contributions are welcome, especially new adapters. Read [CONTRIBUTING.md](CONTRIBUTING.md) for the setup and the conventions, and pick a [good first issue](https://github.com/yosriady/openrampkit/labels/good%20first%20issue).
 
 1. Read [Writing an adapter](https://openrampkit-getformo.vercel.app/adapters/writing-an-adapter).
-2. Run the conformance kit from `@openrampkit/adapter/testing` against your adapter.
+2. Run the conformance kit from `@openrampkit/adapter/testing` against your adapter. Adapters use the adapter API version 2.
 3. Run `pnpm build && pnpm typecheck && pnpm test` before you open a pull request.
 4. Add a changeset with `pnpm changeset` when you change a published package.
 

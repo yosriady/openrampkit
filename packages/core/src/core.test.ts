@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ADDRESS_TRANSFER_METHODS, METHODS, USDC, bps, isAddressTransfer, cmp, fromBaseUnits, isRegionAllowed, planPathways, rankQuotes, roundTo, toBaseUnits, TRANSITION_TABLE, isTerminal } from './index.js'
+import { ADDRESS_TRANSFER_METHODS, METHODS, USDC, bps, isAddressTransfer, cmp, fromBaseUnits, isRegionAllowed, planPathways, rankQuotes, roundTo, toBaseUnits, TRANSITION_TABLE, isTerminal, isLegalLegMove } from './index.js'
 import type { LegSpec, Quote } from './index.js'
 
 describe('money', () => {
@@ -31,6 +31,22 @@ describe('table', () => {
     expect(isTerminal('COMPLETED')).toBe(true)
     expect(isTerminal('PROCESSING')).toBe(false)
     expect(TRANSITION_TABLE.KYC.terminal).toBe(false)
+  })
+
+  it('moves a leg only forward', () => {
+    expect(isLegalLegMove('pending', 'processing')).toBe(true)
+    expect(isLegalLegMove('requires_action', 'requires_action')).toBe(true)
+    expect(isLegalLegMove('processing', 'succeeded')).toBe(true)
+    expect(isLegalLegMove('processing', 'refunded')).toBe(true)
+    expect(isLegalLegMove('processing', 'pending')).toBe(false)
+    expect(isLegalLegMove('processing', 'requires_action')).toBe(false)
+    expect(isLegalLegMove('failed', 'succeeded')).toBe(false)
+    expect(isLegalLegMove('succeeded', 'succeeded')).toBe(false)
+    expect(isLegalLegMove('succeeded', 'refunded')).toBe(true)
+    expect(isLegalLegMove('succeeded', 'reversed')).toBe(true)
+    expect(isLegalLegMove('refunded', 'reversed')).toBe(false)
+    expect(isLegalLegMove('failed', 'refunded')).toBe(false)
+    expect(isTerminal('REVERSED')).toBe(true)
   })
 })
 
@@ -93,8 +109,9 @@ describe('rankQuotes', () => {
   it('orders by output and marks badges', () => {
     const q = (id: string, out: string, eta: number): Quote => ({
       id, pathwayId: id, method: 'card', provider: id, legs: [],
-      input: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } },
-      output: { amount: out, asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x' } }, fees: [], eta: { min: 0, max: eta },
+      input: { value: '100', asset: { kind: 'fiat', currency: 'USD' } },
+      output: { value: out, asset: { kind: 'crypto', chain: 'eip155:8453', token: 'x' } }, fees: [], eta: { min: 0, max: eta },
+      guarantee: 'estimate', expiresAt: '2099-01-01T00:00:00.000Z',
     })
     const r = rankQuotes([q('a', '97', 300), q('b', '98', 600), q('c', '95', 60)])
     expect(r.map((x) => x.id)).toEqual(['b', 'a', 'c'])

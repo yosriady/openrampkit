@@ -3,6 +3,7 @@
 // (so the session registry lives across requests).
 
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
+import { timingSafeEqual } from '@openrampkit/core'
 import type { OpenRampMcpConfig } from './config.js'
 import { createRampOps } from './ramp.js'
 import { createOpenRampMcpServer } from './server.js'
@@ -17,13 +18,6 @@ export type McpHttpOptions = {
 /** Default body size limit for MCP requests (1 MB). */
 export const MAX_BODY_BYTES = 1_000_000
 
-function safeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let r = 0
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return r === 0
-}
-
 /** A `(Request) => Promise<Response>` handler for the MCP Streamable HTTP transport. */
 export function createMcpHttpHandler(config: OpenRampMcpConfig, opts: McpHttpOptions): (req: Request) => Promise<Response> {
   if (!opts.bearerToken || opts.bearerToken.length < 16) throw new Error('OpenRamp MCP: `bearerToken` must be at least 16 characters')
@@ -33,7 +27,7 @@ export function createMcpHttpHandler(config: OpenRampMcpConfig, opts: McpHttpOpt
   const rpcError = (status: number, code: number, message: string, headers: Record<string, string> = {}) =>
     new Response(JSON.stringify({ jsonrpc: '2.0', error: { code, message }, id: null }), { status, headers: { 'content-type': 'application/json', ...headers } })
   return async (req) => {
-    if (!safeEqual(req.headers.get('authorization') ?? '', expected)) return rpcError(401, -32001, 'Unauthorized', { 'www-authenticate': 'Bearer' })
+    if (!timingSafeEqual(req.headers.get('authorization') ?? '', expected)) return rpcError(401, -32001, 'Unauthorized', { 'www-authenticate': 'Bearer' })
     if (Number(req.headers.get('content-length') ?? 0) > maxBody) return rpcError(413, -32600, 'Request body too large')
     if (req.body) {
       // The length header can be missing or wrong: read the body with the limit.

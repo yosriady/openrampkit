@@ -8,7 +8,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `POST` | `/sessions` | `authorize` hook | Create a session (only when `authorize` is set) |
+| `POST` | `/sessions` | `authorize` hook, `Idempotency-Key` | Create a session (only when `authorize` is set) |
 | `GET` | `/sessions/:id` | Bearer client secret | Read the session |
 | `GET` | `/sessions/:id/step` | Bearer | Read the session after a status check |
 | `POST` | `/sessions/:id/plan` | Bearer | Plan pathways and methods |
@@ -16,6 +16,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `POST` | `/sessions/:id/quotes` | Bearer | Quote a method |
 | `POST` | `/sessions/:id/select` | Bearer, `Idempotency-Key` | Confirm a quote and start the first leg |
 | `POST` | `/sessions/:id/transitions/:name` | Bearer, `Idempotency-Key` | Fire a transition |
+| `POST` | `/sessions/:id/cancel` | Bearer client secret | Cancel the session before money moved |
 | `POST` | `/sessions/:id/pay-link` | Bearer client secret | Make a signed pay link |
 | `POST` | `/sessions/:id/pay-link/revoke` | Bearer client secret | Make one pay link stop working |
 | `GET` | `/start/:token` | Signed token | Popup-safe redirect to a provider |
@@ -28,6 +29,8 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `GET` | `/admin` | none (the page asks for the token) | Ops dashboard page (only with `admin.token`) |
 | `GET`, `POST` | `/admin/*` | Bearer `admin.token` | [Admin routes](#admin-routes): list, inspect, resolve, replay, stats |
 | `OPTIONS` | any | none | CORS preflight: `204` |
+
+Every `POST` accepts an `Idempotency-Key` header (see [Idempotency](#idempotency)). Every response has the header `openramp-version: 1`.
 
 ## Authentication
 
@@ -53,9 +56,9 @@ Every error is JSON:
 |---|---|
 | `400` | Body is not JSON (`BAD_REQUEST`), a field that is not valid (amount, address, source, target, `Idempotency-Key`), or an adapter refused the input |
 | `401` | Bad client secret, bad start URL signature, bad webhook signature, bad tasks token, or `authorize` returned `null` |
-| `403` | Withdraw target refused: `TARGET_NOT_ALLOWED` or `ADDRESS_REJECTED` |
+| `403` | Withdraw target refused: `DESTINATION_NOT_ALLOWED` or `ADDRESS_REJECTED` |
 | `404` | Unknown route or adapter (`NOT_FOUND`) |
-| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; a locked withdraw target (`TARGET_LOCKED`); or a concurrent change (`CONFLICT`) |
+| `409` | A payment is already in progress; a transition is not allowed now; nothing to continue; a withdrawal that can no longer change; a locked withdraw target (`DESTINATION_LOCKED`); or a concurrent change (`CONFLICT`) |
 | `410` | Quote expired (`QUOTE_EXPIRED`), session past its deadline (`SESSION_EXPIRED`), or start URL expired (plain text) |
 | `413` | The body is too large (`BAD_REQUEST`): more than 64 KiB for the browser routes, more than 1 MiB for provider webhooks |
 | `422` | No pathway for the method (`NO_QUOTES`), an amount outside `amountBounds` (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`), or an adapter error |
@@ -75,6 +78,8 @@ Available only when `authorize` is set; otherwise `404`.
 - The hook returns a `CreateSessionInput` or `null` (`401`).
 - `country` and `region` from geo headers are the defaults; the hook's values win.
 - Response `201`: `{ "id": "ors_...", "clientSecret": "ors_....", "expiresAt": "2026-09-29T10:30:00.000Z" }`
+- With an `externalId` in the input: a repeat by the same user with the same input, for a session that is not final, answers `200` with `{ id, expiresAt, existing: true }` and no client secret. Another user, other input or a final session answers `409 EXTERNAL_ID_CONFLICT`. See [externalId](./server.md#externalid).
+- An `Idempotency-Key` here is scoped to the `userId` that `authorize` returns.
 
 ## GET /sessions/:id
 
@@ -86,21 +91,22 @@ type PublicSession = {
   direction: 'deposit' | 'withdraw'
   destination?: Destination       // withdraw: absent until the user picks a target
   source?: WithdrawSource         // withdraw only
-  allowedTargets?: AllowedTargets // withdraw only, when the app set them
-  targetLocked?: boolean          // withdraw only: true when the app set and locked the target
-  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
+  allowedDestinations?: AllowedDestinations // withdraw only, when the app set them
+  destinationLocked?: boolean          // withdraw only: true when the app set and locked the destination
+  status: 'requires_payment_method' | 'requires_action' | 'processing' | 'succeeded' | 'failed' | 'canceled' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string             // set after the first plan
   locale?: string               // only when the app set one
   amountBounds?: { min?: string; max?: string; currency: string }
   step: Step
+  payment?: Payment             // once a payment started: the legs, provider refs and transactions
   result?: SessionResult        // once a payment started
   expiresAt: string
   livemode: boolean
 }
 ```
 
-See [`SessionResult`](./core.md#sessionresult).
+See [`Payment`](./core.md#payment) and [`SessionResult`](./core.md#sessionresult).
 
 ## GET /sessions/:id/step
 
@@ -127,7 +133,7 @@ type PlanResult = {
 type MethodOption = {
   method: string; name: string; kind: string
   group: 'connected' | 'recommended' | 'more' | 'unavailable'
-  reason?: OrkError
+  reason?: OpenRampError
   providers: string[]; pathwayIds: string[]
   eta: { min: number; max: number }
   limits?: { min?: string; max?: string; currency: string }
@@ -155,7 +161,7 @@ Both can also carry the `/plan` fields `walletConnected`, `walletAddress` and `s
 The server:
 
 1. checks the format: a CAIP-2 `chain`, a token address or `native`, and an address that is valid for the chain; or an ISO 4217 `currency` (uppercased),
-2. checks the session's `allowedTargets`,
+2. checks the session's `allowedDestinations`,
 3. calls `screenAddress(address, chain)` for a crypto target,
 4. stores the target as the session `destination`, clears the stored quotes, and plans.
 
@@ -164,13 +170,13 @@ Response `200`: a `PlanResult`.
 | Status | When |
 |---|---|
 | `400` | The body is not valid (for example "Enter a valid address for this network.") |
-| `403` | `TARGET_NOT_ALLOWED` (not in `allowedTargets`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
-| `409` | Not a withdraw session; the app locked the target (`TARGET_LOCKED`); a payment is in progress; the withdrawal is complete or expired |
+| `403` | `DESTINATION_NOT_ALLOWED` (not in `allowedDestinations`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
+| `409` | Not a withdraw session; the app locked the target (`DESTINATION_LOCKED`); a payment is in progress; the withdrawal is complete or expired |
 | `503` | `screenAddress` threw (`PROVIDER_UNAVAILABLE`, "We could not check this address. Try again.") |
 
 On a withdraw session, `/plan` and `/quotes` answer `409` ("Choose where to send the funds first.") until a target is set.
 
-When the app created the session with `target` and `lockTarget: true`, the target is already set. Then this route always answers `409 TARGET_LOCKED`, also for the same target and also for a pay link credential. Call `/plan` to get the plan. The session shows `targetLocked: true`. See [Locked targets](../guide/withdraw.md#locked-targets).
+When the app created the session with `destination` and `lockDestination: true`, the target is already set. Then this route always answers `409 DESTINATION_LOCKED`, also for the same target and also for a pay link credential. Call `/plan` to get the plan. The session shows `destinationLocked: true`. See [Locked targets](../guide/withdraw.md#locked-targets).
 
 ## POST /sessions/:id/quotes
 
@@ -191,7 +197,9 @@ The server plans first if needed. It quotes up to 5 available pathways for the m
 
 For a withdraw session, the source is the session's `source`, and `body.source` is ignored.
 
-Response `200`: `{ "quotes": Quote[], "errors": OrkError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`, or when a field is not valid; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
+Response `200`: `{ "quotes": PublicQuote[], "errors": OpenRampError[] }`, ranked (see [Quoting](../concepts/pathways.md#quoting)). A quote outside the session's `amountBounds` is dropped, and `errors` gets `AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH`. Errors: `400` without `method` or `amount`, or when a field is not valid; `409` while a payment is in progress; `422 NO_QUOTES` when the method has no available pathway.
+
+Each `PublicQuote` has `guarantee` (`firm`, `min_output` or `estimate`), `minOutput` and `slippageBps` when they apply, typed `fees` (`amount` is an `Amount` or `null`, with `included`), and a required `expiresAt`. See [Fee and Quote](./core.md#fee-and-quote).
 
 ## POST /sessions/:id/select
 
@@ -207,24 +215,47 @@ Headers: `Idempotency-Key: <random>` (recommended).
 
 Body: `{ "inputs": { "txHash": "0x..." } }` (`inputs` optional).
 
-- `restart`: back to `SELECT_METHOD`. Allowed with no active payment, during `PAYMENT`, or after a terminal state other than `COMPLETED`. Otherwise `409`. The server keeps the left payment as an earlier attempt. When the provider later reports it as paid, the session completes with it, or sends `session.late_payment` when another payment is already in progress or complete.
+- `restart`: back to `SELECT_METHOD`. Allowed when the status is `requires_payment_method` (no payment in progress, or the last attempt failed) and during `PAYMENT`. A session with a final status (`succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) answers `409`. Otherwise `409`. The server keeps the left payment as an earlier attempt. When the provider later reports it as paid, the session completes with it, or sends `session.late_payment` when another payment is already in progress or complete.
 - Any other name must be a SUBMIT or SURFACE_RESULT transition of the current step, and the adapter must implement `transition()`. Otherwise `409`.
 
 Response `200`: the `PublicSession`.
 
 ### Idempotency
 
-When `Idempotency-Key` is present, the server stores the response under `(session, route, key)` for 24 hours. The route is `select` or `transitions/{name}`. A repeat on the same route returns the stored status and body with `idempotent-replay: true`. The same key on another route does not replay. The key must have 1 to 255 printable ASCII characters (else `400`).
+Every `POST` accepts `Idempotency-Key: <random>`. Send a new random key for each new request, and the same key when you send the same request again (for example after a timeout).
+
+- The server stores the response under `(session, route, key)` for 24 hours, with a hash of the request body. The route is the path after the session id, for example `select`, `quotes` or `transitions/{name}`. For `POST /sessions`, the scope is the user from `authorize`.
+- A repeat with the same body returns the stored status and body, with the header `idempotent-replay: true`.
+- A repeat with another body answers `422 IDEMPOTENCY_MISMATCH`. Use a new key for a new request.
+- A repeat while the first request still runs answers `409 CONFLICT` (`retryable: true`).
+- The same key on another route is another request.
+- A request that fails with an error before it has a response stores nothing, so the key is free again.
+- The key must have 1 to 255 printable ASCII characters (else `400`).
 
 ### Session deadline
 
-After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work. The exception is a leg that still waits for the user (`awaiting_user`): the [background sweep](./server.md#background-sweep) expires it after the deadline.
+After `expiresAt`, `/plan`, `/target`, `/quotes`, `/select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment that started before the deadline can still finish: `/step` and the other transitions still work. The exception is a leg that still waits for the user (`requires_action`): the [background sweep](./server.md#background-sweep) expires it after the deadline.
 
 ### Limits
 
 - A JSON body can have at most 64 KiB, and a provider webhook body at most 1 MiB. A larger body gets `413`.
 - `walletAddress` (in `/plan`, `/target` and `/select`) must be 8 to 128 printable characters.
 - `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` call provider APIs. Together they count against `limits.providerCallsPerMinute` per session (default 60). Over the limit: `429 RATE_LIMITED`.
+
+## POST /sessions/:id/cancel
+
+Cancels the session when no money of a payment can be on its way. The client secret only: a pay link gets `403`.
+
+- `requires_payment_method` (nothing started, or the last attempt failed): allowed.
+- `requires_action`: allowed only before any money moved. The server refuses (`409`) when a leg reported a transaction that moves funds (any role but `approval`), the treasury sent, a leg is past `requires_action`, or a leg after the first started.
+- When the waiting leg's adapter has `cancel()`, the server asks the provider to void the order first. A provider error refuses the cancel: `409 PROVIDER_UNAVAILABLE`, and the session does not change.
+- Then the step becomes `CANCELED` (with the error `CANCELED`), the status `canceled`, and `canceled: { at, reason: 'requested_by_user' }` is set. The server sends `session.canceled`.
+- Response `200`: the `PublicSession`. A session that is already canceled is returned as it is.
+- `409` while the payment is `processing`, and after another final status.
+- The leg refs stay indexed. A payment that still arrives (a provider webhook, or the sweep's grace poll for an adapter with `status()`) goes into the timeline and the leg data, and the server sends `session.late_payment` with `reason: 'after_cancel'`. The session stays `canceled`: refund or credit the payment by hand.
+- The `restart` transition has the same rule while the user still has to pay: `409` when money may be on its way.
+
+Your backend can also call `openramp.sessions.cancel(id, { reason })`.
 
 ## GET /start/:sessionId.:token.:sig
 
@@ -331,7 +362,7 @@ The routes for operators. See [Admin and observability](../guide/admin.md).
 | `POST` | `/admin/sessions/:id/resolve` | Body `{ "state": "COMPLETED" \| "FAILED" \| "REFUNDED" \| "EXPIRED", "note": "..." }`. Answer: the `AdminSession` view. `400` without a note, `404` for an unknown session, `409` when the session already has that state. |
 | `POST` | `/admin/sessions/:id/replay` | `{ "queued": 1 }`: the dead letters sent again. `404` for an unknown session. |
 | `GET` | `/admin/stats` | `AdminStats`. Query: `since` (ISO 8601 or ms; default 24 hours ago). |
-| `GET` | `/admin/find` | `{ sessions: [...] }`. Query: `provider` and `ref`, or `tx` and an optional `chain`. |
+| `GET` | `/admin/find` | `{ sessions: [...] }`. Query: `provider` and `ref`, or `tx` and an optional `chain`. `tx` finds a transaction of any role (approval, source, hop, destination, settlement, refund) in any payment attempt; with `chain`, the transaction must be on that chain. |
 
 The list, stats and tx search answer `501` when the store queue has no `range` (a custom store). See [The time index](../guide/admin.md#the-time-index-and-its-limits).
 

@@ -19,9 +19,11 @@ peer({
   enabled: true,
   apiKey: process.env.PEER_API_KEY!,
   webhookSecret: process.env.PEER_WEBHOOK_SECRET!,
-  env: 'live',
+  env: 'production',
 })
 ```
+
+To get the keys, see [Get provider keys](../guide/provider-keys.md#peer).
 
 ## Options
 
@@ -30,7 +32,7 @@ peer({
 | `enabled` | `true` | required | The opt-in flag |
 | `apiKey` | `string` | required | Merchant API key. Sandbox and live keys are separate. |
 | `webhookSecret` | `string` | required | Peer reports settlement only by webhook |
-| `env` | `'sandbox' \| 'live'` | required | Which key you pass |
+| `env` | `'sandbox' \| 'production'` | required | Which key you pass. `'live'` is a deprecated alias of `'production'`. The server checks `env` against `livemode`. |
 | `rails` | `string[]` | all | `venmo`, `cashapp`, `zelle`, `chime`, `paypal`, `revolut`, `wise` |
 | `feePayer` | `'MERCHANT' \| 'PAYEE' \| 'SPLIT'` | merchant setting | Who pays the fee |
 | `buyerFeeShareBps` | `number` | none | With `SPLIT`: the buyer's share, 0 to 10000 in steps of 1000 |
@@ -56,15 +58,26 @@ All legs deliver USDC on Base. The platform minimum is 10 USDC per order.
 ## Quotes and start
 
 - Quote: checks availability for the rail (`POST /api/v1/merchants/me/quotes/availability`); no availability gives `NO_QUOTES`. The USDC estimate comes from the public orderbook (or 1:1 for USD), minus the plan fee.
+- The guarantee is `estimate`: a seller fills the order only when the user pays, and availability locks no rate. Quotes expire after 2 minutes (`quoteExpiresAt(2)`).
+- Fees: one `provider` fee ("Peer fee"), with `included: true`. With `feePayer: 'PAYEE'`, it is in fiat and part of the grossed-up input. Else it is in USDC and comes off the output.
 - Start: `POST /api/v1/orders` with the rail, the destination address on Base and an idempotency key. The checkout URL is `https://pay.peer.xyz/?order=...&token=...`.
 - Surface: `REDIRECT` by default. With `surface: 'iframe'`, an `IFRAME` that declares the `checkout.success`, `checkout.failed` and `checkout.closed` messages.
 - Status: `GET /api/v1/orders/{orderId}`.
+- `providerRef`: the Peer order id. It is also the leg ref.
+
+| Peer order status | Leg |
+|---|---|
+| `CREATED` | no event: the user has not paid yet |
+| `PARTIALLY_FULFILLED` | `processing`, detail code `processing` |
+| `FULFILLED` | `succeeded`, with the fulfil transaction as the `destination` transaction (on Base) |
+| `CANCELLED` | `failed` |
+| other | no event: the adapter logs the unknown status once (`statusMap`), and the leg keeps its current step |
 
 ## Webhooks
 
 Register `{baseUrl}/webhooks/peer` with Peer (`POST /api/v1/webhooks`) and pass the returned secret as `webhookSecret`.
 
-- Verification: `X-Webhook-Signature` is the hex HMAC-SHA256 of `{X-Webhook-Timestamp}.{body}`, 5 minute tolerance.
+- Verification: `X-Webhook-Signature` is the hex HMAC-SHA256 of `{X-Webhook-Timestamp}.{body}`, 5 minute tolerance. The adapter checks it with `verifyTimestampedHmac` from `@openrampkit/adapter`.
 - `ORDER_FULFILLED` completes the leg with the settled USDC amount and the fulfil transaction. `ORDER_CANCELLED` fails it. Expired or failed payment attempts keep the leg waiting, because a late settlement can still fulfil the order.
 
 ## Verified vs TO VERIFY

@@ -1,7 +1,7 @@
 // Withdraw flow of the controller, against the real server handler with the mock adapter (offramp on).
 import { describe, expect, it, vi } from 'vitest'
 import { USDC } from '@openrampkit/core'
-import type { OrkEvent, WithdrawSource } from '@openrampkit/core'
+import type { ClientEvent, WithdrawSource } from '@openrampkit/core'
 import type { CreateSessionInput } from '@openrampkit/server'
 import { RampController, WithdrawController, createMockWallet, isValidTargetAddress, withdrawTokens } from './index.js'
 import type { ControllerOptions } from './index.js'
@@ -18,7 +18,7 @@ async function make(opts: {
 } = {}) {
   const srv = setupServer(undefined, opts.config)
   const s = await srv.ramp.sessions.create({ userId: 'u1', direction: 'withdraw', source: BASE_SOURCE, country: 'PH', ...opts.session } as CreateSessionInput)
-  const events: OrkEvent[] = []
+  const events: ClientEvent[] = []
   const wallet = opts.wallet === false ? undefined : createMockWallet({ address: USER, delayMs: 0 })
   const c = new WithdrawController({ client: srv.client, clientSecret: s.clientSecret, ...(wallet ? { wallet } : {}), onEvent: (e) => events.push(e), ...opts.ctl })
   return { ...srv, s, c, events, wallet }
@@ -79,7 +79,7 @@ describe('withdraw: to wallet', () => {
 
     c.setAmount('25')
     await c.submitAmount()
-    expect(c.getSnapshot().quotes[0]).toMatchObject({ input: { amount: '25' }, output: { asset: { chain: 'eip155:42161' } } })
+    expect(c.getSnapshot().quotes[0]).toMatchObject({ input: { value: '25' }, output: { asset: { chain: 'eip155:42161' } } })
     // Withdraw quotes never send a pay-with source: the session fixes it.
     expect((await bodyOf(requests, '/quotes'))[0]).toEqual({ method: 'wallet', amount: '25', amountSide: 'source' })
     await c.confirm()
@@ -162,7 +162,7 @@ describe('withdraw: to cash', () => {
     await c.selectMethod('gcash')
     c.setAmount('20')
     await c.submitAmount()
-    expect(c.getSnapshot().quotes[0]!.output).toMatchObject({ amount: '1131.43', asset: { kind: 'fiat', currency: 'PHP' } })
+    expect(c.getSnapshot().quotes[0]!.output).toMatchObject({ value: '1131.43', asset: { kind: 'fiat', currency: 'PHP' } })
     await c.confirm()
     expect(c.getSnapshot().session!.step.surface?.kind).toBe('FORM')
     await c.fire('submit_details', { account_name: 'Juan', phone: '09171234567' })
@@ -182,17 +182,17 @@ describe('withdraw: to cash', () => {
     expect(c.getSnapshot().screen).toBe('target')
   })
 
-  it('allowedTargets: cash only starts on the methods, in an allowed currency', async () => {
-    const { c } = await make({ session: { country: 'SG', allowedTargets: { fiat: { currencies: ['PHP'] } } } })
+  it('allowedDestinations: cash only starts on the methods, in an allowed currency', async () => {
+    const { c } = await make({ session: { country: 'SG', allowedDestinations: { fiat: { currencies: ['PHP'] } } } })
     await c.start()
     await waitFor(() => c.getSnapshot().screen === 'methods')
     expect(c.withdrawTabs()).toEqual(['cash'])
     expect(c.getSnapshot()).toMatchObject({ tab: 'cash', cashCurrency: 'PHP' })
   })
 
-  it('allowedTargets: listed chains only, and the source token shows on its chain', async () => {
+  it('allowedDestinations: listed chains only, and the source token shows on its chain', async () => {
     const token = `0x${'7'.repeat(40)}`
-    const { c } = await make({ session: { source: { chain: 'eip155:8453', token, symbol: 'XYZ', decimals: 8, custody: 'user_wallet' }, allowedTargets: { crypto: { chains: ['eip155:10', 'eip155:8453'] } } } })
+    const { c } = await make({ session: { source: { chain: 'eip155:8453', token, symbol: 'XYZ', decimals: 8, custody: 'user_wallet' }, allowedDestinations: { crypto: { chains: ['eip155:10', 'eip155:8453'] } } } })
     await c.start()
     expect(c.withdrawTabs()).toEqual(['crypto'])
     expect(c.withdrawChains()).toEqual(['eip155:10', 'eip155:8453'])
@@ -202,9 +202,9 @@ describe('withdraw: to cash', () => {
   })
 
   it('no allowed target type is an error; a deposit session is refused when a withdraw is expected', async () => {
-    const none = await make({ session: { allowedTargets: {} } })
+    const none = await make({ session: { allowedDestinations: {} } })
     await none.c.start()
-    expect(none.c.getSnapshot()).toMatchObject({ screen: 'error', error: { code: 'TARGET_NOT_ALLOWED' } })
+    expect(none.c.getSnapshot()).toMatchObject({ screen: 'error', error: { code: 'DESTINATION_NOT_ALLOWED' } })
 
     const srv = setupServer()
     const dep = await srv.ramp.sessions.create({ userId: 'u', destination: BASE_DEST })
@@ -223,7 +223,7 @@ describe('withdraw: to cash', () => {
   })
 
   it('a failing cash target shows the error screen', async () => {
-    const { c } = await make({ session: { allowedTargets: { fiat: {}, crypto: {} } }, config: {} })
+    const { c } = await make({ session: { allowedDestinations: { fiat: {}, crypto: {} } }, config: {} })
     await c.start()
     // Force a server error: the session has an active payment after a crypto confirm.
     c.setTargetAddress(ARB)
@@ -241,10 +241,10 @@ describe('withdraw: locked target', () => {
   const LOCKED = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: ARB }
 
   it('skips the target form, never calls /target, and back goes to the methods', async () => {
-    const { c, requests } = await make({ session: { target: LOCKED, lockTarget: true } })
+    const { c, requests } = await make({ session: { destination: LOCKED, lockDestination: true } })
     await c.start()
     const snap = c.getSnapshot()
-    expect(snap.session).toMatchObject({ targetLocked: true, destination: { type: 'crypto', chain: 'eip155:42161', address: ARB } })
+    expect(snap.session).toMatchObject({ destinationLocked: true, destination: { type: 'crypto', chain: 'eip155:42161', address: ARB } })
     expect(c.lockedTarget()).toMatchObject({ address: ARB })
     expect(c.withdrawTabs()).toEqual(['crypto'])
     // One usable method (wallet): straight to the amount screen.
@@ -269,7 +269,7 @@ describe('withdraw: locked target', () => {
   })
 
   it('a locked cash target shows its payout methods in that currency', async () => {
-    const { c, requests } = await make({ session: { target: { type: 'fiat', currency: 'PHP' }, lockTarget: true } })
+    const { c, requests } = await make({ session: { destination: { type: 'fiat', currency: 'PHP' }, lockDestination: true } })
     await c.start()
     expect(c.getSnapshot()).toMatchObject({ screen: 'methods', tab: 'cash', cashCurrency: 'PHP', plan: { currency: 'PHP' } })
     expect(c.withdrawTabs()).toEqual(['cash'])
@@ -277,7 +277,7 @@ describe('withdraw: locked target', () => {
   })
 
   it('a target that is not locked still shows the form', async () => {
-    const { c } = await make({ session: { target: LOCKED } })
+    const { c } = await make({ session: { destination: LOCKED } })
     await c.start()
     expect(c.getSnapshot().screen).toBe('target')
     expect(c.lockedTarget()).toBeUndefined()

@@ -7,6 +7,7 @@ Status: research done, scope set, spec written ([spec](./spec.md)). No code yet.
 Related:
 - [Spec](./spec.md): detailed spec and phased implementation plan
 - [Landscape](./landscape.md): market research and competitor teardowns
+- [Data model for 0.1.0](./data-model-0.1.md): statuses, webhooks, externalId, idempotency and cancel
 - Diagrams: https://claude.ai/artifact/YVe96tnDr1LhAyonwzdteV (private until shared)
 
 ---

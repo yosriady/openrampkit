@@ -102,8 +102,8 @@ sequenceDiagram
   S->>S: beginPayment() then startLeg(0)
   S->>A: start({ leg, quote, deliverTo })
   A->>P: create the order or sign the widget URL
-  A-->>S: LegStep PAYMENT, surface REDIRECT or IFRAME, AWAIT poll, ref
-  S->>S: checkSurfaceUrls(), then wrapSurface() for REDIRECT
+  A-->>S: LegStep requires_action, action payment with surface REDIRECT or IFRAME and an AWAIT poll, ref, providerRef
+  S->>S: sanitizeLegStep() (surface URLs and all adapter data), then wrapSurface() for REDIRECT
   S->>St: index ref:adapterId:ref to the session id, save the session
   S-->>B: Step PAYMENT
   alt REDIRECT
@@ -127,10 +127,10 @@ sequenceDiagram
   S->>A: webhook.verify(req, rawBody)
   S->>A: webhook.parse(rawBody) returns LegEvent[]
   S->>St: find the session by ref:adapterId:ref
-  S->>S: applyEvent(), setLegStep() with status succeeded
+  S->>S: applyEvent(), setLegStep() with status succeeded, check the output (result.delivery)
   S->>App: leg.succeeded
   S->>S: composeStep(): every leg succeeded, so COMPLETED
-  S->>App: session.completed (signed)
+  S->>App: session.succeeded (signed)
   B->>S: GET /sessions/:id/step
   S-->>B: Step COMPLETED with result
   B->>U: Result screen, onComplete(session)
@@ -167,7 +167,7 @@ sequenceDiagram
   S->>X: start()
   X->>XP: POST /v3/payment_requests { channel_code: 'QRIS', reference_id }
   XP-->>X: payment_request_id, actions QR_STRING
-  X-->>S: LegStep PAYMENT, surface QR { payload, amount, currency, reference, expiresAt }, AWAIT poll
+  X-->>S: LegStep requires_action, action payment with surface QR { payload, amount, currency, reference, expiresAt }, AWAIT poll
   S-->>B: Step PAYMENT
   B->>U: QR code with a countdown to expiresAt
   U->>Bank: Scan and pay
@@ -180,7 +180,7 @@ sequenceDiagram
   XP->>S: POST /webhooks/xendit (x-callback-token)
   S->>X: webhook.verify(), webhook.parse(): payment.capture
   S->>S: applyEvent({ ref, status: 'succeeded' })
-  S->>App: session.completed
+  S->>App: session.succeeded
   B->>S: GET /sessions/:id/step
   S-->>B: Step COMPLETED
 ```
@@ -218,22 +218,22 @@ sequenceDiagram
   S-->>B: { quotes }
   B->>S: POST /sessions/:id/select { quoteId }
   S->>On: start() leg 0 with deliverTo = Relay deposit address
-  On-->>S: LegStep PAYMENT with a surface
-  S-->>B: Step PAYMENT, progress shows 2 legs
+  On-->>S: LegStep requires_action with an action surface
+  S-->>B: Step PAYMENT, session.payment shows 2 legs
   Note over B,On: The user pays at the onramp (see the fiat onramp flow)
   On->>S: provider webhook, leg 0 succeeded
   S->>App: leg.succeeded { index: 0 }
   S->>R: startLeg(1): start() bridge leg
-  R-->>S: LegStep PROCESSING, sub waiting_for_deposit, ref = deposit address
+  R-->>S: LegStep processing, detail waiting_for_deposit, ref = deposit address
   S-->>B: Step PROCESSING, legIndex 1
   loop AWAIT poll
     B->>S: GET /sessions/:id/step
     S->>R: status({ ref: deposit address })
     R->>RA: GET /requests/v3?depositAddress=... (v2 without apiKey)
-    R-->>S: PROCESSING, or COMPLETED with output and txHash
+    R-->>S: processing, or succeeded with output and a destination transaction
   end
   S->>S: composeStep(): both legs succeeded, so COMPLETED
-  S->>App: leg.succeeded { index: 1 }, then session.completed
+  S->>App: leg.succeeded { index: 1 }, then session.succeeded
 ```
 
 Notes:
@@ -266,7 +266,7 @@ sequenceDiagram
   end
   B->>S: POST /sessions/:id/select { quoteId }
   S->>R: start() transfer leg
-  R-->>S: LegStep PAYMENT, surface DEPOSIT_ADDRESS { chain, token, address, warning }, ref = address
+  R-->>S: LegStep requires_action, action payment with surface DEPOSIT_ADDRESS { chain, token, address, warning }, ref = address
   S-->>B: Step PAYMENT
   U->>C: Send the token to the address from any wallet or exchange
   loop AWAIT poll
@@ -280,7 +280,7 @@ sequenceDiagram
     else direct, Solana
       R->>C: getSignaturesForAddress, getTransaction
     end
-    R-->>S: PAYMENT, PROCESSING or COMPLETED with output and txHash
+    R-->>S: requires_action, processing or succeeded with output and transactions (source, destination)
   end
   S-->>B: Step COMPLETED
 ```
@@ -313,7 +313,7 @@ sequenceDiagram
   end
   B->>S: POST /sessions/:id/select { quoteId, walletAddress }
   S->>R: start({ source: { chain, token, address } })
-  R-->>S: LegStep PAYMENT, surface WALLET_TX { chain, txs }, transition submit_tx (SURFACE_RESULT tx_hash)
+  R-->>S: LegStep requires_action, action payment with surface WALLET_TX { chain, txs } and transition submit_tx (SURFACE_RESULT tx_hash)
   S-->>B: Step PAYMENT
   U->>B: Confirm in the modal
   B->>W: sendTransactions(chain, txs)
@@ -322,7 +322,7 @@ sequenceDiagram
   W-->>B: { hash } of the last transaction
   B->>S: POST /sessions/:id/transitions/submit_tx { inputs: { txHash } } with Idempotency-Key
   S->>R: transition({ name: 'submit_tx', inputs })
-  R-->>S: LegStep PROCESSING with txHash
+  R-->>S: LegStep processing with a source transaction
   loop AWAIT poll
     B->>S: GET /sessions/:id/step
     S->>R: status({ ref })
@@ -370,7 +370,7 @@ sequenceDiagram
   end
   R->>R: buildSettlementTxs(): approve(contract, amount), then settle(settlement, intent)
   R->>C: eth_blockNumber (fromBlock for the log search)
-  R-->>S: LegStep PAYMENT, WALLET_TX with 2 txs, ref settle:...
+  R-->>S: LegStep requires_action, action payment with WALLET_TX (2 txs), ref settle:...
   S-->>B: Step PAYMENT
   B->>T: approve(OpenRampSettlement, amount)
   B->>K: settle(settlement, intent)
@@ -396,11 +396,11 @@ sequenceDiagram
     R->>R: compare token, recipient, minAmount and callsHash
   end
   alt the receipt matches the quote
-    R-->>S: COMPLETED with the Settled txHash
+    R-->>S: succeeded with a settlement transaction (the Settled tx)
   else not settled, or a different settlement
-    R-->>S: FAILED with DELIVERY_FAILED and a problem message
+    R-->>S: failed with DELIVERY_FAILED and a problem message
   end
-  S->>App: session.completed or session.failed
+  S->>App: session.succeeded or session.failed
 ```
 
 The server verifies by session id. A transaction hash from the browser is not enough. Without an intent signer, another wallet can settle the session id first with other values. Then the receipt does not match, and the leg fails.
@@ -420,13 +420,13 @@ sequenceDiagram
   participant A as Adapter (Relay or offramp)
   participant Tr as config.treasury
   participant App as Your backend
-  App->>S: sessions.create({ direction: 'withdraw', source: { chain, token, custody }, allowedTargets })
+  App->>S: sessions.create({ direction: 'withdraw', source: { chain, token, custody }, allowedDestinations })
   S-->>App: { id, clientSecret }
   B->>S: GET /sessions/:id
   alt To wallet
     U->>B: Pick a network, a token and an address
     B->>S: POST /sessions/:id/target { type: 'crypto', chain, token, address }
-    S->>S: parseTarget(), checkAllowed() (403 TARGET_NOT_ALLOWED)
+    S->>S: parseTarget(), checkAllowed() (403 DESTINATION_NOT_ALLOWED)
     S->>Scr: screenAddress(address, chain)
     alt false
       S-->>B: 403 ADDRESS_REJECTED
@@ -444,7 +444,7 @@ sequenceDiagram
   Note over S: The sender is treasury.address for app custody, else the user's walletAddress
   B->>S: POST /sessions/:id/select { quoteId }
   S->>A: start({ source })
-  A-->>S: LegStep PAYMENT, WALLET_TX, submit_tx
+  A-->>S: LegStep requires_action, action payment with WALLET_TX and submit_tx
   alt custody user_wallet
     S-->>B: Step PAYMENT with WALLET_TX
     B->>W: sendTransactions(chain, txs)
@@ -457,15 +457,15 @@ sequenceDiagram
     Tr-->>S: { hash }
     S->>A: transition({ name: 'submit_tx', inputs: { txHash: hash } })
   end
-  A-->>S: LegStep PROCESSING
+  A-->>S: LegStep processing (the server adds the treasury hash as a source transaction)
   Note over A: A fiat payout completes when the provider pays the user's bank or e-wallet
   S->>A: status() or provider webhook
-  S->>App: session.completed and withdrawal.completed
+  S->>App: session.succeeded (direction withdraw)
 ```
 
 For a fiat payout at an offramp (for example Swapped), the provider first shows its own page in an `IFRAME` for the payout details. Then a provider event carries a new `WALLET_TX` surface that pays the provider's deposit address.
 
-A failed withdrawal sends `session.failed` and `withdrawal.failed`. When the treasury hook throws, the leg fails with `PAYMENT_FAILED` and the server does not send again for that step.
+A failed withdrawal attempt sends `session.payment_failed`, and the user can try again. A final failure sends `session.failed`. When the treasury hook throws `TreasuryRefusedError`, the leg fails with `PAYMENT_FAILED` and the user can try again. Any other error from the hook makes the failure final, because the funds may have left. The server never sends again for that step.
 
 ## Webhooks to your backend
 
@@ -490,8 +490,8 @@ sequenceDiagram
   alt 409 conflict
     S->>S: nothing is sent; a retry makes the same event ids
   else saved
-    S->>App: POST webhooks.url with headers openramp-id, openramp-timestamp, openramp-signature
-    Note over S,App: openramp-signature = "v1=" + HMAC-SHA256(secret, id.timestamp.body), timeout 4 s
+    S->>App: POST webhooks.url with headers webhook-id, webhook-timestamp, webhook-signature
+    Note over S,App: webhook-signature = "v1," + base64 HMAC-SHA256(secret, id.timestamp.body), timeout 4 s
     App->>App: openramp.webhooks.verify(req, rawBody), 300 s tolerance
     App->>App: dedupe by event id or session id, then credit
     S->>St: put(rec, version): remove the sent events, or attempts + 1
@@ -551,7 +551,7 @@ sequenceDiagram
 
 Other expiry paths:
 
-- `loadAuthed()` expires an `open` session (no payment) on the next browser request after the deadline, and sends `session.expired`.
+- `loadAuthed()` expires a `requires_payment_method` session (no payment in progress, also after a failed attempt) on the next browser request after the deadline, and sends `session.expired`.
 - After the deadline, `plan`, `target`, `quotes`, `select` and the `restart` transition answer `410 SESSION_EXPIRED`. A payment in progress can still finish.
 - A leg can end as `expired`, for example a QR code that nobody paid. Then the step is `EXPIRED`.
 
@@ -594,7 +594,7 @@ sequenceDiagram
   loop every pollIntervalMs (3 s), up to timeout_seconds (default 60, capped by maxWaitSeconds)
     M->>S: GET /sessions/:id/step
   end
-  S->>App: session.completed with metadata.reference
+  S->>App: session.succeeded with metadata.reference
   M-->>Ag: status completed, or timed_out with a next hint
 ```
 

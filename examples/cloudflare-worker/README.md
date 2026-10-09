@@ -21,4 +21,6 @@ Give `clientSecret` to the browser and point the widget at this worker (`baseUrl
 
 Storage: `durableObjectStore` uses a Durable Object (built into Workers, strongly consistent). No extra service is needed.
 
+Webhooks: set `WEBHOOK_URL` (your backend) and `WEBHOOK_SECRET`. The secret is a Standard Webhooks secret (`whsec_` and base64). Make one with `node -e "import('@openrampkit/server').then((m) => console.log(m.generateWebhookSecret()))"`, then `wrangler secret put WEBHOOK_SECRET`. Your backend verifies the `webhook-id`, `webhook-timestamp` and `webhook-signature` headers with `verifyWebhook()` from `@openrampkit/server`, or with any Standard Webhooks library. See [Webhooks to your backend](https://openrampkit-getformo.vercel.app/guide/webhooks).
+
 A Cron Trigger in `wrangler.toml` calls `sweep()` every minute. Read the full guide: [Deploy on Cloudflare Workers](https://openrampkit-getformo.vercel.app/deploy/cloudflare-workers).

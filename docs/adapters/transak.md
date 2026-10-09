@@ -13,6 +13,8 @@ transak({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#transak).
+
 ## Options
 
 | Option | Type | Default | Description |
@@ -20,7 +22,7 @@ transak({
 | `apiKey` | `string` | required | Partner API key |
 | `apiSecret` | `string` | required | Partner API secret |
 | `referrerDomain` | `string` | required | Your web domain (or mobile package name), registered with Transak |
-| `env` | `'staging' \| 'production'` | `'production'` | Staging uses the `-stg` hosts |
+| `env` | `'sandbox' \| 'production'` | `'production'` | `sandbox` uses the Transak staging (`-stg`) hosts. `'staging'` is a deprecated alias of `'sandbox'`. The server checks `env` against `livemode`. |
 | `surface` | `'IFRAME' \| 'REDIRECT'` | `'IFRAME'` | How the widget opens (see the warning below) |
 | `defaultCountry` | `string` | none | Country for quotes when the session has none |
 
@@ -39,16 +41,17 @@ transak({
 
 - The catalog also maps `pm_astropay` to `astropay`.
 - Sources: the live list [`GET /api/v2/currencies/fiat-currencies`](https://api.transak.com/api/v2/currencies/fiat-currencies), the [Get Fiat Currencies example](https://docs.transak.com/api/public/get-fiat-currencies) and the [Transak fee table](https://transak.notion.site/On-Ramp-Payment-Methods-Fees-Other-Details-b0761634feed4b338a69f4f186d906a5).
-- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana.
+- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana. Another token or chain gets no quote (`NO_QUOTES`). The adapter does not quote USDC on Base in its place.
 - Live catalog: `GET /fiat/public/v1/currencies/fiat-currencies`, cached for one hour. For the session currency, it builds one leg per active payment option, with the supporting countries and the min and max amounts. Common methods keep the static leg ids.
 - Surface: `IFRAME` (625 px high) by default.
 
 ## Quotes and start
 
 - Access token: `POST /partners/api/v2/refresh-token`. It is valid for 7 days, and a new call invalidates the old token, so the adapter caches it (in memory and in the store) and refreshes one at a time.
-- Quote: `GET /api/v1/pricing/public/quotes` with the fiat currency and amount, USDC, the network, the payment method and the country. Fees come from `feeBreakdown`. Quotes expire after 10 minutes.
+- Quote: `GET /api/v1/pricing/public/quotes` with the fiat currency and amount, USDC, the network, the payment method and the country. Fees come from `feeBreakdown`, in the fiat currency: a network fee is `network`, a partner fee is `app`, and the rest are `provider`. Transak takes them from the fiat amount before it converts, so each fee has `included: true`. The guarantee is `estimate`: Transak sets the final rate. Quotes expire after 10 minutes (`quoteExpiresAt(10)`).
 - Start: `POST {gateway}/api/v2/auth/session` with `widgetParams` (wallet address locked, amount, payment method, `partnerOrderId`, `partnerCustomerId`, `redirectURL`, email and country when known). The widget URL is single-use and valid for 5 minutes, so it is made in `start()`.
 - Reference: `partnerOrderId`, `ork_{random}`.
+- `providerRef`: the Transak order id, from the first webhook. No Transak order exists before the user pays in the widget, so the start step has none.
 - There is no `status()`. Progress comes from webhooks only.
 
 ::: warning REDIRECT and the Referer header
@@ -64,12 +67,21 @@ Set the webhook URL in the Transak partner dashboard to `{baseUrl}/webhooks/tran
 
 | Status | Leg |
 |---|---|
-| `COMPLETED` | `succeeded` with `transactionHash` |
+| `COMPLETED` | `succeeded`, with `transactionHash` as the `destination` transaction |
 | `FAILED`, `CANCELLED` | `failed` |
 | `EXPIRED` | `expired` |
 | `REFUNDED` | `refunded` |
-| `PAYMENT_DONE_MARKED_BY_USER`, `PROCESSING`, `PENDING_DELIVERY_FROM_TRANSAK`, `ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK` | `processing` |
+| `PAYMENT_DONE_MARKED_BY_USER`, `PROCESSING` | `processing`, detail code `processing` |
+| `PENDING_DELIVERY_FROM_TRANSAK` | `processing`, detail code `settling` |
+| `ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK` | `processing`, detail code `delayed` |
 | `AWAITING_PAYMENT_FROM_USER` | no change |
+| other | no change: the adapter logs the unknown status once (`statusMap`), and the leg keeps its current step |
+
+The raw Transak status goes to `detail.providerStatus`.
+
+## Sandbox limits
+
+Transak staging has 26 fiat currencies. INR is not one of them, so you cannot test UPI on staging. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
 
 ## Verified vs TO VERIFY
 

@@ -7,15 +7,17 @@ import type {
   Direction,
   LegQuote,
   LegSpec,
-  LegStatus,
   LegStep,
-  OrkError,
   PathwayLeg,
-  Surface,
-  Transition,
 } from '@openrampkit/core'
+import { bytesToBase64, bytesToHex } from './util.js'
 
-export const ADAPTER_API_VERSION = 1
+/**
+ * The version of the adapter contract. Version 2: a `LegStep` has a `status` and, when the user must
+ * act, an `action` (no `state`, no loose surface fields); `detail` replaces `sub`; transactions are
+ * records with a role; quotes have a `guarantee` and an `expiresAt`; fees have a typed amount.
+ */
+export const ADAPTER_API_VERSION = 2
 
 export interface Logger {
   debug(msg: string, data?: Record<string, unknown>): void
@@ -28,6 +30,12 @@ export interface Logger {
 export interface ScopedKV {
   get<T = unknown>(key: string): Promise<T | undefined>
   put(key: string, value: unknown, ttlSec?: number): Promise<void>
+  /**
+   * Optional: write `value` only when `key` has no live value, as one atomic step. Returns true when
+   * it wrote, false when the key was already set. Stores with no atomic operation leave it out.
+   * Use `claimOnce` instead of calling it directly.
+   */
+  putIfAbsent?(key: string, value: unknown, ttlSec: number): Promise<boolean>
 }
 
 export interface AdapterContext {
@@ -87,28 +95,40 @@ export type TransitionInput = {
   inputs?: Record<string, unknown>
 }
 
-export type LegEvent = {
+/**
+ * A provider event for one leg (from a webhook, or an adapter route): a `LegStep` with the leg's
+ * `ref`. The server applies it with the same rules as a step from `status()` (see `stateFor` in
+ * `@openrampkit/core`). For example, an offramp `payment_pending` webhook that carries the deposit
+ * address is `{ ref, status: 'requires_action', action: { kind: 'payment', surface: { kind: 'WALLET_TX', ... }, transitions } }`,
+ * and a KYC review webhook is `{ ref, status: 'processing', phase: 'kyc' }`.
+ */
+export type LegEvent = LegStep & {
   ref: string
-  status: LegStatus
-  output?: Amount
-  txHash?: string
-  error?: OrkError
   /**
-   * Optional new surface for a non-terminal event, e.g. an offramp `payment_pending` webhook that
-   * carries the deposit address: `{ kind: 'WALLET_TX', ... }` with status `awaiting_user`.
-   * The server shows it instead of the current surface.
+   * Optional provider event id (or another value that is the same for each delivery of one event).
+   * The server keeps the recent ids of each session and drops an event whose id it already applied.
    */
-  surface?: Surface
-  /** Transitions that go with `surface`. Default: an AWAIT poll. */
-  transitions?: Transition[]
+  eventId?: string
 }
 
 export type CatalogInput = { country?: string; currency: string; direction: Direction }
+
+/**
+ * The provider environment that an adapter calls: test keys and no real money (`sandbox`), or real
+ * money (`production`). Every first-party adapter takes it as the `env` option.
+ */
+export type AdapterEnv = 'sandbox' | 'production'
 
 export interface Adapter {
   id: string
   name: string
   apiVersion: number
+  /**
+   * The provider environment this adapter calls, from its options (or its keys). Undefined when the
+   * adapter follows each session's `livemode`. The server refuses to start with `livemode: true` and an
+   * adapter in `sandbox`, and warns for an adapter in `production` when `livemode` is false.
+   */
+  readonly env?: AdapterEnv
   /** Static leg declarations */
   legs: LegSpec[]
   /** Optional live catalog: returns legs refined for this user (methods, limits, assets) */
@@ -122,9 +142,30 @@ export interface Adapter {
   start(input: StartInput, ctx: AdapterContext): Promise<LegStep>
   transition?(input: TransitionInput, ctx: AdapterContext): Promise<LegStep>
   status?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<LegStep>
+  /**
+   * Optional: void the provider order of a started leg when the session is canceled
+   * (`POST /sessions/:id/cancel`, `openramp.sessions.cancel`). Best effort: the server logs an error and
+   * cancels the session anyway. A payment that arrives later takes the late payment path.
+   */
+  cancel?(input: { leg: PathwayLeg; ref: string }, ctx: AdapterContext): Promise<void>
   webhook?: {
+    /**
+     * False when the adapter cannot verify webhooks with its options (for example no webhook secret),
+     * so no provider event can arrive. Default true. The server warns at start when an adapter with
+     * legs has neither `status()` nor a configured webhook (see `resultChannels`).
+     */
+    configured?: boolean
     verify(req: Request, rawBody: string, ctx: WebhookContext): Promise<boolean>
     parse(rawBody: string, ctx: WebhookContext & { url?: string }): Promise<LegEvent[]>
+    /**
+     * Optional replay protection. Return a key that is the same for every delivery of one provider
+     * event: the provider event id, or `webhookBodyKey(rawBody)` when the provider signs the body with
+     * no timestamp. The server calls it after `verify`. It remembers each key for 7 days in the
+     * adapter's shared store (`claimWebhook`), and answers a repeat with `200` and applies nothing.
+     * When an event of the delivery cannot be applied yet (the server answers `503`), the server gives
+     * the key back, so the provider's retry still applies.
+     */
+    replayKey?(req: Request, rawBody: string, ctx: WebhookContext): Promise<string | undefined>
   }
   health?(ctx: Pick<AdapterContext, 'fetch' | 'log'>): Promise<{ ok: boolean; detail?: string }>
   /**
@@ -136,6 +177,16 @@ export interface Adapter {
 
 export type WebhookContext = Pick<AdapterContext, 'log' | 'shared' | 'fetch'>
 
+/**
+ * How the server learns the result of this adapter's legs:
+ * - `polling`: the adapter has `status()`, so the server and the client can check a leg.
+ * - `webhooks`: the adapter has a `webhook` that can verify events (`configured` is not false).
+ * An adapter with neither cannot move a leg past the provider step by itself.
+ */
+export function resultChannels(a: Pick<Adapter, 'status' | 'webhook'>): { polling: boolean; webhooks: boolean } {
+  return { polling: typeof a.status === 'function', webhooks: !!a.webhook && a.webhook.configured !== false }
+}
+
 export type RouteContext = Pick<AdapterContext, 'fetch' | 'log' | 'shared'> & {
   baseUrl: string
   /** Apply a provider event to the session that owns `ref` (same effect as a webhook) */
@@ -146,6 +197,13 @@ export type AdapterDefinition = Omit<Adapter, 'apiVersion'> & { apiVersion?: num
 
 export function createAdapter(def: AdapterDefinition): Adapter {
   if (!def.id || !/^[a-z0-9-]+$/.test(def.id)) throw new Error(`Adapter id must be lowercase letters, digits or dashes: ${def.id}`)
+  if (def.apiVersion !== undefined && def.apiVersion !== ADAPTER_API_VERSION) {
+    throw new Error(
+      `Adapter ${def.id} was built for adapter API version ${def.apiVersion}, but @openrampkit/adapter supports version ${ADAPTER_API_VERSION}. ` +
+        'Update the adapter: a LegStep has `status` and an `action` (no `state`), `detail` (no `sub`) and `transactions` (no `txHash`). ' +
+        'See docs/adapters/writing-an-adapter.md.',
+    )
+  }
   const ids = new Set<string>()
   for (const leg of def.legs) {
     if (ids.has(leg.id)) throw new Error(`Adapter ${def.id} has duplicate leg id ${leg.id}`)
@@ -156,24 +214,54 @@ export function createAdapter(def: AdapterDefinition): Adapter {
 
 // ---------- helpers for adapter authors ----------
 
+const deprecationsShown = new Set<string>()
+
+/**
+ * Write a deprecation warning once per process (adapters have no logger when they are built).
+ * Returns true the first time for `key`.
+ */
+export function warnDeprecatedOnce(key: string, message: string): boolean {
+  if (deprecationsShown.has(key)) return false
+  deprecationsShown.add(key)
+  console.warn(`[openrampkit] Deprecated: ${message}`)
+  return true
+}
+
+/**
+ * The `env` of an adapter from its options. `legacy` is the value of an older option (for example
+ * peer's `env: 'live'` or coinbase's `sandbox: true`), already mapped to an `AdapterEnv`; it is used only
+ * when `env` is not set, with a one-time warning. Returns `fallback` when neither is set.
+ */
+export function resolveEnv<F extends AdapterEnv | undefined>(
+  adapter: string,
+  env: AdapterEnv | undefined,
+  legacy: { value: AdapterEnv | undefined; option: string } | undefined,
+  fallback: F,
+): AdapterEnv | F {
+  if (env !== undefined && env !== 'sandbox' && env !== 'production') throw new Error(`${adapter}: env must be 'sandbox' or 'production', not ${JSON.stringify(env)}`)
+  if (env) return env
+  if (legacy?.value) {
+    warnDeprecatedOnce(`${adapter}:${legacy.option}`, `${adapter}: the option ${legacy.option} is deprecated. Use env: '${legacy.value}'.`)
+    return legacy.value
+  }
+  return fallback
+}
+
 export async function hmacSha256(secret: string, message: string, encoding: 'hex' | 'base64' = 'hex'): Promise<string> {
   const enc = new TextEncoder()
   const key = await crypto.subtle.importKey('raw', enc.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'])
   const sig = new Uint8Array(await crypto.subtle.sign('HMAC', key, enc.encode(message)))
-  if (encoding === 'hex') return [...sig].map((b) => b.toString(16).padStart(2, '0')).join('')
-  let bin = ''
-  for (const b of sig) bin += String.fromCharCode(b)
-  return btoa(bin)
+  if (encoding === 'hex') return bytesToHex(sig)
+  return bytesToBase64(sig)
 }
 
-export function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false
-  let r = 0
-  for (let i = 0; i < a.length; i++) r |= a.charCodeAt(i) ^ b.charCodeAt(i)
-  return r === 0
-}
+/** Constant-time string compare. The one implementation lives in `@openrampkit/core`. */
+export { timingSafeEqual } from '@openrampkit/core'
 
 export * from './http.js'
+export * from './helpers.js'
+export * from './claim.js'
+export * from './rsa.js'
 export * from './util.js'
 export * from './evm.js'
 export * from './solana.js'

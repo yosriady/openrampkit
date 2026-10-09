@@ -1,6 +1,6 @@
 # Xendit
 
-`@openrampkit/adapter-xendit` takes fiat pay-ins into your own [Xendit](https://docs.xendit.co) account with the Payments API v3. It has QR rails (QRIS, QR Ph, PromptPay, PayNow) and e-wallets. There is no crypto: use it with a merchant destination. See the [merchant guide](../guide/merchant-destination.md).
+`@openrampkit/adapter-xendit` takes fiat pay-ins into your own [Xendit](https://docs.xendit.co) account with the Payments API v3. It has QR rails (QRIS, QR Ph, PromptPay, PayNow QR) and e-wallets. There is no crypto: use it with a merchant destination. See the [merchant guide](../guide/merchant-destination.md).
 
 ```ts
 import { xendit } from '@openrampkit/adapter-xendit'
@@ -11,6 +11,8 @@ xendit({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#xendit).
+
 ## Options
 
 | Option | Type | Default | Description |
@@ -19,6 +21,7 @@ xendit({
 | `webhookToken` | `string` | required | Webhook verification token from Dashboard > Settings > Webhooks |
 | `forUserId` | `string` | none | Sub-account id for xenPlatform (sent as `for-user-id`) |
 | `apiUrl` | `string` | `https://api.xendit.co` | API base URL |
+| `env` | `'sandbox' \| 'production'` | from the key prefix | `xnd_development_` is `sandbox`; `xnd_production_` is `production`. A value that does not agree with the key throws. The server checks `env` against `livemode`. |
 | `fees` | `Record<method, { bps?: number; fixed?: string }>` | none | Fee model for quotes (Xendit does not return fees) |
 | `expiryMinutes` | `number` | `15` | Countdown shown on QR codes |
 | `methods` | `string[]` | all | Offer only these methods |
@@ -43,37 +46,60 @@ One leg per country and channel. The leg id is `{country}-{method}`, for example
 | `my-grabpay` | `GRABPAY` | MYR | 1 | 10,000 | `REDIRECT`, `DEEPLINK` |
 | `vn-momo` | `MOMO` | VND | 1,000 | 50,000,000 | `REDIRECT`, `DEEPLINK` |
 | `vn-zalopay` | `ZALOPAY` | VND | 1,000 | 50,000,000 | `REDIRECT`, `DEEPLINK` |
-| `sg-paynow` | `PAYNOW` | SGD | 1 | 200,000 | `QR` |
+| `sg-paynow` | `SGQR` | SGD | 0.01 | 200,000 | `QR` |
 
 Each leg allows only its country. Limits come from Xendit's channel pages.
 
+PayNow QR uses the channel code `SGQR`, not `PAYNOW`. Source: the Xendit [PayNow QR channel page](https://docs.xendit.co/docs/paynow-qr) (read 2026-10-09). The leg id stays `sg-paynow`. With `PAYNOW`, Xendit test mode returns `400 API_VALIDATION_ERROR` "API endpoint and method is not supported for 'PAYNOW' channel code with country 'SG'".
+
 ## Quotes and start
 
-- Quote: local. The amount is rounded to the currency's minor units and checked against the channel limits (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`). Fees come from the `fees` option. Quotes expire after 10 minutes.
+- Quote: local. The amount is rounded to the currency's minor units and checked against the channel limits (`AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`). Fees come from the `fees` option: one `provider` fee ("Xendit fee") in the local currency, with `included: true`. The guarantee is `firm`: the user pays the quoted amount in the local currency, and the merchant gets it. Quotes expire after 10 minutes (`quoteExpiresAt(10)`).
 - Start: `POST /v3/payment_requests` with `type: 'PAY'`, `capture_method: 'AUTOMATIC'`, the channel code, return URLs, and `metadata: { openramp_session, user_id }`. Header `api-version: 2024-11-11`. Idempotency key: `{sessionId}:xendit:{legId}:{nonce}`, with a new nonce per quote.
 - Surface from the payment request's actions: `QR_STRING` gives a `QR`, `WEB_URL` gives a `REDIRECT`, `DEEPLINK_URL` gives a `DEEPLINK`.
 - Status: `GET /v3/payment_requests/{id}`.
+- Reference: the payment request id. It is both the leg `ref` and the `providerRef`.
 
 | Xendit status | Leg |
 |---|---|
-| `ACCEPTING_PAYMENTS`, `REQUIRES_ACTION` | `awaiting_user` (`PAYMENT`) |
+| `ACCEPTING_PAYMENTS`, `REQUIRES_ACTION` | `requires_action` (`PAYMENT`) |
 | `AUTHORIZED` | `processing` |
 | `SUCCEEDED` | `succeeded` |
 | `FAILED`, `CANCELED` | `failed` with `PAYMENT_FAILED` |
 | `EXPIRED` | `expired` |
+| other | no new step: the adapter logs the unknown status once (`statusMap`). The leg keeps its last known status (`requires_action` with the current surface, or `processing`). |
 
-Errors: HTTP 429 is `RATE_LIMITED`. Other 4xx is `PROVIDER_DECLINED` with Xendit's message. 5xx and network errors are `PROVIDER_UNAVAILABLE`.
+Errors:
+
+| Xendit answer | Error | Retryable |
+|---|---|---|
+| `429` | `RATE_LIMITED` | yes |
+| `403 INVALID_MERCHANT_SETTINGS` ("payment channel has not been activated") | `PROVIDER_UNAVAILABLE`, recovery `choose_other` | no |
+| `400 API_VALIDATION_ERROR` that names the channel ("... not supported for 'X' channel code") | `PROVIDER_UNAVAILABLE`, recovery `choose_other` | no |
+| Other `401` and `403` (for example `INVALID_API_KEY`, `REQUEST_FORBIDDEN_ERROR`) | `PROVIDER_UNAVAILABLE`, recovery `choose_other` (the shared setup error) | no |
+| Other 4xx | `PROVIDER_DECLINED` with Xendit's message | no |
+| 5xx, network errors | `PROVIDER_UNAVAILABLE` | yes |
+
+The two setup errors show the user "This payment method is not set up for this app yet. Try another method." The adapter also writes an error log for the operator. The log names the method, the channel code and the country, and tells you what to do:
+
+- `INVALID_MERCHANT_SETTINGS`: the channel is not active on your Xendit account. Activate the payment channel in the Xendit Dashboard. Do this in test mode for `xnd_development_` keys and again in live mode. A test mode check on 2026-10-09 gave this error for QRIS and QR Ph.
+- `API_VALIDATION_ERROR` for a channel: the channel code or the request body does not agree with the Xendit API for that channel. Compare them with the [create payment request reference](https://docs.xendit.co/apidocs/create-payment-request) and the channel page.
+
+Any other `401` or `403` refuses the key or its permissions. It is not a payment decline. The user sees "Xendit is not set up for this app yet. Try another method." The error log gives the Xendit error code and tells you to check `secretKey` (`xnd_development_` for test mode, `xnd_production_` for live mode) and the key permissions.
 
 ## Webhooks
 
 In the Xendit dashboard, set the payment webhook URL to `{baseUrl}/webhooks/xendit`.
 
-- Verification: the `x-callback-token` header must equal `webhookToken`.
+- Verification: the `x-callback-token` header must equal `webhookToken`. The token is fixed, and the body has no signature or timestamp. Keep the token secret.
+- Replay protection: the adapter gives the SHA-256 of the raw body as the replay key (`webhook.replayKey`). The server keeps each key for 7 days in the adapter's shared store (`claimWebhook`, built on `claimOnce`). A repeat of the same body in that time gets `200` with `{ "received": true, "duplicate": true }` and changes nothing. When the server cannot apply the event yet (it answers `503`), it gives the key back, so the provider's retry still applies. The key is also the event id (`eventId`), so a session drops the same event twice.
 - `payment.capture` (or `data.status === 'SUCCEEDED'`) gives `succeeded`. The event has no output amount, because Xendit reports the gross amount and the quote output is net of fees. `payment.failure` (or `FAILED`) gives `failed`. Other events are ignored.
 
 ## Verified vs TO VERIFY
 
-- **TO VERIFY**: the PayNow QR channel code (`PAYNOW`).
+- **Verified (docs)**: PayNow QR uses channel code `SGQR` with `POST /v3/payment_requests`, min 0.01 SGD, max 200,000 SGD ([PayNow QR page](https://docs.xendit.co/docs/paynow-qr), read 2026-10-09).
+- **TO VERIFY**: a live test mode payment request with `SGQR`. The account used on 2026-10-09 did not test it after the change.
+- **TO VERIFY**: PromptPay. The PromptPay channel page gives `PROMPTPAY`, but an example in the create payment request reference uses `QRPROMPTPAY`. The adapter sends `PROMPTPAY`.
 - **TO VERIFY**: DuitNow QR (Malaysia) is not in the list; its channel code must be checked with Xendit.
 - **TO VERIFY**: VietQR is not in the list; it was not in Xendit's public channel list as of 2026-09.
 

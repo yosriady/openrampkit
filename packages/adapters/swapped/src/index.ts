@@ -17,18 +17,25 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
   timingSafeEqual,
+  webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
-import { OrkException, USDC, evmChainId, orkError, roundTo, toBaseUnits } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStep, PollSpec, Surface, Transition, TxRequest } from '@openrampkit/core'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { OpenRampException, USDC, evmChainId, openRampError, roundTo, toBaseUnits } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegAction, LegQuote, LegSpec, LegStep, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type SwappedDeliverAsset = {
   /** CAIP-2 chain */
@@ -47,7 +54,7 @@ export type SwappedOptions = {
   /** Secret key (sk_...). Signs widget URLs and verifies order notifications. */
   secretKey: string
   /** Default 'production'. Sandbox uses https://sandbox.swapped.com (BTC/ETH testnets and test cards only). */
-  env?: 'sandbox' | 'production'
+  env?: AdapterEnv
   /** Widget base URL. Default https://widget.swapped.com (production) or https://sandbox.swapped.com (sandbox). */
   widgetUrl?: string
   /** Merchant API base URL. Default: same as `widgetUrl`. */
@@ -113,6 +120,29 @@ type SwappedNotification = {
 }
 
 const POLL: PollSpec = POLLS.checkout
+
+/**
+ * Buy order status (order notifications and get_transactions). `paying`: the user is still in the
+ * widget, so the leg keeps its step. An unknown status is not in the table: no event, and `status()`
+ * keeps the last known step.
+ */
+const BUY_STATUS = statusMap<'paying' | 'processing' | 'succeeded' | 'failed'>('Swapped', {
+  payment_pending: 'paying',
+  // Paid and bought, but not yet sent on chain.
+  order_completed: 'processing',
+  order_broadcasted: 'succeeded',
+  order_cancelled: 'failed',
+})
+
+/** Sell order status. `send_funds`: Swapped waits for the crypto at `order_crypto_address`. */
+const SELL_STATUS = statusMap<'send_funds' | 'processing' | 'succeeded' | 'failed'>('Swapped sell', {
+  payment_pending: 'send_funds',
+  payout_pending: 'processing',
+  order_completed: 'succeeded',
+  // Status polling reports a completed order with a transaction id this way.
+  order_broadcasted: 'succeeded',
+  order_cancelled: 'failed',
+})
 const ORDER_TTL_SEC = 7 * 24 * 60 * 60
 const METHODS_TTL_SEC = 60 * 60
 const IFRAME_ALLOW = 'accelerometer; autoplay; camera; encrypted-media; gyroscope; payment; clipboard-read; clipboard-write'
@@ -174,6 +204,9 @@ export const SWAPPED_PAYOUT_METHODS: Array<{ slug: string; currencies: string[];
 
 const SELL_PREFIX = 'sell-'
 
+/** What the adapter keeps for an order in the session store. `last`: the last step from a known status. */
+type OrderRecord = { since: number; sell?: boolean; currencyCode?: string; last?: LegStep }
+
 export function swappedMethodId(group: string): string {
   return SWAPPED_METHOD_IDS[group] ?? group
 }
@@ -181,7 +214,7 @@ export function swappedMethodId(group: string): string {
 const dec = decimalFrom
 
 export function swapped(opts: SwappedOptions) {
-  const env = opts.env ?? 'production'
+  const env = resolveEnv('swapped', opts.env, undefined, 'production')
   const widgetUrl = (opts.widgetUrl ?? (env === 'sandbox' ? 'https://sandbox.swapped.com' : 'https://widget.swapped.com')).replace(/\/+$/, '')
   const apiUrl = (opts.apiUrl ?? widgetUrl).replace(/\/+$/, '')
   const widgetOrigin = new URL(widgetUrl).origin
@@ -200,7 +233,6 @@ export function swapped(opts: SwappedOptions) {
     eta: { min: 120, max: 1800 },
     surfaces: ['IFRAME'],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks', ...(opts.statusPolling ? (['polling'] as const) : [])],
     ...extra,
   })
 
@@ -216,7 +248,6 @@ export function swapped(opts: SwappedOptions) {
     eta: { min: 600, max: 3 * 24 * 3600 },
     surfaces: ['IFRAME', 'WALLET_TX'],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks'],
     ...extra,
   })
 
@@ -225,34 +256,27 @@ export function swapped(opts: SwappedOptions) {
   /** Used when the live catalog is not available */
   const staticLegs: LegSpec[] = [leg('creditcard'), leg('apple-pay'), leg('google-pay'), ...staticSellLegs]
 
-  function deliverAssetFor(asset: Amount['asset'] | undefined): SwappedDeliverAsset {
-    if (asset?.kind === 'crypto' && asset.chain !== '*') {
-      const found = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (found) return found
-    }
-    return deliver[0]!
+  /** The asset Swapped delivers for `asset`. NO_QUOTES when Swapped does not deliver that token on that chain (never another token). */
+  function deliverAssetFor(asset: Asset | undefined): SwappedDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Swapped')
   }
 
-  function assetOf(d: SwappedDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   async function methodsByCountry(ctx: Pick<AdapterContext, 'fetch' | 'shared'>): Promise<Record<string, SwappedMethod[]>> {
-    const cached = await ctx.shared.get<Record<string, SwappedMethod[]>>('methods')
-    if (cached) return cached
-    const res = await fetchJson<{ success?: boolean; message?: string; data?: Record<string, SwappedMethod[]> | SwappedMethod[] }>(
-      ctx.fetch,
-      `${apiUrl}/api/v1/merchant/get_payment_methods?apiKey=${encodeURIComponent(opts.publicKey)}`,
-    )
-    // A refused or empty answer is a failure, not "no methods": throw (the server then uses the
-    // static legs) and do not cache it.
-    if (res.success === false || !res.data || typeof res.data !== 'object') {
-      throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: `Swapped returned no payment methods${res.message ? `: ${res.message}` : ''}.`.slice(0, 200) }), 502)
-    }
-    // The live API returns { data: { [country]: Method[] } }. The docs show a flat list; accept both.
-    const data = Array.isArray(res.data) ? { '*': res.data } : res.data
-    await ctx.shared.put('methods', data, METHODS_TTL_SEC)
-    return data
+    return cachedJson(ctx.shared, 'methods', METHODS_TTL_SEC, async () => {
+      const res = await fetchJson<{ success?: boolean; message?: string; data?: Record<string, SwappedMethod[]> | SwappedMethod[] }>(
+        ctx.fetch,
+        `${apiUrl}/api/v1/merchant/get_payment_methods?apiKey=${encodeURIComponent(opts.publicKey)}`,
+      )
+      // A refused or empty answer is a failure, not "no methods": throw (the server then uses the
+      // static legs) and do not cache it.
+      if (res.success === false || !res.data || typeof res.data !== 'object') {
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `Swapped returned no payment methods${res.message ? `: ${res.message}` : ''}.`.slice(0, 200) }), 502)
+      }
+      // The live API returns { data: { [country]: Method[] } }. The docs show a flat list; accept both.
+      return Array.isArray(res.data) ? { '*': res.data } : res.data
+    })
   }
 
   async function signedWidgetUrl(params: Array<[string, string | undefined]>, path = '/'): Promise<string> {
@@ -265,16 +289,14 @@ export function swapped(opts: SwappedOptions) {
 
   async function sellCatalog(input: { country?: string; currency: string }, ctx: Pick<AdapterContext, 'fetch' | 'shared' | 'log'>): Promise<LegSpec[]> {
     type Payout = { slug: string; currency: string[]; disabled: boolean; min_amount?: number; max_amount?: number }
-    let byCountry = await ctx.shared.get<Record<string, Payout[]>>('payouts')
-    if (!byCountry) {
+    const byCountry = await cachedJson<Record<string, Payout[]>>(ctx.shared, 'payouts', METHODS_TTL_SEC, async () => {
       const res = await fetchJson<{ success?: boolean; data?: Record<string, Payout[]> | Payout[] }>(
         ctx.fetch,
         `${apiUrl}/api/v1/merchant/sell/get_payout_methods?api_key=${encodeURIComponent(opts.publicKey)}`,
       )
-      if (res.success === false || !res.data) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Swapped returned no payout methods.' }), 502)
-      byCountry = Array.isArray(res.data) ? { '*': res.data } : res.data
-      await ctx.shared.put('payouts', byCountry, METHODS_TTL_SEC)
-    }
+      if (res.success === false || !res.data) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Swapped returned no payout methods.' }), 502)
+      return Array.isArray(res.data) ? { '*': res.data } : res.data
+    })
     const currency = input.currency.toUpperCase()
     const countries = input.country ? [input.country.toUpperCase(), '*'] : Object.keys(byCountry)
     const out = new Map<string, LegSpec>()
@@ -297,14 +319,15 @@ export function swapped(opts: SwappedOptions) {
     return `0xa9059cbb${to.toLowerCase().replace(/^0x/, '').padStart(64, '0')}${BigInt(amountBase).toString(16).padStart(64, '0')}`
   }
 
-  /** The step that asks the sender to pay Swapped's deposit address (from a sell `payment_pending`). */
-  function sendFundsStep(ref: string, n: SwappedNotification): { surface: Surface; transitions: Transition[] } | undefined {
+  /** The action that asks the sender to pay Swapped's deposit address (from a sell `payment_pending`). */
+  function sendFundsAction(n: SwappedNotification): LegAction | undefined {
     const d = deliver.find((x) => x.currencyCode === n.order_crypto)
     const chainId = d ? evmChainId(d.chain) : undefined
     if (!d || !chainId || !n.order_crypto_address || n.order_crypto_amount === undefined) return undefined
     const amount = toBaseUnits(dec(n.order_crypto_amount, d.decimals ?? 6), d.decimals ?? 6)
     const tx: TxRequest = { to: d.token, data: erc20Transfer(n.order_crypto_address, amount), value: '0', chainId }
     return {
+      kind: 'payment',
       surface: { kind: 'WALLET_TX', chain: d.chain, txs: [tx] },
       transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
     }
@@ -315,40 +338,54 @@ export function swapped(opts: SwappedOptions) {
     return d ? assetOf(d) : undefined
   }
 
-  function eventFrom(n: SwappedNotification): LegEvent | undefined {
+  /** True when the order status is in the buy or sell table (an unknown one is logged with `log`) */
+  function knownStatus(n: SwappedNotification, log?: Pick<Logger, 'warn'>): boolean {
+    return (n.order_type === 'sell' ? SELL_STATUS(n.order_status, log) : BUY_STATUS(n.order_status, log)) !== undefined
+  }
+
+  /** The event of an order notification. Undefined: no change (still paying, an unknown status, or no ref). */
+  function eventFrom(n: SwappedNotification, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
     const ref = n.external_customer_id ?? undefined
     if (!ref) return undefined
-    if (n.order_type === 'sell') return sellEventFrom(ref, n)
+    const ids = { ref, ...(n.order_id ? { providerRef: n.order_id } : {}) }
+    if (n.order_type === 'sell') return sellEventFrom(ids, n, log)
     const asset = assetByCode(n.order_crypto)
-    const output = asset && n.order_crypto_amount !== undefined ? { amount: dec(n.order_crypto_amount, 8), asset } : undefined
-    switch (n.order_status) {
-      case 'order_broadcasted':
-        return { ref, status: 'succeeded', ...(n.transaction_id ? { txHash: n.transaction_id } : {}), ...(output ? { output } : {}) }
-      case 'order_completed':
-        // Paid and bought, but not yet sent on chain.
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'order_cancelled':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The order was cancelled or the payment failed.', recovery: 'retry_payment' }) }
+    const output = asset && n.order_crypto_amount !== undefined ? { value: dec(n.order_crypto_amount, 8), asset } : undefined
+    switch (BUY_STATUS(n.order_status, log)) {
+      case 'succeeded':
+        // The broadcast transaction delivers the crypto to the user.
+        return { ...ids, status: 'succeeded', ...(n.transaction_id ? { transactions: [{ role: 'destination', hash: n.transaction_id, ...chainOf(n) }] } : {}), ...(output ? { output } : {}) }
+      case 'processing':
+        return { ...ids, status: 'processing', detail: { code: 'settling', providerStatus: 'order_completed' }, ...(output ? { output } : {}) }
+      case 'failed':
+        return { ...ids, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The order was cancelled or the payment failed.', recovery: 'retry_payment' }) }
       default:
-        // payment_pending: the user is still paying inside the widget. No state change.
+        // paying: the user is still paying inside the widget. No state change. Unknown: logged, no change.
         return undefined
     }
   }
 
-  function sellEventFrom(ref: string, n: SwappedNotification): LegEvent | undefined {
-    switch (n.order_status) {
-      case 'payment_pending': {
+  /** `{ chain }` of the order's crypto, when it is one of the deliver assets */
+  function chainOf(n: SwappedNotification): { chain?: string } {
+    const chain = deliver.find((x) => x.currencyCode === n.order_crypto)?.chain
+    return chain ? { chain } : {}
+  }
+
+  function sellEventFrom(ids: { ref: string; providerRef?: string }, n: SwappedNotification, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
+    // The transaction id of a sell is the user's crypto transfer to Swapped.
+    const transactions = n.transaction_id ? { transactions: [{ role: 'source' as const, hash: n.transaction_id, ...chainOf(n) }] } : {}
+    switch (SELL_STATUS(n.order_status, log)) {
+      case 'send_funds': {
         // The user finished the widget; Swapped waits for the crypto at `order_crypto_address`.
-        const send = sendFundsStep(ref, n)
-        return send ? { ref, status: 'awaiting_user', ...send } : undefined
+        const action = sendFundsAction(n)
+        return action ? { ...ids, status: 'requires_action', action } : undefined
       }
-      case 'payout_pending':
-        return { ref, status: 'processing', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
-      case 'order_completed':
-      case 'order_broadcasted': // status polling reports a completed order with a transaction id this way
-        return { ref, status: 'succeeded', ...(n.transaction_id ? { txHash: n.transaction_id } : {}) }
-      case 'order_cancelled':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The payout was cancelled.', recovery: 'contact_support' }) }
+      case 'processing':
+        return { ...ids, status: 'processing', detail: { code: 'settling', providerStatus: 'payout_pending' }, ...transactions }
+      case 'succeeded':
+        return { ...ids, status: 'succeeded', ...transactions }
+      case 'failed':
+        return { ...ids, status: 'failed', error: openRampError('PAYMENT_FAILED', { message: 'The payout was cancelled.', recovery: 'contact_support' }) }
       default:
         return undefined
     }
@@ -361,9 +398,9 @@ export function swapped(opts: SwappedOptions) {
     try {
       res = await fetchJson<SellPricing>(ctx.fetch, `${apiUrl}/api/v1/merchant/sell/pricing`, { method: 'POST', body: JSON.stringify({ api_key: opts.publicKey, ...body }) })
     } catch (e) {
-      throw httpErrorToOrk(e, 'Swapped', { what: 'price this payout', log: ctx.log })
+      throw httpErrorToOpenRamp(e, 'Swapped', { what: 'price this payout', log: ctx.log })
     }
-    if (!res.success || !res.data) throw new OrkException(orkError('NO_QUOTES', { message: res.message ? `Swapped: ${res.message}`.slice(0, 200) : 'Swapped could not price this payout.' }), 422)
+    if (!res.success || !res.data) throw new OpenRampException(openRampError('NO_QUOTES', { message: res.message ? `Swapped: ${res.message}`.slice(0, 200) : 'Swapped could not price this payout.' }), 422)
     return res.data
   }
 
@@ -377,23 +414,25 @@ export function swapped(opts: SwappedOptions) {
     const src = input.amountIn?.asset.kind === 'crypto' ? input.amountIn.asset : input.leg.from.asset
     const d = deliverAssetFor(src)
     const fiat = (input.leg.to.asset.kind === 'fiat' ? input.leg.to.asset.currency : 'EUR').toUpperCase()
-    const cryptoAmount = input.amountIn?.amount ?? '0'
+    const cryptoAmount = input.amountIn?.value ?? '0'
     const probe = await sellPricing(ctx, { payout_method: slug, crypto_currency: d.currencyCode, fiat_amount: 100, fiat_currency: fiat })
     const perCrypto = probe.crypto_amount > 0 ? probe.fiat_amount_incl_fees / probe.crypto_amount : 0
-    if (!(perCrypto > 0)) throw new OrkException(orkError('NO_QUOTES', { message: 'Swapped returned no sell price.' }), 422)
+    if (!(perCrypto > 0)) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Swapped returned no sell price.' }), 422)
     const grossFiat = Math.floor(Number(cryptoAmount) * perCrypto * 100) / 100
     const p = await sellPricing(ctx, { payout_method: slug, crypto_currency: d.currencyCode, fiat_amount: grossFiat, fiat_currency: fiat })
     const fees: Fee[] = []
-    if (p.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: dec(p.processing_fee, 2), currency: fiat })
-    if (p.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: dec(p.markup_fiat_value, 2), currency: fiat })
+    if (p.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: { value: dec(p.processing_fee, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+    if (p.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: { value: dec(p.markup_fiat_value, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
     return {
       adapterId: 'swapped',
       legId: input.leg.legId,
-      input: { amount: cryptoAmount, asset: assetOf(d) },
-      output: { amount: dec(p.fiat_amount_excl_fees_local ?? p.fiat_amount_excl_fees, 2), asset: { kind: 'fiat', currency: fiat } },
+      input: { value: cryptoAmount, asset: assetOf(d) },
+      output: { value: dec(p.fiat_amount_excl_fees_local ?? p.fiat_amount_excl_fees, 2), asset: { kind: 'fiat', currency: fiat } },
       fees,
+      // `estimate`: Swapped sets the final amount inside the widget, at the rate when it executes.
+      guarantee: 'estimate',
       eta: { min: 600, max: 3 * 24 * 3600 },
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: quoteExpiresAt(10),
       data: { slug, currencyCode: d.currencyCode, fiat, estimate: true },
     }
   }
@@ -408,7 +447,7 @@ export function swapped(opts: SwappedOptions) {
         ['method', data.slug ?? input.leg.legId.slice(SELL_PREFIX.length)],
         ['userSendsFunds', 'false'],
         ['cryptoCurrencyCode', data.currencyCode ?? d.currencyCode],
-        ['cryptoCurrencyAmount', dec(input.quote.input.amount, 6)],
+        ['cryptoCurrencyAmount', dec(input.quote.input.value, 6)],
         ['fiatCurrencyCode', data.fiat ?? (input.quote.output.asset.kind === 'fiat' ? input.quote.output.asset.currency : 'EUR')],
         ['externalCustomerId', ref],
         ['email', ctx.session.email],
@@ -417,18 +456,21 @@ export function swapped(opts: SwappedOptions) {
       ],
       '/sell',
     )
-    await ctx.store.put(`o:${ref}`, { since: Date.now(), sell: true }, ORDER_TTL_SEC)
+    await ctx.store.put(`o:${ref}`, { since: Date.now(), sell: true } satisfies OrderRecord, ORDER_TTL_SEC)
     return {
-      state: 'PAYMENT',
-      surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 600, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
-      transitions: [awaitPoll(POLL)],
-      status: 'awaiting_user',
+      status: 'requires_action',
+      action: {
+        kind: 'payment',
+        surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 600, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
+        transitions: [awaitPoll(POLL)],
+      },
       ref,
     }
   }
 
   return createAdapter({
     id: 'swapped',
+    env,
     name: 'Swapped',
     legs: staticLegs,
 
@@ -462,15 +504,15 @@ export function swapped(opts: SwappedOptions) {
       const group = input.leg.legId
       const target = deliverAssetFor(input.leg.to.asset)
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
-      if (fiatAsset.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Swapped quotes need a fiat amount.' }))
+      if (fiatAsset.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Swapped quotes need a fiat amount.' }))
       const region = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
       const body = {
         api_key: opts.publicKey,
         payment_method: group,
         fiat_currency: fiatAsset.currency.toUpperCase(),
-        ...(input.amountIn ? { fiat_amount: Number(input.amountIn.amount) } : {}),
+        ...(input.amountIn ? { fiat_amount: Number(input.amountIn.value) } : {}),
         crypto_currency: target.currencyCode,
-        ...(!input.amountIn && input.amountOut ? { crypto_amount: Number(input.amountOut.amount) } : {}),
+        ...(!input.amountIn && input.amountOut ? { crypto_amount: Number(input.amountOut.value) } : {}),
         region,
         ...(opts.markup !== undefined ? { markup: opts.markup } : {}),
       }
@@ -478,27 +520,29 @@ export function swapped(opts: SwappedOptions) {
       try {
         res = await fetchJson<SwappedPricing>(ctx.fetch, `${apiUrl}/api/v1/merchant/pricing`, { method: 'POST', body: JSON.stringify(body) })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Swapped', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Swapped', { what: 'price this amount', log: ctx.log })
       }
       const d = res.data
       if (!res.success || !d) {
-        throw new OrkException(orkError('NO_QUOTES', { message: res.message ? `Swapped: ${res.message}`.slice(0, 200) : 'Swapped could not price this amount.' }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: res.message ? `Swapped: ${res.message}`.slice(0, 200) : 'Swapped could not price this amount.' }), 422)
       }
       const fiat = fiatAsset.currency.toUpperCase()
       const fees: Fee[] = []
-      if (d.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: dec(d.processing_fee, 2), currency: fiat })
-      if (d.network_fee_local) fees.push({ kind: 'network', label: 'Network fee', amount: dec(d.network_fee_local, 2), currency: fiat })
-      if (d.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: dec(d.markup_fiat_value, 2), currency: fiat })
-      const inputAmount = input.amountIn?.amount ?? dec(d.fiat_amount_incl_fees_local, 2)
+      if (d.processing_fee) fees.push({ kind: 'provider', label: 'Swapped fee', amount: { value: dec(d.processing_fee, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+      if (d.network_fee_local) fees.push({ kind: 'network', label: 'Network fee', amount: { value: dec(d.network_fee_local, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+      if (d.markup_fiat_value) fees.push({ kind: 'app', label: 'App fee', amount: { value: dec(d.markup_fiat_value, 2), asset: { kind: 'fiat', currency: fiat } }, included: true })
+      const inputAmount = input.amountIn?.value ?? dec(d.fiat_amount_incl_fees_local, 2)
       return {
         adapterId: 'swapped',
         legId: group,
-        input: { amount: inputAmount, asset: { kind: 'fiat', currency: fiat } },
-        output: { amount: dec(d.crypto_amount, target.decimals ?? 8), asset: assetOf(target) },
+        input: { value: inputAmount, asset: { kind: 'fiat', currency: fiat } },
+        output: { value: dec(d.crypto_amount, target.decimals ?? 8), asset: assetOf(target) },
         fees,
+        // `estimate`: Swapped prices move with the market, and the rate is set when the order executes.
+        guarantee: 'estimate',
         eta: input.leg.legId === 'creditcard' || input.leg.legId.endsWith('-pay') ? { min: 120, max: 900 } : { min: 120, max: 1800 },
         // Swapped prices move with the market; the widget shows the final price.
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(10),
         data: { group, currencyCode: target.currencyCode, fiat, fiatAmount: inputAmount, region },
       }
     },
@@ -508,7 +552,7 @@ export function swapped(opts: SwappedOptions) {
       const data = (input.quote.data ?? {}) as Record<string, string>
       const target = deliverAssetFor(input.quote.output.asset)
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!walletAddress) throw new OrkException(orkError('BAD_REQUEST', { message: 'Swapped needs a wallet address to deliver to.' }))
+      if (!walletAddress) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Swapped needs a wallet address to deliver to.' }))
       const fiat = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : data.fiat
       const ref = `${ctx.session.userId}.${randomHex(6)}`
       const url = await signedWidgetUrl([
@@ -517,7 +561,7 @@ export function swapped(opts: SwappedOptions) {
         ['walletAddress', walletAddress],
         ['method', data.group ?? input.leg.legId],
         ['baseCurrencyCode', fiat],
-        ['baseCurrencyAmount', roundTo(input.quote.input.amount, 2)],
+        ['baseCurrencyAmount', roundTo(input.quote.input.value, 2)],
         ['lockBaseCurrency', 'true'],
         ['externalCustomerId', ref],
         ['email', ctx.session.email],
@@ -526,12 +570,14 @@ export function swapped(opts: SwappedOptions) {
         ['responseUrl', ctx.urls.webhookUrl],
         ['markup', opts.markup !== undefined ? String(opts.markup) : undefined],
       ])
-      await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode }, ORDER_TTL_SEC)
+      await ctx.store.put(`o:${ref}`, { since: Date.now(), currencyCode: data.currencyCode ?? target.currencyCode } satisfies OrderRecord, ORDER_TTL_SEC)
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
-        transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
+        action: {
+          kind: 'payment',
+          surface: { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 560, provider: 'Swapped', messages: { completed: ['SWAPPED_ORDER_DATA'] } },
+          transitions: [awaitPoll(POLL)],
+        },
         ref,
       }
     },
@@ -541,7 +587,8 @@ export function swapped(opts: SwappedOptions) {
           // TO VERIFY: get_transactions signature = base64 HMAC-SHA256(secretKey, JSON body without `signature`),
           // per the docs assistant. Not tested against the live API (the sandbox key was rejected).
           async status(input: { ref: string }, ctx: AdapterContext): Promise<LegStep> {
-            const rec = await ctx.store.get<{ since: number }>(`o:${input.ref}`)
+            const key = `o:${input.ref}`
+            const rec = await ctx.store.get<OrderRecord>(key)
             const body: Record<string, unknown> = {
               apiKey: opts.publicKey,
               timestamp: new Date().toISOString(),
@@ -553,22 +600,27 @@ export function swapped(opts: SwappedOptions) {
             try {
               res = await fetchJson(ctx.fetch, `${apiUrl}/api/v1/merchant/get_transactions`, { method: 'POST', body: JSON.stringify({ ...body, signature }) })
             } catch (e) {
-              throw httpErrorToOrk(e, 'Swapped', { what: 'find this order', log: ctx.log })
+              throw httpErrorToOpenRamp(e, 'Swapped', { what: 'find this order', log: ctx.log })
             }
             const order = res.data?.orders?.find((o) => o.external_customer_id === input.ref)
             if (!order) return legStepFromEvent(undefined, input.ref, POLL)
             // get_transactions has no `order_broadcasted`; a set transaction_id means it was broadcast.
             const status = order.order_status === 'order_completed' && order.transaction_id ? 'order_broadcasted' : order.order_status
-            return legStepFromEvent(eventFrom({ ...order, order_status: status, external_customer_id: input.ref }), input.ref, POLL)
+            const n: SwappedNotification = { ...order, order_status: status, external_customer_id: input.ref }
+            // An unknown status (logged): keep the last known step. Never `processing` by default.
+            if (!knownStatus(n, ctx.log)) return rec?.last ?? legStepFromEvent(undefined, input.ref, POLL)
+            const step = legStepFromEvent(eventFrom(n), input.ref, POLL)
+            if (rec) await ctx.store.put(key, { ...rec, last: step } satisfies OrderRecord, ORDER_TTL_SEC)
+            return step
           },
         }
       : {}),
 
     /** Sell: the user's wallet (or the app treasury) sent the USDC to Swapped. */
     async transition(input) {
-      if (input.name !== 'submit_tx') throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown transition ${input.name}.` }), 409)
+      if (input.name !== 'submit_tx') throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown transition ${input.name}.` }), 409)
       const txHash = typeof input.inputs?.txHash === 'string' ? input.inputs.txHash : undefined
-      return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref: input.ref, transitions: [awaitPoll(POLL)], ...(txHash ? { txHash } : {}) }
+      return { status: 'processing', detail: { code: 'confirming' }, ref: input.ref, poll: POLL, ...(txHash ? { transactions: [{ role: 'source', hash: txHash }] } : {}) }
     },
 
     webhook: {
@@ -583,6 +635,8 @@ export function swapped(opts: SwappedOptions) {
         const expected = await hmacSha256(opts.secretKey, rawBody, 'base64')
         return timingSafeEqual(sig.trim(), expected)
       },
+      // Swapped signs the body only (no timestamp). The server keeps the hash for 7 days and drops a repeat.
+      replayKey: async (_req, rawBody) => webhookBodyKey(rawBody),
       async parse(rawBody, ctx) {
         let n: SwappedNotification
         try {
@@ -591,9 +645,9 @@ export function swapped(opts: SwappedOptions) {
           ctx.log.warn('swapped: webhook body is not JSON')
           return []
         }
-        const ev = eventFrom(n)
+        const ev = eventFrom(n, ctx.log)
         if (!ev && !n.external_customer_id) ctx.log.warn('swapped: notification without external_customer_id', { orderId: n.order_id })
-        return ev ? [ev] : []
+        return ev ? [{ ...ev, eventId: (await webhookBodyKey(rawBody)).slice(0, 32) }] : []
       },
     },
 

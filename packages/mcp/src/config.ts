@@ -1,5 +1,5 @@
 import { cmp, isDecimal } from '@openrampkit/core'
-import type { AllowedTargets, Destination, WithdrawSource } from '@openrampkit/core'
+import type { AllowedDestinations, Destination, WithdrawSource } from '@openrampkit/core'
 import type { Connection } from './backend.js'
 import { RampError } from './backend.js'
 import type { Limits } from './limits.js'
@@ -39,7 +39,7 @@ export type OpenRampMcpConfig = {
     /** The asset that leaves, and who holds it. Use `custody: 'app'` with a server `treasury` for agent payouts. */
     source: WithdrawSource
     /** Where the person may receive the funds on the pay link. Default: cash only (`{ fiat: {} }`). */
-    allowedTargets?: AllowedTargets
+    allowedDestinations?: AllowedDestinations
     /**
      * Payout targets bound by the operator. The agent picks one by name. The MCP server sets the
      * target and starts the payout itself: no pay link is made, so nobody can send the funds elsewhere.
@@ -154,7 +154,7 @@ export function resolveTarget(c: OpenRampMcpConfig, name: string | undefined): N
     return undefined
   }
   const t = w.targets?.find((x) => x.name === name)
-  if (!t) throw new RampError('TARGET_NOT_ALLOWED', `Unknown target "${name}". Allowed: ${(w.targets ?? []).map((x) => x.name).join(', ') || 'none'}.`, 403)
+  if (!t) throw new RampError('DESTINATION_NOT_ALLOWED', `Unknown target "${name}". Allowed: ${(w.targets ?? []).map((x) => x.name).join(', ') || 'none'}.`, 403)
   return t
 }
 

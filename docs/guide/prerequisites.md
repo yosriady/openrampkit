@@ -29,7 +29,10 @@ Each adapter needs an account with its provider, except the mock adapter. You ca
 | Adapter | What you need | Where |
 |---|---|---|
 | [Mock](../adapters/mock.md) | Nothing | |
-| [Relay](../adapters/relay.md) | Optional API key (recommended: status lookups use `/requests/v3`, which needs a key) | [docs.relay.link](https://docs.relay.link) |
+| [Relay](../adapters/relay.md) | API key. Relay requires one for quotes under its announced policy from 2 Oct 2026. Some requests without a key may still work today, but Relay can refuse them at any time. Status lookups use `/requests/v3`, which also needs one. Always set `RELAY_API_KEY`. | [dashboard.relay.link](https://dashboard.relay.link) |
+| [LI.FI](../adapters/lifi.md) | API key and an integration string (`integrator`). Without a key the quote limit is 75 requests per 2 hours. | [portal.li.fi](https://portal.li.fi) |
+| [Bridge](../adapters/bridge.md) | API key and the webhook public key (contact sales) | [apidocs.bridge.xyz](https://apidocs.bridge.xyz) |
+| [Binance](../adapters/binance.md) | Partner approval: base URL, client id, access token, your RSA private key, Binance's webhook public key | See [Binance](../adapters/binance.md) |
 | [Swapped](../adapters/swapped.md) | Merchant public key (`pk_...`) and secret key (`sk_...`) | [docs.swapped.com](https://docs.swapped.com) |
 | [Coinbase](../adapters/coinbase.md) | CDP Secret API key (id and secret), and a CDP webhook subscription secret | [docs.cdp.coinbase.com/onramp](https://docs.cdp.coinbase.com/onramp) |
 | [Transak](../adapters/transak.md) | Partner API key and API secret, and your registered referrer domain | [docs.transak.com](https://docs.transak.com) |
@@ -52,7 +55,7 @@ Keep these out of your client bundle. Store them as environment variables or pla
 | `OPENRAMP_WEBHOOK_SECRET` | Signs the webhooks the server sends to your backend. At least 16 characters. |
 | `CRON_SECRET` | Protects the cron route that calls `openramp.sweep()` (Next.js example). To use `POST /tasks/sweep` instead, set `tasksToken` (at least 16 characters). |
 | `PUBLIC_URL` | The public origin of your app. The server's `baseUrl` is built from it. |
-| Provider keys | For example `XENDIT_SECRET_KEY` and `XENDIT_WEBHOOK_TOKEN`. |
+| Provider keys | For example `XENDIT_SECRET_KEY` and `XENDIT_WEBHOOK_TOKEN`. [Get provider keys](./provider-keys.md) shows where to get each one. |
 
 Generate a strong secret:
 

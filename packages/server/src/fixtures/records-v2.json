@@ -1,0 +1,3575 @@
+{
+  "note": "Stored records written by @openrampkit/server at SESSION_SCHEMA 2 (commit e868d9f): LegStep state and sub, txHash and sourceTxHash, step.progress, amountMismatch, and fees with currency and inRate. Do not edit by hand.",
+  "capturedAt": "2026-10-09T15:00:00.000Z",
+  "secret": "ssssssssssssssssssssssssssssssssssssssss",
+  "sessions": {
+    "open": {
+      "clientSecret": "ors_44fc69a437200c6f2bcada9d.4256041b1bed69ab2f2996ce828a0668317a489dee57656e",
+      "record": {
+        "id": "ors_44fc69a437200c6f2bcada9d",
+        "secretHash": "d9687f58aec3cc1e12da0a7f61f880261ccccb41c0b0aa365467daa61637deb2",
+        "schema": 2,
+        "version": 3,
+        "userId": "user_open",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "US",
+        "livemode": false,
+        "status": "requires_payment_method",
+        "createdAt": 1791558000000,
+        "expiresAt": 1791559800000,
+        "quotes": {
+          "q_5afdc534bfa68452": {
+            "quote": {
+              "id": "q_5afdc534bfa68452",
+              "pathwayId": "card:mock.card",
+              "method": "card",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "24.375000",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "0.63",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 60,
+                    "max": 300
+                  },
+                  "expiresAt": "2026-10-09T15:01:00.000Z"
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "24.375000",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "0.63",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "expiresAt": "2026-10-09T15:01:00.000Z"
+            },
+            "pathway": {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          },
+          "q_da2af712eeebb7c9": {
+            "quote": {
+              "id": "q_da2af712eeebb7c9",
+              "pathwayId": "card:fx.card",
+              "method": "card",
+              "provider": "FX test",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "20",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "FX fee",
+                      "amount": "0",
+                      "currency": "USD",
+                      "inRate": true
+                    },
+                    {
+                      "kind": "network",
+                      "label": "Network fee",
+                      "amount": "0.5",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 1,
+                    "max": 2
+                  }
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "20",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "FX fee",
+                  "amount": "0",
+                  "currency": "USD",
+                  "inRate": true
+                },
+                {
+                  "kind": "network",
+                  "label": "Network fee",
+                  "amount": "0.5",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 1,
+                "max": 2
+              }
+            },
+            "pathway": {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_44fc69a437200c6f2bcada9d",
+          "state": "SELECT_METHOD",
+          "transitions": [],
+          "expiresAt": "2026-10-09T15:30:00.000Z"
+        },
+        "startUrls": {},
+        "notified": [
+          "session.created:{}"
+        ],
+        "updatedAt": 1791558000000,
+        "timeline": [
+          {
+            "at": 1791558000000,
+            "type": "session.created"
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "recommended",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            }
+          ],
+          "methods": [
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider",
+                "FX test"
+              ],
+              "pathwayIds": [
+                "card:mock.card",
+                "card:fx.card"
+              ],
+              "eta": {
+                "min": 1,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "USD"
+        },
+        "walletConnected": false
+      }
+    },
+    "awaitingUser": {
+      "clientSecret": "ors_daa6aea250bde3a91ec5d806.24c57c4693ec385c8846073f45fe56bf60e8f49da552efe6",
+      "record": {
+        "id": "ors_daa6aea250bde3a91ec5d806",
+        "secretHash": "b1d859de9d372145a405361f78b1ff5733920c3baf958d22f036d3834290aeb9",
+        "schema": 2,
+        "version": 4,
+        "userId": "user_awaitingUser",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "VN",
+        "livemode": false,
+        "status": "requires_action",
+        "createdAt": 1791558000000,
+        "expiresAt": 1791559800000,
+        "quotes": {
+          "q_875fe3b0fd0e6076": {
+            "quote": {
+              "id": "q_875fe3b0fd0e6076",
+              "pathwayId": "vietqr:mock.local",
+              "method": "vietqr",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "input": {
+                    "value": "500000",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    }
+                  },
+                  "output": {
+                    "value": "19.552500",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "5000",
+                      "currency": "VND"
+                    }
+                  ],
+                  "eta": {
+                    "min": 10,
+                    "max": 120
+                  },
+                  "expiresAt": "2026-10-09T15:01:00.000Z"
+                }
+              ],
+              "input": {
+                "value": "500000",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "VND"
+                }
+              },
+              "output": {
+                "value": "19.552500",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "5000",
+                  "currency": "VND"
+                }
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "expiresAt": "2026-10-09T15:01:00.000Z"
+            },
+            "pathway": {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_daa6aea250bde3a91ec5d806",
+          "state": "PAYMENT",
+          "legIndex": 0,
+          "surface": {
+            "kind": "QR",
+            "payload": "MOCKQR|mock_daa6aea250_local_mv13dk00|500000|VND",
+            "amount": "500000",
+            "currency": "VND",
+            "reference": "L_MV13DK00",
+            "expiresAt": "2026-10-09T15:15:00.000Z"
+          },
+          "transitions": [
+            {
+              "name": "simulate_payment",
+              "kind": "SUBMIT",
+              "label": "Simulate payment (test mode)"
+            },
+            {
+              "name": "poll",
+              "kind": "AWAIT",
+              "poll": {
+                "intervalMs": 1500,
+                "backoff": 1.1,
+                "maxIntervalMs": 5000,
+                "giveUpAfterMs": 900000
+              }
+            }
+          ],
+          "progress": {
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "provider": "Test provider",
+                "status": "requires_action"
+              }
+            ]
+          },
+          "expiresAt": "2026-10-09T15:30:00.000Z"
+        },
+        "startUrls": {},
+        "notified": [
+          "session.created:{}",
+          "session.requires_action:{\"attempt\":0,\"index\":0,\"adapterId\":\"mock\",\"legId\":\"local\"}"
+        ],
+        "updatedAt": 1791558000000,
+        "timeline": [
+          {
+            "at": 1791558000000,
+            "type": "session.created"
+          },
+          {
+            "at": 1791558000000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 0,
+              "method": "vietqr",
+              "provider": "Test provider"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "ref": "mock_daa6aea250_local_mv13dk00"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "mock",
+              "legId": "local",
+              "attempt": 0
+            }
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "vietqr:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "vietqr"
+                }
+              ],
+              "method": "vietqr",
+              "group": "recommended",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "momo:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "momo"
+                }
+              ],
+              "method": "momo",
+              "group": "more",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "bank_transfer:mock.local",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "local",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "bank_transfer"
+                }
+              ],
+              "method": "bank_transfer",
+              "group": "more",
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "VND"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            }
+          ],
+          "methods": [
+            {
+              "method": "vietqr",
+              "name": "VietQR",
+              "kind": "qr",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "vietqr:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "momo",
+              "name": "MoMo",
+              "kind": "ewallet",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "momo:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "bank_transfer",
+              "name": "Bank transfer",
+              "kind": "bank",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "bank_transfer:mock.local"
+              ],
+              "eta": {
+                "min": 10,
+                "max": 120
+              },
+              "limits": {
+                "min": "5",
+                "max": "3000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider",
+                "FX test"
+              ],
+              "pathwayIds": [
+                "card:mock.card",
+                "card:fx.card"
+              ],
+              "eta": {
+                "min": 1,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "VND"
+        },
+        "walletConnected": false,
+        "active": {
+          "n": 0,
+          "quoteId": "q_875fe3b0fd0e6076",
+          "pathway": {
+            "id": "vietqr:mock.local",
+            "legs": [
+              {
+                "adapterId": "mock",
+                "legId": "local",
+                "from": {
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "VND"
+                  },
+                  "location": {
+                    "kind": "user_account"
+                  }
+                },
+                "to": {
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                  },
+                  "location": {
+                    "kind": "address",
+                    "address": "0x000000000000000000000000000000000000beef"
+                  }
+                },
+                "method": "vietqr"
+              }
+            ],
+            "method": "vietqr",
+            "group": "recommended",
+            "eta": {
+              "min": 10,
+              "max": 120
+            },
+            "limits": {
+              "min": "5",
+              "max": "3000",
+              "currency": "USD"
+            },
+            "provider": "Test provider"
+          },
+          "index": 0,
+          "destination": {
+            "type": "crypto",
+            "chain": "eip155:8453",
+            "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "address": "0x000000000000000000000000000000000000beef"
+          },
+          "legs": [
+            {
+              "adapterId": "mock",
+              "legId": "local",
+              "quote": {
+                "adapterId": "mock",
+                "legId": "local",
+                "input": {
+                  "value": "500000",
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "VND"
+                  }
+                },
+                "output": {
+                  "value": "19.552500",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "fees": [
+                  {
+                    "kind": "provider",
+                    "label": "Test provider fee",
+                    "amount": "5000",
+                    "currency": "VND"
+                  }
+                ],
+                "eta": {
+                  "min": 10,
+                  "max": 120
+                },
+                "expiresAt": "2026-10-09T15:01:00.000Z"
+              },
+              "deliverTo": {
+                "address": "0x000000000000000000000000000000000000beef"
+              },
+              "started": true,
+              "step": {
+                "state": "PAYMENT",
+                "status": "requires_action",
+                "ref": "mock_daa6aea250_local_mv13dk00",
+                "surface": {
+                  "kind": "QR",
+                  "payload": "MOCKQR|mock_daa6aea250_local_mv13dk00|500000|VND",
+                  "amount": "500000",
+                  "currency": "VND",
+                  "reference": "L_MV13DK00",
+                  "expiresAt": "2026-10-09T15:15:00.000Z"
+                },
+                "transitions": [
+                  {
+                    "name": "simulate_payment",
+                    "kind": "SUBMIT",
+                    "label": "Simulate payment (test mode)"
+                  },
+                  {
+                    "name": "poll",
+                    "kind": "AWAIT",
+                    "poll": {
+                      "intervalMs": 1500,
+                      "backoff": 1.1,
+                      "maxIntervalMs": 5000,
+                      "giveUpAfterMs": 900000
+                    }
+                  }
+                ]
+              },
+              "ref": "mock_daa6aea250_local_mv13dk00"
+            }
+          ]
+        }
+      }
+    },
+    "processing": {
+      "clientSecret": "ors_5e726c62521ea5460a4108ab.797ccb603acec44f3ec6ac27a58f3c51aab23a82d727ee91",
+      "record": {
+        "id": "ors_5e726c62521ea5460a4108ab",
+        "secretHash": "c232d4a632553a266c622a14b33512a9456ff414ae4f0e9f239ba3f90b67add8",
+        "schema": 2,
+        "version": 5,
+        "userId": "user_processing",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "US",
+        "livemode": false,
+        "status": "processing",
+        "createdAt": 1791558000000,
+        "expiresAt": 1791559800000,
+        "quotes": {
+          "q_f84547ab69dfd85b": {
+            "quote": {
+              "id": "q_f84547ab69dfd85b",
+              "pathwayId": "card:mock.card",
+              "method": "card",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "24.375000",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "0.63",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 60,
+                    "max": 300
+                  },
+                  "expiresAt": "2026-10-09T15:01:00.000Z"
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "24.375000",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "0.63",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "expiresAt": "2026-10-09T15:01:00.000Z"
+            },
+            "pathway": {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          },
+          "q_1a9f7637c2b1cfc9": {
+            "quote": {
+              "id": "q_1a9f7637c2b1cfc9",
+              "pathwayId": "card:fx.card",
+              "method": "card",
+              "provider": "FX test",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "20",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "FX fee",
+                      "amount": "0",
+                      "currency": "USD",
+                      "inRate": true
+                    },
+                    {
+                      "kind": "network",
+                      "label": "Network fee",
+                      "amount": "0.5",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 1,
+                    "max": 2
+                  }
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "20",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "FX fee",
+                  "amount": "0",
+                  "currency": "USD",
+                  "inRate": true
+                },
+                {
+                  "kind": "network",
+                  "label": "Network fee",
+                  "amount": "0.5",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 1,
+                "max": 2
+              }
+            },
+            "pathway": {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_5e726c62521ea5460a4108ab",
+          "state": "PROCESSING",
+          "sub": "confirming",
+          "legIndex": 0,
+          "transitions": [
+            {
+              "name": "poll",
+              "kind": "AWAIT",
+              "poll": {
+                "intervalMs": 1000,
+                "backoff": 1,
+                "maxIntervalMs": 1000,
+                "giveUpAfterMs": 60000
+              }
+            }
+          ],
+          "progress": {
+            "legs": [
+              {
+                "adapterId": "fx",
+                "legId": "card",
+                "provider": "FX test",
+                "status": "processing",
+                "txHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+                "sourceTxHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+              }
+            ]
+          },
+          "expiresAt": "2026-10-09T15:30:00.000Z"
+        },
+        "startUrls": {
+          "6c98324df241dccecbbb32dd": {
+            "url": "https://provider.test/pay",
+            "exp": 1791558600000
+          }
+        },
+        "notified": [
+          "session.created:{}",
+          "session.requires_action:{\"attempt\":0,\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\"}",
+          "session.processing:{\"attempt\":0,\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\"}"
+        ],
+        "updatedAt": 1791558000000,
+        "timeline": [
+          {
+            "at": 1791558000000,
+            "type": "session.created"
+          },
+          {
+            "at": 1791558000000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 0,
+              "method": "card",
+              "provider": "FX test"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-1"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "attempt": 0
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.processing",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-1",
+              "txHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.provider_status",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "status": "pending"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.processing",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "attempt": 0
+            }
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "recommended",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            }
+          ],
+          "methods": [
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider",
+                "FX test"
+              ],
+              "pathwayIds": [
+                "card:mock.card",
+                "card:fx.card"
+              ],
+              "eta": {
+                "min": 1,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "USD"
+        },
+        "walletConnected": false,
+        "active": {
+          "n": 0,
+          "quoteId": "q_1a9f7637c2b1cfc9",
+          "pathway": {
+            "id": "card:fx.card",
+            "legs": [
+              {
+                "adapterId": "fx",
+                "legId": "card",
+                "from": {
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "USD"
+                  },
+                  "location": {
+                    "kind": "user_account"
+                  }
+                },
+                "to": {
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                  },
+                  "location": {
+                    "kind": "address",
+                    "address": "0x000000000000000000000000000000000000beef"
+                  }
+                },
+                "method": "card"
+              }
+            ],
+            "method": "card",
+            "group": "more",
+            "eta": {
+              "min": 1,
+              "max": 2
+            },
+            "provider": "FX test"
+          },
+          "index": 0,
+          "destination": {
+            "type": "crypto",
+            "chain": "eip155:8453",
+            "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "address": "0x000000000000000000000000000000000000beef"
+          },
+          "legs": [
+            {
+              "adapterId": "fx",
+              "legId": "card",
+              "quote": {
+                "adapterId": "fx",
+                "legId": "card",
+                "input": {
+                  "value": "25",
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "USD"
+                  }
+                },
+                "output": {
+                  "value": "20",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "fees": [
+                  {
+                    "kind": "provider",
+                    "label": "FX fee",
+                    "amount": "0",
+                    "currency": "USD",
+                    "inRate": true
+                  },
+                  {
+                    "kind": "network",
+                    "label": "Network fee",
+                    "amount": "0.5",
+                    "currency": "USD"
+                  }
+                ],
+                "eta": {
+                  "min": 1,
+                  "max": 2
+                }
+              },
+              "deliverTo": {
+                "address": "0x000000000000000000000000000000000000beef"
+              },
+              "started": true,
+              "step": {
+                "state": "PROCESSING",
+                "sub": "confirming",
+                "providerStatus": "pending",
+                "status": "processing",
+                "ref": "fx-1",
+                "txHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+                "sourceTxHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+                "transitions": [
+                  {
+                    "name": "poll",
+                    "kind": "AWAIT",
+                    "poll": {
+                      "intervalMs": 1000,
+                      "backoff": 1,
+                      "maxIntervalMs": 1000,
+                      "giveUpAfterMs": 60000
+                    }
+                  }
+                ]
+              },
+              "ref": "fx-1"
+            }
+          ]
+        }
+      }
+    },
+    "short": {
+      "clientSecret": "ors_ba350d3b17db7eeb765574c9.27ed59e72d48efcbb31759df2be2afb4619482f68ca4ca88",
+      "record": {
+        "id": "ors_ba350d3b17db7eeb765574c9",
+        "secretHash": "2f82e307cdc95e746d033c1ad23b895f64ac4abd102dabac69ea833003a5a8d8",
+        "schema": 2,
+        "version": 6,
+        "userId": "user_short",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "US",
+        "livemode": false,
+        "status": "succeeded",
+        "createdAt": 1791558000000,
+        "expiresAt": 1791559800000,
+        "quotes": {
+          "q_1c2ee05830922a5a": {
+            "quote": {
+              "id": "q_1c2ee05830922a5a",
+              "pathwayId": "card:mock.card",
+              "method": "card",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "24.375000",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "0.63",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 60,
+                    "max": 300
+                  },
+                  "expiresAt": "2026-10-09T15:01:00.000Z"
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "24.375000",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "0.63",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "expiresAt": "2026-10-09T15:01:00.000Z"
+            },
+            "pathway": {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          },
+          "q_b93d0093b0b43abb": {
+            "quote": {
+              "id": "q_b93d0093b0b43abb",
+              "pathwayId": "card:fx.card",
+              "method": "card",
+              "provider": "FX test",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "20",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "FX fee",
+                      "amount": "0",
+                      "currency": "USD",
+                      "inRate": true
+                    },
+                    {
+                      "kind": "network",
+                      "label": "Network fee",
+                      "amount": "0.5",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 1,
+                    "max": 2
+                  }
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "20",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "FX fee",
+                  "amount": "0",
+                  "currency": "USD",
+                  "inRate": true
+                },
+                {
+                  "kind": "network",
+                  "label": "Network fee",
+                  "amount": "0.5",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 1,
+                "max": 2
+              }
+            },
+            "pathway": {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_ba350d3b17db7eeb765574c9",
+          "state": "COMPLETED",
+          "transitions": [],
+          "progress": {
+            "legs": [
+              {
+                "adapterId": "fx",
+                "legId": "card",
+                "provider": "FX test",
+                "status": "succeeded",
+                "txHash": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+                "sourceTxHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+              }
+            ]
+          },
+          "legIndex": 0
+        },
+        "startUrls": {
+          "cbcd407c6963349283a0e613": {
+            "url": "https://provider.test/pay",
+            "exp": 1791558600000
+          }
+        },
+        "notified": [
+          "session.created:{}",
+          "session.requires_action:{\"attempt\":0,\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\"}",
+          "session.processing:{\"attempt\":0,\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\"}",
+          "leg.succeeded:{\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\"}",
+          "session.succeeded:{}"
+        ],
+        "updatedAt": 1791558000000,
+        "timeline": [
+          {
+            "at": 1791558000000,
+            "type": "session.created"
+          },
+          {
+            "at": 1791558000000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 0,
+              "method": "card",
+              "provider": "FX test"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-2"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "attempt": 0
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.processing",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-2",
+              "txHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.provider_status",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "status": "pending"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.processing",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "attempt": 0
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.succeeded",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-2",
+              "txHash": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.amount_mismatch",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "reason": "short",
+              "expected": "20",
+              "received": "18"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.succeeded",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.succeeded"
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "recommended",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            }
+          ],
+          "methods": [
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider",
+                "FX test"
+              ],
+              "pathwayIds": [
+                "card:mock.card",
+                "card:fx.card"
+              ],
+              "eta": {
+                "min": 1,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "USD"
+        },
+        "walletConnected": false,
+        "active": {
+          "n": 0,
+          "quoteId": "q_b93d0093b0b43abb",
+          "pathway": {
+            "id": "card:fx.card",
+            "legs": [
+              {
+                "adapterId": "fx",
+                "legId": "card",
+                "from": {
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "USD"
+                  },
+                  "location": {
+                    "kind": "user_account"
+                  }
+                },
+                "to": {
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                  },
+                  "location": {
+                    "kind": "address",
+                    "address": "0x000000000000000000000000000000000000beef"
+                  }
+                },
+                "method": "card"
+              }
+            ],
+            "method": "card",
+            "group": "more",
+            "eta": {
+              "min": 1,
+              "max": 2
+            },
+            "provider": "FX test"
+          },
+          "index": 0,
+          "destination": {
+            "type": "crypto",
+            "chain": "eip155:8453",
+            "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "address": "0x000000000000000000000000000000000000beef"
+          },
+          "legs": [
+            {
+              "adapterId": "fx",
+              "legId": "card",
+              "quote": {
+                "adapterId": "fx",
+                "legId": "card",
+                "input": {
+                  "value": "25",
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "USD"
+                  }
+                },
+                "output": {
+                  "value": "20",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "fees": [
+                  {
+                    "kind": "provider",
+                    "label": "FX fee",
+                    "amount": "0",
+                    "currency": "USD",
+                    "inRate": true
+                  },
+                  {
+                    "kind": "network",
+                    "label": "Network fee",
+                    "amount": "0.5",
+                    "currency": "USD"
+                  }
+                ],
+                "eta": {
+                  "min": 1,
+                  "max": 2
+                }
+              },
+              "deliverTo": {
+                "address": "0x000000000000000000000000000000000000beef"
+              },
+              "started": true,
+              "step": {
+                "state": "COMPLETED",
+                "sub": "confirming",
+                "providerStatus": "pending",
+                "status": "succeeded",
+                "ref": "fx-2",
+                "txHash": "0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2",
+                "sourceTxHash": "0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+                "transitions": [],
+                "output": {
+                  "value": "18",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                }
+              },
+              "ref": "fx-2",
+              "amountMismatch": {
+                "reason": "short",
+                "expected": {
+                  "value": "20",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "received": {
+                  "value": "18",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "shortfall": "2"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "failedAttempt": {
+      "clientSecret": "ors_ac91d3fea070810fda500fe6.89afa175119fdd472d472ae7866861362d187e44c1bfe237",
+      "record": {
+        "id": "ors_ac91d3fea070810fda500fe6",
+        "secretHash": "80a5079bf871d8bb8bc1fc2cd529871dcf78fd81e219b6640a0be8a5063544cc",
+        "schema": 2,
+        "version": 5,
+        "userId": "user_failedAttempt",
+        "direction": "deposit",
+        "destination": {
+          "type": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "address": "0x000000000000000000000000000000000000beef"
+        },
+        "country": "US",
+        "livemode": false,
+        "status": "requires_payment_method",
+        "createdAt": 1791558000000,
+        "expiresAt": 1791559800000,
+        "quotes": {
+          "q_0f62648ec9876dfe": {
+            "quote": {
+              "id": "q_0f62648ec9876dfe",
+              "pathwayId": "card:mock.card",
+              "method": "card",
+              "provider": "Test provider",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "24.375000",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "Test provider fee",
+                      "amount": "0.63",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 60,
+                    "max": 300
+                  },
+                  "expiresAt": "2026-10-09T15:01:00.000Z"
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "24.375000",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "Test provider fee",
+                  "amount": "0.63",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "expiresAt": "2026-10-09T15:01:00.000Z"
+            },
+            "pathway": {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          },
+          "q_224921111eddc15b": {
+            "quote": {
+              "id": "q_224921111eddc15b",
+              "pathwayId": "card:fx.card",
+              "method": "card",
+              "provider": "FX test",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "input": {
+                    "value": "25",
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    }
+                  },
+                  "output": {
+                    "value": "20",
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                      "symbol": "USDC",
+                      "decimals": 6
+                    }
+                  },
+                  "fees": [
+                    {
+                      "kind": "provider",
+                      "label": "FX fee",
+                      "amount": "0",
+                      "currency": "USD",
+                      "inRate": true
+                    },
+                    {
+                      "kind": "network",
+                      "label": "Network fee",
+                      "amount": "0.5",
+                      "currency": "USD"
+                    }
+                  ],
+                  "eta": {
+                    "min": 1,
+                    "max": 2
+                  }
+                }
+              ],
+              "input": {
+                "value": "25",
+                "asset": {
+                  "kind": "fiat",
+                  "currency": "USD"
+                }
+              },
+              "output": {
+                "value": "20",
+                "asset": {
+                  "kind": "crypto",
+                  "chain": "eip155:8453",
+                  "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                  "symbol": "USDC",
+                  "decimals": 6
+                }
+              },
+              "fees": [
+                {
+                  "kind": "provider",
+                  "label": "FX fee",
+                  "amount": "0",
+                  "currency": "USD",
+                  "inRate": true
+                },
+                {
+                  "kind": "network",
+                  "label": "Network fee",
+                  "amount": "0.5",
+                  "currency": "USD"
+                }
+              ],
+              "eta": {
+                "min": 1,
+                "max": 2
+              }
+            },
+            "pathway": {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            },
+            "deliverTo": [
+              {
+                "address": "0x000000000000000000000000000000000000beef"
+              }
+            ]
+          }
+        },
+        "step": {
+          "sessionId": "ors_ac91d3fea070810fda500fe6",
+          "state": "FAILED",
+          "legIndex": 0,
+          "transitions": [],
+          "error": {
+            "code": "PAYMENT_FAILED",
+            "message": "The card was declined.",
+            "retryable": true,
+            "recovery": "retry_payment"
+          },
+          "progress": {
+            "legs": [
+              {
+                "adapterId": "fx",
+                "legId": "card",
+                "provider": "FX test",
+                "status": "failed"
+              }
+            ]
+          },
+          "expiresAt": "2026-10-09T15:30:00.000Z"
+        },
+        "startUrls": {
+          "fa516669dd19795216bcb6ed": {
+            "url": "https://provider.test/pay",
+            "exp": 1791558600000
+          }
+        },
+        "notified": [
+          "session.created:{}",
+          "session.requires_action:{\"attempt\":0,\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\"}",
+          "leg.failed:{\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\",\"error\":{\"code\":\"PAYMENT_FAILED\",\"message\":\"The card was declined.\",\"retryable\":true,\"recovery\":\"retry_payment\"}}",
+          "session.payment_failed:{\"attempt\":0,\"index\":0,\"adapterId\":\"fx\",\"legId\":\"card\",\"error\":{\"code\":\"PAYMENT_FAILED\",\"message\":\"The card was declined.\",\"retryable\":true,\"recovery\":\"retry_payment\"}}"
+        ],
+        "updatedAt": 1791558000000,
+        "timeline": [
+          {
+            "at": 1791558000000,
+            "type": "session.created"
+          },
+          {
+            "at": 1791558000000,
+            "type": "payment.started",
+            "detail": {
+              "attempt": 0,
+              "method": "card",
+              "provider": "FX test"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-3"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.requires_action",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "attempt": 0
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.failed",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "ref": "fx-3",
+              "error": "PAYMENT_FAILED"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "leg.failed",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "error": "PAYMENT_FAILED"
+            }
+          },
+          {
+            "at": 1791558000000,
+            "type": "session.payment_failed",
+            "detail": {
+              "index": 0,
+              "adapterId": "fx",
+              "legId": "card",
+              "attempt": 0,
+              "error": "PAYMENT_FAILED"
+            }
+          }
+        ],
+        "plan": {
+          "pathways": [
+            {
+              "id": "card:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "apple_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "apple_pay"
+                }
+              ],
+              "method": "apple_pay",
+              "group": "recommended",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "google_pay:mock.card",
+              "legs": [
+                {
+                  "adapterId": "mock",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "google_pay"
+                }
+              ],
+              "method": "google_pay",
+              "group": "more",
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              },
+              "provider": "Test provider"
+            },
+            {
+              "id": "card:fx.card",
+              "legs": [
+                {
+                  "adapterId": "fx",
+                  "legId": "card",
+                  "from": {
+                    "asset": {
+                      "kind": "fiat",
+                      "currency": "USD"
+                    },
+                    "location": {
+                      "kind": "user_account"
+                    }
+                  },
+                  "to": {
+                    "asset": {
+                      "kind": "crypto",
+                      "chain": "eip155:8453",
+                      "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                    },
+                    "location": {
+                      "kind": "address",
+                      "address": "0x000000000000000000000000000000000000beef"
+                    }
+                  },
+                  "method": "card"
+                }
+              ],
+              "method": "card",
+              "group": "more",
+              "eta": {
+                "min": 1,
+                "max": 2
+              },
+              "provider": "FX test"
+            }
+          ],
+          "methods": [
+            {
+              "method": "apple_pay",
+              "name": "Apple Pay",
+              "kind": "wallet_pay",
+              "group": "recommended",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "apple_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "card",
+              "name": "Card",
+              "kind": "card",
+              "group": "more",
+              "providers": [
+                "Test provider",
+                "FX test"
+              ],
+              "pathwayIds": [
+                "card:mock.card",
+                "card:fx.card"
+              ],
+              "eta": {
+                "min": 1,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            },
+            {
+              "method": "google_pay",
+              "name": "Google Pay",
+              "kind": "wallet_pay",
+              "group": "more",
+              "providers": [
+                "Test provider"
+              ],
+              "pathwayIds": [
+                "google_pay:mock.card"
+              ],
+              "eta": {
+                "min": 60,
+                "max": 300
+              },
+              "limits": {
+                "min": "10",
+                "max": "20000",
+                "currency": "USD"
+              }
+            }
+          ],
+          "currency": "USD"
+        },
+        "walletConnected": false,
+        "active": {
+          "n": 0,
+          "quoteId": "q_224921111eddc15b",
+          "pathway": {
+            "id": "card:fx.card",
+            "legs": [
+              {
+                "adapterId": "fx",
+                "legId": "card",
+                "from": {
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "USD"
+                  },
+                  "location": {
+                    "kind": "user_account"
+                  }
+                },
+                "to": {
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913"
+                  },
+                  "location": {
+                    "kind": "address",
+                    "address": "0x000000000000000000000000000000000000beef"
+                  }
+                },
+                "method": "card"
+              }
+            ],
+            "method": "card",
+            "group": "more",
+            "eta": {
+              "min": 1,
+              "max": 2
+            },
+            "provider": "FX test"
+          },
+          "index": 0,
+          "destination": {
+            "type": "crypto",
+            "chain": "eip155:8453",
+            "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+            "address": "0x000000000000000000000000000000000000beef"
+          },
+          "legs": [
+            {
+              "adapterId": "fx",
+              "legId": "card",
+              "quote": {
+                "adapterId": "fx",
+                "legId": "card",
+                "input": {
+                  "value": "25",
+                  "asset": {
+                    "kind": "fiat",
+                    "currency": "USD"
+                  }
+                },
+                "output": {
+                  "value": "20",
+                  "asset": {
+                    "kind": "crypto",
+                    "chain": "eip155:8453",
+                    "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+                    "symbol": "USDC",
+                    "decimals": 6
+                  }
+                },
+                "fees": [
+                  {
+                    "kind": "provider",
+                    "label": "FX fee",
+                    "amount": "0",
+                    "currency": "USD",
+                    "inRate": true
+                  },
+                  {
+                    "kind": "network",
+                    "label": "Network fee",
+                    "amount": "0.5",
+                    "currency": "USD"
+                  }
+                ],
+                "eta": {
+                  "min": 1,
+                  "max": 2
+                }
+              },
+              "deliverTo": {
+                "address": "0x000000000000000000000000000000000000beef"
+              },
+              "started": true,
+              "step": {
+                "state": "FAILED",
+                "status": "failed",
+                "ref": "fx-3",
+                "transitions": [],
+                "error": {
+                  "code": "PAYMENT_FAILED",
+                  "message": "The card was declined.",
+                  "retryable": true,
+                  "recovery": "retry_payment"
+                }
+              },
+              "ref": "fx-3"
+            }
+          ]
+        },
+        "lastError": {
+          "code": "PAYMENT_FAILED",
+          "message": "The card was declined.",
+          "retryable": true,
+          "recovery": "retry_payment"
+        }
+      }
+    }
+  },
+  "kv": {
+    "ref:mock:mock_daa6aea250_local_mv13dk00": "ors_daa6aea250bde3a91ec5d806",
+    "a:mock:order:mock_daa6aea250_local_mv13dk00": {
+      "status": "awaiting",
+      "output": {
+        "value": "19.552500",
+        "asset": {
+          "kind": "crypto",
+          "chain": "eip155:8453",
+          "token": "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+          "symbol": "USDC",
+          "decimals": 6
+        }
+      },
+      "kind": "local"
+    },
+    "ref:fx:fx-1": "ors_5e726c62521ea5460a4108ab",
+    "ref:fx:fx-2": "ors_ba350d3b17db7eeb765574c9",
+    "ref:fx:fx-3": "ors_ac91d3fea070810fda500fe6"
+  }
+}

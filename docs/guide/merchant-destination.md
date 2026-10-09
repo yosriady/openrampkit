@@ -73,20 +73,20 @@ Nothing changes in the browser. Use `DepositButton`, `OpenRampEmbedded` or `open
 2. The quote shows the amount, the fee (if you configured `fees`) and the net amount.
 3. On confirm, the adapter creates a Xendit payment request. QR channels show a `QR` surface with a 15-minute countdown. E-wallets show a `REDIRECT` (web checkout) or a `DEEPLINK` (open the app).
 4. Xendit sends a webhook when the payment succeeds or fails. The server also polls Xendit while the modal is open.
-5. The modal shows "Deposit complete". Your backend receives `session.completed`.
+5. The modal shows "Deposit complete". Your backend receives `session.succeeded`.
 
 ## 5. Credit the order
 
-Handle `session.completed` in your webhook route. The event carries your `metadata`, so you can find the order:
+Handle `session.succeeded` in your webhook route. The event carries your `metadata`, so you can find the order:
 
 ```ts
-if (event.type === 'session.completed') {
+if (event.type === 'session.succeeded') {
   const { session, userId, metadata } = event.data.object
   await markOrderPaid(metadata.orderId, { sessionId: session.id, userId })
 }
 ```
 
-`session.result` has the amounts. `result.input` is the amount the user paid. The Xendit webhook does not report an output amount, so `result.output` is the quoted net amount (after the fee model of the adapter) and `result.outputConfirmed` is `false`. Compare `result.input` with the expected amount on your order. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
+`session.result` has the amounts. `result.input` is the amount the user paid. The Xendit webhook does not report an output amount, so `result.output` is the quoted net amount (after the fee model of the adapter) and `result.outputConfirmed` is `false`. No output is reported, so `result.delivery` is absent. Compare `result.input` with the expected amount on your order. `session.payment.legs[0].providerRef` is the Xendit payment request id, for Xendit support. Your net settlement is in the Xendit dashboard. See [Webhooks to your backend](./webhooks.md).
 
 ## Fees in quotes
 
@@ -99,7 +99,7 @@ xendit({
 })
 ```
 
-`bps` is basis points of the amount. `fixed` is a decimal string in the payment currency. The quote's output is the amount minus these fees.
+`bps` is basis points of the amount. `fixed` is a decimal string in the payment currency. The quote's output is the amount minus these fees. The fee is a `provider` fee in the payment currency, with `included: true`. Xendit quotes are `firm`: the amount does not change after the quote.
 
 ## Test without Xendit
 

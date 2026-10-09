@@ -1,9 +1,9 @@
 // Pure view logic for <openramp-modal>. No Lit and no DOM here, so it is easy to test.
 
 import type { Snapshot } from '@openrampkit/client'
-import { CHAINS, USDC, mulRatio } from '@openrampkit/core'
-import type { IframeMessages, MethodOption, OrkError, PathwayGroup, Quote, Step, Surface, WalletBalance } from '@openrampkit/core'
-import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, presetAmounts, shortAddress, titleCase } from './format.js'
+import { CHAINS, USDC, isStepDetailCode, mulRatio } from '@openrampkit/core'
+import type { IframeMessages, MethodOption, OpenRampError, PathwayGroup, PaymentLeg, PublicQuote, Step, Surface, WalletBalance } from '@openrampkit/core'
+import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, hasUnstatedFee, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
 
@@ -16,13 +16,30 @@ export function resolveMode(theme: Theme | undefined, systemDark: boolean): 'lig
   return 'light'
 }
 
+/** The transaction to show for a leg: the delivery (destination, hop or settlement), else the one that paid into it */
+export function mainTx(l: PaymentLeg): string | undefined {
+  const delivery = l.transactions.find((t) => t.role === 'destination' || t.role === 'hop' || t.role === 'settlement')
+  return (delivery ?? l.transactions.find((t) => t.role === 'source'))?.hash
+}
+
 /** Identifies one step screen. Form inputs reset when it changes. */
 export function stepKey(step: Step | undefined): string {
-  return step ? `${step.state}|${step.sub ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
+  return step ? `${step.state}|${step.detail?.code ?? ''}|${step.legIndex ?? ''}|${step.surface?.kind ?? ''}` : ''
+}
+
+/**
+ * The label of a step: the translated `detail.code` (an i18n key from the closed list
+ * `STEP_DETAIL_CODES`), else the state title. A code that this version does not know (from a newer
+ * server) falls back to the state title.
+ */
+export function stepLabel(m: Messages, step: Step): string {
+  const code = step.detail?.code
+  const detail = isStepDetailCode(code) ? m.stepDetail[code] : undefined
+  return detail || m.stepTitle[step.state] || m.checkingStatus
 }
 
 /** Screen shown for a snapshot, or for an element that has no controller yet. */
-export function screenOf(s: Snapshot | undefined, error: OrkError | undefined): string {
+export function screenOf(s: Snapshot | undefined, error: OpenRampError | undefined): string {
   if (s) return s.screen
   return error ? 'error' : 'loading'
 }
@@ -52,13 +69,13 @@ export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: A
 }
 
 /** Text for the polite live region, so screen readers hear loading, errors and step progress. */
-export function liveText(s: Snapshot | undefined, error: OrkError | undefined, m: Messages): string {
+export function liveText(s: Snapshot | undefined, error: OpenRampError | undefined, m: Messages): string {
   if (!s) return error ? error.message : m.loading
   if (s.quotesLoading) return m.gettingQuotes
   if (s.error) return s.error.message
   if (s.screen === 'step' && s.session) {
     const step = s.session.step
-    const legs = step.progress?.legs.map((l, i) => `${i + 1}. ${l.provider ?? titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
+    const legs = s.session.payment?.legs.map((l, i) => `${i + 1}. ${l.provider || titleCase(l.adapterId)}: ${m.legStatus[l.status] ?? l.status}`) ?? []
     return [m.stepTitle[step.state] ?? '', ...legs].join('. ')
   }
   if (s.screen === 'result' && s.session) {
@@ -158,16 +175,19 @@ export function amountModel(s: Snapshot, m: Messages): AmountModel {
 }
 
 /** Second line of a quote row: what the user pays and the fees. */
-export function quoteSubtitle(q: Quote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
+export function quoteSubtitle(q: PublicQuote, m: Messages, direction: 'deposit' | 'withdraw' = 'deposit'): string {
   const fees = formatFees(q.fees, m.locale)
   const sub: string[] = []
-  if (Number(q.input.amount) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
-  sub.push(fees ? m.fees(fees) : m.noFees)
+  if (Number(q.input.value) > 0) sub.push((direction === 'withdraw' ? m.youSend : m.youPay)(formatAmount(q.input, m.locale)))
+  // A fee with no stated amount (in the rate): never say "No fees".
+  if (fees) sub.push(m.fees(hasUnstatedFee(q.fees) ? `${fees} + ${m.feeInRate}` : fees))
+  else if (hasUnstatedFee(q.fees)) sub.push(m.feesInRate)
+  else sub.push(m.noFees)
   return sub.join(' · ')
 }
 
 /** The quote after (dir 1) or before (dir -1) the selected one, wrapping around. */
-export function nextQuoteId(quotes: Quote[], selectedId: string | undefined, dir: 1 | -1): string | undefined {
+export function nextQuoteId(quotes: PublicQuote[], selectedId: string | undefined, dir: 1 | -1): string | undefined {
   if (!quotes.length) return undefined
   const i = quotes.findIndex((q) => q.id === selectedId)
   return quotes[(i + dir + quotes.length) % quotes.length]?.id

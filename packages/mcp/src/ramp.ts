@@ -2,7 +2,7 @@
 // registry, and return compact JSON views. The MCP layer (server.ts) only maps tools to these.
 
 import { cmp, currencyForCountry } from '@openrampkit/core'
-import type { MethodOption, OrkError, PublicSession, Quote, SurfaceKind } from '@openrampkit/core'
+import type { MethodOption, OpenRampError, PublicQuote, PublicSession, SurfaceKind } from '@openrampkit/core'
 import { createBackend, RampError } from './backend.js'
 import type { Backend, SessionInput } from './backend.js'
 import { checkConfig, resolveBounds, resolveDestination, resolveTarget } from './config.js'
@@ -13,7 +13,7 @@ import { memoryRegistry } from './registry.js'
 import type { SessionRegistry } from './registry.js'
 
 type PlanResult = { methods: MethodOption[]; currency: string }
-type QuotesResult = { quotes: Quote[]; errors: OrkError[] }
+type QuotesResult = { quotes: PublicQuote[]; errors: OpenRampError[] }
 type Direction = 'deposit' | 'withdraw'
 
 const PREVIEW_TTL_MIN = 10
@@ -118,7 +118,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
   function withdrawConfig() {
     const w = config.withdraw
     if (!w) throw new RampError('NOT_ALLOWED', 'Payouts are turned off in this MCP server.', 403)
-    return { source: w.source, allowedTargets: w.allowedTargets ?? { fiat: {} } }
+    return { source: w.source, allowedDestinations: w.allowedDestinations ?? { fiat: {} } }
   }
 
   /** A short-lived session used only to list methods and quote. Reused per direction, country and destination. */
@@ -215,7 +215,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
       })
       const out: Record<string, unknown> = {
         session_id: s.id,
-        status: 'open',
+        status: 'requires_payment_method',
         pay_url: link.url,
         pay_url_expires_at: link.expiresAt,
         expires_at: s.expiresAt,
@@ -250,10 +250,10 @@ export function createRampOps(config: OpenRampMcpConfig) {
         source: w.source,
         // A bound target: the server sets and locks it at creation, so nobody can change it later.
         // Only its chain is allowed, and no pay link is made.
-        allowedTargets: target ? { crypto: { chains: [target.chain] } } : w.allowedTargets,
+        allowedDestinations: target ? { crypto: { chains: [target.chain] } } : w.allowedDestinations,
         ...(target
           ? {
-              target: {
+              destination: {
                 type: 'crypto' as const,
                 chain: target.chain,
                 token: target.token,
@@ -261,7 +261,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
                 ...(target.symbol ? { symbol: target.symbol } : {}),
                 ...(target.decimals !== undefined ? { decimals: target.decimals } : {}),
               },
-              lockTarget: true,
+              lockDestination: true,
             }
           : {}),
         amountBounds: bounds,
@@ -276,7 +276,7 @@ export function createRampOps(config: OpenRampMcpConfig) {
         const link = await payLink(s.id, s.clientSecret)
         return {
           session_id: s.id,
-          status: 'open',
+          status: 'requires_payment_method',
           pay_url: link.url,
           pay_url_expires_at: link.expiresAt,
           expires_at: s.expiresAt,
@@ -311,7 +311,8 @@ export function createRampOps(config: OpenRampMcpConfig) {
       for (;;) {
         const view = sessionView(await backend.call<PublicSession>(secret, 'GET', `/sessions/${encodeURIComponent(sessionId)}/step`))
         const elapsed = Date.now() - start
-        if (TERMINAL.has(view.status)) return { ...view, waited_seconds: Math.round(elapsed / 1000) }
+        // Stop on a final status, and on a failed attempt (the person must choose again).
+        if (TERMINAL.has(view.status) || view.attempt_failed) return { ...view, waited_seconds: Math.round(elapsed / 1000) }
         await opts.onPoll?.(view, elapsed)
         if (elapsed + pollMs > limit || opts.signal?.aborted) {
           return { ...view, waited_seconds: Math.round(elapsed / 1000), timed_out: true, next: 'Not finished yet. Call wait_for_completion again, or ask the person if they need help.' }

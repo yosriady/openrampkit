@@ -1,9 +1,10 @@
 import { createHash, createHmac, createPublicKey, generateKeyPairSync, verify } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { checkAdapterShape, checkLegQuote, checkLegStep, webhookBodyKey } from '@openrampkit/adapter'
+import { createOpenRamp } from '@openrampkit/server'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
-import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
+import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 import { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, onramper, onramperMethodId, onramperPaymentType } from './index.js'
 
 const { privateKey, publicKey } = generateKeyPairSync('ed25519')
@@ -12,7 +13,7 @@ const API_KEY = 'pk_test_onramper'
 const WH = 'onramper_webhook_secret'
 const opts = { apiKey: API_KEY, secretKey: PEM, webhookSecret: WH, env: 'production' as const }
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
-const money = (amount: string, currency = 'USD') => ({ amount, asset: { kind: 'fiat' as const, currency } })
+const money = (amount: string, currency = 'USD') => ({ value: amount, asset: { kind: 'fiat' as const, currency } })
 
 const leg = (legId: string, currency = 'USD'): PathwayLeg => ({
   adapterId: 'onramper',
@@ -171,12 +172,14 @@ describe('onramper adapter', () => {
     const u = new URL(calls[0]!.url)
     expect(u.origin + u.pathname).toBe('https://api.onramper.com/quotes/usd/usdc_base')
     expect(Object.fromEntries(u.searchParams)).toEqual({ amount: '100.00', paymentMethod: 'creditcard', type: 'buy', country: 'US', platform: 'web', walletAddress: '0xabc' })
-    expect(q.output).toEqual({ amount: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.input).toEqual(money('100.00'))
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'banxa fee', amount: '2.5', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.05', currency: 'USD' },
+      { kind: 'provider', label: 'banxa fee', amount: money('2.5'), included: true },
+      { kind: 'network', label: 'Network fee', amount: money('0.05'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(q.data!.onramp).toBe('banxa')
     expect((q.data!.providers as Array<{ ramp: string }>).map((p) => p.ramp)).toEqual(['banxa', 'moonpay'])
     // `onramps` filters providers
@@ -193,7 +196,7 @@ describe('onramper adapter', () => {
     await expect(run(401, {})).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(run(429, {})).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
     await expect(run(500, {})).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
-    await expect(onramper(opts).quote({ leg: leg('card'), amountOut: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(onramper(opts).quote({ leg: leg('card'), amountOut: { value: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })
 
   it('start: POST /checkout/v2/intent with a valid Signature V2 (Ed25519, checked with the public key)', async () => {
@@ -206,7 +209,13 @@ describe('onramper adapter', () => {
     const quote = await a.quote({ leg: leg('card'), amountIn: money('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: 'https://buy.onramper.com/checkout?session=s1', popup: true, provider: 'banxa' } })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({
+      status: 'requires_action',
+      action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://buy.onramper.com/checkout?session=s1', popup: true, provider: 'banxa' }, transitions: [{ kind: 'AWAIT' }] },
+    })
+    // V2 checkout gives no transaction id: the first webhook gives the providerRef
+    expect(step.providerRef).toBeUndefined()
     const post = calls[1]!
     expect(post.url).toBe('https://api.onramper.com/checkout/v2/intent')
     expect(post.body).toEqual({
@@ -232,14 +241,67 @@ describe('onramper adapter', () => {
 
   it('start: needs the user IP, a wallet and a provider; maps HTTP errors', async () => {
     const a = onramper(opts)
-    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { amount: '95', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { onramp: 'banxa' } }
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z', data: { onramp: 'banxa' } }
     const f = (status = 200, body: unknown = { redirectUrl: 'https://x' }) => fakeFetch([{ method: 'POST', match: '/checkout/v2/intent', status, reply: () => body }]).fetch
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f() }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote: { ...quote, data: {} } }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'QUOTE_EXPIRED' } })
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' }, destination: { type: 'merchant', currency: 'USD' } }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(401, { errorId: 4011, message: 'Invalid signature' }), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(200, {}), session: { ip: '1.2.3.4' } }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
-    await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' } }))).resolves.toMatchObject({ state: 'PAYMENT' })
+    await expect(a.start({ leg: leg('card'), quote }, makeCtx({ fetch: f(), session: { ip: '1.2.3.4' } }))).resolves.toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
+  })
+
+  it('start: 401 "No V2 signing key" is a setup error: not retryable, operator log names the public key, user message is neutral', async () => {
+    const a = onramper(opts)
+    const quote = { adapterId: 'onramper', legId: 'card', input: money('100'), output: { value: '95', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z', data: { onramp: 'banxa' } }
+    const run = async (status: number, body: unknown) => {
+      const log = recordingLog()
+      const e = await a
+        .start({ leg: leg('card'), quote, deliverTo: { address: '0xd16e' } }, makeCtx({ log, session: { ip: '1.2.3.4' }, fetch: fakeFetch([{ method: 'POST', match: '/checkout/v2/intent', status, reply: () => body }]).fetch }))
+        .catch((x) => x)
+      return { error: e.error, logs: log.errors }
+    }
+    // Live staging answer (2026-10-09)
+    const noKey = await run(401, { errorId: 4011, message: 'No V2 signing key is registered for this API key. Please contact Onramper support.' })
+    expect(noKey.error).toEqual({ code: 'PROVIDER_UNAVAILABLE', message: 'Onramper is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' })
+    expect(noKey.logs).toHaveLength(1)
+    expect(noKey.logs[0]).toMatch(/Register the Ed25519 public key that matches secretKey/)
+    // Documented code (Error codes & troubleshooting)
+    expect((await run(401, { code: 'PUBLIC_KEY_NOT_CONFIGURED', message: 'Public key not configured' })).logs[0]).toMatch(/Ed25519 public key/)
+    expect((await run(401, { code: 'SIGNATURE_INVALID', message: 'Invalid signature' })).logs[0]).toMatch(/refused the Signature V2/)
+    expect((await run(401, { code: 'PARTNER_NOT_FOUND' })).logs[0]).toMatch(/refused the API key/)
+    const ip = await run(403, { code: 'IP_BLOCKED' })
+    expect(ip.error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: false })
+    expect(ip.logs[0]).toMatch(/allowlist/)
+    // A provider outage stays retryable
+    expect((await run(503, {})).error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true })
+  })
+
+  it('quote: an API key refused (401) is a setup error, not retryable', async () => {
+    const log = recordingLog()
+    const e = await onramper(opts)
+      .quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ log, fetch: fakeFetch([{ match: '/quotes/', status: 401, reply: () => ({ message: 'Unauthorized' }) }]).fetch }))
+      .catch((x) => x)
+    expect(e.error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: false, recovery: 'choose_other' })
+    expect(log.errors[0]).toMatch(/onramper: cannot price this amount/)
+  })
+
+  it('quote: an onramp with no fee fields gets a fee line in the rate, never "no fees"', async () => {
+    // Live staging shape (2026-10-09): guardarian sends no networkFee or transactionFee
+    const guardarian = { rate: 1.0504, payout: 95.2, ramp: 'guardarian', paymentMethod: 'creditcard', quoteId: 'g1', recommendations: [] }
+    const usd = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/usd/usdc_base', reply: () => [guardarian] }]).fetch }))
+    expect(checkLegQuote(usd)).toEqual([])
+    // USD to USDC: comparable units, so the cost is 100 - 95.2
+    expect(usd.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: money('4.80'), included: true }])
+    // EUR to USDC: no reference rate in the response, so the amount is not known (null)
+    const eur = await onramper(opts).quote({ leg: leg('card', 'EUR'), amountIn: money('100', 'EUR') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/eur/usdc_base', reply: () => [guardarian] }]).fetch }))
+    expect(eur.fees).toEqual([{ kind: 'provider', label: 'guardarian fee (included in rate)', amount: null, included: true }])
+    // Explicit fee fields (also zero) keep the old lines
+    const zero = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/', reply: () => [{ ...guardarian, transactionFee: 0, networkFee: 0 }] }]).fetch }))
+    expect(zero.fees).toEqual([])
+    // A payout at or above the input in USD: no cost to show
+    const par = await onramper(opts).quote({ leg: leg('card'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/', reply: () => [{ ...guardarian, payout: 100 }] }]).fetch }))
+    expect(par.fees).toEqual([])
   })
 
   it('webhook: X-Onramper-Webhook-Signature (good, bad, missing, no secret); parse maps statuses and keeps the transaction id', async () => {
@@ -256,16 +318,27 @@ describe('onramper adapter', () => {
     // Known vector: HMAC-SHA256(secret, '{}')
     expect(sig('{}')).toBe('1156082a881702dc9edab3dda95d53704f3ee7e9e0a5a899a4646c01fdb7773a')
 
-    expect(await a.webhook!.parse(body, wctx)).toEqual([
-      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+    expect(await a.webhook!.parse(body, wctx)).toMatchObject([
+      {
+        ref: 'ork_abc',
+        status: 'succeeded',
+        providerRef: 'otx_1',
+        transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }],
+        output: { value: '95.4', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
     expect(await shared.get('tx:ork_abc')).toBe('otx_1')
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
-    expect(await parse(HOOK('new'))).toEqual([{ ref: 'ork_abc', status: 'awaiting_user' }])
-    expect(await parse(HOOK('pending'))).toMatchObject([{ status: 'processing' }])
-    expect(await parse(HOOK('paid'))).toMatchObject([{ status: 'processing' }])
+    expect(await parse(HOOK('new'))).toMatchObject([{ ref: 'ork_abc', status: 'requires_action', providerRef: 'otx_1' }])
+    expect((await parse(HOOK('new')))[0]!.action).toBeUndefined()
+    expect(await parse(HOOK('pending'))).toMatchObject([{ status: 'processing', providerRef: 'otx_1', detail: { code: 'processing', providerStatus: 'pending' } }])
+    expect(await parse(HOOK('PAID'))).toMatchObject([{ status: 'processing', detail: { code: 'processing', providerStatus: 'PAID' } }])
     expect(await parse(HOOK('failed'))).toMatchObject([{ status: 'failed', error: { code: 'PAYMENT_FAILED' } }])
     expect(await parse(HOOK('canceled'))).toMatchObject([{ status: 'failed' }])
+    // An unknown status is no event (never `processing`), and it is logged
+    const log = recordingLog()
+    expect(await a.webhook!.parse(JSON.stringify(HOOK('onramper_test_status')), makeWebhookCtx({ shared, log }))).toEqual([])
+    expect(log.warnings.some((w) => w.includes('unknown provider status'))).toBe(true)
     expect(await parse(HOOK('test'))).toEqual([])
     expect(await parse(HOOK('completed', { partnerContext: undefined }))).toEqual([])
     expect(await a.webhook!.parse('{', wctx)).toEqual([])
@@ -276,14 +349,22 @@ describe('onramper adapter', () => {
     const { fetch, calls } = fakeFetch([{ match: '/transactions/otx_1', reply: () => HOOK('completed', { transactionHash: '0xhash' }) }])
     const a = onramper(opts)
     const ctx = makeCtx({ fetch, shared })
-    expect(await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    const first = await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)
+    expect(stateFor(first)).toBe('PAYMENT')
+    expect(first).toMatchObject({ status: 'requires_action', action: { kind: 'payment', transitions: [{ kind: 'AWAIT' }] } })
     expect(calls).toHaveLength(0)
     await shared.put('tx:ork_abc', 'otx_1')
     const s = await a.status!({ leg: leg('card'), ref: 'ork_abc' }, ctx)
     expect(checkLegStep(s)).toEqual([])
-    expect(s).toMatchObject({ state: 'COMPLETED', txHash: '0xhash', output: { amount: '95.4' } })
+    expect(stateFor(s)).toBe('COMPLETED')
+    expect(s).toMatchObject({ status: 'succeeded', providerRef: 'otx_1', transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }], output: { value: '95.4' } })
     expect(calls[0]!.url).toBe('https://api.onramper.com/transactions/otx_1')
     expect(calls[0]!.headers.get('x-onramper-secret')).toBe(WH)
+    // An unknown status is never `processing`: a status poll that keeps the current step
+    const odd = fakeFetch([{ match: '/transactions/otx_1', reply: () => HOOK('on_review') }])
+    const unknown = await a.status!({ leg: leg('card'), ref: 'ork_abc' }, makeCtx({ fetch: odd.fetch, shared }))
+    expect(unknown.status).not.toBe('processing')
+    expect(unknown).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     const down = fakeFetch([{ match: '/transactions/', status: 503, reply: () => ({}) }])
     await expect(a.status!({ leg: leg('card'), ref: 'ork_abc' }, makeCtx({ fetch: down.fetch, shared }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
   })
@@ -307,6 +388,7 @@ describe('onramper adapter', () => {
         { leg: leg('card'), quote: { amountIn: money('100') }, expect: { start: 'PAYMENT', status: 'PAYMENT' } },
         { leg: leg('sepa', 'EUR'), quote: { amountIn: money('100', 'EUR') } },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: money('100') }, ctx: (f) => makeCtx({ fetch: f, shared: memoryKV(), session: { ip: '203.0.113.9' } }) }],
       webhookCtx: makeWebhookCtx({ shared }),
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'x-onramper-webhook-signature': createHmac('sha256', WH).update(body).digest('hex') } }), events: 1 },
@@ -314,5 +396,36 @@ describe('onramper adapter', () => {
       ],
     })
     expect(report.problems).toEqual([])
+  })
+})
+
+describe('onramper webhook replay protection', () => {
+  const sig = (b: string) => createHmac('sha256', WH).update(b).digest('hex')
+  const ramp = () => createOpenRamp({ secret: 's'.repeat(40), baseUrl: 'https://app.test/api', adapters: [onramper(opts)], logger: silentLog })
+  const post = (r: ReturnType<typeof ramp>, body: string) =>
+    r.handle(new Request('https://app.test/api/webhooks/onramper', { method: 'POST', headers: { 'x-onramper-webhook-signature': sig(body) }, body }))
+
+  it('gives the body hash as the replay key and as the event id', async () => {
+    const a = onramper(opts)
+    const body = JSON.stringify(HOOK('completed'))
+    const key = await a.webhook!.replayKey!(new Request('https://app.test/w', { method: 'POST' }), body, makeWebhookCtx())
+    expect(key).toBe(await webhookBodyKey(body))
+    expect((await a.webhook!.parse(body, makeWebhookCtx()))[0]!.eventId).toBe(key!.slice(0, 32))
+  })
+
+  it('ignores a replayed signed body (200, nothing applied), and lets a retry of an unapplied body through', async () => {
+    const r = ramp()
+    const body = JSON.stringify(HOOK('test'))
+    const first = await post(r, body)
+    expect(first.status).toBe(200)
+    expect(await first.json()).toEqual({ received: true })
+    const replay = await post(r, body)
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ received: true, duplicate: true })
+
+    // The ref is not known yet: 503, and the provider's retry is not taken for a replay.
+    const unknown = JSON.stringify(HOOK('completed', { partnerContext: 'ork_unknown' }))
+    expect((await post(r, unknown)).status).toBe(503)
+    expect((await post(r, unknown)).status).toBe(503)
   })
 })

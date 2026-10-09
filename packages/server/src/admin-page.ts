@@ -42,7 +42,7 @@ th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);verti
 th{font-size:12px;color:var(--muted);font-weight:600}
 tbody tr:last-child td{border-bottom:0}
 .chip{display:inline-block;padding:1px 8px;border-radius:999px;background:var(--chip);font-size:12px}
-.chip.completed{color:var(--ok)}.chip.failed,.chip.refunded{color:var(--bad)}.chip.expired{color:var(--muted)}.chip.stuck{color:var(--warn)}
+.chip.succeeded{color:var(--ok)}.chip.failed,.chip.canceled,.chip.refunded,.chip.reversed{color:var(--bad)}.chip.expired{color:var(--muted)}.chip.stuck,.chip.requires_action{color:var(--warn)}
 .muted{color:var(--muted)}
 .mono{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all;white-space:normal}
 #status{min-height:20px;margin:8px 0;color:var(--muted)}
@@ -107,7 +107,7 @@ function age(ms) {
 }
 const time = (s) => (s ? new Date(s).toLocaleString() : '-')
 const chip = (text, cls) => h('span', { class: 'chip ' + (cls || '') }, text)
-function amountText(a) { if (!a) return '-'; const asset = a.asset || {}; return a.amount + ' ' + (asset.currency || asset.symbol || (asset.token ? asset.token.slice(0, 10) : '')) }
+function amountText(a) { if (!a) return '-'; const asset = a.asset || {}; return a.value + ' ' + (asset.currency || asset.symbol || (asset.token ? asset.token.slice(0, 10) : '')) }
 
 function signOut(message) {
   token = ''
@@ -135,21 +135,23 @@ async function signIn(value) {
 function card(label, value, cls) { return h('div', { class: 'card ' + (cls || '') }, h('b', null, String(value)), h('span', null, label)) }
 async function loadStats() {
   const s = await api('/stats')
-  const failed = (s.byStatus.failed || 0) + (s.byStatus.refunded || 0)
+  const failed = (s.byStatus.failed || 0) + (s.byStatus.refunded || 0) + (s.byStatus.canceled || 0)
   $('cards').replaceChildren(
     card('Sessions in 24 h', s.total + (s.truncated ? '+' : '')),
-    card('Completed', s.byStatus.completed || 0),
-    card('Open or processing', (s.byStatus.open || 0) + (s.byStatus.processing || 0)),
+    card('Succeeded', s.byStatus.succeeded || 0),
+    card('Open or processing', (s.byStatus.requires_payment_method || 0) + (s.byStatus.processing || 0)),
+    card('Waiting for the user', s.byStatus.requires_action || 0),
     card('Stuck after ' + s.stuck.afterMinutes + ' min', s.stuck.count, s.stuck.count ? 'warn' : ''),
-    card('Failed or refunded', failed, failed ? 'bad' : ''),
+    card('Failed, canceled or refunded', failed, failed ? 'bad' : ''),
+    card('Reversed after success', s.byStatus.reversed || 0, s.byStatus.reversed ? 'bad' : ''),
     card('Dead letters', s.outbox.deadLetters, s.outbox.deadLetters ? 'bad' : ''),
     card('Webhook failures', s.webhookFailures, s.webhookFailures ? 'warn' : ''),
     card('Outbox queue', s.outbox.queued),
     card('Deposits', s.byDirection.deposit.total),
     card('Withdrawals', s.byDirection.withdraw.total),
   )
-  const vol = s.completedVolume
-  $('volume').replaceChildren(vol.length ? h('ul', null, vol.map((v) => h('li', null, v.direction + ': ' + v.amount + ' ' + v.currency + ' (' + v.count + ')'))) : h('p', { class: 'muted' }, 'No completed volume in 24 h.'))
+  const vol = s.succeededVolume
+  $('volume').replaceChildren(vol.length ? h('ul', null, vol.map((v) => h('li', null, v.direction + ': ' + v.amount + ' ' + v.currency + ' (' + v.count + ')'))) : h('p', { class: 'muted' }, 'No succeeded volume in 24 h.'))
 }
 
 function query() {
@@ -194,16 +196,18 @@ async function refresh() {
   }
 }
 
+function feesText(fees) { return (fees || []).map((f) => (f.amount ? amountText(f.amount) : 'amount not given') + ' ' + f.label + (f.included ? '' : ' (on top)')).join(', ') || '-' }
 function dl(pairs) { return h('dl', null, pairs.filter((p) => p[1] !== undefined && p[1] !== '').flatMap(([k, v]) => [h('dt', null, k), h('dd', null, v)])) }
 function legsTable(p) {
   return h('div', { class: 'table-wrap' }, h('table', null,
     h('caption', { class: 'sr' }, 'Legs of attempt ' + p.attempt),
-    h('thead', null, h('tr', null, ['#', 'Adapter', 'Status', 'Input', 'Output', 'Ref', 'Tx'].map((t) => h('th', { scope: 'col' }, t)))),
+    h('thead', null, h('tr', null, ['#', 'Adapter', 'Status', 'Input', 'Output', 'Fees', 'Ref', 'Tx'].map((t) => h('th', { scope: 'col' }, t)))),
     h('tbody', null, p.legs.map((l, i) => h('tr', null,
       h('td', null, String(i)), h('td', null, l.adapterId),
-      h('td', null, chip(l.status, l.status === 'succeeded' ? 'completed' : l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
-      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)')),
-      h('td', { class: 'mono' }, l.ref || '-'), h('td', { class: 'mono' }, l.txHash || '-'),
+      h('td', null, chip(l.status, l.status), l.error ? h('div', { class: 'muted' }, l.error.code) : ''),
+      h('td', null, amountText(l.input)), h('td', null, amountText(l.output), l.outputConfirmed ? '' : h('span', { class: 'muted' }, ' (quoted)'), l.delivery && l.delivery.status !== 'ok' ? h('div', null, chip(l.delivery.status === 'short' ? 'short by ' + l.delivery.shortfall : l.delivery.status.replace('_', ' '), 'failed')) : ''),
+      h('td', null, feesText(l.fees)),
+      h('td', { class: 'mono' }, (l.ref || '-') + (l.providerRef && l.providerRef !== l.ref ? ' / ' + l.providerRef : '')), h('td', { class: 'mono' }, (l.transactions || []).map((t) => t.role + ': ' + t.hash).join(', ') || '-'),
     ))),
   ))
 }
@@ -231,12 +235,13 @@ function renderDetail(s) {
   )
   body.replaceChildren(
     dl([
-      ['Direction', s.direction], ['Status', s.status], ['State', s.state + (s.step.sub ? ' / ' + s.step.sub : '')],
+      ['Direction', s.direction], ['Status', s.status], ['State', s.state + (s.step.detail ? ' / ' + s.step.detail.code + (s.step.detail.providerStatus ? ' (' + s.step.detail.providerStatus + ')' : '') : '')],
       ['Error', s.step.error ? s.step.error.code + ': ' + s.step.error.message : undefined],
       ['Amount', s.amount ? s.amount + ' ' + (s.currency || '') : undefined], ['User', s.userId], ['Country', s.country],
       ['Created', time(s.createdAt)], ['Updated', time(s.updatedAt)], ['Expires', time(s.expiresAt)], ['Live', s.livemode ? 'yes' : 'no (test)'],
+      ['Reversal', s.reversal ? 'Leg ' + s.reversal.index + ' (' + s.reversal.adapterId + ') ' + s.reversal.status + ' at ' + time(s.reversal.at) + ' (was ' + s.reversal.previous + ')' : undefined],
       ['Resolution', s.resolution ? s.resolution.state + ' at ' + time(s.resolution.at) + ' (was ' + s.resolution.previous + '): ' + s.resolution.note : undefined],
-      ['Tx hashes', s.txHashes.join(', ') || undefined],
+      ['Transactions', (s.transactions || []).map((t) => t.role + ' ' + t.hash + ' (' + t.chain + ', leg ' + t.legIndex + ', attempt ' + t.attempt + ')').join(', ') || undefined],
     ]),
     resolveBox,
     h('h2', null, 'Payment'),
@@ -345,7 +350,7 @@ const BODY = `<div id="demo" class="banner" role="note" hidden></div>
 <form id="find" class="row" role="search"><label for="find-value">Find by session id, tx hash, or provider:ref<input id="find-value" type="search" size="40"></label><button type="submit">Find</button></form>
 <div class="row" role="group" aria-label="Filters">
 <label for="f-direction">Direction<select id="f-direction"><option value="">All</option><option value="deposit">Deposit</option><option value="withdraw">Withdraw</option></select></label>
-<label for="f-state">State<select id="f-state"><option value="">All</option><option>open</option><option>processing</option><option>completed</option><option>failed</option><option>expired</option><option>refunded</option></select></label>
+<label for="f-state">State<select id="f-state"><option value="">All</option><option>requires_payment_method</option><option>requires_action</option><option>processing</option><option>succeeded</option><option>failed</option><option>canceled</option><option>expired</option><option>refunded</option><option>reversed</option></select></label>
 <label class="inline" for="f-stuck"><input id="f-stuck" type="checkbox">Stuck only</label>
 </div>
 <div class="table-wrap"><table><caption class="sr">Recent sessions, newest first</caption>

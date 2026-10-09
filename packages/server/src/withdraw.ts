@@ -1,7 +1,7 @@
 // Withdraw sessions: validate the source at creation, and the target the user picks.
 
-import { CHAINS, OrkException, isUsdc, nativeDecimals, normalizeToken, orkError } from '@openrampkit/core'
-import type { Destination, WithdrawSource, WithdrawTarget } from '@openrampkit/core'
+import { CHAINS, OpenRampException, isUsdc, nativeDecimals, normalizeToken, openRampError } from '@openrampkit/core'
+import type { Destination, WithdrawSource, WithdrawDestination } from '@openrampkit/core'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
 
@@ -13,7 +13,7 @@ export const CAIP2 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/
 const CURRENCY = /^[A-Z]{3}$/
 const SYMBOL = /^[A-Za-z0-9.$_-]{1,12}$/
 
-const bad = (message: string) => new OrkException(orkError('BAD_REQUEST', { message }), 400)
+const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
 
 /** True when `address` has the right format for `chain` (EVM: `0x` and 40 hex digits, not the zero address). */
 export function isValidAddress(chain: string, address: string): boolean {
@@ -51,7 +51,7 @@ export function normalizeSource(src: WithdrawSource | undefined): WithdrawSource
 }
 
 /** Parse the body of `POST /sessions/:id/target`. Throws a 400 when it is not valid. */
-export function parseTarget(body: unknown): WithdrawTarget {
+export function parseTarget(body: unknown): WithdrawDestination {
   const b = (body && typeof body === 'object' ? body : {}) as Record<string, unknown>
   if (b.type === 'fiat') {
     const currency = typeof b.currency === 'string' ? b.currency.toUpperCase() : ''
@@ -65,7 +65,7 @@ export function parseTarget(body: unknown): WithdrawTarget {
     if (!isValidToken(chain, rawToken)) throw bad('`token` must be a token address or "native".')
     const address = typeof b.address === 'string' ? b.address.trim() : ''
     if (!isValidAddress(chain, address)) {
-      throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }), 400)
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }), 400)
     }
     const token = normToken(chain, rawToken)
     return { type: 'crypto', chain, token, address, ...tokenMeta(chain, token, b) }
@@ -74,10 +74,10 @@ export function parseTarget(body: unknown): WithdrawTarget {
 }
 
 /** Throw a 403 when the app does not allow this target. */
-export function checkAllowed(rec: SessionRecord, t: WithdrawTarget): void {
-  const allowed = rec.allowedTargets
+export function checkAllowed(rec: SessionRecord, t: WithdrawDestination): void {
+  const allowed = rec.allowedDestinations
   if (!allowed) return
-  const refuse = () => new OrkException(orkError('TARGET_NOT_ALLOWED'), 403)
+  const refuse = () => new OpenRampException(openRampError('DESTINATION_NOT_ALLOWED'), 403)
   if (t.type === 'crypto') {
     if (!allowed.crypto) throw refuse()
     if (allowed.crypto.chains && !allowed.crypto.chains.includes(t.chain)) throw refuse()
@@ -88,20 +88,20 @@ export function checkAllowed(rec: SessionRecord, t: WithdrawTarget): void {
 }
 
 /** Run the app's `screenAddress` hook. Refused or failed checks throw (fail closed). */
-export async function screenTarget(rt: Runtime, t: WithdrawTarget): Promise<void> {
+export async function screenTarget(rt: Runtime, t: WithdrawDestination): Promise<void> {
   if (t.type !== 'crypto' || !rt.config.screenAddress) return
   let ok: boolean
   try {
     ok = await rt.config.screenAddress(t.address, t.chain)
   } catch (e) {
     rt.log.warn('screenAddress failed', { error: String(e) })
-    throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'We could not check this address. Try again.' }), 503)
+    throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'We could not check this address. Try again.' }), 503)
   }
-  if (ok !== true) throw new OrkException(orkError('ADDRESS_REJECTED'), 403)
+  if (ok !== true) throw new OpenRampException(openRampError('ADDRESS_REJECTED'), 403)
 }
 
 /** The session destination for a target. Adapters read it as `ctx.destination`. */
-export function targetDestination(t: WithdrawTarget): Destination {
+export function targetDestination(t: WithdrawDestination): Destination {
   if (t.type === 'fiat') return { type: 'fiat', currency: t.currency }
   return {
     type: 'crypto',

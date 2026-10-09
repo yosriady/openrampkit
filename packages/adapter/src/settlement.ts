@@ -2,11 +2,12 @@
 // the server signs, and verify a settlement on chain over JSON-RPC. The contract lives in `contracts/`.
 // Web-standard APIs only (fetch), no viem.
 
-import { OrkException, orkError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
 import type { ContractCall, EvmTxRequest } from '@openrampkit/core'
 import { evmRpc } from './evm.js'
 import type { Logger } from './index.js'
 import { hexToBytes, keccak256 } from './keccak.js'
+import { bytesToHex } from './util.js'
 
 export { OPEN_RAMP_SETTLEMENT_ABI } from './settlement-abi.js'
 export { keccak256 } from './keccak.js'
@@ -117,8 +118,8 @@ export function isEvmAddress(a: unknown): a is string {
  */
 export function sessionIdToBytes32(sessionId: string): string {
   const b = new TextEncoder().encode(sessionId)
-  if (!b.length || b.length > 32) throw new OrkException(orkError('BAD_REQUEST', { message: 'A settlement session id must be 1 to 32 bytes.' }), 400)
-  return `0x${[...b].map((x) => x.toString(16).padStart(2, '0')).join('').padEnd(64, '0')}`
+  if (!b.length || b.length > 32) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A settlement session id must be 1 to 32 bytes.' }), 400)
+  return `0x${bytesToHex(b).padEnd(64, '0')}`
 }
 
 export function bytes32ToSessionId(word: string): string {
@@ -131,8 +132,8 @@ export function bytes32ToSessionId(word: string): string {
 /** The settlement calls of a destination (`ContractCall` uses `to`; the contract calls it `target`) */
 export function settlementCallsFrom(calls: ContractCall[] | undefined): SettlementCall[] {
   return (calls ?? []).map((c) => {
-    if (!isEvmAddress(c.to) || !HEX_RE.test(c.data)) throw new OrkException(orkError('BAD_REQUEST', { message: 'Each destination call needs a `to` address and hex `data`.' }), 400)
-    if (c.value && BigInt(c.value) !== 0n) throw new OrkException(orkError('BAD_REQUEST', { message: 'Destination calls cannot send native value.' }), 400)
+    if (!isEvmAddress(c.to) || !HEX_RE.test(c.data)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Each destination call needs a `to` address and hex `data`.' }), 400)
+    if (c.value && BigInt(c.value) !== 0n) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Destination calls cannot send native value.' }), 400)
     return { target: c.to, data: c.data }
   })
 }
@@ -195,7 +196,7 @@ function settlementTuple(p: SettlementParams): AbiValue {
  */
 export function encodeSettle(p: SettlementParams, intent?: SettlementIntent, opts: { fromBalance?: boolean } = {}): string {
   if (opts.fromBalance && intent && intent.minAmount !== p.amount) {
-    throw new OrkException(orkError('BAD_REQUEST', { message: 'For settleFromBalance, the intent amount must equal the settled amount.' }), 400)
+    throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'For settleFromBalance, the intent amount must equal the settled amount.' }), 400)
   }
   const i = intent ?? { payer: ZERO_ADDRESS, minAmount: 0n, deadline: 0n, signature: '0x' }
   const selector = opts.fromBalance ? SETTLEMENT_SELECTORS.settleFromBalance : SETTLEMENT_SELECTORS.settle
@@ -333,7 +334,7 @@ export async function verifySettlement(input: {
   const sid = sessionIdToBytes32(input.sessionId)
   const ret = await evmRpc<string>(f, input.rpcUrl, 'eth_call', [{ to: input.contract, data: `${SETTLEMENT_SELECTORS.receiptOf}${sid.slice(2)}` }, 'latest'], opts)
   const hex = (ret ?? '0x').replace(/^0x/, '')
-  if (hex.length < 64 * 5) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'The settlement contract returned no receipt. Check the contract address and chain.' }), 502)
+  if (hex.length < 64 * 5) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The settlement contract returned no receipt. Check the contract address and chain.' }), 502)
   const w = (i: number) => hex.slice(i * 64, i * 64 + 64)
   const settledAt = Number(BigInt(`0x${w(1)}`))
   if (settledAt === 0) return { settled: false }
@@ -347,7 +348,7 @@ export async function verifySettlement(input: {
     opts,
   )
   const log = logs?.[0]
-  if (!log) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'The session settled, but its Settled log was not found. Check `fromBlock`.' }), 502)
+  if (!log) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The session settled, but its Settled log was not found. Check `fromBlock`.' }), 502)
   const data = log.data.replace(/^0x/, '')
 
   const record: SettlementRecord = {

@@ -1,6 +1,6 @@
 import { createMockWallet } from '@openrampkit/client'
 import { METHODS } from '@openrampkit/core'
-import type { OrkEvent } from '@openrampkit/core'
+import type { ClientEvent } from '@openrampkit/core'
 import { autoTheme, darkTheme, lightTheme, openDeposit, openWithdraw } from '@openrampkit/web'
 import type { DepositHandle, RadiusScale, Theme, ThemeOptions } from '@openrampkit/web'
 import { BASE_URL, createSession, DEMO_ADMIN_TOKEN, fakeFetch, onWebhook } from './server.js'
@@ -125,7 +125,7 @@ const { clientSecret } = await openramp.sessions.create({
   country: '${o.country}',
   locale: '${o.locale}',${allowedLine}
   source: { chain: 'eip155:8453', token: USDC_BASE, custody: 'user_wallet' },
-  allowedTargets: { crypto: { chains: ['eip155:8453', 'eip155:42161'] }, fiat: {} },
+  allowedDestinations: { crypto: { chains: ['eip155:8453', 'eip155:42161'] }, fiat: {} },
 })`
       : `// Your server
 const { clientSecret } = await openramp.sessions.create({
@@ -173,7 +173,7 @@ function push(listId: string, item: HTMLLIElement) {
   while (list.children.length > 40) list.lastElementChild?.remove()
 }
 
-const logEvent = (e: OrkEvent) => {
+const logEvent = (e: ClientEvent) => {
   const state = (e.data.object as { state?: unknown } | undefined)?.state
   push('events', li(typeof state === 'string' ? [[e.type, 'code'], [state, 'small']] : [[e.type, 'code']]))
 }

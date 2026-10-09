@@ -2,15 +2,13 @@
 // <openramp-modal> driven by a real DepositController against the in-process server and the mock adapter.
 // Surfaces that the mock adapter never returns (IFRAME, FORM, OTP, ...) use a fake client.
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { DepositController, createMockWallet } from '@openrampkit/client'
 import type { Destination, PublicSession, Surface, Transition, WalletAdapter } from '@openrampkit/core'
-import { USDC, orkError } from '@openrampkit/core'
-import { BASE, BASE_DEST, fakeClient, quote, session, setupServer, sleep, step, waitFor } from '../../client/src/testctx.js'
+import { USDC, openRampError } from '@openrampkit/core'
+import { BASE, BASE_DEST, fakeClient, payment, quote, session, setupServer, sleep, step, waitFor } from '../../client/src/testctx.js'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import { OpenRampModal, TAG_NAME, createDepositController, darkColors, defineOpenRampModal, lightColors } from './index.js'
-
-type Mounted = Awaited<ReturnType<typeof mount>>
 
 const mounted: OpenRampModal[] = []
 afterEach(() => {
@@ -84,8 +82,8 @@ async function mount(opts: { country?: string; destination?: Destination; wallet
 }
 
 /** An element on a fake controller whose `select` returns the given step. */
-async function mountStep(surface: Surface | undefined, transitions: Transition[] = [], extra: Partial<PublicSession['step']> = {}) {
-  const client = fakeClient({ select: vi.fn(async () => session(step({ state: 'PAYMENT', transitions, ...(surface ? { surface } : {}), ...extra }))) })
+async function mountStep(surface: Surface | undefined, transitions: Transition[] = [], extra: Partial<PublicSession['step']> = {}, sessionExtra: Partial<PublicSession> = {}) {
+  const client = fakeClient({ select: vi.fn(async () => session(step({ state: 'PAYMENT', transitions, ...(surface ? { surface } : {}), ...extra }), sessionExtra)) })
   const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
   const el = document.createElement(TAG_NAME) as OpenRampModal
   mounted.push(el)
@@ -126,7 +124,7 @@ describe('registration', () => {
     expect(h.$('.skeleton')).not.toBeNull()
     expect(h.$('.card')!.getAttribute('aria-busy')).toBe('true')
     expect(h.$('.sr-only[role="status"]')!.textContent).toBe('Loading')
-    el.error = orkError('UNAUTHORIZED')
+    el.error = openRampError('UNAUTHORIZED')
     await settle(el)
     expect(h.text()).toContain('Something went wrong')
     expect(h.text()).toContain('This session is not valid.')
@@ -263,7 +261,7 @@ describe('amount and quotes', () => {
   it('quote list with several quotes, badges, selection and partial errors', async () => {
     const q = (id: string, badges: Array<'best_price' | 'fastest'>) => quote({ id, provider: id, badges })
     const client = fakeClient({
-      quotes: vi.fn(async () => ({ quotes: [q('alpha', ['best_price']), q('beta', ['fastest'])], errors: [orkError('PROVIDER_UNAVAILABLE'), orkError('PROVIDER_UNAVAILABLE')] })),
+      quotes: vi.fn(async () => ({ quotes: [q('alpha', ['best_price']), q('beta', ['fastest'])], errors: [openRampError('PROVIDER_UNAVAILABLE'), openRampError('PROVIDER_UNAVAILABLE')] })),
     })
     const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
     const el = document.createElement(TAG_NAME) as OpenRampModal
@@ -291,7 +289,7 @@ describe('amount and quotes', () => {
   })
 
   it('no quotes: notice, errors and Refresh', async () => {
-    const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [], errors: [orkError('AMOUNT_TOO_LOW')] })) })
+    const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [], errors: [openRampError('AMOUNT_TOO_LOW')] })) })
     const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
     const el = document.createElement(TAG_NAME) as OpenRampModal
     mounted.push(el)
@@ -606,16 +604,17 @@ describe('other surfaces (fake client)', () => {
 
   it('a step without a surface shows processing, progress and extra buttons', async () => {
     const h = await mountStep(undefined, [{ name: 'cancel', kind: 'SUBMIT', label: 'Cancel order' }], {
-      sub: 'KYC_REVIEW',
-      progress: {
-        legs: [
-          { adapterId: 'mock', legId: 'a', provider: 'Mock', status: 'succeeded', txHash: '0x1234567890abcdef1234567890abcdef' },
-          { adapterId: 'relay_bridge', legId: 'b', status: 'processing' },
-        ],
-      },
-      error: orkError('PAYMENT_FAILED'),
+      detail: { code: 'kyc_review', providerStatus: 'UNDER_REVIEW' },
+      error: openRampError('PAYMENT_FAILED'),
+    }, {
+      payment: payment([
+        { adapterId: 'mock', legId: 'a', provider: 'Mock', status: 'succeeded', transactions: [{ role: 'source', hash: '0xaaaa567890abcdef1234567890abbbbb' }, { role: 'hop', hash: '0x1234567890abcdef1234567890abcdef' }] },
+        { adapterId: 'relay_bridge', legId: 'b', status: 'processing' },
+      ]),
     })
-    expect(h.text()).toContain('Kyc Review')
+    // The detail code is translated (en.stepDetail), not the raw value title-cased
+    expect(h.text()).toContain('Checking your identity')
+    expect(h.text()).not.toContain('Kyc Review')
     expect(h.$$('.progress li')).toHaveLength(2)
     expect(h.$$('.leg-status').map((l) => l.textContent)).toEqual(['done', 'in progress'])
     expect(h.text()).toContain('0x1234...cdef')
@@ -647,10 +646,10 @@ describe('other surfaces (fake client)', () => {
 })
 
 describe('result and error screens', () => {
-  async function mountResult(state: 'FAILED' | 'EXPIRED' | 'COMPLETED', err = orkError('PAYMENT_FAILED')) {
+  async function mountResult(state: 'FAILED' | 'EXPIRED' | 'COMPLETED' | 'REVERSED', err = openRampError('PAYMENT_FAILED')) {
     const client = fakeClient({
       getSession: vi.fn(async () =>
-        session(step({ state, ...(state === 'COMPLETED' ? {} : { error: err }), progress: { legs: [{ adapterId: 'a', legId: 'a', status: 'succeeded' }, { adapterId: 'b', legId: 'b', status: 'succeeded' }] } })),
+        session(step({ state, ...(state === 'COMPLETED' ? {} : { error: err }) }), { payment: payment([{ adapterId: 'a', legId: 'a', status: 'succeeded' }, { adapterId: 'b', legId: 'b', status: 'succeeded' }]) }),
       ),
     })
     client.transition.mockResolvedValue(session('SELECT_METHOD'))
@@ -674,8 +673,17 @@ describe('result and error screens', () => {
   })
 
   it('EXPIRED: no retry, only Close', async () => {
-    const h = await mountResult('EXPIRED', orkError('SESSION_EXPIRED'))
+    const h = await mountResult('EXPIRED', openRampError('SESSION_EXPIRED'))
     expect(h.$('.result-title')!.textContent).toBe('Session expired')
+    expect(() => h.button('Try again')).toThrow()
+    expect(h.button('Close').className).not.toContain('secondary')
+  })
+
+  it('REVERSED: says the payment was reversed, no retry, only Close', async () => {
+    const h = await mountResult('REVERSED', openRampError('PAYMENT_REVERSED'))
+    expect(h.$('.result-title')!.textContent).toBe('Payment reversed')
+    expect(h.text()).toContain('The provider refunded or reversed this payment after it completed.')
+    expect(h.$('.result-icon.failure')).not.toBeNull()
     expect(() => h.button('Try again')).toThrow()
     expect(h.button('Close').className).not.toContain('secondary')
   })
@@ -850,7 +858,7 @@ describe('keyboard, focus and closing', () => {
     const el = document.createElement(TAG_NAME) as OpenRampModal
     mounted.push(el)
     el.embedded = true
-    el.error = orkError('INTERNAL')
+    el.error = openRampError('INTERNAL')
     document.body.appendChild(el)
     await settle(el)
     expect(() => helpers(el).button('Close')).toThrow()

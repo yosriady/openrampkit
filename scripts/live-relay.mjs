@@ -44,12 +44,12 @@ await check('health (GET /chains)', async () => {
   if (!h.ok) throw new Error(h.detail ?? 'not ok')
 })
 await check('wallet quote 25 USDC Arbitrum to Base (with key)', async () => {
-  const q = await a.quote({ leg: leg('wallet', 'user_wallet'), amountIn: { amount: '25', asset: { kind: 'crypto', chain: 'eip155:42161', token: USDC_ARB } }, source: { chain: 'eip155:42161', token: USDC_ARB, address: DEST }, deliverTo: { address: DEST } }, ctx)
-  return `receive ${q.output.amount} USDC, fees ${q.fees.map((f) => `${f.amount} ${f.currency}`).join(' + ')}`
+  const q = await a.quote({ leg: leg('wallet', 'user_wallet'), amountIn: { value: '25', asset: { kind: 'crypto', chain: 'eip155:42161', token: USDC_ARB } }, source: { chain: 'eip155:42161', token: USDC_ARB, address: DEST }, deliverTo: { address: DEST } }, ctx)
+  return `receive ${q.output.value} USDC, fees ${q.fees.map((f) => `${f.amount} ${f.currency}`).join(' + ')}`
 })
 let depositAddress
 await check('open deposit address (transfer leg)', async () => {
-  const q = await a.quote({ leg: leg('transfer', 'user_wallet'), amountIn: { amount: '0', asset: { kind: 'crypto', chain: 'eip155:42161', token: USDC_ARB } }, source: { chain: 'eip155:42161', token: USDC_ARB } }, ctx)
+  const q = await a.quote({ leg: leg('transfer', 'user_wallet'), amountIn: { value: '0', asset: { kind: 'crypto', chain: 'eip155:42161', token: USDC_ARB } }, source: { chain: 'eip155:42161', token: USDC_ARB } }, ctx)
   const step = await a.start({ leg: leg('transfer', 'user_wallet'), quote: q }, ctx)
   depositAddress = step.surface?.address
   return `deposit address ${depositAddress}`

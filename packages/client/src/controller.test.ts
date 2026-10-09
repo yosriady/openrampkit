@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { USDC, combineWallets, orkError } from '@openrampkit/core'
-import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
-import { DepositController, OrkClientError, createMockWallet } from './index.js'
+import { USDC, combineWallets, openRampError } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, StepDetailCode, WalletAdapter } from '@openrampkit/core'
+import { DepositController, OpenRampClientError, createMockWallet } from './index.js'
 import type { ControllerOptions } from './index.js'
-import { BEEF, POLL, fakeClient, method, plan, quote, session, step } from './testctx.js'
+import { BEEF, POLL, fakeClient, method, payment as paymentOf, plan, quote, session, step } from './testctx.js'
 
 afterEach(() => {
   vi.useRealTimers()
@@ -11,7 +11,7 @@ afterEach(() => {
 })
 
 function make(over: Partial<ControllerOptions> = {}, client = fakeClient()) {
-  const events: OrkEvent[] = []
+  const events: ClientEvent[] = []
   const c = new DepositController({ client, clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e), ...over })
   const types = () => events.map((e) => e.type)
   return { c, client, events, types }
@@ -114,6 +114,16 @@ describe('start', () => {
     expect(noCrypto.c.getSnapshot().tab).toBe('cash')
   })
 
+  it('shows the result for a REVERSED session and does not resolve done', async () => {
+    const client = fakeClient({ getSession: vi.fn(async () => session('REVERSED')) })
+    const { c } = make({}, client)
+    await c.start()
+    expect(c.getSnapshot()).toMatchObject({ screen: 'result', session: { step: { state: 'REVERSED' } } })
+    const done = c.done.then(() => 'resolved', () => 'rejected')
+    c.close()
+    await expect(done).resolves.toBe('rejected')
+  })
+
   it('resumes a session that is past SELECT_METHOD without planning', async () => {
     const client = fakeClient({ getSession: vi.fn(async () => session('COMPLETED')) })
     const { c } = make({}, client)
@@ -124,7 +134,7 @@ describe('start', () => {
   })
 
   it('shows the error screen when loading fails, and retry emits modal.opened once', async () => {
-    const client = fakeClient({ getSession: vi.fn().mockRejectedValueOnce(new OrkClientError(orkError('UNAUTHORIZED'), 401)).mockResolvedValue(session('SELECT_METHOD')) })
+    const client = fakeClient({ getSession: vi.fn().mockRejectedValueOnce(new OpenRampClientError(openRampError('UNAUTHORIZED'), 401)).mockResolvedValue(session('SELECT_METHOD')) })
     const { c, types } = make({}, client)
     await c.start()
     expect(c.getSnapshot()).toMatchObject({ screen: 'error', busy: false, error: { code: 'UNAUTHORIZED' } })
@@ -275,21 +285,21 @@ describe('refreshQuotes', () => {
   })
 
   it('keeps partial errors next to the quotes that worked', async () => {
-    const errors = [orkError('PROVIDER_UNAVAILABLE'), orkError('AMOUNT_TOO_LOW')]
+    const errors = [openRampError('PROVIDER_UNAVAILABLE'), openRampError('AMOUNT_TOO_LOW')]
     const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [quote({ id: 'only' })], errors })) })
     const { c } = await atQuotes({}, client)
     expect(c.getSnapshot()).toMatchObject({ selectedQuoteId: 'only', quoteErrors: errors })
   })
 
   it('no quotes: nothing is selected', async () => {
-    const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [], errors: [orkError('NO_QUOTES')] })) })
+    const client = fakeClient({ quotes: vi.fn(async () => ({ quotes: [], errors: [openRampError('NO_QUOTES')] })) })
     const { c } = await atQuotes({}, client)
     expect(c.getSnapshot().selectedQuoteId).toBeUndefined()
     expect(c.getSnapshot().quoteErrors[0]!.code).toBe('NO_QUOTES')
   })
 
   it('a failed request sets the error and clears the loading flag', async () => {
-    const client = fakeClient({ quotes: vi.fn().mockRejectedValue(new OrkClientError(orkError('RATE_LIMITED'), 429)) })
+    const client = fakeClient({ quotes: vi.fn().mockRejectedValue(new OpenRampClientError(openRampError('RATE_LIMITED'), 429)) })
     const { c } = await atQuotes({}, client)
     expect(c.getSnapshot()).toMatchObject({ quotesLoading: false, busy: false, error: { code: 'RATE_LIMITED' } })
   })
@@ -428,7 +438,7 @@ describe('confirm, fire and wallet', () => {
   })
 
   it('confirm failure keeps the quotes screen and shows the error', async () => {
-    const client = fakeClient({ select: vi.fn().mockRejectedValue(new OrkClientError(orkError('QUOTE_EXPIRED'), 409)) })
+    const client = fakeClient({ select: vi.fn().mockRejectedValue(new OpenRampClientError(openRampError('QUOTE_EXPIRED'), 409)) })
     const { c } = await atQuotes({}, client)
     await c.confirm()
     expect(client.select).toHaveBeenCalledWith('ors_1.sig', { quoteId: 'q1' })
@@ -639,7 +649,7 @@ describe('back and restart', () => {
     const client = fakeClient()
     client.transition.mockResolvedValue(session('SELECT_METHOD'))
     const { c } = await atQuotes({}, client)
-    client.plan.mockRejectedValueOnce(new OrkClientError(orkError('SESSION_EXPIRED'), 410))
+    client.plan.mockRejectedValueOnce(new OpenRampClientError(openRampError('SESSION_EXPIRED'), 410))
     await c.restart()
     await vi.waitFor(() => expect(c.getSnapshot().screen).toBe('error'))
     expect(c.getSnapshot().error?.code).toBe('SESSION_EXPIRED')
@@ -658,7 +668,7 @@ describe('back and restart', () => {
 })
 
 describe('polling', () => {
-  const awaiting = (sub?: string) => session(step({ state: 'PROCESSING', ...(sub ? { sub } : {}), transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }))
+  const awaiting = (code?: StepDetailCode) => session(step({ state: 'PROCESSING', ...(code ? { detail: { code } } : {}), transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }))
 
   it('polls with backoff up to the max interval, then gives up', async () => {
     vi.useFakeTimers()
@@ -690,17 +700,17 @@ describe('polling', () => {
     c.destroy()
   })
 
-  it('applies a changed step (sub or progress) and restarts the backoff', async () => {
+  it('applies a changed step (detail or payment) and restarts the backoff', async () => {
     vi.useFakeTimers()
-    const progressed = session(step({ state: 'PROCESSING', transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], progress: { legs: [{ adapterId: 'mock', legId: 'a', status: 'succeeded' }] } }))
-    const client = fakeClient({ select: vi.fn(async () => awaiting()), step: vi.fn().mockResolvedValueOnce(awaiting('BRIDGING')).mockResolvedValueOnce(progressed).mockResolvedValue(progressed) })
+    const progressed = session(step({ state: 'PROCESSING', detail: { code: 'bridging' }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }] }), { payment: paymentOf([{ adapterId: 'mock', legId: 'a', status: 'succeeded' }]) })
+    const client = fakeClient({ select: vi.fn(async () => awaiting()), step: vi.fn().mockResolvedValueOnce(awaiting('bridging')).mockResolvedValueOnce(progressed).mockResolvedValue(progressed) })
     const { c, types } = await atQuotes({}, client)
     await c.confirm()
     await vi.advanceTimersByTimeAsync(1000)
-    expect(c.getSnapshot().session?.step.sub).toBe('BRIDGING')
+    expect(c.getSnapshot().session?.step.detail?.code).toBe('bridging')
     expect(types().filter((t) => t === 'step.changed')).toHaveLength(2)
     await vi.advanceTimersByTimeAsync(1000) // backoff restarted at 1000
-    expect(c.getSnapshot().session?.step.progress?.legs[0]!.status).toBe('succeeded')
+    expect(c.getSnapshot().session?.payment?.legs[0]!.status).toBe('succeeded')
     c.destroy()
   })
 
@@ -717,7 +727,7 @@ describe('polling', () => {
     let releasePoll!: () => void
     const client = fakeClient({
       select: vi.fn(async () => awaiting()),
-      step: vi.fn(() => new Promise<PublicSession>((r) => (releasePoll = () => r(awaiting('STALE'))))),
+      step: vi.fn(() => new Promise<PublicSession>((r) => (releasePoll = () => r(awaiting('delayed'))))),
       transition: vi.fn(async () => session('COMPLETED')),
     })
     const { c } = await atQuotes({}, client)
@@ -783,7 +793,7 @@ describe('terminal states and done', () => {
   })
 
   it('FAILED shows the result but keeps done pending; restart and success resolve it', async () => {
-    const failed = session(step({ state: 'FAILED', error: orkError('PAYMENT_FAILED') }))
+    const failed = session(step({ state: 'FAILED', error: openRampError('PAYMENT_FAILED') }))
     const client = fakeClient({ select: vi.fn().mockResolvedValueOnce(failed).mockResolvedValue(session('COMPLETED')) })
     client.transition.mockResolvedValue(session('SELECT_METHOD'))
     const { c } = await atQuotes({}, client)
@@ -825,13 +835,13 @@ describe('terminal states and done', () => {
   })
 
   it('events carry id, created and livemode; no sessionId before the session loads', () => {
-    const events: OrkEvent[] = []
+    const events: ClientEvent[] = []
     const c = new DepositController({ client: fakeClient(), clientSecret: 'ors_1.sig', onEvent: (e) => events.push(e) })
     void c.start()
     expect(events[0]).toMatchObject({ type: 'modal.opened', livemode: false, data: { object: {} } })
     expect(events[0]!.id).toMatch(/^evt_/)
     expect(events[0]!.sessionId).toBeUndefined()
-    expect(typeof events[0]!.created).toBe('number')
+    expect(Number.isNaN(Date.parse(events[0]!.createdAt))).toBe(false)
   })
 
   it('works without onEvent', async () => {
@@ -843,8 +853,8 @@ describe('terminal states and done', () => {
 
 describe('notifySurface (provider iframe messages)', () => {
   const iframe = { kind: 'IFRAME' as const, url: 'https://p.example/w', origin: 'https://p.example' }
-  const payment = (sub?: string) =>
-    session(step({ state: 'PAYMENT', surface: iframe, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ...(sub ? { sub } : {}) }))
+  const payment = (code?: StepDetailCode) =>
+    session(step({ state: 'PAYMENT', surface: iframe, transitions: [{ name: 'poll', kind: 'AWAIT', poll: POLL }], ...(code ? { detail: { code } } : {}) }))
 
   async function atIframe(stepFn = vi.fn(async () => payment())) {
     const client = fakeClient({ select: vi.fn(async () => payment()), step: stepFn })
@@ -915,9 +925,9 @@ describe('notifySurface (provider iframe messages)', () => {
     c.reopenSurface() // no-op
     c.notifySurface('closed')
     await vi.advanceTimersByTimeAsync(0)
-    stepFn.mockResolvedValue(payment('RETRY'))
+    stepFn.mockResolvedValue(payment('card_details'))
     await vi.advanceTimersByTimeAsync(1000)
-    expect(c.getSnapshot().session?.step.sub).toBe('RETRY')
+    expect(c.getSnapshot().session?.step.detail?.code).toBe('card_details')
     expect(c.getSnapshot().surfaceClosed).toBe(false)
     c.destroy()
   })

@@ -1,12 +1,12 @@
 // Compact, agent-friendly views of server objects. No secrets, no provider internals.
 
-import type { Amount, MethodOption, OrkError, PublicSession, Quote, Surface } from '@openrampkit/core'
+import type { Amount, Fee, MethodOption, OpenRampError, PublicQuote, PublicSession, Surface } from '@openrampkit/core'
 
-export const TERMINAL = new Set(['completed', 'failed', 'expired', 'refunded'])
+export const TERMINAL = new Set(['succeeded', 'failed', 'canceled', 'expired', 'refunded', 'reversed'])
 
 export function amountText(a: Amount): string {
   const unit = a.asset.kind === 'fiat' ? a.asset.currency : (a.asset.symbol ?? a.asset.token)
-  return `${a.amount} ${unit}`
+  return `${a.value} ${unit}`
 }
 
 export function amountCurrency(a: Amount): string {
@@ -31,20 +31,30 @@ export function methodView(m: MethodOption) {
   }
 }
 
-export function quoteView(q: Quote) {
+export function quoteView(q: PublicQuote) {
   return {
     method: q.method,
     provider: q.provider,
     pay: amountText(q.input),
     receive: amountText(q.output),
-    fees: q.fees.map((f) => `${f.amount} ${f.currency} ${f.label}`),
+    // A fiat onramp or a bridge may only estimate the output. `min_output`: `min_receive` is guaranteed.
+    guarantee: q.guarantee,
+    ...(q.minOutput ? { min_receive: amountText(q.minOutput) } : {}),
+    ...(q.slippageBps !== undefined ? { slippage_bps: q.slippageBps } : {}),
+    fees: q.fees.map(feeText),
     eta: eta(q.eta),
     ...(q.badges?.length ? { badges: q.badges } : {}),
-    ...(q.expiresAt ? { expires_at: q.expiresAt } : {}),
+    expires_at: q.expiresAt,
   }
 }
 
-export function errorView(e: OrkError) {
+/** One fee line: the amount (or "amount not given"), and whether the quote already counts it */
+export function feeText(f: Fee): string {
+  const where = f.included ? 'included in rate' : 'charged on top'
+  return f.amount ? `${amountText(f.amount)} ${f.label} (${where})` : `${f.label}: amount not given (${where})`
+}
+
+export function errorView(e: OpenRampError) {
   return { code: e.code, message: e.message }
 }
 
@@ -81,12 +91,18 @@ export function sessionView(s: PublicSession) {
           paid: amountText(r.input),
           received: amountText(r.output),
           received_confirmed: r.outputConfirmed,
-          ...(r.txHashes.length ? { tx_hashes: r.txHashes } : {}),
+          ...(r.transactions.length ? { transactions: r.transactions.map((t) => ({ role: t.role, chain: t.chain, hash: t.hash, leg: t.legIndex })) } : {}),
+          // Not `ok`: the received amount is not the quote. Tell the person before they rely on it.
+          ...(r.delivery && r.delivery.status !== 'ok' ? { delivery: r.delivery.status, ...(r.delivery.shortfall ? { short_by: r.delivery.shortfall } : {}) } : {}),
         }
       : {}),
+    // The provider's own order ids, for provider support
+    ...(s.payment?.legs.some((l) => l.providerRef) ? { provider_refs: s.payment.legs.filter((l) => l.providerRef).map((l) => ({ provider: l.provider, ref: l.providerRef! })) } : {}),
     ...(s.destination?.type === 'fiat' ? { payout_currency: s.destination.currency } : {}),
     ...(s.amountBounds ? { bounds: boundsText(s.amountBounds) } : {}),
     ...(s.step.error ? { error: errorView(s.step.error) } : {}),
+    // A failed attempt: the person can try again with another method (or the same one).
+    ...(s.status === 'requires_payment_method' && s.lastError ? { attempt_failed: true, last_error: errorView(s.lastError) } : {}),
     expires_at: s.expiresAt,
   }
 }

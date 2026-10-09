@@ -51,7 +51,7 @@ const openramp = createOpenRamp({
 
 Open `{baseUrl}/admin` (for example `https://app.example.com/api/openramp/admin`) and enter the token.
 
-- Stat cards for the last 24 hours: sessions, completed, open, stuck, failed, dead letters, webhook failures, outbox queue, deposits and withdrawals. Completed volume per currency.
+- Stat cards for the last 24 hours: sessions, completed, open or processing, waiting for the user (`requires_action`), stuck, failed, dead letters, webhook failures, outbox queue, deposits and withdrawals. Completed volume per currency.
 - A table of recent deposits and withdrawals, newest first, with filters (direction, state, stuck only) and "Load more".
 - A search box: a session id, a transaction hash, or `provider:ref` (for example `xendit:inv_123`).
 - A detail drawer: the session data, the active payment and earlier attempts with their legs, the provider refs, the outbox and the timeline.
@@ -85,7 +85,7 @@ Recent sessions, newest first.
 | Option | Description |
 |---|---|
 | `direction` | `'deposit'` or `'withdraw'` |
-| `state` | A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`) or a step state (`PAYMENT`, `PROCESSING`, ...) |
+| `state` | A session status (`requires_payment_method`, `requires_action`, `processing`, `succeeded`, `failed`, `canceled`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, `PROCESSING`, ...) |
 | `olderThan` | Minutes. Only sessions created at least this long ago. |
 | `stuck` | Only sessions that are not final after `admin.stuckAfterMinutes` |
 | `limit` | 1 to 200, default 50 |
@@ -97,22 +97,22 @@ One call reads at most 1000 sessions. When it stops before the end, it returns `
 
 ### get
 
-The full operator view: the summary fields, plus the user data, the destination or source, the step, the active payment and earlier attempts (each leg with its adapter, ref, status, input, output, fees and transaction hash), the outbox (with dead letters), the provider refs, the transaction hashes, the timeline and the resolution.
+The full operator view: the summary fields, plus the user data, the destination or source, the step, the active payment and earlier attempts (each leg with its adapter, ref, `providerRef`, `providerStatus`, status, input, output, `delivery`, fees and `transactions`), the outbox (with dead letters), the provider refs, `transactions` (every transaction of every attempt, each with its `role`, `chain`, `legIndex` and `attempt`), the step (with `step.detail`), the timeline and the resolution.
 
-The timeline keeps the last 100 events of a session: webhook event types (`session.created`, `leg.succeeded`, ...), leg status changes (`leg.awaiting_user`, `leg.processing`, ...), `payment.started`, `payment.restarted`, `webhook.dead_letter`, `webhook.replayed` and `admin.resolved`.
+The timeline keeps the last 100 events of a session: webhook event types (`session.created`, `leg.succeeded`, ...), leg status changes (`leg.requires_action`, `leg.processing`, ...), `leg.transaction` (a new transaction of a leg, with its role and hash), `leg.provider_status` (a new provider status), `leg.delivery` (a delivery that is not `ok`), `payment.started`, `payment.restarted`, `webhook.dead_letter`, `webhook.replayed` and `admin.resolved`.
 
 ### findByRef and findByTx
 
 `findByRef(provider, ref)` uses the provider reference index. The server keeps it 30 days.
 
-`findByTx(chain, txHash)` has no index. It reads the time index (at most 1000 sessions in `admin.indexDays`) and compares the transaction hash of each leg, without case. When you give `chain`, the leg input or output must be on that chain.
+`findByTx(chain, txHash)` has no index. It reads the time index (at most 1000 sessions in `admin.indexDays`) and compares the hash of each transaction, without case. It finds a transaction of any role (approval, source, hop, destination, settlement, refund) in any payment attempt. When you give `chain`, the transaction must be on that chain.
 
 ### stats
 
 Counts for the sessions created since `since` (a time in ms, an ISO 8601 string or a `Date`; default: 24 hours ago):
 
 - `total`, `byStatus`, `byState`, and `byDirection` (total and statuses for deposits and withdrawals)
-- `completedVolume`: the sum that users paid in completed sessions, per direction and currency
+- `succeededVolume`: the sum that users paid in succeeded sessions, per direction and currency
 - `stuck`: the count, the threshold, and the oldest stuck session
 - `outbox`: `queued` (sessions on the outbox queue now), `pendingEvents`, `deadLetters`, `sessionsWithDeadLetters`
 - `webhookFailures`: events with at least one failed delivery
@@ -129,16 +129,17 @@ The server:
 
 1. Sets the step state and the session status.
 2. Stores `resolution: { state, note, at, previous }` in the record and adds `admin.resolved` to the timeline.
-3. Sends the matching webhook: `session.completed`, `session.failed`, `session.refunded` or `session.expired`, and for a withdrawal also `withdrawal.completed` or `withdrawal.failed`. The event data has `resolution: { by: 'admin', state, note, at }`.
+3. Sends the matching webhook: `session.succeeded`, `session.failed`, `session.refunded` or `session.expired`. The event data has `resolution: { by: 'admin', state, note, at }`.
 
 After a resolve:
 
-- A later provider event still updates the legs (you see it in the drawer), but it does not change the session state, start a next leg or send from the treasury.
+- A later provider event still updates the legs (you see it in the drawer), but it does not change the session state, start a next leg or send from the treasury. One exception: a refund or a chargeback after success makes the session `REVERSED` and sends `session.reversed`.
 - A payment on an earlier attempt that succeeds sends `session.late_payment`.
+- The sweep does not poll the session for a late payment.
 - Browser requests that change the session answer `409`.
 - A resolve to the state that the session already has answers `409`.
 
-Your backend must handle a `session.completed` from a resolve like any other: credit once per session id.
+Your backend must handle a `session.succeeded` from a resolve like any other: credit once per session id.
 
 ### replayWebhooks
 
@@ -167,6 +168,10 @@ All need `Authorization: Bearer {admin.token}`, except the page. See [HTTP route
 | `quote.latency_ms` | ms | `adapter`, `ok` | Each adapter quote |
 | `start.error` | 1 | `adapter`, `code` | The first leg of a payment did not start |
 | `webhook.verify_failed` | 1 | `adapter` | A provider webhook failed verification |
+| `event.out_of_order` | 1 | `adapter` | A provider event would move a leg back; the server ignored it |
+| `leg.delivery_mismatch` | 1 | `adapter`, `status` | A leg's delivery is not `ok`: `short` (less than `minOutput`, or beyond `policy.outputToleranceBps`), `asset_mismatch` or `invalid` |
+| `payment.reversed` | 1 | `adapter`, `status` | A provider refunded or charged back a leg after it succeeded |
+| `webhook.replayed` | 1 | `adapter` | A provider webhook with a replay key that the server saw in the last 7 days; ignored |
 | `webhook.delivery_failed` | 1 | `status` | A webhook to your backend failed (HTTP status, or `error`) |
 | `webhook.dead_letter` | 1 | `type` | An event stopped its retries |
 | `outbox.depth` | count | none | Each sweep: sessions on the outbox queue |

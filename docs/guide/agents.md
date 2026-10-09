@@ -96,7 +96,7 @@ Put the guardrails in a JSON file. Keep secrets (the URL and the app key) in env
 | `deposit.destinations` | none | The only wallets that the agent can fund. The agent picks one by `name`. Without `deposit`, the deposit tool is off. |
 | `deposit.allowCustomAddress` | off | `{ chains, tokens? }`: let the agent give its own address, on these chains and tokens only. |
 | `withdraw.source` | none | The asset that leaves and who holds it. For agent payouts, use `custody: 'app'` and a server [`treasury`](./withdraw.md#custody-app). Without `withdraw`, the payout tool is off. |
-| `withdraw.allowedTargets` | cash only | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
+| `withdraw.allowedDestinations` | cash only | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
 | `withdraw.targets` | none | Bound payout wallets, in the same form as `deposit.destinations`. The agent picks one by `name`. The MCP server sets the target and starts the payout. No pay link is made. Needs `custody: 'app'`. |
 | `withdraw.requireBoundTarget` | `false` in the library, `true` in the CLI | Refuse payouts without a bound target. Then the agent cannot make a payout pay link. |
 | `limits.maxTotalPerDay` | none | The largest total per UTC day, by currency. When set, it must list each currency of `maxAmounts`. Each session counts its largest amount. Payouts and deposits have separate totals. |
@@ -211,15 +211,15 @@ All results are compact JSON. An error result has `isError: true` and `{ "error"
 | Tool | Input | Result |
 |---|---|---|
 | `list_payment_methods` | `country`, `direction?` (`deposit` or `withdraw`, default `deposit`), `destination?` (only with more than one destination) | The methods in that country: `method`, `name`, `kind`, `available`, `reason` (when not available), `eta`, `limits`, `providers` |
-| `get_quotes` | `country`, `amount`, `method?`, `direction?`, `destination?` (only with more than one destination) | Quotes: `pay`, `receive`, `fees`, `eta`. Without `method`, it quotes up to 3 cash methods. |
+| `get_quotes` | `country`, `amount`, `method?`, `direction?`, `destination?` (only with more than one destination) | Quotes: `pay`, `receive`, `guarantee` (`firm`, `min_output` or `estimate`), `min_receive` (when the provider guarantees a minimum), `slippage_bps` (when set), `fees`, `eta`, `expires_at`. Each fee line gives the amount, or "amount not given", and "included in rate" or "charged on top". Without `method`, it quotes up to 3 cash methods. |
 | `create_deposit_session` | `country`, `destination?`, `custom_destination?` (only with `allowCustomAddress`), `currency?`, `max_amount?`, `min_amount?`, `method?`, `amount?`, `reference?`, `ttl_minutes?` | `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next`. With `method` and `amount`: also `payment` (for example a VietQR `qr_payload`). |
 | `create_withdraw_session` | `country`, `target?` (only with `withdraw.targets`; required with `requireBoundTarget`), `amount?` (required with `target`), `max_amount?` (not with `requireBoundTarget`), `reference?`, `ttl_minutes?` | Without `target`: `session_id`, `pay_url`, `pay_url_expires_at`, `expires_at`, `bounds`, `next`. With `target`: `session_id`, `status`, `target`, `quote`, `expires_at`, `bounds`, `next` (no `pay_url`). |
-| `get_session_status` | `session_id` | `status`, `state`, `done`, `expires_at`. When there is a result: `method`, `provider`, `paid`, `received`, `received_confirmed`, `tx_hashes`. Also `bounds` and `error` when set. |
+| `get_session_status` | `session_id` | `status`, `state`, `done`, `expires_at`. When there is a result: `method`, `provider`, `paid`, `received`, `received_confirmed`, `transactions` (each with `role`, `chain`, `hash` and `leg`), and `delivery` with `short_by` when the received amount is not the quote. `provider_refs` lists the provider order ids (`provider`, `ref`) for provider support. Also `bounds` and `error` when set. |
 | `wait_for_completion` | `session_id`, `timeout_seconds` (default 60, capped by `maxWaitSeconds`) | Like `get_session_status`, plus `waited_seconds`. `timed_out: true` when the payment did not finish in time. |
 
 `list_payment_methods` and `get_quotes` use a short preview session (10 minutes) on your server. They do not move money.
 
-`wait_for_completion` polls the server. It stops when the session is `completed`, `failed`, `expired` or `refunded`, or when the time ends. When the client sends a progress token, the tool sends progress notifications.
+`wait_for_completion` polls the server. It stops when the session is `succeeded`, `failed`, `canceled`, `expired`, `refunded` or `reversed`, when an attempt failed (`attempt_failed: true`, the person must choose again), or when the time ends. When the client sends a progress token, the tool sends progress notifications.
 
 ### A deposit, step by step
 
@@ -240,13 +240,13 @@ To skip the method screen, give `method` and `amount`. The tool then starts the 
 With a bound target:
 
 1. The agent calls `create_withdraw_session` with `target: "ops"` and `amount: "20"`.
-2. The MCP server checks the limits and calls `approve`. Then it creates the session with the target set and locked (`target` and `lockTarget: true`, see [Locked targets](./withdraw.md#locked-targets)). It plans, quotes and starts the payout with the client secret. The agent never sees the client secret.
+2. The MCP server checks the limits and calls `approve`. Then it creates the session with the destination set and locked (`destination` and `lockDestination: true`, see [Locked targets](./withdraw.md#locked-targets)). It plans, quotes and starts the payout with the client secret. The agent never sees the client secret.
 3. The server sends the USDC from your treasury to the target wallet. The agent calls `wait_for_completion`.
 
 ## Guardrails
 
 - **Destinations.** The agent can fund only a named destination from the config. The `destination` input is an enum of these names. The `custom_destination` input exists only when `allowCustomAddress` is set, and then only for the chains and tokens that you list.
-- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the server locks the target when it creates the session (`targetLocked: true`), and the MCP server makes no pay link. Nobody can change the target: `POST /sessions/:id/target` answers `409 TARGET_LOCKED`, also for a pay link. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedTargets`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
+- **Payout targets.** The agent cannot give an address for a payout. It can pick only a name from `withdraw.targets`. For a bound target, the server locks the target when it creates the session (`destinationLocked: true`), and the MCP server makes no pay link. Nobody can change the target: `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED`, also for a pay link. Without a bound target, the person who opens the pay link picks the target, inside `withdraw.allowedDestinations`. The server also runs [`screenAddress`](./withdraw.md#screen-addresses) on wallet targets.
 - **Amounts.** Each session gets `amountBounds`, at most the cap in `maxAmounts`. The server enforces the bounds on each quote and each payment.
 - **Limits.** `limits.maxTotalPerDay` and `limits.maxSessionsPerHour` stop a looping agent. A session that passes a limit is refused with `LIMIT_REACHED`, and nothing is counted for it. A session that the server refuses is not counted.
 - **Approval.** `approve` runs before each payout. It fails closed (`NOT_APPROVED`).
@@ -273,7 +273,7 @@ Error codes from the guardrails:
 | `LIMIT_REACHED` | A limit in `limits` is reached. The message says when the window ends. |
 | `NOT_APPROVED` | `approve` did not return `true` |
 | `TARGET_REQUIRED` | `requireBoundTarget` is on and the agent gave no `target` |
-| `TARGET_NOT_ALLOWED` | The `target` is not in `withdraw.targets` |
+| `DESTINATION_NOT_ALLOWED` | The `target` is not in `withdraw.targets` |
 
 ## The pay link
 

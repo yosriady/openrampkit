@@ -1,6 +1,6 @@
 import { createElement, Fragment, useCallback, useRef } from 'react'
 import type { ReactNode } from 'react'
-import type { OrkError, OrkEvent, PublicSession } from '@openrampkit/core'
+import type { OpenRampError, ClientEvent, PublicSession } from '@openrampkit/core'
 import { useOpenRamp } from './provider.js'
 
 export type DepositButtonRenderProps = {
@@ -14,8 +14,8 @@ export type DepositButtonCustomProps = {
   getClientSecret: string | (() => Promise<string>)
   onComplete?: (session: PublicSession) => void
   /** Called when the modal closes before the session completes */
-  onError?: (error: OrkError) => void
-  onEvent?: (e: OrkEvent) => void
+  onError?: (error: OpenRampError) => void
+  onEvent?: (e: ClientEvent) => void
   children: (props: DepositButtonRenderProps) => ReactNode
 }
 
@@ -40,7 +40,7 @@ function useOpen(kind: Kind, p: Omit<DepositButtonCustomProps, 'children'>): Dep
     const begin = kind === 'withdraw' ? beginWithdraw : beginDeposit
     begin({ clientSecret: c.getClientSecret, ...(c.onEvent ? { onEvent: c.onEvent } : {}) }).then(
       (s) => props.current.onComplete?.(s),
-      (e: OrkError) => props.current.onError?.(e),
+      (e: OpenRampError) => props.current.onError?.(e),
     )
   }, [kind, beginDeposit, beginWithdraw])
   return { open, isOpen }

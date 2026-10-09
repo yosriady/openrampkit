@@ -2,33 +2,48 @@
 // Node 20+, Bun and Deno. It holds provider secrets, fixes the destination per session,
 // plans pathways, runs legs, takes provider webhooks and sends signed webhooks to the app.
 
-import { OrkException, orkError } from '@openrampkit/core'
+import { API_VERSION, OpenRampException, openRampError } from '@openrampkit/core'
+import type { CancelReason, Session } from '@openrampkit/core'
 import type { OpenRampConfig } from './config.js'
 import { verifyWebhook } from './crypto.js'
 import { corsHeaders, errorResponse, withCors } from './http.js'
 import { refreshActive } from './legs.js'
 import { route } from './routes.js'
 import { replayDeadLetters, saveSession } from './outbox.js'
-import { createRuntime, publicSession } from './runtime.js'
-import { createSession } from './sessions.js'
+import { backendSession, createRuntime } from './runtime.js'
+import { cancelSession, createSession } from './sessions.js'
 import { createPayLink, revokePayLink } from './pay.js'
 import { sweep } from './tasks.js'
 import type { CreateSessionInput } from './config.js'
+import type { CreatedSession, ExistingSession } from './sessions.js'
 import { adminFindByRef, adminFindByTx, adminGet, adminList, adminReplay, adminResolve, adminStats } from './admin.js'
 import type { AdminListOptions } from './admin.js'
 
 export * from './store.js'
 export * from './durable-object-store.js'
-export { verifyWebhook } from './crypto.js'
+export { generateWebhookSecret, signWebhook, verifyWebhook } from './crypto.js'
+export type { ClientEvent, Session, WebhookEvent, WebhookEventOf, WebhookEventType } from '@openrampkit/core'
 export type { AdminConfig, CreateSessionInput, OpenRampConfig, Telemetry, TreasuryHook, TreasurySendInput } from './config.js'
+export { TreasuryRefusedError, isTreasuryRefused } from './config.js'
 export type { AdminLeg, AdminListOptions, AdminListResult, AdminOutboxEvent, AdminPayment, AdminSession, AdminSessionSummary, AdminStats } from './admin.js'
 export { isValidAddress } from './withdraw.js'
-export type { CreatedSession } from './sessions.js'
+export type { CreatedSession, ExistingSession } from './sessions.js'
 export type { PayLink } from './pay.js'
 export type { SweepResult } from './tasks.js'
 
 export function createOpenRamp(config: OpenRampConfig) {
   const rt = createRuntime(config)
+
+  /**
+   * Create a session from your backend. Give `clientSecret` to the browser. With `externalId`, a repeat
+   * for a session that is not final, by the same user with the same input, returns
+   * `{ id, expiresAt, existing: true }` with no client secret. Other repeats throw `409 EXTERNAL_ID_CONFLICT`.
+   */
+  function create(input: CreateSessionInput & { externalId: string }): Promise<CreatedSession | ExistingSession>
+  function create(input: CreateSessionInput): Promise<CreatedSession>
+  function create(input: CreateSessionInput): Promise<CreatedSession | ExistingSession> {
+    return createSession(rt, input)
+  }
 
   const adminPath = `${rt.basePath}/admin`
 
@@ -41,15 +56,18 @@ export function createOpenRamp(config: OpenRampConfig) {
     try {
       res = await route(rt, req)
     } catch (e) {
-      if (e instanceof OrkException) res = errorResponse(e.error, e.status)
+      if (e instanceof OpenRampException) res = errorResponse(e.error, e.status)
       // No message from the error: a parse error can quote a provider response.
-      else if (e instanceof SyntaxError) res = errorResponse(orkError('BAD_REQUEST'), 400)
+      else if (e instanceof SyntaxError) res = errorResponse(openRampError('BAD_REQUEST'), 400)
       else {
         rt.log.error('unhandled error', { error: e instanceof Error ? (e.stack ?? e.message) : String(e) })
-        res = errorResponse(orkError('INTERNAL'), 500)
+        res = errorResponse(openRampError('INTERNAL'), 500)
       }
     }
-    return withCors(res, cors)
+    // The wire format version (the same as `apiVersion` in webhook events)
+    const h = new Headers(res.headers)
+    h.set('openramp-version', String(API_VERSION))
+    return withCors(new Response(res.body, { status: res.status, statusText: res.statusText, headers: h }), cors)
   }
 
   return {
@@ -60,18 +78,38 @@ export function createOpenRamp(config: OpenRampConfig) {
     /** Next.js App Router: `export const { GET, POST, OPTIONS } = openramp.nextHandlers()` */
     nextHandlers: () => ({ GET: handle, POST: handle, OPTIONS: handle }),
     sessions: {
-      /** Create a session from your backend. Give `clientSecret` to the browser. */
-      create: (input: CreateSessionInput) => createSession(rt, input),
-      async retrieve(id: string) {
+      create,
+      /** The backend view of a session (`Session`: the browser view plus `userId` and `metadata`), or null */
+      async retrieve(id: string): Promise<Session | null> {
         const rec = await rt.store.get(id)
-        return rec ? publicSession(rec) : null
+        return rec ? backendSession(rec) : null
       },
-      /** Server-side status refresh, e.g. from a cron job */
-      async refresh(id: string) {
+      /** Server-side status refresh, e.g. from a cron job. Returns the backend view. */
+      async refresh(id: string): Promise<Session | null> {
         const rec = await rt.store.get(id)
         if (!rec) return null
         if (await refreshActive(rt, rec, true)) await saveSession(rt, rec)
-        return publicSession(rec)
+        return backendSession(rec)
+      },
+      /**
+       * Cancel a session that has no payment under way (status `requires_payment_method` or
+       * `requires_action`): the step becomes CANCELED, the status `canceled`, and the server sends
+       * `session.canceled`. Returns the backend view, or null when the session does not exist. Throws a
+       * `409` while a payment is processing or after another final status.
+       */
+      async cancel(id: string, opts: { reason?: CancelReason } = {}): Promise<Session | null> {
+        for (let attempt = 0; attempt < 3; attempt++) {
+          const rec = await rt.store.get(id)
+          if (!rec) return null
+          await cancelSession(rt, rec, opts.reason ?? 'requested_by_app')
+          try {
+            await saveSession(rt, rec)
+            return backendSession(rec)
+          } catch (e) {
+            if (!(e instanceof OpenRampException && e.status === 409)) throw e
+          }
+        }
+        throw new OpenRampException(openRampError('CONFLICT'), 409)
       },
       /**
        * A signed, expiring link to a hosted page where a person completes this session
@@ -93,7 +131,7 @@ export function createOpenRamp(config: OpenRampConfig) {
      */
     sweep: (opts?: { limit?: number }) => sweep(rt, opts),
     webhooks: {
-      /** Verify an OpenRampKit webhook your backend received */
+      /** Verify a webhook your backend received (Standard Webhooks headers; use the raw body text) */
       verify: (req: Request, body: string) => (config.webhooks ? verifyWebhook(config.webhooks.secret, req.headers, body) : Promise.resolve(false)),
       /**
        * Send the dead letters of one session again (events whose retries stopped). They keep their

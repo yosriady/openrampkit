@@ -3,7 +3,7 @@
 A framework-free client for the OpenRampKit server, and `RampController`, the state machine behind the modal. Use it to build a custom UI, to test flows, or in React Native.
 
 ```ts
-import { createOpenRampClient, DepositController, WithdrawController, createMockWallet, toOrkError, OrkClientError } from '@openrampkit/client'
+import { createOpenRampClient, DepositController, WithdrawController, createMockWallet, toOpenRampError, OpenRampClientError } from '@openrampkit/client'
 ```
 
 `RampController`, `DepositController` and `WithdrawController` are the same class. The session's `direction` picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
@@ -24,19 +24,20 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `getSession(secret)` | `GET /sessions/:id` | `PublicSession` |
 | `plan(secret, { walletConnected, walletAddress?, surfaces? })` | `POST /sessions/:id/plan` | `PlanResult` |
 | `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. |
-| `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: Quote[]; errors: OrkError[] }` |
+| `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: PublicQuote[]; errors: OpenRampError[] }` |
 | `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
+| `cancel(secret)` | `POST /sessions/:id/cancel` (with a random `idempotency-key`) | `PublicSession`. Cancels the session while no payment is under way. |
 | `baseUrl` | | The base URL without a trailing slash |
 
 The type is `OpenRampClient`.
 
 ### Errors
 
-A non-OK response throws `OrkClientError`, which has `error` (an `OrkError`) and `status` (the HTTP status). When the body has no `OrkError` (for example an HTML 502 from a proxy), the error is built from the status: 401 and 403 give `UNAUTHORIZED`, 404 `NOT_FOUND`, 429 `RATE_LIMITED`, 5xx `PROVIDER_UNAVAILABLE`, others `INTERNAL`. A 2xx body that is not JSON throws `INTERNAL`.
+A non-OK response throws `OpenRampClientError`, which has `error` (an `OpenRampError`) and `status` (the HTTP status). When the body has no `OpenRampError` (for example an HTML 502 from a proxy), the error is built from the status: 401 and 403 give `UNAUTHORIZED`, 404 `NOT_FOUND`, 429 `RATE_LIMITED`, 5xx `PROVIDER_UNAVAILABLE`, others `INTERNAL`. A 2xx body that is not JSON throws `INTERNAL`.
 
-`toOrkError(e)` turns anything thrown by the client, the controller or a wallet into an `OrkError`.
+`toOpenRampError(e)` turns anything thrown by the client, the controller or a wallet into an `OpenRampError`.
 
 ## DepositController
 
@@ -91,9 +92,9 @@ These methods serve withdraw sessions:
 
 | Method | Description |
 |---|---|
-| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedTargets.crypto` is set, `'cash'` ("To cash") when `allowedTargets.fiat` is set, both without `allowedTargets`. With no tab, `start()` shows `TARGET_NOT_ALLOWED`. A locked target gives one tab. |
-| `lockedTarget()` | The target that the app set and locked (`session.targetLocked`), else `undefined`. With a locked target, `start()` does not show the target screen and never calls `/target`. It gets the plan with `/plan` and shows the methods (or the amount screen when one wallet method is available). `setTab()` keeps the tab of the locked target, and `back()` from the amount screen goes to the methods. See [Locked targets](../guide/withdraw.md#locked-targets). |
-| `withdrawChains()` | The networks for "To wallet": `allowedTargets.crypto.chains`, else every chain with a known USDC address plus the source chain |
+| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedDestinations.crypto` is set, `'cash'` ("To cash") when `allowedDestinations.fiat` is set, both without `allowedDestinations`. With no tab, `start()` shows `DESTINATION_NOT_ALLOWED`. A locked target gives one tab. |
+| `lockedTarget()` | The target that the app set and locked (`session.destinationLocked`), else `undefined`. With a locked target, `start()` does not show the target screen and never calls `/target`. It gets the plan with `/plan` and shows the methods (or the amount screen when one wallet method is available). `setTab()` keeps the tab of the locked target, and `back()` from the amount screen goes to the methods. See [Locked targets](../guide/withdraw.md#locked-targets). |
+| `withdrawChains()` | The networks for "To wallet": `allowedDestinations.crypto.chains`, else every chain with a known USDC address plus the source chain |
 | `targetTokens(chain?)` | Token choices for a chain: USDC when known, the native token, and the source token on the source chain |
 | `setTargetChain(chain)` | Picks a network. The token becomes the source token on the source chain, else USDC, else native. The native token stays native. |
 | `setTargetToken(token)` | Picks a token from `targetTokens()` |
@@ -123,12 +124,12 @@ type Snapshot = {
   method?: MethodOption
   amount: string
   amountSide: 'source' | 'destination'
-  quotes: Quote[]
-  quoteErrors: OrkError[]
+  quotes: PublicQuote[]
+  quoteErrors: OpenRampError[]
   quotesLoading: boolean
   selectedQuoteId?: string
   busy: boolean              // an action is in flight
-  error?: OrkError           // the last error, or the step's error
+  error?: OpenRampError           // the last error, or the step's error
   walletConnected: boolean
   walletAddress?: string
   balances: WalletBalance[]  // balances above zero
@@ -169,4 +170,4 @@ The returned object also has `sent: Array<{ chain, txs, hash }>`.
 
 ## Re-exported types
 
-`MethodOption`, `PlanResult`, `PublicSession`, `Quote`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.
+`MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.

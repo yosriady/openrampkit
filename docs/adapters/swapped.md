@@ -12,17 +12,19 @@ swapped({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#swapped).
+
 ## Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `publicKey` | `string` | required | Public key (`pk_...`). Used as `apiKey` in the widget URL and the merchant APIs. |
 | `secretKey` | `string` | required | Secret key (`sk_...`). Signs widget URLs and verifies order notifications. |
-| `env` | `'sandbox' \| 'production'` | `'production'` | Sandbox uses `https://sandbox.swapped.com` (BTC and ETH testnets and test cards only) |
+| `env` | `'sandbox' \| 'production'` | `'production'` | Sandbox uses `https://sandbox.swapped.com` (BTC and ETH testnets and test cards only). The server checks `env` against `livemode`. |
 | `widgetUrl` | `string` | `https://widget.swapped.com` or the sandbox URL | Widget base URL |
 | `apiUrl` | `string` | same as `widgetUrl` | Merchant API base URL |
 | `markup` | `number` | none | Your markup in percent, 0 to 5 (0.5 means 0.5%) |
-| `deliverAssets` | `SwappedDeliverAsset[]` | USDC on Base, Arbitrum, Polygon, Ethereum | Assets Swapped may deliver, most preferred first |
+| `deliverAssets` | `SwappedDeliverAsset[]` | USDC on Base, Arbitrum, Polygon, Ethereum | Assets Swapped may deliver, most preferred first. A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `defaultCountry` | `string` | `'US'` | Country for pricing when the session has none |
 | `statusPolling` | `boolean` | `false` | Also poll `get_transactions` for order status. **TO VERIFY** (see below). |
 
@@ -77,36 +79,41 @@ Swapped prices a sell by the fiat amount only. The user enters a crypto amount, 
 1. It prices 100 units of the payout currency, to get the fiat value of one crypto unit.
 2. It prices the fiat amount that the crypto amount buys (rounded down to cents).
 
-The quote output is the fiat amount after fees. The fees are the Swapped fee and your markup (as an app fee), in the payout currency. The quote expires after 10 minutes. The widget sets the final amount, so the quote is an estimate (`data.estimate: true`). Swapped does not report the payout amount, so `result.outputConfirmed` stays `false`.
+The quote output is the fiat amount after fees. The fees are the Swapped fee (`provider`) and your markup (`app`), in the payout currency, with `included: true`. The quote expires after 10 minutes (`quoteExpiresAt(10)`). The widget sets the final amount, so the guarantee is `estimate`. Swapped does not report the payout amount, so `result.outputConfirmed` stays `false`.
 
 ### Sell flow
 
 1. **Start**: a signed widget URL on `/sell`, with `userSendsFunds=false`, the payout method, the crypto code and amount, the payout currency, `externalCustomerId`, the email and country when known, and `responseUrl` (the webhook URL). The user enters the payout details, and passes any checks that Swapped needs, in the widget.
 2. **`payment_pending` webhook**: Swapped is ready for the crypto. The notification has the deposit address (`order_crypto_address`) and the amount. The adapter turns it into a `WALLET_TX` step: an ERC-20 `transfer` of that amount to that address. The user's wallet signs it, or the server's [treasury hook](../guide/withdraw.md#custody-app) sends it (`custody: 'app'`).
-3. **`submit_tx`**: the client (or the server, for the treasury) reports the hash. The leg is `PROCESSING` (sub-state `CONFIRMING`).
-4. **Payout**: `payout_pending` keeps it `processing`. `order_completed` is `succeeded`. `order_cancelled` fails the leg with `PAYMENT_FAILED` ("The payout was cancelled.", `recovery: 'contact_support'`).
+3. **`submit_tx`**: the client (or the server, for the treasury) reports the hash. The leg is `processing` (detail code `confirming`). The hash is the `source` transaction of the leg.
+4. **Payout**: `payout_pending` keeps it `processing` (detail code `settling`). `order_completed` is `succeeded`. `order_cancelled` fails the leg with `PAYMENT_FAILED` ("The payout was cancelled.", `recovery: 'contact_support'`).
 
 The deposit address and the amount of the `WALLET_TX` come from the verified Swapped webhook, not from the quote. With `custody: 'app'`, check them in your treasury hook.
 
 ## Quotes and start
 
-- Quote: `POST /api/v1/merchant/pricing` with the public key, the payment group, the fiat amount (or crypto amount), the target currency code and the region. Fees: Swapped fee, network fee, and your markup as an app fee. Quotes expire after 10 minutes; the widget shows the final price.
+- Quote: `POST /api/v1/merchant/pricing` with the public key, the payment group, the fiat amount (or crypto amount), the target currency code and the region. Fees, in the fiat currency, with `included: true`: the Swapped fee (`provider`), the network fee (`network`) and your markup (`app`). The guarantee is `estimate`: the widget shows the final price. Quotes expire after 10 minutes (`quoteExpiresAt(10)`).
 - Start: a signed widget URL. The signature is the base64 HMAC-SHA256 of the query string (with the leading `?`) using the secret key, appended last as `&signature=`. The URL locks the amount (`lockBaseCurrency=true`), sets the wallet address, the method, the email and country when known, `redirectUrl` (the return page) and `responseUrl` (the webhook URL).
 - Reference: `externalCustomerId` is set to `{userId}.{random}`. Swapped echoes only this field in callbacks, so it routes the webhook to the leg. The user id stays visible as the prefix in the Swapped dashboard.
+- `providerRef`: the Swapped `order_id`, from the first order notification.
 
 ## Webhooks
 
 Swapped sends order notifications (buy and sell) to the `responseUrl` that the adapter puts in the widget URL: `{baseUrl}/webhooks/swapped`. You do not need to configure it in a dashboard.
 
-- Verification: the `signature` header must equal the base64 HMAC-SHA256 of the raw body with the secret key. An empty `secretKey` refuses every notification. The signature has no timestamp, so the adapter cannot refuse a replay. A replay cannot change a leg that is already final.
+- Verification: the `signature` header must equal the base64 HMAC-SHA256 of the raw body with the secret key. An empty `secretKey` refuses every notification. The signature has no timestamp.
+- Replay protection: the adapter gives the SHA-256 of the raw body as the replay key (`webhook.replayKey`). The server keeps each key for 7 days in the adapter's shared store (`claimWebhook`, built on `claimOnce`). A repeat of the same body in that time gets `200` with `{ "received": true, "duplicate": true }` and changes nothing. When the server cannot apply the event yet (it answers `503`), it gives the key back, so the provider's retry still applies. The key is also the event id (`eventId`), so a session drops the same event twice.
 - Status mapping for buy orders (sell orders: see [Sell flow](#sell-flow)):
 
 | `order_status` | Leg |
 |---|---|
-| `order_broadcasted` | `succeeded`, with the transaction id as `txHash` |
-| `order_completed` | `processing` (paid and bought, not yet sent on chain) |
+| `order_broadcasted` | `succeeded`, with the transaction id as the `destination` transaction |
+| `order_completed` | `processing`, detail code `settling` (paid and bought, not yet sent on chain) |
 | `order_cancelled` | `failed` with `PAYMENT_FAILED` |
 | `payment_pending` | no change |
+| other | no change: the adapter logs the unknown status once (`statusMap`), and the leg keeps its step |
+
+For a sell order, the `transaction_id` is the user's crypto transfer to Swapped: the `source` transaction.
 
 ## Verified vs TO VERIFY
 

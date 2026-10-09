@@ -32,7 +32,7 @@ Holds the shared config and opens the modal.
 | `locale` | `string` | BCP 47. Pushed live to an open modal. |
 | `messages` | `Partial<Messages>` | Applied when the modal opens |
 | `providerRenderers` | `Record<string, ProviderRenderer>` | Renderers for `PROVIDER_SDK` surfaces |
-| `onEvent` | `(e: OrkEvent) => void` | Every browser event |
+| `onEvent` | `(e: ClientEvent) => void` | Every browser event |
 | `children` | `JSX.Element` | |
 
 Only one modal is open at a time. When you open a new modal, the previous modal closes. When the provider unmounts, the modal closes.
@@ -47,7 +47,7 @@ const session = await beginDeposit({ clientSecret: getClientSecret, onEvent: (e)
 
 | Member | Type | Description |
 |---|---|---|
-| `beginDeposit({ clientSecret, onEvent? })` | `Promise<PublicSession>` | Opens the modal. Resolves when the deposit completes. Rejects (with an `OrkError`) when the modal closes first. Rejects on the server. |
+| `beginDeposit({ clientSecret, onEvent? })` | `Promise<PublicSession>` | Opens the modal. Resolves when the deposit completes. Rejects (with an `OpenRampError`) when the modal closes first. Rejects on the server. |
 | `beginWithdraw({ clientSecret, onEvent? })` | `Promise<PublicSession>` | The same for a withdraw session (created with `direction: 'withdraw'`). |
 | `close()` | `() => void` | Closes the modal |
 | `isOpen` | `Accessor<boolean>` | Whether the modal is open |
@@ -69,8 +69,8 @@ A ready-made button that calls `beginDeposit`. It is disabled while the modal is
 | `class` | `string` | |
 | `disabled` | `boolean` | |
 | `onComplete` | `(session: PublicSession) => void` | The deposit completed |
-| `onError` | `(error: OrkError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
-| `onEvent` | `(e: OrkEvent) => void` | Browser events for this deposit (in addition to the provider's) |
+| `onError` | `(error: OpenRampError) => void` | The modal closed before completion (code `CLOSED`, or the step's error) |
+| `onEvent` | `(e: ClientEvent) => void` | Browser events for this deposit (in addition to the provider's) |
 
 ### DepositButton.Custom
 
@@ -132,4 +132,4 @@ The value is `undefined` when `controller` is `undefined` or `null`. It does not
 
 ## Re-exports
 
-Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OrkError`, `OrkEvent`, `WalletAdapter`, `OpenRampConfig`, `OpenRampApi`, `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonRenderProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonRenderProps`, `OpenRampEmbeddedProps`.
+Themes: `lightTheme`, `darkTheme`, `autoTheme` (from `@openrampkit/web/theme`, no Lit). Types: `Theme`, `ThemeOptions`, `ThemeColors`, `Appearance`, `RadiusScale`, `DepositController`, `WithdrawController`, `RampController`, `Snapshot`, `PublicSession`, `OpenRampError`, `ClientEvent`, `WalletAdapter`, `OpenRampConfig`, `OpenRampApi`, `OpenRampProviderProps`, `BeginDepositOptions`, `BeginWithdrawOptions`, `DepositButtonProps`, `DepositButtonCustomProps`, `DepositButtonRenderProps`, `WithdrawButtonProps`, `WithdrawButtonCustomProps`, `WithdrawButtonRenderProps`, `OpenRampEmbeddedProps`.

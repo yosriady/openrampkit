@@ -16,16 +16,31 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, decimalFrom, fetchJson, httpErrorToOrk, randomHex, timingSafeEqual } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, ScopedKV } from '@openrampkit/adapter'
-import { OrkException, USDC, orkError } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import {
+  POLL as POLLS,
+  awaitPoll,
+  cachedJson,
+  createAdapter,
+  decimalFrom,
+  deliverableToAsset,
+  fetchJson,
+  httpErrorToOpenRamp,
+  quoteExpiresAt,
+  randomHex,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
+  timingSafeEqual,
+} from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
+import { OpenRampException, USDC, openRampError } from '@openrampkit/core'
+import type { Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode } from '@openrampkit/core'
 
 export type TransakOptions = {
   apiKey: string
   apiSecret: string
-  /** Default 'production' */
-  env?: 'staging' | 'production'
+  /** Default 'production'. 'sandbox' uses the Transak staging hosts. 'staging' is a deprecated alias of 'sandbox'. */
+  env?: AdapterEnv | 'staging'
   /** Your web domain (or mobile package name), registered with Transak. Required by the widget session API. */
   referrerDomain: string
   /** Default 'IFRAME' */
@@ -137,6 +152,24 @@ type WebhookOrder = {
 
 const dec = decimalFrom
 
+/**
+ * Transak order statuses (https://docs.transak.com/docs/tracking-user-kyc-and-order-status).
+ * `null`: a known status that changes nothing (the user is still in the widget). An unknown status is
+ * no event either, and it is logged: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode } | null>('Transak', {
+  AWAITING_PAYMENT_FROM_USER: null,
+  PAYMENT_DONE_MARKED_BY_USER: { status: 'processing', detail: 'processing' },
+  PROCESSING: { status: 'processing', detail: 'processing' },
+  PENDING_DELIVERY_FROM_TRANSAK: { status: 'processing', detail: 'settling' },
+  ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK: { status: 'processing', detail: 'delayed' },
+  COMPLETED: { status: 'succeeded' },
+  FAILED: { status: 'failed' },
+  CANCELLED: { status: 'failed' },
+  EXPIRED: { status: 'expired' },
+  REFUNDED: { status: 'refunded' },
+})
+
 function b64urlToBytes(s: string): Uint8Array<ArrayBuffer> {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4)
   const bin = atob(b64)
@@ -185,7 +218,8 @@ function decodeClaims(token: string): Record<string, unknown> | undefined {
 type TokenRecord = { token: string; expiresAt: number }
 
 export function transak(opts: TransakOptions) {
-  const urls = URLS[opts.env ?? 'production']
+  const env = resolveEnv('transak', opts.env === 'staging' ? undefined : opts.env, { value: opts.env === 'staging' ? 'sandbox' : undefined, option: "env: 'staging'" }, 'production')
+  const urls = URLS[env === 'sandbox' ? 'staging' : 'production']
   const surfaceKind = opts.surface ?? 'IFRAME'
   /** In-memory copy for webhook verification (webhook handlers get no KV today) */
   let memToken: TokenRecord | undefined
@@ -208,7 +242,7 @@ export function transak(opts: TransakOptions) {
         body: JSON.stringify({ apiKey: opts.apiKey }),
       })
       const token = res.data?.accessToken
-      if (!token) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return an access token.' }), 502)
+      if (!token) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return an access token.' }), 502)
       const rec = { token, expiresAt: res.data?.expiresAt ?? Math.floor(Date.now() / 1000) + 6 * 24 * 3600 }
       await ctx.shared.put('accessToken', rec, Math.max(60, Math.floor(rec.expiresAt - Date.now() / 1000)))
       memToken = rec
@@ -231,7 +265,6 @@ export function transak(opts: TransakOptions) {
     eta: { min: 120, max: 1800 },
     surfaces: [surfaceKind],
     requires: ['provider_account', 'provider_kyc'],
-    capabilities: ['webhooks'],
     ...extra,
   })
 
@@ -252,52 +285,53 @@ export function transak(opts: TransakOptions) {
     return LEG_PAYMENT_METHOD[legId] ?? legId
   }
 
-  function target(asset: CryptoAsset | undefined): { network: string; asset: CryptoAsset } {
-    const chain = asset && asset.chain !== '*' && TRANSAK_NETWORKS[asset.chain] ? asset.chain : 'eip155:8453'
-    return { network: TRANSAK_NETWORKS[chain]!, asset: { kind: 'crypto', chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 } }
+  /** The tokens Transak delivers here: USDC on each supported network */
+  const deliverable = Object.keys(TRANSAK_NETWORKS).map((chain) => ({ chain, token: USDC_TOKENS[chain]!, symbol: 'USDC', decimals: 6 }))
+
+  /** What Transak delivers for `asset`: USDC on a supported chain. NO_QUOTES for another token or chain (never USDC on Base instead). */
+  function target(asset: Asset | undefined): { network: string; asset: CryptoAsset } {
+    const d = requireDeliverAsset(deliverable, asset, 'Transak')
+    return { network: TRANSAK_NETWORKS[d.chain]!, asset: deliverableToAsset(d) }
   }
 
-  function eventFrom(claims: Record<string, unknown>): LegEvent | undefined {
+  function eventFrom(claims: Record<string, unknown>, log: Pick<Logger, 'warn'>): LegEvent | undefined {
     const o = (claims.webhookData ?? claims) as WebhookOrder
     const ref = o.partnerOrderId
     if (!ref) return undefined
+    // AWAITING_PAYMENT_FROM_USER (the user is still in the widget) or an unknown status: no state change.
+    const m = STATUS(o.status, log)
+    if (!m) return undefined
     const chain = Object.entries(TRANSAK_NETWORKS).find(([, n]) => n === o.network)?.[0]
-    const output = chain && o.cryptoAmount !== undefined ? { amount: dec(o.cryptoAmount, 6), asset: target({ kind: 'crypto', chain, token: '' }).asset } : undefined
-    switch (o.status) {
-      case 'COMPLETED':
-        return { ref, status: 'succeeded', ...(o.transactionHash ? { txHash: o.transactionHash } : {}), ...(output ? { output } : {}) }
-      case 'FAILED':
-      case 'CANCELLED':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The Transak order did not complete.', recovery: 'retry_payment' }) }
-      case 'EXPIRED':
-        return { ref, status: 'expired' }
-      case 'REFUNDED':
-        return { ref, status: 'refunded' }
-      case 'PAYMENT_DONE_MARKED_BY_USER':
-      case 'PROCESSING':
-      case 'PENDING_DELIVERY_FROM_TRANSAK':
-      case 'ON_HOLD_PENDING_DELIVERY_FROM_TRANSAK':
-        return { ref, status: 'processing' }
+    const output = chain && o.cryptoAmount !== undefined ? { value: dec(o.cryptoAmount, 6), asset: deliverableToAsset(deliverable.find((d) => d.chain === chain)!) } : undefined
+    const base: LegEvent = { ref, status: m.status, ...(o.id ? { providerRef: o.id } : {}), ...(m.detail ? { detail: { code: m.detail, providerStatus: o.status! } } : {}) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(o.transactionHash ? { transactions: [{ role: 'destination' as const, hash: o.transactionHash, ...(chain ? { chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'failed':
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The Transak order did not complete.', recovery: 'retry_payment' }) }
       default:
-        // AWAITING_PAYMENT_FROM_USER: the user is still in the widget. No state change.
-        return undefined
+        return base
     }
   }
 
   return createAdapter({
     id: 'transak',
+    env,
     name: 'Transak',
     legs,
 
     async catalog(input, ctx) {
-      let list = await ctx.shared.get<FiatCurrency[]>('fiat')
-      if (!list) {
+      const list = await cachedJson(ctx.shared, 'fiat', 60 * 60, async () => {
         const res = await fetchJson<{ response?: FiatCurrency[] }>(ctx.fetch, `${urls.api}/fiat/public/v1/currencies/fiat-currencies`)
         // A missing list is a failure, not "no methods": throw (the server then uses the static legs) and do not cache it.
-        if (!Array.isArray(res?.response)) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak returned no fiat currency list.' }), 502)
-        list = res.response
-        await ctx.shared.put('fiat', list, 60 * 60)
-      }
+        if (!Array.isArray(res?.response)) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak returned no fiat currency list.' }), 502)
+        return res.response
+      })
       const cur = list.find((c) => c.symbol.toUpperCase() === input.currency.toUpperCase() && c.isAllowed !== false)
       if (!cur) return []
       const out: LegSpec[] = []
@@ -323,7 +357,7 @@ export function transak(opts: TransakOptions) {
 
     async quote(input, ctx) {
       const fiat = input.amountIn?.asset ?? input.leg.from.asset
-      if (fiat.kind !== 'fiat') throw new OrkException(orkError('BAD_REQUEST', { message: 'Transak quotes need a fiat amount.' }))
+      if (fiat.kind !== 'fiat') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Transak quotes need a fiat amount.' }))
       const currency = fiat.currency.toUpperCase()
       const t = target(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const paymentMethod = paymentMethodFor(input.leg.legId, currency)
@@ -335,34 +369,37 @@ export function transak(opts: TransakOptions) {
         isBuyOrSell: 'BUY',
         paymentMethod,
       })
-      if (input.amountIn) q.set('fiatAmount', input.amountIn.amount)
-      else if (input.amountOut) q.set('cryptoAmount', input.amountOut.amount)
+      if (input.amountIn) q.set('fiatAmount', input.amountIn.value)
+      else if (input.amountOut) q.set('cryptoAmount', input.amountOut.value)
       const country = ctx.session.country ?? opts.defaultCountry
       if (country) q.set('quoteCountryCode', country.toUpperCase())
       let res: PriceResponse
       try {
         res = await fetchJson<PriceResponse>(ctx.fetch, `${urls.api}/api/v1/pricing/public/quotes?${q}`, { headers: { 'x-api-key': opts.apiKey } })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Transak', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Transak', { what: 'price this amount', log: ctx.log })
       }
       const r = res.response
-      if (!r) throw new OrkException(orkError('NO_QUOTES', { message: 'Transak did not return a quote.' }), 422)
+      if (!r) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Transak did not return a quote.' }), 422)
+      // Transak takes its fees out of fiatAmount (the quote input) before it converts, so each fee is included.
       const fees: Fee[] = (r.feeBreakdown ?? [])
         .filter((f) => f.value)
         .map((f) => ({
           kind: f.id.includes('network') ? 'network' : f.id.includes('partner') ? 'app' : 'provider',
           label: f.name,
-          amount: dec(f.value, 2),
-          currency,
+          amount: { value: dec(f.value, 2), asset: { kind: 'fiat', currency } },
+          included: true,
         }))
       return {
         adapterId: 'transak',
         legId: input.leg.legId,
-        input: { amount: dec(r.fiatAmount, 2), asset: { kind: 'fiat', currency } },
-        output: { amount: dec(r.cryptoAmount, 6), asset: t.asset },
+        input: { value: dec(r.fiatAmount, 2), asset: { kind: 'fiat', currency } },
+        output: { value: dec(r.cryptoAmount, 6), asset: t.asset },
         fees,
+        // Transak sets the crypto price when the order executes, so cryptoAmount is an estimate.
+        guarantee: 'estimate',
         eta: legs.find((l) => l.id === input.leg.legId)?.eta ?? { min: 120, max: 1800 },
-        expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(10),
         data: { quoteId: r.quoteId, paymentMethod, network: t.network },
       }
     },
@@ -370,7 +407,7 @@ export function transak(opts: TransakOptions) {
     async start(input, ctx) {
       const data = (input.quote.data ?? {}) as { paymentMethod?: string; network?: string }
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!walletAddress) throw new OrkException(orkError('BAD_REQUEST', { message: 'Transak needs a wallet address to deliver to.' }))
+      if (!walletAddress) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Transak needs a wallet address to deliver to.' }))
       const currency = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD'
       const t = target(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const ref = `ork_${randomHex(10)}`
@@ -383,7 +420,7 @@ export function transak(opts: TransakOptions) {
         walletAddress,
         disableWalletAddressForm: true,
         fiatCurrency: currency,
-        fiatAmount: Number(input.quote.input.amount),
+        fiatAmount: Number(input.quote.input.value),
         paymentMethod: data.paymentMethod ?? paymentMethodFor(input.leg.legId, currency),
         hideExchangeScreen: true,
         partnerOrderId: ref,
@@ -402,23 +439,26 @@ export function transak(opts: TransakOptions) {
         widgetUrl = res.data?.widgetUrl
       } catch (e) {
         ctx.log.warn('transak: create widget URL failed', { error: String((e as Error)?.message ?? e).slice(0, 300) })
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak could not start the checkout.' }), 502)
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak could not start the checkout.' }), 502)
       }
       let origin: string
       try {
         origin = new URL(widgetUrl ?? '').origin
       } catch {
-        throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
+        throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Transak did not return a widget URL.' }), 502)
       }
+      // No Transak order exists before the user pays in the widget, so no providerRef yet.
       return {
-        state: 'PAYMENT',
-        surface:
-          surfaceKind === 'IFRAME'
-            ? { kind: 'IFRAME', url: widgetUrl!, origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
-            : // Transak checks the Referer against the partner domain, so keep it on the start redirect.
-              { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak', keepReferrer: true },
-        transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
+        action: {
+          kind: 'payment',
+          surface:
+            surfaceKind === 'IFRAME'
+              ? { kind: 'IFRAME', url: widgetUrl!, origin, allow: 'camera; microphone; payment; clipboard-write', height: 625, provider: 'Transak' }
+              : // Transak checks the Referer against the partner domain, so keep it on the start redirect.
+                { kind: 'REDIRECT', url: widgetUrl!, popup: true, provider: 'Transak', keepReferrer: true },
+          transitions: [awaitPoll(POLL)],
+        },
         ref,
       }
     },
@@ -456,7 +496,7 @@ export function transak(opts: TransakOptions) {
           return []
         }
         const claims = typeof body?.data === 'string' ? decodeClaims(body.data) : undefined
-        const ev = claims ? eventFrom(claims) : undefined
+        const ev = claims ? eventFrom(claims, ctx.log) : undefined
         return ev ? [ev] : []
       },
     },

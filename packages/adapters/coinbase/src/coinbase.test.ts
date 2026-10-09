@@ -1,7 +1,7 @@
 import { createHmac, generateKeyPairSync, verify as nodeVerify } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { COINBASE_NETWORKS, coinbase } from './index.js'
 import { base64ToBytes, cdpJwt, importCdpKey } from './jwt.js'
@@ -88,14 +88,17 @@ describe('coinbase adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/platform/v2/onramp/sessions', reply: () => SESSION_RES }])
     const a = coinbase({ apiKeyId: 'key-id', apiKeySecret: secret })
     const ctx = makeCtx({ fetch, session: { country: 'US', livemode: false } })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } }, deliverTo: { address: DEST } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } }, deliverTo: { address: DEST } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q.input).toEqual({ amount: '100.00', asset: { kind: 'fiat', currency: 'USD' } })
-    expect(q.output).toEqual({ amount: '98.520000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.input).toEqual({ value: '100.00', asset: { kind: 'fiat', currency: 'USD' } })
+    expect(q.output).toEqual({ value: '98.520000', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Coinbase fee', amount: '1.48', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0', currency: 'USD' },
+      { kind: 'provider', label: 'Coinbase fee', amount: usd('1.48'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
+    expect(Date.parse(q.expiresAt) - Date.now()).toBeLessThanOrEqual(5 * 60_000)
     const call = calls[0]!
     expect(call.url).toBe('https://api.cdp.coinbase.com/platform/v2/onramp/sessions')
     const jwt = call.headers.get('authorization')!.replace(/^Bearer /, '')
@@ -108,7 +111,10 @@ describe('coinbase adapter', () => {
 
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: DEST } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl, popup: true, provider: 'Coinbase' } })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl, popup: true, provider: 'Coinbase' } } })
+    // No Coinbase transaction exists before the user pays
+    expect(step.providerRef).toBeUndefined()
     expect(step.ref).toBe((call.body as { partnerUserRef: string }).partnerUserRef)
     expect(calls).toHaveLength(1)
 
@@ -124,12 +130,12 @@ describe('coinbase adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/platform/v2/onramp/sessions', reply: () => SESSION_RES }])
     const a = coinbase({ apiKeyId: 'key-id', apiKeySecret: secret })
     const ctx = makeCtx({ fetch, session: { country: 'US', region: 'US-CA' } as never })
-    const q = await a.quote({ leg: { ...cardLeg, legId: 'ach' }, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } }, deliverTo: { address: DEST } }, ctx)
+    const q = await a.quote({ leg: { ...cardLeg, legId: 'ach' }, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } }, deliverTo: { address: DEST } }, ctx)
     expect(calls[0]!.body).toMatchObject({ paymentMethod: 'ACH', country: 'US', subdivision: 'CA' })
     expect(q.eta).toEqual({ min: 300, max: 5 * 86400 })
     const step = await a.start({ leg: { ...cardLeg, legId: 'ach' }, quote: { ...q, data: { ...q.data, createdAt: 0 } }, deliverTo: { address: DEST } }, ctx)
     expect(calls[1]!.body).toMatchObject({ paymentMethod: 'ACH' })
-    expect(step.state).toBe('PAYMENT')
+    expect(stateFor(step)).toBe('PAYMENT')
   })
 
   it('quote: passes the US state when the session region is known, maps 400 to NO_QUOTES', async () => {
@@ -137,7 +143,7 @@ describe('coinbase adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/onramp/sessions', status: 400, reply: () => ({ errorType: 'invalid_request', errorMessage: 'Amount below minimum' }) }])
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const ctx = makeCtx({ fetch, session: { country: 'US', region: 'US-NY' } as never })
-    await expect(a.quote({ leg: { ...cardLeg, legId: 'apple_pay' }, amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)).rejects.toMatchObject({
+    await expect(a.quote({ leg: { ...cardLeg, legId: 'apple_pay' }, amountIn: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)).rejects.toMatchObject({
       error: { code: 'NO_QUOTES', message: 'Coinbase: Amount below minimum' },
     })
     expect(calls[0]!.body).toMatchObject({ subdivision: 'NY', paymentMethod: 'APPLE_PAY' })
@@ -149,18 +155,34 @@ describe('coinbase adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'GET', match: '/onramp/v1/buy/user/', reply: () => ({ transactions: txs }) }])
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const ctx = makeCtx({ fetch })
-    expect(await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    const none = await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)
+    expect(stateFor(none)).toBe('PAYMENT')
+    expect(none).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     expect(calls[0]!.url).toBe('https://api.developer.coinbase.com/onramp/v1/buy/user/sandbox-ork-1/transactions?pageSize=1')
     const jwt = calls[0]!.headers.get('authorization')!.replace(/^Bearer /, '')
     expect(decodePart(jwt.split('.')[1]!).uris).toEqual(['GET api.developer.coinbase.com/onramp/v1/buy/user/sandbox-ork-1/transactions'])
-    txs = [{ status: 'ONRAMP_TRANSACTION_STATUS_IN_PROGRESS', tx_hash: '0x' }]
-    expect(await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)).toMatchObject({ state: 'PROCESSING', status: 'processing' })
-    txs = [{ status: 'ONRAMP_TRANSACTION_STATUS_SUCCESS', tx_hash: '0xabc', purchase_amount: { value: '5', currency: 'USDC' }, purchase_network: 'base' }]
+    txs = [{ status: 'ONRAMP_TRANSACTION_STATUS_IN_PROGRESS', tx_hash: '0x', transaction_id: 'cb-tx-1' }]
+    const inProgress = await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)
+    expect(stateFor(inProgress)).toBe('PROCESSING')
+    expect(inProgress).toMatchObject({ status: 'processing', providerRef: 'cb-tx-1', detail: { code: 'processing', providerStatus: 'ONRAMP_TRANSACTION_STATUS_IN_PROGRESS' } })
+    // The placeholder hash 0x is no transaction
+    expect(inProgress.transactions).toBeUndefined()
+    txs = [{ status: 'ONRAMP_TRANSACTION_STATUS_SUCCESS', tx_hash: '0xabc', transaction_id: 'cb-tx-1', purchase_amount: { value: '5', currency: 'USDC' }, purchase_network: 'base' }]
     const done = await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)
     expect(checkLegStep(done)).toEqual([])
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { amount: '5', asset: { chain: 'eip155:8453' } } })
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({
+      status: 'succeeded', providerRef: 'cb-tx-1', transactions: [{ role: 'destination', hash: '0xabc', chain: 'eip155:8453' }], output: { value: '5', asset: { chain: 'eip155:8453' } },
+    })
     txs = [{ status: 'ONRAMP_TRANSACTION_STATUS_FAILED', failure_reason: 'FAILURE_REASON_BUY_FAILED' }]
-    expect(await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)).toMatchObject({ state: 'FAILED', status: 'failed' })
+    const failed = await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)
+    expect(stateFor(failed)).toBe('FAILED')
+    expect(failed.status).toBe('failed')
+    // An unknown Coinbase status is never `processing` (it was before v2): a status poll that keeps the current step
+    txs = [{ status: 'ONRAMP_TRANSACTION_STATUS_PAUSED' }]
+    const unknown = await a.status!({ leg: cardLeg, ref: 'sandbox-ork-1' }, ctx)
+    expect(unknown.status).not.toBe('processing')
+    expect(unknown).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
   })
 
   it('webhook: verifies X-Hook0-Signature (v0 over "t.body") and maps events', async () => {
@@ -180,7 +202,12 @@ describe('coinbase adapter', () => {
     expect(await coinbase({ apiKeyId: 'k', apiKeySecret: 'x' }).webhook!.verify(req(`t=${t},v0=${v0}`), body, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
 
     expect(await a.webhook!.parse(body, { log: silentLog, shared: memoryKV(), fetch })).toEqual([
-      { ref: 'ork-1', status: 'succeeded', txHash: '0xfeed', output: { amount: '4.81', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      {
+        ref: 'ork-1',
+        status: 'succeeded',
+        transactions: [{ role: 'destination', hash: '0xfeed', chain: 'eip155:8453' }],
+        output: { value: '4.81', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
     // headless order event shape
     const headless = JSON.stringify({ eventType: 'onramp.transaction.failed', status: 'ONRAMP_ORDER_STATUS_FAILED', partnerUserRef: 'ork-2' })
@@ -211,7 +238,7 @@ describe('coinbase adapter', () => {
 })
 
 
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 const hook0 = (secret: string, body: string, t = Math.floor(Date.now() / 1000)) => `t=${t},v0=${createHmac('sha256', secret).update(`${t}.${body}`).digest('hex')}`
 const hookReq = (body: string, header?: string) => new Request('https://x/webhooks/coinbase', { method: 'POST', body, headers: header ? { 'x-hook0-signature': header } : {} })
 
@@ -226,6 +253,7 @@ describe('coinbase conformance', () => {
     const report = await runAdapterConformance(coinbase({ apiKeyId: 'k', apiKeySecret: secret, webhookSecret: 'whsec' }), {
       fetch,
       fixtures: [{ leg: cardLeg, quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT', status: 'PAYMENT' } }],
+      errorPaths: [{ leg: cardLeg, quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => hookReq(body, hook0('whsec', body)), events: 1 },
         { name: 'bad signature', rawBody: body, request: () => hookReq(body, hook0('other', body)), valid: false },
@@ -248,12 +276,23 @@ describe('coinbase errors and edge cases', () => {
     }
   })
 
-  it('quote: maps 429, 404/401 (setup errors), 5xx; a missing quote is NO_QUOTES', async () => {
+  it('quote: maps 429, 401/403 (setup errors), 404, 5xx; a missing quote is NO_QUOTES', async () => {
     const { secret } = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const q = (routes: Parameters<typeof fakeFetch>[0], log = recordingLog()) => a.quote({ leg: cardLeg, amountIn: usd('10') }, makeCtx({ fetch: fakeFetch(routes).fetch, log }))
     await expect(q([{ method: 'POST', match: '/onramp/sessions', status: 429, reply: () => ({}) }])).rejects.toMatchObject({ status: 429, error: { code: 'RATE_LIMITED' } })
-    for (const status of [401, 403, 404, 500]) {
+    // 401 and 403: our key is wrong. Not retryable, the user chooses another method, the operator gets one error log.
+    for (const status of [401, 403]) {
+      const log = recordingLog()
+      await expect(q([{ method: 'POST', match: '/onramp/sessions', status, reply: () => ({ errorMessage: 'Unauthorized key' }) }], log)).rejects.toMatchObject({
+        status: 502,
+        error: { code: 'PROVIDER_UNAVAILABLE', message: 'Coinbase is not set up for this app yet. Try another method.', retryable: false, recovery: 'choose_other' },
+      })
+      expect(log.warnings).toEqual([])
+      expect(log.errors).toHaveLength(1)
+      expect(log.errors[0]).toMatch(/^Coinbase: cannot price this amount: .*HTTP 40[13]/)
+    }
+    for (const status of [404, 500]) {
       const log = recordingLog()
       await expect(q([{ method: 'POST', match: '/onramp/sessions', status, reply: () => ({ errorMessage: 'Unauthorized key' }) }], log)).rejects.toMatchObject({
         status: 502,
@@ -267,7 +306,7 @@ describe('coinbase errors and edge cases', () => {
 
   it('quote: needs fiat and a wallet address', async () => {
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: 'x' })
-    await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+    await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { value: '1', asset: BASE_USDC } }, makeCtx({ fetch: fakeFetch([]).fetch }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const { secret } = await ed25519Secret()
     const b = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
     const merchant = makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', merchantId: 'm', currency: 'USD' } as never })
@@ -279,7 +318,7 @@ describe('coinbase errors and edge cases', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/onramp/sessions', reply: () => SESSION_RES }])
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret, defaultSubdivision: 'CA', defaultCountry: 'us' })
     const arb: PathwayLeg = { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:42161', token: USDC['eip155:42161']! }, location: { kind: 'address', address: DEST } } }
-    const q = await a.quote({ leg: arb, amountOut: { amount: '25', asset: BASE_USDC } }, makeCtx({ fetch, session: { country: undefined, livemode: true } }))
+    const q = await a.quote({ leg: arb, amountOut: { value: '25', asset: BASE_USDC } }, makeCtx({ fetch, session: { country: undefined, livemode: true } }))
     expect(calls[0]!.body).toMatchObject({ purchaseAmount: '25', destinationNetwork: 'arbitrum', country: 'US', subdivision: 'CA', paymentCurrency: 'USD' })
     expect((calls[0]!.body as Record<string, unknown>).paymentAmount).toBeUndefined()
     expect((calls[0]!.body as { partnerUserRef: string }).partnerUserRef).toMatch(/^ork-[0-9a-f]{20}$/)
@@ -288,9 +327,17 @@ describe('coinbase errors and edge cases', () => {
     await a.quote({ leg: cardLeg, amountIn: usd('10') }, makeCtx({ fetch, session: { country: 'GB', region: 'US-NY' } }))
     expect((calls[1]!.body as Record<string, unknown>).subdivision).toBeUndefined()
     expect(calls[1]!.body).toMatchObject({ country: 'GB' })
-    // unknown chain: Base; google_pay maps to CARD; sandbox forced on
-    const b = coinbase({ apiKeyId: 'k', apiKeySecret: secret, sandbox: true })
-    await b.quote({ leg: { ...cardLeg, legId: 'google_pay', to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: DEST } } }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))
+    // unknown chain, or another token on a known chain: no quote (never USDC on Base instead), and no Coinbase call
+    const b = coinbase({ apiKeyId: 'k', apiKeySecret: secret, env: 'sandbox' })
+    for (const asset of [{ kind: 'crypto' as const, chain: 'eip155:143', token: '0x1' }, { kind: 'crypto' as const, chain: 'eip155:8453', token: '0xfde4c96c8593536e31f229ea8f37b2ada2699bb2' }]) {
+      await expect(b.quote({ leg: { ...cardLeg, to: { asset, location: { kind: 'address', address: DEST } } }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))).rejects.toMatchObject({
+        status: 422,
+        error: { code: 'NO_QUOTES', message: expect.stringMatching(/^Coinbase does not deliver /) },
+      })
+    }
+    expect(calls).toHaveLength(2)
+    // google_pay maps to CARD; env: 'sandbox' wins over a live session
+    await b.quote({ leg: { ...cardLeg, legId: 'google_pay' }, amountIn: usd('10') }, makeCtx({ fetch, session: { livemode: true } }))
     expect(calls[2]!.body).toMatchObject({ destinationNetwork: 'base', paymentMethod: 'CARD' })
     expect((calls[2]!.body as { partnerUserRef: string }).partnerUserRef).toMatch(/^sandbox-ork-/)
     expect(COINBASE_NETWORKS['eip155:8453']).toBe('base')
@@ -311,10 +358,10 @@ describe('coinbase errors and edge cases', () => {
   it('start: new session without quote data, and its errors', async () => {
     const { secret } = await ed25519Secret()
     const a = coinbase({ apiKeyId: 'k', apiKeySecret: secret })
-    const quote = { adapterId: 'coinbase', legId: 'card', input: { amount: '10', asset: BASE_USDC }, output: { amount: '10', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'coinbase', legId: 'card', input: { value: '10', asset: BASE_USDC }, output: { value: '10', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z' }
     const ok = fakeFetch([{ method: 'POST', match: '/onramp/sessions', reply: () => SESSION_RES }])
     const step = await a.start({ leg: cardLeg, quote }, makeCtx({ fetch: ok.fetch }))
-    expect(step.surface).toMatchObject({ kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl })
+    expect(step.action!.surface).toMatchObject({ kind: 'REDIRECT', url: SESSION_RES.session.onrampUrl })
     expect(ok.calls[0]!.body).toMatchObject({ paymentCurrency: 'USD', destinationNetwork: 'base' })
     expect((ok.calls[0]!.body as Record<string, unknown>).paymentMethod).toBeUndefined()
     const noUrl = fakeFetch([{ method: 'POST', match: '/onramp/sessions', reply: () => ({ session: {} }) }])
@@ -332,17 +379,20 @@ describe('coinbase errors and edge cases', () => {
     const { fetch } = fakeFetch([{ method: 'GET', match: '/buy/user/', reply: () => (tx === undefined ? {} : { transactions: [tx] }) }])
     const ctx = makeCtx({ fetch })
     const st = () => a.status!({ leg: cardLeg, ref: 'r' }, ctx)
-    expect(await st()).toMatchObject({ state: 'PAYMENT' })
+    expect(stateFor(await st())).toBe('PAYMENT')
     tx = { status: 'ONRAMP_ORDER_STATUS_COMPLETED', txHash: '0x9', purchaseAmount: '3.5', purchaseNetwork: 'polygon' }
-    expect(await st()).toMatchObject({ state: 'COMPLETED', txHash: '0x9', output: { amount: '3.5', asset: { chain: 'eip155:137' } } })
-    tx = { status: 'ONRAMP_TRANSACTION_STATUS_SUCCESS', purchase_amount: { amount: '2', currency: 'USDC' }, destinationNetwork: 'unknown-net' }
+    expect(await st()).toMatchObject({ status: 'succeeded', transactions: [{ role: 'destination', hash: '0x9', chain: 'eip155:137' }], output: { value: '3.5', asset: { chain: 'eip155:137' } } })
+    tx = { status: 'ONRAMP_TRANSACTION_STATUS_SUCCESS', purchase_amount: { amount: '2', currency: 'USDC' }, destinationNetwork: 'unknown-net', tx_hash: '0x7' }
     const s = await st()
-    expect(s).toMatchObject({ state: 'COMPLETED' })
+    expect(stateFor(s)).toBe('COMPLETED')
     expect(s.output).toBeUndefined()
+    // Unknown network: the server takes the chain from the leg
+    expect(s.transactions).toEqual([{ role: 'destination', hash: '0x7' }])
     tx = { status: 'ONRAMP_TRANSACTION_STATUS_SUCCESS', purchaseAmount: { value: 'lots', currency: 'USDC' }, purchaseNetwork: 'base' }
     expect((await st()).output).toBeUndefined()
+    // A transaction without a status: no known state, so a status poll (it was `processing` before v2)
     tx = {}
-    expect(await st()).toMatchObject({ state: 'PROCESSING', status: 'processing' })
+    expect(await st()).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
   })
 
   it('webhook: malformed headers, no secret (logged), and parse edge cases', async () => {
@@ -365,7 +415,14 @@ describe('coinbase errors and edge cases', () => {
     expect(await a.webhook!.parse('nope', pctx)).toEqual([])
     expect(plog.warnings).toEqual(['coinbase: webhook body is not JSON'])
     expect(await a.webhook!.parse(JSON.stringify({ status: 'ONRAMP_TRANSACTION_STATUS_SUCCESS' }), pctx)).toEqual([])
-    expect(await a.webhook!.parse(JSON.stringify({ eventType: 'onramp.transaction.created', partner_user_ref: 'ork-3' }), pctx)).toEqual([{ ref: 'ork-3', status: 'processing' }])
+    // A created event without a status says nothing: no event (it was `processing` before v2)
+    expect(await a.webhook!.parse(JSON.stringify({ eventType: 'onramp.transaction.created', partner_user_ref: 'ork-3' }), pctx)).toEqual([])
+    expect(await a.webhook!.parse(JSON.stringify({ eventType: 'onramp.transaction.updated', partnerUserRef: 'ork-3', transactionId: 'cb-3', status: 'ONRAMP_TRANSACTION_STATUS_IN_PROGRESS' }), pctx)).toEqual([
+      { ref: 'ork-3', status: 'processing', providerRef: 'cb-3', detail: { code: 'processing', providerStatus: 'ONRAMP_TRANSACTION_STATUS_IN_PROGRESS' } },
+    ])
+    // An unknown status: no event, logged once
+    expect(await a.webhook!.parse(JSON.stringify({ eventType: 'onramp.transaction.updated', partnerUserRef: 'ork-3', status: 'ONRAMP_TRANSACTION_STATUS_REVIEW' }), pctx)).toEqual([])
+    expect(plog.warnings.filter((w) => w.includes('unknown provider status'))).toHaveLength(1)
     expect(await a.webhook!.parse(JSON.stringify({ eventType: 'onramp.transaction.success', partnerUserRef: 'ork-4', txHash: '0x' }), pctx)).toEqual([{ ref: 'ork-4', status: 'succeeded' }])
   })
 

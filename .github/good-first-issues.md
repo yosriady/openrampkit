@@ -124,7 +124,7 @@ For a withdraw session with `custody: 'user_wallet'`, the modal reads the wallet
 
 - A new optional server config, for example `withdraw: { checkBalance: { rpcUrls } }`. It is off by default.
 - When it is on, the server reads the ERC-20 `balanceOf` of `rec.walletAddress` for the session source token before it quotes or starts the first leg.
-- When the balance is too low, the method is "Not available" or the request fails with a clear `OrkError` code and message.
+- When the balance is too low, the method is "Not available" or the request fails with a clear `OpenRampError` code and message.
 - RPC errors do not block the withdrawal (fail open for this check only), and they are logged.
 - Unit tests in `packages/server/src/withdraw.test.ts` with a fake RPC `fetch`.
 - Docs in [docs/guide/withdraw.md](../docs/guide/withdraw.md).

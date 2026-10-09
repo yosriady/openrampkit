@@ -69,7 +69,7 @@ test('To wallet: USDC on Base to an Arbitrum address, signed by the mock wallet'
   await expect(modal).toContainText('Withdrawal complete', { timeout: 30_000 })
   await expectAccessible(page, 'withdraw success')
   await shot(page, info, '05-wallet-done')
-  await waitForWebhook(page, 'withdrawal.completed')
+  await waitForWebhook(page, 'session.succeeded')
 })
 
 test('To cash: GCash payout in the Philippines through the mock offramp', async ({ page }, info) => {
@@ -105,7 +105,7 @@ test('To cash: GCash payout in the Philippines through the mock offramp', async 
   await expect(modal).toContainText('Withdrawal complete', { timeout: 30_000 })
   await expect(modal).toContainText('You get about ₱1,131.43')
   await shot(page, info, '14-cash-done')
-  await waitForWebhook(page, 'withdrawal.completed')
+  await waitForWebhook(page, 'session.succeeded')
 })
 
 test('Address screening: the burn address is refused', async ({ page }) => {

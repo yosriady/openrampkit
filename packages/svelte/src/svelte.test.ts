@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DepositController } from '@openrampkit/client'
-import type { OrkEvent } from '@openrampkit/core'
+import type { ClientEvent } from '@openrampkit/core'
 import type { OpenRampModal } from '@openrampkit/web'
 import { BASE, BASE_SOURCE, fakeClient, session, setupServer, sleep } from '../../client/src/testctx.js'
 
@@ -65,7 +65,7 @@ describe('createOpenRamp', () => {
   it('beginDeposit opens the modal on body; isOpen follows; close() removes it and rejects', async () => {
     const events: string[] = []
     const perCall: string[] = []
-    const ramp = createOpenRamp({ baseUrl: BASE, theme: lightTheme(), onEvent: (e: OrkEvent) => events.push(e.type) })
+    const ramp = createOpenRamp({ baseUrl: BASE, theme: lightTheme(), onEvent: (e: ClientEvent) => events.push(e.type) })
     const seen: boolean[] = []
     const off = ramp.isOpen.subscribe((v) => seen.push(v))
     expect(seen).toEqual([false])

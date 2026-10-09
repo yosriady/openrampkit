@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Snapshot } from '@openrampkit/client'
-import { USDC, orkError } from '@openrampkit/core'
-import { METHODS, method, plan, quote, session, step } from '../../client/src/testctx.js'
+import { USDC, openRampError } from '@openrampkit/core'
+import { METHODS, method, payment, plan, quote, session, step } from '../../client/src/testctx.js'
 import { en } from './messages.js'
 import {
   amountModel,
@@ -36,13 +36,13 @@ describe('mode, keys and screens', () => {
 
   it('stepKey', () => {
     expect(stepKey(undefined)).toBe('')
-    expect(stepKey(step({ state: 'PAYMENT', sub: 'X', legIndex: 1, surface: { kind: 'OTP', channel: 'sms', to: '1' } }))).toBe('PAYMENT|X|1|OTP')
+    expect(stepKey(step({ state: 'PAYMENT', detail: { code: 'confirming' }, legIndex: 1, surface: { kind: 'OTP', channel: 'sms', to: '1' } }))).toBe('PAYMENT|confirming|1|OTP')
     expect(stepKey(step({ state: 'PROCESSING' }))).toBe('PROCESSING|||')
   })
 
   it('screenOf', () => {
     expect(screenOf(snap({ screen: 'quotes' }), undefined)).toBe('quotes')
-    expect(screenOf(undefined, orkError('INTERNAL'))).toBe('error')
+    expect(screenOf(undefined, openRampError('INTERNAL'))).toBe('error')
     expect(screenOf(undefined, undefined)).toBe('loading')
   })
 })
@@ -66,20 +66,15 @@ describe('screenTitle', () => {
 describe('liveText', () => {
   it('announces loading, errors, quotes and step progress', () => {
     expect(liveText(undefined, undefined, en)).toBe('Loading')
-    expect(liveText(undefined, orkError('UNAUTHORIZED'), en)).toBe('This session is not valid.')
+    expect(liveText(undefined, openRampError('UNAUTHORIZED'), en)).toBe('This session is not valid.')
     expect(liveText(snap({ quotesLoading: true }), undefined, en)).toBe('Getting quotes')
-    expect(liveText(snap({ error: orkError('NO_QUOTES') }), undefined, en)).toMatch(/^No provider/)
-    const s = session(
-      step({
-        state: 'PROCESSING',
-        progress: {
-          legs: [
-            { adapterId: 'swapped', legId: 'a', provider: 'Swapped', status: 'succeeded' },
-            { adapterId: 'relay_bridge', legId: 'b', status: 'mystery' as never },
-          ],
-        },
-      }),
-    )
+    expect(liveText(snap({ error: openRampError('NO_QUOTES') }), undefined, en)).toMatch(/^No provider/)
+    const s = session(step({ state: 'PROCESSING' }), {
+      payment: payment([
+        { adapterId: 'swapped', legId: 'a', provider: 'Swapped', status: 'succeeded' },
+        { adapterId: 'relay_bridge', legId: 'b', status: 'mystery' as never },
+      ]),
+    })
     expect(liveText(snap({ screen: 'step', session: s }), undefined, en)).toBe('Processing. 1. Swapped: done. 2. Relay Bridge: mystery')
     expect(liveText(snap({ screen: 'step', session: session('WEIRD' as never) }), undefined, en)).toBe('')
     expect(liveText(snap(), undefined, en)).toBe('')
@@ -93,6 +88,7 @@ describe('liveText', () => {
     expect(liveText(snap({ screen: 'result', session: failed }), undefined, en)).toBe('Payment failed')
     expect(liveText(snap({ screen: 'result', session: failed, direction: 'withdraw' }), undefined, en)).toBe('Withdrawal failed')
     expect(liveText(snap({ screen: 'result', session: session(step({ state: 'EXPIRED' })) }), undefined, en)).toBe('Session expired')
+    expect(liveText(snap({ screen: 'result', session: session(step({ state: 'REVERSED' })) }), undefined, en)).toBe('Payment reversed')
   })
 })
 
@@ -178,7 +174,13 @@ describe('amountModel', () => {
 describe('quotes', () => {
   it('quoteSubtitle', () => {
     expect(quoteSubtitle(quote({ id: 'a' }), en)).toBe('You pay $100.00 · Fees $2.50')
-    expect(quoteSubtitle(quote({ id: 'a', input: { amount: '0', asset: { kind: 'fiat', currency: 'USD' } }, fees: [] }), en)).toBe('No fees')
+    expect(quoteSubtitle(quote({ id: 'a', input: { value: '0', asset: { kind: 'fiat', currency: 'USD' } }, fees: [] }), en)).toBe('No fees')
+    // Fees in the rate: a known amount shows; an amount that the provider does not give never says "No fees"
+    const unstated = { kind: 'provider' as const, label: 'guardarian fee', amount: null, included: true }
+    const known = { kind: 'network' as const, label: 'Network fee', amount: { value: '4.8', asset: { kind: 'fiat' as const, currency: 'USD' } }, included: true }
+    expect(quoteSubtitle(quote({ id: 'a', input: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } }, fees: [unstated] }), en)).toBe('You pay €100.00 · Fees included in the rate')
+    expect(quoteSubtitle(quote({ id: 'a', fees: [known] }), en)).toBe('You pay $100.00 · Fees $4.80')
+    expect(quoteSubtitle(quote({ id: 'a', fees: [known, unstated] }), en)).toBe('You pay $100.00 · Fees $4.80 + a fee in the rate')
   })
 
   it('nextQuoteId wraps both ways', () => {

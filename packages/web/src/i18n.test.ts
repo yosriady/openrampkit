@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { catalogFor, catalogs, en, mergeMessages, resolveLocale, resolveMessages } from './messages.js'
 import type { Messages } from './messages.js'
+import { STEP_DETAIL_CODES } from '@openrampkit/core'
+import type { Step } from '@openrampkit/core'
+import { stepLabel } from './view.js'
 import { formatAmount, formatEta, formatFees, formatFiat, formatLimit, formatToken } from './format.js'
 
 /** Sample arguments for every function message, by arity. */
@@ -65,6 +68,16 @@ describe('catalogs', () => {
     expect(m.etaDaysRange(1, 3)).toMatch(/1[\s\S]*3/)
     expect(formatEta({ min: 3600, max: 3 * 3600 }, m)).toBe(m.etaHoursRange(1, 3))
     expect(formatEta({ min: 0, max: 30 }, m)).toBe(m.etaInstant)
+  })
+
+  it.each(LOCALES)('%s has a label for every detail code in STEP_DETAIL_CODES, and stepLabel uses it', (loc) => {
+    const m = catalogs[loc]
+    expect(Object.keys(m.stepDetail).sort()).toEqual([...STEP_DETAIL_CODES].sort())
+    const step = (code?: string) => ({ sessionId: 's', state: 'PROCESSING' as const, transitions: [], ...(code ? { detail: { code } } : {}) }) as Step
+    for (const code of STEP_DETAIL_CODES) expect(stepLabel(m, step(code))).toBe(m.stepDetail[code])
+    // No detail, or a raw provider value from an older or newer server: the state title, never the raw value
+    expect(stepLabel(m, step())).toBe(m.stepTitle.PROCESSING)
+    expect(stepLabel(m, step('WAIT_DESTINATION_TRANSACTION'))).toBe(m.stepTitle.PROCESSING)
   })
 
   it('English plurals', () => {
@@ -152,9 +165,9 @@ describe('locale number and currency formatting', () => {
   it('tokens, amounts, fees and limits follow the locale', () => {
     expect(formatToken('1234.5', 'USDC', 'vi')).toBe('1.234,5 USDC')
     expect(formatToken('1234.5', 'USDC', 'en')).toBe('1,234.5 USDC')
-    expect(sp(formatAmount({ amount: '1234.5', asset: { kind: 'fiat', currency: 'USD' } }, 'vi'))).toBe('1.234,50 US$')
-    expect(formatAmount({ amount: '1234.5', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'ETH' } }, 'id')).toBe('1.234,5 ETH')
-    expect(sp(formatFees([{ kind: 'provider', label: 'Fee', amount: '15000', currency: 'IDR' }], 'id'))).toBe('Rp 15.000')
+    expect(sp(formatAmount({ value: '1234.5', asset: { kind: 'fiat', currency: 'USD' } }, 'vi'))).toBe('1.234,50 US$')
+    expect(formatAmount({ value: '1234.5', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'ETH' } }, 'id')).toBe('1.234,5 ETH')
+    expect(sp(formatFees([{ kind: 'provider', label: 'Fee', amount: { value: '15000', asset: { kind: 'fiat', currency: 'IDR' } }, included: true }], 'id'))).toBe('Rp 15.000')
     expect(sp(formatLimit({ max: '50000000', currency: 'VND' }, resolveMessages({ locale: 'vi' })))).toBe('Hạn mức 50.000.000 ₫')
     // Non-ISO codes fall back to token formatting in the locale
     expect(formatFiat('1234.5', 'USDC', { locale: 'vi' })).toBe('1.234,5 USDC')

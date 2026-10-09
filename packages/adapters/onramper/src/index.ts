@@ -18,18 +18,28 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
+  httpStatus,
   legStepFromEvent,
+  providerMessage,
+  providerSetupError,
+  quoteExpiresAt,
   randomHex,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
   timingSafeEqual,
+  webhookBodyKey,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, cmp, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec } from '@openrampkit/core'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
+import { OpenRampException, USDC, cmp, openRampError, roundTo, sub } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode } from '@openrampkit/core'
 import { canonicalJson, importEd25519Key, sha256Hex, signV2 } from './sign.js'
 
 export { canonicalJson, canonicalStringV2, ed25519Sign, importEd25519Key, sha256Hex, signV2 } from './sign.js'
@@ -46,7 +56,8 @@ export type OnramperOptions = {
   secretKey: string
   /** Webhook secret from your Onramper CSM: verifies webhooks and is sent as `x-onramper-secret` for status reads. */
   webhookSecret?: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Only these onramps (e.g. ['moonpay', 'banxa']) */
   onramps?: string[]
   /** Assets Onramper may deliver, most preferred first. Default: USDC on Base, Ethereum, Polygon, Arbitrum. */
@@ -176,8 +187,58 @@ const STATIC: Array<{ id: string; countries?: string[]; currencies: string[] | '
 
 const dec = decimalFrom
 
+/**
+ * Onramper transaction statuses (https://docs.onramper.com/docs/webhooks, compared without case).
+ * "Statuses might vary among providers": an unknown status is no event, and the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>(
+  'Onramper',
+  {
+    new: { status: 'requires_action' },
+    pending: { status: 'processing', detail: 'processing' },
+    paid: { status: 'processing', detail: 'processing' },
+    completed: { status: 'succeeded' },
+    failed: { status: 'failed' },
+    canceled: { status: 'failed' },
+    cancelled: { status: 'failed' },
+  },
+  { ignoreCase: true },
+)
+
+/** Symbols of stablecoins worth one USD: a USD amount and their payout are in comparable units. */
+const USD_STABLES = new Set(['USDC', 'USDT', 'USDG', 'PYUSD'])
+
+/**
+ * A 401 or 403 from Onramper means our setup is wrong (API key, Signature V2 public key, IP allowlist),
+ * not the user's input. A retry cannot fix it. The operator gets an error log that says what to do; the
+ * user gets a neutral message and can choose another method.
+ * Codes from https://docs.onramper.com/docs/error-codes-troubleshooting (read 2026-10-09). The live staging
+ * answer for an API key without a public key was `{"errorId":4011,"message":"No V2 signing key is registered for this API key..."}`.
+ */
+export function onramperSetupError(e: unknown, log: Pick<Logger, 'error'>, what: string): OpenRampException | undefined {
+  const status = httpStatus(e)
+  if (status !== 401 && status !== 403) return undefined
+  const body = (e as { body?: { errorId?: unknown; code?: unknown; errorCode?: unknown } } | undefined)?.body
+  const detail = providerMessage(e)
+  const text = [body?.code, body?.errorCode, detail].filter((x) => typeof x === 'string').join(' ')
+  let hint: string
+  if (body?.errorId === 4011 || /signing key|public key|PUBLIC_KEY_NOT_CONFIGURED/i.test(text)) {
+    hint =
+      'Onramper has no Signature V2 public key for this API key. Register the Ed25519 public key that matches secretKey with Onramper (in the Onramper dashboard, or through your Onramper account manager or support). Each environment (staging pk_test_, production pk_prod_) needs its own key pair.'
+  } else if (/SIGNATURE|TIMESTAMP|NONCE/i.test(text)) {
+    hint = 'Onramper refused the Signature V2. Make sure secretKey matches the public key registered for this API key and environment, and that the server clock is correct.'
+  } else if (status === 403) {
+    hint = 'Onramper refused the request (403). Make sure the server egress IPs and your domains are on your Onramper allowlist.'
+  } else {
+    hint = 'Onramper refused the API key (401). Make sure apiKey is correct: pk_test_ with env sandbox, pk_prod_ with env production.'
+  }
+  log.error(`onramper: cannot ${what}. ${hint}`, { status, ...(typeof body?.errorId === 'number' ? { errorId: body.errorId } : {}), ...(detail ? { message: detail.slice(0, 200) } : {}) })
+  return providerSetupError('Onramper')
+}
+
 export function onramper(opts: OnramperOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
+  const env = resolveEnv('onramper', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api-stg.onramper.com' : 'https://api.onramper.com')).replace(/\/+$/, '')
   const deliver = opts.deliverAssets?.length ? opts.deliverAssets : DEFAULT_DELIVER_ASSETS
   const toChains: Record<string, string[]> = {}
   for (const d of deliver) (toChains[d.chain] ??= []).push(d.chain.startsWith('eip155:') ? d.token.toLowerCase() : d.token)
@@ -194,51 +255,54 @@ export function onramper(opts: OnramperOptions) {
     eta: { min: 60, max: 1800 },
     surfaces: ['REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling'],
     ...extra,
   })
   const staticLegs = STATIC.map((s) => leg(s.id, { from: { asset: { kind: 'fiat', currencies: s.currencies }, location: ['user_account'] }, regions: { allow: s.countries ?? ['*'], deny: [] }, eta: s.eta }))
 
-  function deliverFor(asset: CryptoAsset | undefined): OnramperDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return deliver[0]!
+  /** The asset Onramper delivers for `asset`. NO_QUOTES when Onramper does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): OnramperDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'Onramper')
   }
 
-  function assetOf(d: OnramperDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   const get = <T>(ctx: Pick<AdapterContext, 'fetch'>, pathAndQuery: string, extra: Record<string, string> = {}) =>
     fetchJson<T>(ctx.fetch, `${api}${pathAndQuery}`, { headers: { authorization: opts.apiKey, ...extra } })
 
-  function eventFrom(tx: OrTransaction, refOverride?: string): LegEvent | undefined {
+  function eventFrom(tx: OrTransaction, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? tx.partnerContext
     if (!ref) return undefined
+    const m = STATUS(tx.status, log)
+    if (!m) return undefined
     const d = deliver.find((x) => x.cryptoId === tx.targetCurrency?.toLowerCase())
-    const output = d && tx.outAmount !== undefined ? { amount: dec(tx.outAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
-    // "Statuses might vary among providers": map the documented ones, ignore the rest.
-    switch (tx.status?.toLowerCase()) {
-      case 'completed':
-        return { ref, status: 'succeeded', ...(tx.transactionHash ? { txHash: tx.transactionHash } : {}), ...(output ? { output } : {}) }
-      case 'paid':
-      case 'pending':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'new':
-        return { ref, status: 'awaiting_user' }
+    const output = d && tx.outAmount !== undefined ? { value: dec(tx.outAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
+    const base: LegEvent = {
+      ref,
+      status: m.status,
+      ...(tx.transactionId ? { providerRef: tx.transactionId } : {}),
+      ...(m.detail ? { detail: { code: m.detail, providerStatus: tx.status! } } : {}),
+    }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(tx.transactionHash ? { transactions: [{ role: 'destination' as const, hash: tx.transactionHash, ...(d ? { chain: d.chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'processing':
+        return { ...base, ...(output ? { output } : {}) }
       case 'failed':
-      case 'canceled':
-      case 'cancelled':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The purchase did not complete.', recovery: 'retry_payment' }) }
       default:
-        return undefined
+        // requires_action: the user still pays in the onramp page. No action: the UI keeps that page.
+        return base
     }
   }
 
   return createAdapter({
     id: 'onramper',
+    env,
     name: 'Onramper',
     legs: staticLegs,
 
@@ -247,17 +311,21 @@ export function onramper(opts: OnramperOptions) {
       const country = input.country?.toUpperCase()
       const target = deliver[0]!
       const cacheKey = `pt:${fiat}:${country ?? '*'}`
-      let types = await ctx.shared.get<OrPaymentType[]>(cacheKey)
-      if (!types) {
-        const q = new URLSearchParams({ type: 'buy', destination: target.cryptoId })
-        if (country) q.set('country', country)
-        const res = await get<{ message?: OrPaymentType[] }>(ctx, `/supported/payment-types/${encodeURIComponent(fiat)}?${q}`)
-        if (!Array.isArray(res.message) || !res.message.length) {
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper returned no payment types.' }), 502)
-        }
-        types = res.message
-        await ctx.shared.put(cacheKey, types, CATALOG_TTL_SEC)
-      }
+      const types = await cachedJson(
+        ctx.shared,
+        cacheKey,
+        CATALOG_TTL_SEC,
+        async () => {
+          const q = new URLSearchParams({ type: 'buy', destination: target.cryptoId })
+          if (country) q.set('country', country)
+          const res = await get<{ message?: OrPaymentType[] }>(ctx, `/supported/payment-types/${encodeURIComponent(fiat)}?${q}`)
+          if (!Array.isArray(res.message) || !res.message.length) {
+            throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Onramper returned no payment types.' }), 502)
+          }
+          return res.message
+        },
+        { valid: (t) => Array.isArray(t) && t.length > 0 },
+      )
       const byId = new Map<string, { min?: number; max?: number }>()
       for (const t of types) {
         const id = onramperMethodId(t.paymentTypeId)
@@ -282,26 +350,26 @@ export function onramper(opts: OnramperOptions) {
     },
 
     async quote(input, ctx) {
-      if (!input.amountIn || input.amountIn.asset.kind !== 'fiat') throw new OrkException(orkError('NO_QUOTES', { message: 'Onramper quotes need a fiat amount.' }), 422)
+      if (!input.amountIn || input.amountIn.asset.kind !== 'fiat') throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Onramper quotes need a fiat amount.' }), 422)
       const fiat = input.amountIn.asset.currency.toLowerCase()
       const target = deliverFor(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       const country = (ctx.session.country ?? opts.defaultCountry ?? 'US').toUpperCase()
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
       const paymentMethod = onramperPaymentType(input.leg.legId, fiat)
-      const q = new URLSearchParams({ amount: roundTo(input.amountIn.amount, 2), paymentMethod, type: 'buy', country, platform: 'web' })
+      const q = new URLSearchParams({ amount: roundTo(input.amountIn.value, 2), paymentMethod, type: 'buy', country, platform: 'web' })
       if (wallet) q.set('walletAddress', wallet)
       let res: OrQuote[] | { message?: string }
       try {
         res = await get<OrQuote[] | { message?: string }>(ctx, `/quotes/${encodeURIComponent(fiat)}/${encodeURIComponent(target.cryptoId)}?${q}`)
       } catch (e) {
-        throw httpErrorToOrk(e, 'Onramper', { what: 'price this amount', log: ctx.log })
+        throw onramperSetupError(e, ctx.log, 'price this amount') ?? httpErrorToOpenRamp(e, 'Onramper', { what: 'price this amount', log: ctx.log })
       }
       const list = Array.isArray(res) ? res : []
       const ok = list.filter((x) => x.ramp && !x.errors?.length && typeof x.payout === 'number' && x.payout > 0 && (!opts.onramps || opts.onramps.includes(x.ramp)))
       if (!ok.length) {
         const err = list.flatMap((x) => x.errors ?? [])[0]
         const msg = err?.message ?? (Array.isArray(res) ? undefined : res.message)
-        throw new OrkException(orkError('NO_QUOTES', { message: msg ? `Onramper: ${msg}`.slice(0, 200) : 'No Onramper provider can serve this amount.' }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: msg ? `Onramper: ${msg}`.slice(0, 200) : 'No Onramper provider can serve this amount.' }), 422)
       }
       const providers = ok
         .map((x) => ({
@@ -310,41 +378,57 @@ export function onramper(opts: OnramperOptions) {
           rate: dec(x.rate, 8),
           transactionFee: dec(x.transactionFee, 2),
           networkFee: dec(x.networkFee, 2),
+          // Some onramps (for example guardarian) send no fee fields: their fees are in the rate.
+          feesInRate: x.transactionFee === undefined && x.networkFee === undefined,
           ...(x.quoteId ? { quoteId: x.quoteId } : {}),
           ...(x.recommendations?.length ? { recommendations: x.recommendations } : {}),
         }))
         .sort((a, b) => cmp(b.payout, a.payout))
       const best = providers[0]!
       const cur = fiat.toUpperCase()
+      // The onramp takes its fees out of `amount` (the quote input) before it converts, so each fee is included.
+      const fiatAmt = (value: string): Amount => ({ value, asset: { kind: 'fiat', currency: cur } })
       const fees: Fee[] = []
-      if (best.transactionFee !== '0') fees.push({ kind: 'provider', label: `${best.ramp} fee`, amount: best.transactionFee, currency: cur })
-      if (best.networkFee !== '0') fees.push({ kind: 'network', label: 'Network fee', amount: best.networkFee, currency: cur })
+      if (best.transactionFee !== '0') fees.push({ kind: 'provider', label: `${best.ramp} fee`, amount: fiatAmt(best.transactionFee), included: true })
+      if (best.networkFee !== '0') fees.push({ kind: 'network', label: 'Network fee', amount: fiatAmt(best.networkFee), included: true })
+      const inputAmount = roundTo(input.amountIn.value, 2)
+      if (best.feesInRate) {
+        // No fee fields and no reference rate in the response. For USD to a USD stablecoin, the cost is the
+        // difference between what the user pays and what arrives. Otherwise the amount is not known: a line
+        // with amount null keeps the UI from saying "No fees".
+        const comparable = cur === 'USD' && USD_STABLES.has((target.symbol ?? '').toUpperCase())
+        const diff = comparable ? roundTo(sub(inputAmount, best.payout), 2) : '0'
+        if (!comparable) fees.push({ kind: 'provider', label: `${best.ramp} fee (included in rate)`, amount: null, included: true })
+        else if (cmp(diff, '0') > 0) fees.push({ kind: 'provider', label: `${best.ramp} fee (included in rate)`, amount: fiatAmt(diff), included: true })
+      }
       return {
         adapterId: 'onramper',
         legId: input.leg.legId,
-        input: { amount: roundTo(input.amountIn.amount, 2), asset: { kind: 'fiat', currency: cur } },
-        output: { amount: best.payout, asset: assetOf(target) },
+        input: { value: inputAmount, asset: { kind: 'fiat', currency: cur } },
+        output: { value: best.payout, asset: assetOf(target) },
         fees,
+        // Onramper relays the onramp's indicative price: the onramp sets the rate when it executes the order.
+        guarantee: 'estimate',
         eta: STATIC.find((s) => s.id === input.leg.legId)?.eta ?? { min: 60, max: 1800 },
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: { onramp: best.ramp, providers, paymentMethod, cryptoId: target.cryptoId, network: target.network, fiat, country },
       }
     },
 
     async start(input, ctx) {
       const data = (input.quote.data ?? {}) as { onramp?: string; paymentMethod?: string; cryptoId?: string; network?: string; fiat?: string; country?: string }
-      if (!data.onramp) throw new OrkException(orkError('QUOTE_EXPIRED', { recovery: 'requote' }), 409)
+      if (!data.onramp) throw new OpenRampException(openRampError('QUOTE_EXPIRED', { recovery: 'requote' }), 409)
       const target = deliverFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Onramper needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Onramper needs a wallet address to deliver to.' }))
       // The checkout session is bound to the IP of the user who opens it.
-      if (!ctx.session.ip) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper needs the user IP address to start a checkout.' }), 502)
+      if (!ctx.session.ip) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Onramper needs the user IP address to start a checkout.' }), 502)
       const ref = `ork_${randomHex(12)}`
       const payload = {
         onramp: data.onramp,
         source: data.fiat ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency.toLowerCase() : 'usd'),
         destination: data.cryptoId ?? target.cryptoId,
-        amount: Number(roundTo(input.quote.input.amount, 2)),
+        amount: Number(roundTo(input.quote.input.value, 2)),
         type: 'buy',
         paymentMethod: data.paymentMethod ?? onramperPaymentType(input.leg.legId, input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : undefined),
         network: data.network ?? target.network,
@@ -364,15 +448,14 @@ export function onramper(opts: OnramperOptions) {
         const headers = await signV2(await key(), { apiKey: opts.apiKey, method: 'POST', path, body, timestamp: new Date().toISOString(), nonce: crypto.randomUUID() })
         res = await fetchJson(ctx.fetch, `${api}${path}`, { method: 'POST', headers: { ...headers, 'content-type': 'application/json' }, body })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Onramper', { what: 'start the purchase', log: ctx.log })
+        throw onramperSetupError(e, ctx.log, 'start the purchase') ?? httpErrorToOpenRamp(e, 'Onramper', { what: 'start the purchase', log: ctx.log })
       }
-      if (!res.redirectUrl) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Onramper did not return a checkout URL.' }), 502)
+      if (!res.redirectUrl) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Onramper did not return a checkout URL.' }), 502)
       if (res.sessionId) await ctx.store.put(`s:${ref}`, { sessionId: res.sessionId }, TX_TTL_SEC)
+      // V2 checkout returns no transaction id, so no providerRef yet (the first webhook gives it).
       return {
-        state: 'PAYMENT',
-        surface: { kind: 'REDIRECT', url: res.redirectUrl, popup: true, provider: data.onramp },
-        transitions: [awaitPoll(POLL)],
-        status: 'awaiting_user',
+        status: 'requires_action',
+        action: { kind: 'payment', surface: { kind: 'REDIRECT', url: res.redirectUrl, popup: true, provider: data.onramp }, transitions: [awaitPoll(POLL)] },
         ref,
       }
     },
@@ -385,12 +468,16 @@ export function onramper(opts: OnramperOptions) {
       try {
         tx = await get<OrTransaction>(ctx, `/transactions/${encodeURIComponent(txId)}`, { 'x-onramper-secret': opts.webhookSecret })
       } catch (e) {
-        throw httpErrorToOrk(e, 'Onramper', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'Onramper', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
-      return legStepFromEvent(eventFrom(tx, input.ref), input.ref, POLL)
+      // An unknown status: a status poll. The server never moves a leg back, so a leg that already
+      // moved on keeps its step.
+      return legStepFromEvent(eventFrom(tx, ctx.log, input.ref), input.ref, POLL)
     },
 
     webhook: {
+      // Without the webhookSecret, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookSecret,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookSecret) {
           ctx.log.warn('onramper: webhookSecret is not set; rejecting webhook')
@@ -398,10 +485,12 @@ export function onramper(opts: OnramperOptions) {
         }
         const sig = req.headers.get('x-onramper-webhook-signature')
         if (!sig) return false
-        // Onramper signs the body only (no timestamp), so replays cannot be told apart; parse() is idempotent.
+        // Onramper signs the body only (no timestamp). `replayKey` lets the server drop a replayed body.
         const expected = await hmacSha256(opts.webhookSecret, rawBody, 'hex')
         return timingSafeEqual(sig.trim().toLowerCase(), expected)
       },
+      // The same signed body is the same event: the server keeps the hash for 7 days and drops a repeat.
+      replayKey: async (_req, rawBody) => webhookBodyKey(rawBody),
       async parse(rawBody, ctx) {
         let tx: OrTransaction
         try {
@@ -413,8 +502,8 @@ export function onramper(opts: OnramperOptions) {
         if (!tx.partnerContext) return []
         // Keep the transaction id so status() can poll it.
         if (tx.transactionId) await ctx.shared.put(`tx:${tx.partnerContext}`, tx.transactionId, TX_TTL_SEC)
-        const ev = eventFrom(tx)
-        return ev ? [ev] : []
+        const ev = eventFrom(tx, ctx.log)
+        return ev ? [{ ...ev, eventId: (await webhookBodyKey(rawBody)).slice(0, 32) }] : []
       },
     },
 

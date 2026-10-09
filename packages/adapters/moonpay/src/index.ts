@@ -17,19 +17,25 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   decimalFrom,
+  deliverableToAsset,
   fetchJson,
   hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   httpStatus,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
-  timingSafeEqual,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent } from '@openrampkit/adapter'
-import { OrkException, USDC, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
+import { OpenRampException, USDC, openRampError, roundTo } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode, Surface } from '@openrampkit/core'
 
 export type MoonPayDeliverAsset = {
   /** CAIP-2 chain */
@@ -53,7 +59,8 @@ export type MoonPayOptions = {
   secretKey: string
   /** Webhook API key from the dashboard (Developers page). Needed to accept webhooks. */
   webhookKey?: string
-  env: 'sandbox' | 'production'
+  /** Provider environment: 'sandbox' (test keys, no real money) or 'production'. The server checks it against `livemode`. */
+  env: AdapterEnv
   /** Fiat currency when the quote has none. Default 'USD'. */
   baseCurrencyDefault?: string
   /** How the widget opens. Default 'redirect' (a popup). */
@@ -175,17 +182,20 @@ export const MOONPAY_METHODS: MethodDef[] = [
 
 const dec = decimalFrom
 
-function parseSigHeader(header: string): Record<string, string> {
-  return Object.fromEntries(
-    header.split(',').map((kv) => {
-      const i = kv.indexOf('=')
-      return [kv.slice(0, i).trim(), kv.slice(i + 1).trim()]
-    }),
-  )
-}
+/**
+ * MoonPay transaction statuses (https://dev.moonpay.com/api-reference/widget/gettransaction).
+ * An unknown status is no event: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('MoonPay', {
+  waitingPayment: { status: 'requires_action' },
+  waitingAuthorization: { status: 'requires_action' },
+  pending: { status: 'processing', detail: 'processing' },
+  completed: { status: 'succeeded' },
+  failed: { status: 'failed' },
+})
 
 export function moonpay(opts: MoonPayOptions) {
-  const env = opts.env
+  const env = resolveEnv('moonpay', opts.env, undefined, 'production')
   const apiUrl = (opts.apiUrl ?? 'https://api.moonpay.com').replace(/\/+$/, '')
   const widgetUrl = (opts.widgetUrl ?? (env === 'sandbox' ? 'https://buy-sandbox.moonpay.com' : 'https://buy.moonpay.com')).replace(/\/+$/, '')
   const widgetOrigin = new URL(widgetUrl).origin
@@ -206,27 +216,21 @@ export function moonpay(opts: MoonPayOptions) {
     eta: d.eta,
     surfaces: [opts.surface === 'iframe' ? 'IFRAME' : 'REDIRECT'],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling', 'exact_output'],
   })
   const legs = defs.map((d) => legFor(d))
 
   function def(legId: string): MethodDef {
     const d = byId.get(legId)
-    if (!d) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown MoonPay leg ${legId}` }), 400)
+    if (!d) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown MoonPay leg ${legId}` }), 400)
     return d
   }
 
-  function deliverAssetFor(asset: CryptoAsset | undefined): MoonPayDeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const found = deliver.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (found) return found
-    }
-    return deliver[0]!
+  /** The asset MoonPay delivers for `asset`. NO_QUOTES when MoonPay does not deliver that token on that chain (never another token). */
+  function deliverAssetFor(asset: Asset | undefined): MoonPayDeliverAsset {
+    return requireDeliverAsset(deliver, asset, 'MoonPay')
   }
 
-  function assetOf(d: MoonPayDeliverAsset): CryptoAsset {
-    return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
-  }
+  const assetOf = deliverableToAsset
 
   /** Per-asset restrictions (e.g. usdc_base is not sold in New York or Canada) */
   function checkAssetRegion(d: MoonPayDeliverAsset, ctx: AdapterContext) {
@@ -234,7 +238,7 @@ export function moonpay(opts: MoonPayOptions) {
     const region = ctx.session.region?.toUpperCase()
     const state = country === 'US' && region?.startsWith('US-') ? region.slice(3) : undefined
     if ((country && d.notAllowedCountries?.includes(country)) || (state && d.notAllowedUSStates?.includes(state))) {
-      throw new OrkException(orkError('REGION_UNSUPPORTED', { message: `MoonPay does not sell ${d.symbol ?? d.currencyCode} on this network in your region.`, recovery: 'choose_other' }), 422)
+      throw new OpenRampException(openRampError('REGION_UNSUPPORTED', { message: `MoonPay does not sell ${d.symbol ?? d.currencyCode} on this network in your region.`, recovery: 'choose_other' }), 422)
     }
   }
 
@@ -246,41 +250,53 @@ export function moonpay(opts: MoonPayOptions) {
     return `${widgetUrl}/${search}&signature=${encodeURIComponent(signature)}`
   }
 
-  function eventFrom(tx: MpTransaction, refOverride?: string): LegEvent | undefined {
+  function eventFrom(tx: MpTransaction, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? tx.externalTransactionId ?? undefined
     if (!ref) return undefined
+    const m = STATUS(tx.status, log)
+    if (!m) return undefined
     const code = tx.currency?.code ?? tx.currencyCode
     const d = deliver.find((x) => x.currencyCode === code)
-    const output = d && tx.quoteCurrencyAmount !== undefined && tx.quoteCurrencyAmount !== null ? { amount: dec(tx.quoteCurrencyAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
-    switch (tx.status) {
-      case 'completed':
-        return { ref, status: 'succeeded', ...(tx.cryptoTransactionId ? { txHash: tx.cryptoTransactionId } : {}), ...(output ? { output } : {}) }
+    const output = d && tx.quoteCurrencyAmount !== undefined && tx.quoteCurrencyAmount !== null ? { value: dec(tx.quoteCurrencyAmount, d.decimals ?? 8), asset: assetOf(d) } : undefined
+    const base: LegEvent = { ref, status: m.status, ...(tx.id ? { providerRef: tx.id } : {}), ...(m.detail ? { detail: { code: m.detail, providerStatus: tx.status! } } : {}) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet. Its chain is the chain of the MoonPay currency.
+          ...(tx.cryptoTransactionId ? { transactions: [{ role: 'destination' as const, hash: tx.cryptoTransactionId, ...(d ? { chain: d.chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
       case 'failed':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The MoonPay purchase did not complete.', recovery: 'retry_payment' }) }
-      case 'pending':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'waitingPayment':
-      case 'waitingAuthorization':
-        return { ref, status: 'awaiting_user' }
+        return { ...base, error: openRampError('PAYMENT_FAILED', { message: 'The MoonPay purchase did not complete.', recovery: 'retry_payment' }) }
+      case 'processing':
+        return { ...base, ...(output ? { output } : {}) }
       default:
-        return undefined
+        // requires_action: the user still pays in the widget. No action: the UI keeps the widget.
+        return base
     }
   }
 
   return createAdapter({
     id: 'moonpay',
+    env,
     name: 'MoonPay',
     legs,
 
     async catalog(_input, ctx) {
-      let countries = await ctx.shared.get<MpCountry[]>('countries')
-      if (!countries) {
-        countries = await fetchJson<MpCountry[]>(ctx.fetch, `${apiUrl}/v3/countries`)
-        if (!Array.isArray(countries) || !countries.length) {
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'MoonPay returned no countries.' }), 502)
-        }
-        await ctx.shared.put('countries', countries, COUNTRIES_TTL_SEC)
-      }
+      const countries = await cachedJson(
+        ctx.shared,
+        'countries',
+        COUNTRIES_TTL_SEC,
+        async () => {
+          const list = await fetchJson<MpCountry[]>(ctx.fetch, `${apiUrl}/v3/countries`)
+          if (!Array.isArray(list) || !list.length) {
+            throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'MoonPay returned no countries.' }), 502)
+          }
+          return list
+        },
+        { valid: (c) => Array.isArray(c) && c.length > 0 },
+      )
       const allowed = countries.filter((c) => c.isBuyAllowed ?? c.isAllowed).map((c) => c.alpha2.toUpperCase())
       const deniedStates = countries.flatMap((c) => (c.states ?? []).filter((s) => (s.isBuyAllowed ?? s.isAllowed) === false).map((s) => `${c.alpha2.toUpperCase()}-${s.code.toUpperCase()}`))
       return defs
@@ -298,9 +314,9 @@ export function moonpay(opts: MoonPayOptions) {
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
       const fiat = (fiatAsset.kind === 'fiat' ? fiatAsset.currency : opts.baseCurrencyDefault ?? 'USD').toUpperCase()
       const q = new URLSearchParams({ apiKey: opts.publishableKey, baseCurrencyCode: fiat.toLowerCase(), paymentMethod: d.paymentMethod, areFeesIncluded: 'true' })
-      if (input.amountIn) q.set('baseCurrencyAmount', roundTo(input.amountIn.amount, 2))
-      else if (input.amountOut) q.set('quoteCurrencyAmount', input.amountOut.amount)
-      else throw new OrkException(orkError('BAD_REQUEST', { message: 'MoonPay quotes need an amount.' }))
+      if (input.amountIn) q.set('baseCurrencyAmount', roundTo(input.amountIn.value, 2))
+      else if (input.amountOut) q.set('quoteCurrencyAmount', input.amountOut.value)
+      else throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'MoonPay quotes need an amount.' }))
       if (opts.extraFeePercentage !== undefined) q.set('extraFeePercentage', String(opts.extraFeePercentage))
       const address = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
       if (address) q.set('walletAddress', address)
@@ -308,24 +324,28 @@ export function moonpay(opts: MoonPayOptions) {
       try {
         res = await fetchJson<MpQuote>(ctx.fetch, `${apiUrl}/v3/currencies/${encodeURIComponent(target.currencyCode)}/buy_quote?${q}`)
       } catch (e) {
-        throw httpErrorToOrk(e, 'MoonPay', { what: 'price this amount', log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'MoonPay', { what: 'price this amount', log: ctx.log })
       }
       if (res.quoteCurrencyAmount === undefined || res.totalAmount === undefined) {
-        throw new OrkException(orkError('NO_QUOTES', { message: 'MoonPay did not return a quote for this amount.' }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: 'MoonPay did not return a quote for this amount.' }), 422)
       }
+      // areFeesIncluded=true: MoonPay counts every fee inside totalAmount (the quote input).
+      const fiatAmt = (v: number): Amount => ({ value: dec(v, 2), asset: { kind: 'fiat', currency: fiat } })
       const fees: Fee[] = []
-      if (res.feeAmount) fees.push({ kind: 'provider', label: 'MoonPay fee', amount: dec(res.feeAmount, 2), currency: fiat })
-      if (res.networkFeeAmount) fees.push({ kind: 'network', label: 'Network fee', amount: dec(res.networkFeeAmount, 2), currency: fiat })
-      if (res.extraFeeAmount) fees.push({ kind: 'app', label: 'App fee', amount: dec(res.extraFeeAmount, 2), currency: fiat })
+      if (res.feeAmount) fees.push({ kind: 'provider', label: 'MoonPay fee', amount: fiatAmt(res.feeAmount), included: true })
+      if (res.networkFeeAmount) fees.push({ kind: 'network', label: 'Network fee', amount: fiatAmt(res.networkFeeAmount), included: true })
+      if (res.extraFeeAmount) fees.push({ kind: 'app', label: 'App fee', amount: fiatAmt(res.extraFeeAmount), included: true })
       const total = dec(res.totalAmount, 2)
       return {
         adapterId: 'moonpay',
         legId: d.id,
-        input: { amount: total, asset: { kind: 'fiat', currency: fiat } },
-        output: { amount: dec(res.quoteCurrencyAmount, target.decimals ?? 8), asset: assetOf(target) },
+        input: { value: total, asset: { kind: 'fiat', currency: fiat } },
+        output: { value: dec(res.quoteCurrencyAmount, target.decimals ?? 8), asset: assetOf(target) },
         fees,
+        // MoonPay sets the crypto rate when it executes the order, so the output is an estimate.
+        guarantee: 'estimate',
         eta: d.eta,
-        expiresAt: res.expiresAt && !Number.isNaN(Date.parse(res.expiresAt)) ? res.expiresAt : new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5, res.expiresAt),
         data: { currencyCode: target.currencyCode, paymentMethod: d.paymentMethod, fiat, total },
       }
     },
@@ -335,7 +355,7 @@ export function moonpay(opts: MoonPayOptions) {
       const data = (input.quote.data ?? {}) as { currencyCode?: string; paymentMethod?: string; fiat?: string; total?: string }
       const target = deliverAssetFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const walletAddress = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!walletAddress) throw new OrkException(orkError('BAD_REQUEST', { message: 'MoonPay needs a wallet address to deliver to.' }))
+      if (!walletAddress) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'MoonPay needs a wallet address to deliver to.' }))
       const fiat = input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : data.fiat ?? opts.baseCurrencyDefault ?? 'USD'
       // externalTransactionId routes webhooks and status checks back to this leg.
       const ref = `ork_${randomHex(12)}`
@@ -344,7 +364,7 @@ export function moonpay(opts: MoonPayOptions) {
         ['currencyCode', data.currencyCode ?? target.currencyCode],
         ['walletAddress', walletAddress],
         ['baseCurrencyCode', fiat.toLowerCase()],
-        ['baseCurrencyAmount', roundTo(input.quote.input.amount, 2)],
+        ['baseCurrencyAmount', roundTo(input.quote.input.value, 2)],
         ['lockAmount', 'true'],
         ['paymentMethod', data.paymentMethod ?? d.paymentMethod],
         ['externalTransactionId', ref],
@@ -358,7 +378,7 @@ export function moonpay(opts: MoonPayOptions) {
         opts.surface === 'iframe'
           ? { kind: 'IFRAME', url, origin: widgetOrigin, allow: IFRAME_ALLOW, height: 640, provider: 'MoonPay' }
           : { kind: 'REDIRECT', url, popup: true, provider: 'MoonPay' }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'awaiting_user', ref }
+      return { status: 'requires_action', action: { kind: 'payment', surface, transitions: [awaitPoll(POLL)] }, ref }
     },
 
     async status(input, ctx) {
@@ -368,29 +388,33 @@ export function moonpay(opts: MoonPayOptions) {
       } catch (e) {
         // No transaction yet: the user has not paid in the widget.
         if (httpStatus(e) === 404) return legStepFromEvent(undefined, input.ref, POLL)
-        throw httpErrorToOrk(e, 'MoonPay', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
+        throw httpErrorToOpenRamp(e, 'MoonPay', { what: 'find this purchase', noQuoteStatuses: [], log: ctx.log })
       }
       const list = Array.isArray(res) ? res : [res]
       // Several transactions can share one external id (a retry in the widget): the newest decides.
+      // No transaction or an unknown status: a status poll. The server never moves a leg back, so a
+      // leg that already moved on keeps its step.
       const tx = list[list.length - 1]
-      return legStepFromEvent(tx ? eventFrom(tx, input.ref) : undefined, input.ref, POLL)
+      return legStepFromEvent(tx ? eventFrom(tx, ctx.log, input.ref) : undefined, input.ref, POLL)
     },
 
     webhook: {
+      // Without the webhookKey, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookKey,
       async verify(req, rawBody, ctx) {
         if (!opts.webhookKey) {
           ctx.log.warn('moonpay: webhookKey is not set; rejecting webhook')
           return false
         }
-        const header = req.headers.get('moonpay-signature-v2')
-        if (!header) return false
-        const parts = parseSigHeader(header)
-        const t = Number(parts.t)
-        if (!parts.t || !parts.s || !Number.isFinite(t)) return false
-        if (Math.abs(Date.now() / 1000 - t) > WEBHOOK_TOLERANCE_SEC) return false
+        // `t=<unix s>,s=<HMAC-SHA256 over "{t}.{body}">`.
         // TO VERIFY: hex output (inferred from the 64-hex-char example in the docs)
-        const expected = await hmacSha256(opts.webhookKey, `${parts.t}.${rawBody}`, 'hex')
-        return timingSafeEqual(parts.s.toLowerCase(), expected)
+        return verifyTimestampedHmac({
+          secret: opts.webhookKey,
+          rawBody,
+          header: req.headers.get('moonpay-signature-v2'),
+          signatureKey: 's',
+          toleranceSec: WEBHOOK_TOLERANCE_SEC,
+        })
       },
       async parse(rawBody, ctx) {
         let body: { type?: string; data?: MpTransaction }
@@ -401,7 +425,7 @@ export function moonpay(opts: MoonPayOptions) {
           return []
         }
         if (!body.type?.startsWith('transaction_') || !body.data) return []
-        const ev = eventFrom(body.data)
+        const ev = eventFrom(body.data, ctx.log)
         return ev ? [ev] : []
       },
     },

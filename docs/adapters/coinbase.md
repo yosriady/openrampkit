@@ -18,6 +18,8 @@ coinbase({
 Coinbase ended guest checkout in the hosted widget on 2026-06-30. The hosted legs (`card`, `apple_pay`, `google_pay`, `ach`, `coinbase_account`) need a Coinbase account. For guest Apple Pay, set `guestCheckout`. It uses the [Headless Onramp API](https://docs.cdp.coinbase.com/onramp/headless-onramp/overview).
 :::
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#coinbase).
+
 ## Options
 
 | Option | Type | Default | Description |
@@ -30,7 +32,8 @@ Coinbase ended guest checkout in the hosted widget on 2026-06-30. The hosted leg
 | `onrampApiUrl` | `string` | `https://api.developer.coinbase.com` | Onramp API (config, status) |
 | `defaultCountry` | `string` | `'US'` | Country when the session has none |
 | `defaultSubdivision` | `string` | none | US state for quotes when the session has no region (Coinbase needs `subdivision` for US quotes) |
-| `sandbox` | `boolean` | `!session.livemode` | Prefix `partnerUserRef` with `sandbox-` |
+| `env` | `'sandbox' \| 'production'` | none: each session's `livemode` decides | `'sandbox'` prefixes `partnerUserRef` with `sandbox-`. The server checks it against `livemode`. |
+| `sandbox` | `boolean` | none | Deprecated. `true` is `env: 'sandbox'`, `false` is `env: 'production'`. |
 | `accountBalance` | `'FIAT_WALLET' \| 'CRYPTO_WALLET'` | `'FIAT_WALLET'` | The balance that the `coinbase_account` leg selects first. The user can pick another balance on the Coinbase page. |
 | `guestCheckout` | `{ domain, verifiedContact? }` | none | Turns on the `guest_apple_pay` leg. See [Guest Apple Pay](#guest-apple-pay). |
 
@@ -85,24 +88,34 @@ Flow:
 - Quote: `POST /platform/v2/onramp/orders` with `isQuote: true`, `paymentMethod: GUEST_CHECKOUT_APPLE_PAY`, `paymentCurrency: USD`, the network, address, `domain`, `clientIp` and `locale`.
 - Start: the same call with `isQuote: false`. The order's `paymentLink.url` opens in an `IFRAME` surface with `allow="payment"` and `referrerpolicy="no-referrer"`. In sandbox mode the adapter adds `useApplePaySandbox=true` to the link. Sandbox links work on `http://localhost` without domain setup.
 - Frame events: the modal reads the Coinbase `postMessage` events (`eventName`). `onramp_api.commit_success` and `onramp_api.polling_success` make the modal check the status at once. `onramp_api.commit_error`, `onramp_api.polling_error` and `onramp_api.session_error` also do. `onramp_api.cancel` shows the "closed" notice. The server status is always the source of truth.
-- Status: `GET /platform/v2/onramp/orders/{orderId}`. `ONRAMP_ORDER_STATUS_PENDING_*` gives `awaiting_user`, `PROCESSING` gives `processing`, `COMPLETED` gives `succeeded` and `FAILED` gives `failed`.
+- Status: `GET /platform/v2/onramp/orders/{orderId}`. `ONRAMP_ORDER_STATUS_PENDING_AUTH`, `_PENDING_VERIFICATION` and `_PENDING_PAYMENT` give `requires_action`, `PROCESSING` gives `processing`, `COMPLETED` gives `succeeded` and `FAILED` gives `failed`.
 - Errors: `guest_transaction_limit` gives `AMOUNT_TOO_HIGH`. `guest_region_forbidden` gives `REGION_UNSUPPORTED`. `guest_permission_denied` and `guest_transaction_count` give `PROVIDER_DECLINED`.
 
 If the user leaves the frame before paying, Coinbase sends no webhook and the order stays open. The session expires as usual.
 
 ## Quotes and start (hosted legs)
 
+- Delivers USDC on Base, Ethereum, Arbitrum, Optimism, Polygon and Solana. Another token or chain gets no quote (`NO_QUOTES`). The adapter does not quote USDC on Base in its place.
 - Quote: `POST /platform/v2/onramp/sessions` with the payment amount, currency and method, the country, the US subdivision (from `session.region` such as `US-CA`, else `defaultSubdivision`), the destination network and address, and `partnerUserRef`. It returns a quote and a single-use one-click URL.
 - Start: reuses the quote's URL when it is less than 4 minutes old (session tokens last 5 minutes). Otherwise it makes a new session with the same method and location.
 - Reference: `partnerUserRef`, `ork-{random}` (with `sandbox-` in front in sandbox mode). Guest orders use the same reference.
 - Status: `GET /onramp/v1/buy/user/{partnerUserRef}/transactions?pageSize=1`.
+
+## Quotes, fees and references
+
+- **Guarantee**: `estimate` for every leg. Coinbase sets the final price when it executes. Quotes expire after 5 minutes (`quoteExpiresAt(5)`).
+- **Fees**: Coinbase states its fees in the payment currency. A network fee is a `network` fee. Every other fee is a `provider` fee ("Coinbase fee"). `paymentTotal` (the quote input) is the subtotal plus the fees, so each fee has `included: true`.
+- **`providerRef`**: the guest order id for `guest_apple_pay` (set at start). For the hosted legs, Coinbase makes no transaction before the user pays. So the hosted `providerRef` comes later from a status check or a webhook: the Coinbase transaction id.
+- **Transactions**: the delivery to the user's wallet is the `destination` transaction.
 
 ## Webhooks
 
 Create a CDP webhook subscription for `onramp.transaction.created`, `onramp.transaction.updated`, `onramp.transaction.success` and `onramp.transaction.failed` with the URL `{baseUrl}/webhooks/coinbase`. Pass its `metadata.secret` as `webhookSecret`. The same subscription sends hosted transaction events and guest order events.
 
 - Verification: header `X-Hook0-Signature` with `t=...` and `v0=...`. `v0` is the hex HMAC-SHA256 of `{t}.{body}` ([verify signatures](https://docs.cdp.coinbase.com/webhooks/verify-signatures)). Timestamps older than 5 minutes are rejected.
-- `ONRAMP_TRANSACTION_STATUS_SUCCESS`, `ONRAMP_ORDER_STATUS_COMPLETED` or `onramp.transaction.success` give `succeeded` (with the tx hash and amount). Statuses ending in `_FAILED` or `onramp.transaction.failed` give `failed`. `ONRAMP_ORDER_STATUS_PENDING_*` gives `awaiting_user`. Others give `processing`.
+- Verification uses `verifyTimestampedHmac` from `@openrampkit/adapter`.
+- `ONRAMP_TRANSACTION_STATUS_SUCCESS`, `ONRAMP_ORDER_STATUS_COMPLETED` or `onramp.transaction.success` give `succeeded` (with the `destination` transaction and the amount). `ONRAMP_TRANSACTION_STATUS_FAILED`, `ONRAMP_ORDER_STATUS_FAILED` or `onramp.transaction.failed` give `failed`. The three `ONRAMP_ORDER_STATUS_PENDING_*` statuses give `requires_action`. `ONRAMP_TRANSACTION_STATUS_IN_PROGRESS` and `ONRAMP_ORDER_STATUS_PROCESSING` give `processing` (detail code `processing`).
+- An unknown status gives no event (`statusMap`). The adapter logs it once, and the leg keeps its current step. It never becomes `processing` by accident.
 
 ## Verified vs TO VERIFY
 

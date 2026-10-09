@@ -40,7 +40,7 @@ test('Vietnam: VietQR to a token on Monad (onramp, then bridge hop)', async ({ p
   await expect(methods).toContainText('Deposit complete', { timeout: 30_000 })
   await expectAccessible(page, 'success')
   await page.screenshot({ path: 'e2e/screens/vietqr-done.png' })
-  await waitForWebhook(page, 'session.completed')
+  await waitForWebhook(page, 'session.succeeded')
 })
 
 test('Singapore: card via popup-safe redirect to the hosted checkout', async ({ page, context }) => {
@@ -63,7 +63,7 @@ test('Singapore: card via popup-safe redirect to the hosted checkout', async ({ 
   expect(new URL(page.url()).pathname).toBe('/')
   await popup.getByRole('button', { name: /^Pay / }).click()
   await expect(modal).toContainText('Deposit complete', { timeout: 30_000 })
-  await waitForWebhook(page, 'session.completed')
+  await waitForWebhook(page, 'session.succeeded')
 })
 
 test('Mock wallet: pay from a connected wallet', async ({ page }) => {

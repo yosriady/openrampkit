@@ -1,6 +1,8 @@
 // English catalog: the source of truth for every key of `Messages`.
 // Keep copy short and plain. Do not use em dashes or en dashes.
 
+import type { StepDetailCode } from '@openrampkit/core'
+
 export const en = {
   /** BCP 47 tag used for number and currency formatting */
   locale: 'en',
@@ -53,6 +55,10 @@ export const en = {
   youPay: (amount: string) => `You pay ${amount}`,
   fees: (amount: string) => `Fees ${amount}`,
   noFees: 'No fees',
+  /** A quote with a fee whose amount the provider does not say (it is in the exchange rate) */
+  feesInRate: 'Fees included in the rate',
+  /** Added after known fees when another fee is in the rate */
+  feeInRate: 'a fee in the rate',
   bestPrice: 'Best price',
   fastest: 'Fastest',
   gettingQuotes: 'Getting quotes',
@@ -74,7 +80,9 @@ export const en = {
     FAILED: 'Payment failed',
     EXPIRED: 'Expired',
     REFUNDED: 'Refunded',
+    REVERSED: 'Reversed',
     BLOCKED: 'Not available',
+    CANCELED: 'Canceled',
   } as Record<string, string>,
   provider: 'the provider',
   continueTo: (provider: string) => `Continue to ${provider}`,
@@ -111,13 +119,33 @@ export const en = {
   checkingStatus: 'Checking status',
   chooseOther: 'Choose another method',
   progressLabel: 'Progress',
+  /** Labels for `Step.detail.code` (the closed list `STEP_DETAIL_CODES` in core) */
+  stepDetail: {
+    kyc_details: 'Enter your details',
+    kyc_terms: 'Accept the terms',
+    kyc_verify: 'Verify your identity',
+    kyc_review: 'Checking your identity',
+    card_details: 'Enter your card details',
+    bank_details: 'Send the bank transfer',
+    payout_account: 'Add your payout account',
+    send_crypto: 'Send the crypto',
+    waiting_for_deposit: 'Waiting for your deposit',
+    ambiguous_deposit: 'Deposit needs a manual check',
+    confirming: 'Confirming on chain',
+    bridging: 'Moving funds between networks',
+    settling: 'Settling the payment',
+    delayed: 'Taking longer than usual',
+    refunding: 'Refunding',
+    processing: 'Processing',
+  } satisfies Record<StepDetailCode, string>,
   legStatus: {
     pending: 'waiting',
-    awaiting_user: 'needs your action',
+    requires_action: 'needs your action',
     processing: 'in progress',
     succeeded: 'done',
     failed: 'failed',
     refunded: 'refunded',
+    reversed: 'reversed',
     expired: 'expired',
   } as Record<string, string>,
 
@@ -130,7 +158,9 @@ export const en = {
     FAILED: 'Payment failed',
     EXPIRED: 'Session expired',
     REFUNDED: 'Payment refunded',
+    REVERSED: 'Payment reversed',
     BLOCKED: 'Not available',
+    CANCELED: 'Session canceled',
   } as Record<string, string>,
   failedBody: 'The payment did not go through.',
   done: 'Done',

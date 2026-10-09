@@ -227,7 +227,7 @@ test.describe('testnet mode on Solana devnet (fake wallet, fake RPC)', () => {
     await expect(result).toContainText('Deposit complete on Solana devnet.')
     await expect(page.getByTestId('tx-link-solana-explorer')).toHaveAttribute('href', `https://explorer.solana.com/tx/${rpc.sent[0]!.signature}?cluster=devnet`)
     await expect(page.getByTestId('events')).toContainText('COMPLETED')
-    await expect(page.getByTestId('webhooks')).toContainText('session.completed')
+    await expect(page.getByTestId('webhooks')).toContainText('session.succeeded')
     expect(errors).toEqual([])
   })
 })

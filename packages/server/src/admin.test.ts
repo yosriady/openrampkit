@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { USDC } from '@openrampkit/core'
-import type { LegSpec, LegStatus, LegStep } from '@openrampkit/core'
+import type { LegSpec } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
 import type { OpenRampConfig, SessionStore } from './index.js'
 import { amountOf, tokenMatches } from './admin.js'
@@ -22,10 +22,6 @@ const quiet = { debug() {}, info() {}, warn() {}, error() {} }
 const DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, address: '0x000000000000000000000000000000000000beef' }
 const SRC = { chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6, custody: 'user_wallet' as const }
 const HOOKS = { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }
-const STATE: Record<LegStatus, LegStep['state']> = {
-  pending: 'PROCESSING', awaiting_user: 'PAYMENT', processing: 'PROCESSING', succeeded: 'COMPLETED', failed: 'FAILED', refunded: 'REFUNDED', expired: 'EXPIRED',
-}
-
 /** A card provider with webhooks. Each start makes a new order ref. */
 function hookedAdapter() {
   let n = 0
@@ -39,14 +35,14 @@ function hookedAdapter() {
   return createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: { amount: amountIn!.amount, asset: { kind: 'fiat', currency: 'SGD' } }, output: { amount: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: { value: amountIn!.value, asset: { kind: 'fiat', currency: 'SGD' } }, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
       const ref = `order-${++n}`
-      return { state: 'PAYMENT', status: 'awaiting_user', ref, surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll }
+      return { status: 'requires_action', ref, action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: poll } }
     },
     async status({ ref }) {
-      return { state: STATE.awaiting_user, status: 'awaiting_user', ref, transitions: poll }
+      return { status: 'requires_action', ref, action: { kind: 'payment', transitions: poll } }
     },
     webhook: {
       async verify(req) {
@@ -156,10 +152,10 @@ describe('admin list', () => {
     const all = await t.ramp.admin.list()
     expect(all.sessions.map((s) => s.id)).toEqual([...ids].reverse())
     expect(all.nextCursor).toBeUndefined()
-    expect(all.sessions[0]).toMatchObject({ direction: 'deposit', status: 'open', state: 'SELECT_METHOD', stuck: false, deadLetters: 0 })
+    expect(all.sessions[0]).toMatchObject({ direction: 'deposit', status: 'requires_payment_method', state: 'SELECT_METHOD', stuck: false, deadLetters: 0 })
 
     expect((await t.ramp.admin.list({ direction: 'withdraw' })).sessions.map((s) => s.id)).toEqual([ids[3], ids[1]])
-    expect((await t.ramp.admin.list({ state: 'completed' })).sessions).toEqual([])
+    expect((await t.ramp.admin.list({ state: 'succeeded' })).sessions).toEqual([])
     expect((await t.ramp.admin.list({ state: 'SELECT_METHOD' })).sessions).toHaveLength(5)
     // Created at least 3 minutes ago: the first three (the clock is 5 minutes after the first one).
     expect((await t.ramp.admin.list({ olderThan: 3 })).sessions.map((s) => s.id)).toEqual([ids[2], ids[1], ids[0]])
@@ -224,10 +220,14 @@ describe('admin get, find and stats', () => {
     const t = make()
     const s = await t.pay('25')
     const v = (await t.ramp.admin.get(s.id))!
-    expect(v).toMatchObject({ id: s.id, direction: 'deposit', status: 'processing', state: 'PAYMENT', amount: '25', currency: 'SGD', method: 'card', provider: 'Hooked' })
-    expect(v.payment!.legs[0]).toMatchObject({ adapterId: 'hooked', ref: s.ref, status: 'awaiting_user', started: true })
+    // The user still has to pay: `requires_action`, not `processing`.
+    expect(v).toMatchObject({ id: s.id, direction: 'deposit', status: 'requires_action', state: 'PAYMENT', amount: '25', currency: 'SGD', method: 'card', provider: 'Hooked' })
+    expect((await t.ramp.admin.list({ state: 'requires_action' })).sessions.map((x) => x.id)).toEqual([s.id])
+    expect((await t.ramp.admin.list({ state: 'processing' })).sessions).toEqual([])
+    expect((await t.ramp.admin.stats()).byStatus).toMatchObject({ requires_action: 1 })
+    expect(v.payment!.legs[0]).toMatchObject({ adapterId: 'hooked', ref: s.ref, status: 'requires_action', started: true })
     expect(v.providerRefs).toEqual([{ adapterId: 'hooked', ref: s.ref, attempt: 0, active: true }])
-    expect(v.timeline.map((e) => e.type)).toEqual(['session.created', 'payment.started', 'leg.awaiting_user'])
+    expect(v.timeline.map((e) => e.type)).toEqual(['session.created', 'payment.started', 'leg.requires_action', 'session.requires_action'])
     expect(JSON.stringify(v)).not.toMatch(/secretHash|startUrls|provider\.test/)
     expect(await t.ramp.admin.get('ors_missing')).toBeNull()
     expect((await t.admin('/sessions/ors_missing')).status).toBe(404)
@@ -238,12 +238,21 @@ describe('admin get, find and stats', () => {
     const t = make()
     const s = await t.pay()
     const tx = `0x${'ab'.repeat(32)}`
-    await t.hook([{ ref: s.ref, status: 'succeeded', txHash: tx }])
+    const src = `0x${'cd'.repeat(32)}`
+    await t.hook([{ ref: s.ref, status: 'succeeded', transactions: [{ role: 'source', hash: src }, { role: 'destination', hash: tx }] }])
+    const v = (await t.ramp.admin.get(s.id))!
+    expect(v.transactions).toEqual([
+      { role: 'source', chain: 'eip155:8453', hash: src, legIndex: 0, explorerUrl: `https://basescan.org/tx/${src}`, attempt: 0 },
+      { role: 'destination', chain: 'eip155:8453', hash: tx, legIndex: 0, explorerUrl: `https://basescan.org/tx/${tx}`, attempt: 0 },
+    ])
+    expect(v.payment!.legs[0]!.transactions.map((x) => x.role)).toEqual(['source', 'destination'])
     expect((await t.ramp.admin.findByRef('hooked', s.ref))!.id).toBe(s.id)
     expect(await t.ramp.admin.findByRef('hooked', 'nope')).toBeNull()
     expect((await t.ramp.admin.findByTx(undefined, tx.toUpperCase().replace('0X', '0x'))).map((x) => x.id)).toEqual([s.id])
     expect((await t.ramp.admin.findByTx('eip155:8453', tx)).map((x) => x.id)).toEqual([s.id])
     expect(await t.ramp.admin.findByTx('eip155:1', tx)).toEqual([])
+    // The user's own origin transaction finds the session too.
+    expect((await t.ramp.admin.findByTx(undefined, src)).map((x) => x.id)).toEqual([s.id])
     const r = await (await t.admin(`/find?provider=hooked&ref=${s.ref}`)).json()
     expect(r.sessions[0].id).toBe(s.id)
     expect((await (await t.admin(`/find?tx=${tx}`)).json()).sessions[0].id).toBe(s.id)
@@ -262,10 +271,10 @@ describe('admin get, find and stats', () => {
     vi.advanceTimersByTime(61 * 60_000)
 
     const s = await t.ramp.admin.stats()
-    expect(s).toMatchObject({ total: 4, truncated: false, byStatus: { completed: 2, open: 2 } })
-    expect(s.byDirection.deposit).toMatchObject({ total: 3, byStatus: { completed: 2, open: 1 } })
+    expect(s).toMatchObject({ total: 4, truncated: false, byStatus: { succeeded: 2, requires_payment_method: 2 } })
+    expect(s.byDirection.deposit).toMatchObject({ total: 3, byStatus: { succeeded: 2, requires_payment_method: 1 } })
     expect(s.byDirection.withdraw.total).toBe(1)
-    expect(s.completedVolume).toEqual([{ direction: 'deposit', currency: 'SGD', amount: '25.5', count: 2 }])
+    expect(s.succeededVolume).toEqual([{ direction: 'deposit', currency: 'SGD', amount: '25.5', count: 2 }])
     expect(s.stuck).toMatchObject({ count: 2, afterMinutes: 60 })
     expect(s.outbox).toMatchObject({ deadLetters: 1, sessionsWithDeadLetters: 1 })
     expect(s.webhookFailures).toBe(1)
@@ -284,12 +293,12 @@ describe('admin resolve and replay', () => {
     const res = await t.admin(`/sessions/${s.id}/resolve`, { method: 'POST', body: JSON.stringify({ state: 'COMPLETED', note: 'Paid by bank transfer, ticket 123' }) })
     expect(res.status).toBe(200)
     const v = await res.json()
-    expect(v).toMatchObject({ status: 'completed', state: 'COMPLETED', resolved: true, resolution: { state: 'COMPLETED', note: 'Paid by bank transfer, ticket 123', previous: 'PAYMENT' } })
+    expect(v).toMatchObject({ status: 'succeeded', state: 'COMPLETED', resolved: true, resolution: { state: 'COMPLETED', note: 'Paid by bank transfer, ticket 123', previous: 'PAYMENT' } })
     expect(v.timeline.at(-2)).toMatchObject({ type: 'admin.resolved', detail: { state: 'COMPLETED', previous: 'PAYMENT', note: 'Paid by bank transfer, ticket 123' } })
-    const hook = t.sent.find((x) => x.type === 'session.completed')!
+    const hook = t.sent.find((x) => x.type === 'session.succeeded')!
     expect(hook.ok).toBe(true)
     expect(hook.body.data.object).toMatchObject({ resolution: { by: 'admin', state: 'COMPLETED', note: 'Paid by bank transfer, ticket 123' } })
-    expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('completed')
+    expect((await t.ramp.sessions.retrieve(s.id))!.status).toBe('succeeded')
 
     // The same state again is refused; the browser cannot change the session now.
     expect((await t.admin(`/sessions/${s.id}/resolve`, { method: 'POST', body: JSON.stringify({ state: 'completed', note: 'again' }) })).status).toBe(409)
@@ -300,7 +309,7 @@ describe('admin resolve and replay', () => {
     expect(after.payment!.legs[0]!.status).toBe('failed')
   })
 
-  it('resolve needs a valid state and a note, and a withdrawal also gets withdrawal.failed', async () => {
+  it('resolve needs a valid state and a note; a withdrawal gets session.failed (no withdrawal.* events)', async () => {
     const t = make()
     const w = await t.withdraw()
     await expect(t.ramp.admin.resolve(w.id, 'FAILED', '  ')).rejects.toMatchObject({ status: 400 })
@@ -308,7 +317,9 @@ describe('admin resolve and replay', () => {
     await expect(t.ramp.admin.resolve('ors_missing', 'FAILED', 'x')).rejects.toMatchObject({ status: 404 })
     const v = await t.ramp.admin.resolve(w.id, 'FAILED', 'Sanctions hit')
     expect(v).toMatchObject({ status: 'failed', state: 'FAILED' })
-    expect(t.sent.map((x) => x.type)).toEqual(expect.arrayContaining(['session.failed', 'withdrawal.failed']))
+    expect(t.sent.map((x) => x.type)).toContain('session.failed')
+    expect(t.sent.map((x) => x.type).filter((x) => x.startsWith('withdrawal.'))).toEqual([])
+    expect(t.sent.find((x) => x.type === 'session.failed')!.body).toMatchObject({ data: { object: { session: { direction: 'withdraw' }, resolution: { by: 'admin', state: 'FAILED' } } } })
     const s = await t.deposit()
     await t.ramp.admin.resolve(s.id, 'EXPIRED', 'Old test session')
     expect((await t.post(`/sessions/${s.id}/plan`, s.clientSecret)).status).toBe(409)
@@ -386,6 +397,10 @@ describe('admin page', () => {
     expect(html).not.toMatch(/<link[^>]*stylesheet/)
     expect(html).not.toMatch(/https?:\/\/(?!app\.test)/)
     expect(html).toContain('sessionStorage')
+    // Reversed sessions: a filter, a stats card and a detail row
+    expect(html).toContain('<option>reversed</option>')
+    expect(html).toContain('Reversed after success')
+    expect(html).toContain("['Reversal', s.reversal")
     expect(html).not.toMatch(/[\u2013\u2014]/)
     expect(html).not.toContain(TOKEN)
     // A new nonce per request
@@ -396,8 +411,8 @@ describe('admin page', () => {
 })
 
 describe('amountOf', () => {
-  const usdc = (amount: string) => ({ amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } })
-  const vnd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'VND' } })
+  const usdc = (amount: string) => ({ value: amount, asset: { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } })
+  const vnd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'VND' } })
   const rec = (legs: Array<{ input: ReturnType<typeof usdc> | ReturnType<typeof vnd>; output: ReturnType<typeof usdc>; done?: ReturnType<typeof usdc> }>) =>
     ({ active: { legs: legs.map((l) => ({ quote: { input: l.input, output: l.output }, ...(l.done ? { step: { output: l.done } } : {}) })) } }) as unknown as Parameters<typeof amountOf>[0]
 

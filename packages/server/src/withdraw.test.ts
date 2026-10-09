@@ -1,14 +1,14 @@
-// Withdraw sessions: creation, the /target route (validation, allowedTargets, screening), custody by the
+// Withdraw sessions: creation, the /target route (validation, allowedDestinations, screening), custody by the
 // user's wallet or the app's treasury, the mock offramp, events that carry a surface, and webhooks.
 import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
-import { USDC } from '@openrampkit/core'
-import type { PlanResult, PublicSession, Quote, WithdrawSource } from '@openrampkit/core'
-import { createOpenRamp, isValidAddress } from './index.js'
+import { USDC, explorerTxUrl, stateFor } from '@openrampkit/core'
+import type { LegStep, PlanResult, PublicSession, Quote, WithdrawSource } from '@openrampkit/core'
+import { TreasuryRefusedError, createOpenRamp, isValidAddress } from './index.js'
 import type { CreateSessionInput, OpenRampConfig, TreasurySendInput } from './index.js'
-import { legStepFromEvent } from './legs.js'
+import { eventStep, mergeLegStep } from './legs.js'
 
 const BASE = 'https://app.test/api/openramp'
 const HOOK = 'https://app.test/hooks'
@@ -29,7 +29,7 @@ function make(extra: Partial<OpenRampConfig> = {}, adapters = [mockAdapter({ set
     if (String(input) === HOOK) hooks.push(JSON.parse(String(init?.body)) as Hook)
     return new Response('{}')
   }
-  const ramp = createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger: quiet, webhooks: { url: HOOK, secret: 'whsec_test_0123456789' }, fetch: fetchHooks, ...extra })
+  const ramp = createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger: quiet, webhooks: { url: HOOK, secret: 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw' }, fetch: fetchHooks, ...extra })
   const call = async <T = unknown>(path: string, secret: string, body?: unknown, method = body === undefined ? 'GET' : 'POST') => {
     const headers = new Headers({ authorization: `Bearer ${secret}` })
     if (body !== undefined) headers.set('content-type', 'application/json')
@@ -53,19 +53,22 @@ async function run(t: ReturnType<typeof make>, s: { id: string; clientSecret: st
 }
 
 describe('withdraw sessions: creation', () => {
-  it('needs a valid source, takes no destination, and publishes source and allowedTargets', async () => {
+  it('needs a valid source, refuses a merchant destination, and publishes source and allowedDestinations', async () => {
     const { create, ramp } = make()
     await expect(create({ source: undefined })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST', message: expect.stringMatching(/source/) } })
     await expect(create({ source: { ...SRC_USER, chain: 'base' } })).rejects.toMatchObject({ status: 400 })
     await expect(create({ source: { ...SRC_USER, token: '0x12' } })).rejects.toMatchObject({ status: 400 })
     await expect(create({ source: { ...SRC_USER, custody: 'bank' as never } })).rejects.toMatchObject({ status: 400 })
-    await expect(create({ destination: { type: 'merchant', currency: 'PHP' } })).rejects.toMatchObject({ error: { message: expect.stringMatching(/not `destination`/) } })
+    await expect(create({ destination: { type: 'merchant', currency: 'PHP' } })).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/"crypto" or "fiat"/) } })
+    // The names before 0.1.0 are refused with the new name.
+    await expect(create({ target: { type: 'fiat', currency: 'PHP' } } as never)).rejects.toMatchObject({ status: 400, error: { message: '`target` is now `destination`.' } })
+    await expect(create({ allowedTargets: {} } as never)).rejects.toMatchObject({ status: 400, error: { message: '`allowedTargets` is now `allowedDestinations`.' } })
     await expect(ramp.sessions.create({ userId: 'u', direction: 'sideways' as never })).rejects.toMatchObject({ status: 400 })
     await expect(ramp.sessions.create({ userId: 'u' } as CreateSessionInput)).rejects.toMatchObject({ error: { message: /needs `destination`/ } })
 
-    const s = await create({ allowedTargets: { crypto: { chains: ['eip155:42161'] } } })
+    const s = await create({ allowedDestinations: { crypto: { chains: ['eip155:42161'] } } })
     const pub = (await ramp.sessions.retrieve(s.id))!
-    expect(pub).toMatchObject({ direction: 'withdraw', source: { chain: 'eip155:8453', token: USDC['eip155:8453'], symbol: 'USDC', decimals: 6, custody: 'user_wallet' }, allowedTargets: { crypto: { chains: ['eip155:42161'] } } })
+    expect(pub).toMatchObject({ direction: 'withdraw', source: { chain: 'eip155:8453', token: USDC['eip155:8453'], symbol: 'USDC', decimals: 6, custody: 'user_wallet' }, allowedDestinations: { crypto: { chains: ['eip155:42161'] } } })
     expect(pub.destination).toBeUndefined()
     // A native source gets the chain's symbol; an unknown token keeps what the app gave.
     const n = await create({ source: { chain: 'eip155:42161', token: 'native', custody: 'app' } })
@@ -137,19 +140,19 @@ describe('POST /sessions/:id/target', () => {
     expect(q.status).toBe(422)
   })
 
-  it('applies allowedTargets: chains, currencies and whole target types', async () => {
+  it('applies allowedDestinations: chains, currencies and whole target types', async () => {
     const t = make()
-    const s = await t.create({ allowedTargets: { crypto: { chains: ['eip155:10'] }, fiat: { currencies: ['php'] } } })
+    const s = await t.create({ allowedDestinations: { crypto: { chains: ['eip155:10'] }, fiat: { currencies: ['php'] } } })
     const r = await t.call(`/sessions/${s.id}/target`, s.clientSecret, TO_ARB)
     expect(r.status).toBe(403)
-    expect(r.body.error?.code).toBe('TARGET_NOT_ALLOWED')
+    expect(r.body.error?.code).toBe('DESTINATION_NOT_ALLOWED')
     expect((await t.call(`/sessions/${s.id}/target`, s.clientSecret, { type: 'fiat', currency: 'VND' })).status).toBe(403)
     expect((await t.call(`/sessions/${s.id}/target`, s.clientSecret, { type: 'fiat', currency: 'PHP' })).status).toBe(200)
     expect((await t.call(`/sessions/${s.id}/target`, s.clientSecret, { ...TO_ARB, chain: 'eip155:10', token: USDC['eip155:10'] })).status).toBe(200)
-    const cryptoOnly = await t.create({ allowedTargets: { crypto: {} } })
+    const cryptoOnly = await t.create({ allowedDestinations: { crypto: {} } })
     expect((await t.call(`/sessions/${cryptoOnly.id}/target`, cryptoOnly.clientSecret, { type: 'fiat', currency: 'PHP' })).status).toBe(403)
     expect((await t.call(`/sessions/${cryptoOnly.id}/target`, cryptoOnly.clientSecret, TO_ARB)).status).toBe(200)
-    const fiatOnly = await t.create({ allowedTargets: { fiat: {} } })
+    const fiatOnly = await t.create({ allowedDestinations: { fiat: {} } })
     expect((await t.call(`/sessions/${fiatOnly.id}/target`, fiatOnly.clientSecret, TO_ARB)).status).toBe(403)
     expect((await t.call(`/sessions/${fiatOnly.id}/target`, fiatOnly.clientSecret, { type: 'fiat', currency: 'THB' })).status).toBe(200)
   })
@@ -190,15 +193,15 @@ describe('withdraw to a wallet (custody: user_wallet)', () => {
     const t = make()
     const s = await t.create()
     const { quote, session } = await run(t, s, TO_ARB, 'wallet')
-    expect(quote.input).toMatchObject({ amount: '25', asset: { chain: 'eip155:8453', symbol: 'USDC' } })
+    expect(quote.input).toMatchObject({ value: '25', asset: { chain: 'eip155:8453', symbol: 'USDC' } })
     expect(quote.output.asset).toMatchObject({ chain: 'eip155:42161', token: USDC['eip155:42161'] })
     expect(session.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: ARB_ADDR, chainId: 8453 }] } })
     const sent = await t.call<PublicSession>(`/sessions/${s.id}/transitions/submit_tx`, s.clientSecret, { inputs: { txHash: TX } })
     expect(sent.body.step.state).toBe('PROCESSING')
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
-    expect(done.body.status).toBe('completed')
-    expect(t.hooks.map((h) => h.type)).toEqual(['session.created', 'leg.succeeded', 'session.completed', 'withdrawal.completed'])
+    expect(done.body.status).toBe('succeeded')
+    expect(t.hooks.map((h) => h.type)).toEqual(['session.created', 'session.requires_action', 'session.processing', 'leg.succeeded', 'session.succeeded'])
     expect(t.hooks.at(-1)!.data.object.session).toMatchObject({ direction: 'withdraw', destination: { address: ARB_ADDR } })
     // The finished withdrawal can no longer restart.
     const again = await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})
@@ -212,8 +215,8 @@ describe('withdraw to cash with the mock offramp', () => {
     const t = make()
     const s = await t.create()
     const { quote, session } = await run(t, s, { type: 'fiat', currency: 'PHP' }, 'gcash', '20')
-    expect(quote).toMatchObject({ method: 'gcash', input: { amount: '20' }, output: { asset: { kind: 'fiat', currency: 'PHP' } }, fees: [{ amount: '0.200000', currency: 'USDC' }] })
-    expect(quote.output.amount).toBe('1131.43') // (20 - 1%) / 0.0175
+    expect(quote).toMatchObject({ method: 'gcash', input: { value: '20' }, output: { asset: { kind: 'fiat', currency: 'PHP' } }, fees: [{ amount: { value: '0.200000', asset: { kind: 'crypto', symbol: 'USDC' } }, included: true }], guarantee: 'firm' })
+    expect(quote.output.value).toBe('1131.43') // (20 - 1%) / 0.0175
     expect(session.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'FORM', fields: [{ id: 'account_name' }, { id: 'phone', type: 'tel', label: 'GCash phone number' }] }, transitions: [{ name: 'submit_details', kind: 'SUBMIT' }] })
 
     const tr = (name: string, inputs: Record<string, unknown> = {}) => t.call<PublicSession>(`/sessions/${s.id}/transitions/${name}`, s.clientSecret, { inputs })
@@ -221,7 +224,7 @@ describe('withdraw to cash with the mock offramp', () => {
     expect((await tr('submit_details', { account_name: 'Juan', phone: 'call me' })).body.error?.message).toBe('Enter a valid phone number.')
     expect((await tr('submit_tx', { txHash: TX })).status).toBe(409) // not offered yet
     const pay = await tr('submit_details', { account_name: 'Juan Dela Cruz', phone: '+63 917 123 4567' })
-    expect(pay.body.step).toMatchObject({ state: 'PAYMENT', sub: 'SEND_CRYPTO', surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'], chainId: 8453 }] } })
+    expect(pay.body.step).toMatchObject({ state: 'PAYMENT', detail: { code: 'send_crypto' }, surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'], chainId: 8453 }] } })
     const tx = (pay.body.step.surface as { txs: Array<{ data: string }> }).txs[0]!
     expect(tx.data.startsWith('0xa9059cbb')).toBe(true)
     expect(BigInt(`0x${tx.data.slice(-64)}`)).toBe(20_000_000n)
@@ -230,7 +233,7 @@ describe('withdraw to cash with the mock offramp', () => {
     expect((await tr('submit_tx', { txHash: TX })).body.step.state).toBe('PROCESSING')
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
-    expect(t.hooks.map((h) => h.type)).toContain('withdrawal.completed')
+    expect(t.hooks.map((h) => h.type)).toContain('session.succeeded')
   })
 
   it('bank transfer asks for bank fields; VND payout via MoMo is offered in VN only', async () => {
@@ -268,7 +271,7 @@ describe('withdraw with custody: app (treasury)', () => {
     expect(plan.pathways[0]!.legs[0]!.from.location).toEqual({ kind: 'address', address: 'app' })
     expect(session.step.state).toBe('PROCESSING')
     expect(session.step.surface).toBeUndefined()
-    expect(session.step.progress!.legs[0]).toMatchObject({ status: 'processing', txHash: TX })
+    expect(session.payment!.legs[0]).toMatchObject({ status: 'processing', transactions: [{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }] })
     expect(sends).toEqual([{ sessionId: s.id, userId: 'u1', chain: 'eip155:8453', txs: [expect.objectContaining({ to: ARB_ADDR })], idempotencyKey: expect.stringMatching(new RegExp(`^${s.id}:0:`)) }])
     const done = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)
     expect(done.body.step.state).toBe('COMPLETED')
@@ -288,13 +291,18 @@ describe('withdraw with custody: app (treasury)', () => {
     expect(treasury.send.mock.calls[0]![0]).toMatchObject({ chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453'] }] })
   })
 
-  it('a failing treasury fails the leg and sends withdrawal.failed', async () => {
-    const t = make({ treasury: { send: async () => { throw new Error('hot wallet empty') } } })
+  it('a failing treasury fails the attempt: session.payment_failed, and the user can try again', async () => {
+    const t = make({ treasury: { send: async () => { throw new TreasuryRefusedError('hot wallet empty') } } })
     const s = await t.create({ source: SRC_APP })
     const { session } = await run(t, s, TO_ARB, 'wallet', '5', false)
     expect(session.step.state).toBe('FAILED')
+    expect(session.status).toBe('requires_payment_method')
     expect(session.step.error).toMatchObject({ code: 'PAYMENT_FAILED', message: 'The withdrawal could not be sent. Contact support.' })
-    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['leg.failed', 'session.failed', 'withdrawal.failed']))
+    expect(session.lastError).toMatchObject({ code: 'PAYMENT_FAILED' })
+    const types = t.hooks.map((h) => h.type)
+    expect(types).toEqual(expect.arrayContaining(['leg.failed', 'session.payment_failed']))
+    expect(types).not.toContain('session.failed')
+    expect(types).not.toContain('withdrawal.failed')
   })
 })
 
@@ -315,16 +323,18 @@ function eventOfframp() {
         regions: { allow: ['*'], deny: [] },
         eta: { min: 60, max: 600 },
         surfaces: ['WALLET_TX'],
+        // It learns the deposit address from a webhook after the leg started.
+        capabilities: ['surface_after_processing'],
       },
     ],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { amount: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 } }
+      return { adapterId: 'evt', legId: leg.legId, input: amountIn!, output: { value: '1000', asset: leg.to.asset }, fees: [], eta: { min: 60, max: 600 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
-      return { state: 'PROCESSING', status: 'processing', ref: 'order_1', transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }] }
+      return { status: 'processing', ref: 'order_1' }
     },
     async transition({ ref, inputs }) {
-      return { state: 'PROCESSING', status: 'processing', ref, transitions: [], txHash: String(inputs?.txHash) }
+      return { status: 'processing', ref, transactions: [{ role: 'source', hash: String(inputs?.txHash) }] }
     },
     webhook: {
       verify: async () => true,
@@ -335,24 +345,37 @@ function eventOfframp() {
 
 const PENDING: LegEvent = {
   ref: 'order_1',
-  status: 'awaiting_user',
-  surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453']!, data: '0xa9059cbb', chainId: 8453 }] },
-  transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+  status: 'requires_action',
+  action: {
+    kind: 'payment',
+    surface: { kind: 'WALLET_TX', chain: 'eip155:8453', txs: [{ to: USDC['eip155:8453']!, data: '0xa9059cbb', chainId: 8453 }] },
+    transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+  },
 }
+const AWAIT = [{ name: 'poll', kind: 'AWAIT' as const, poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60_000 } }]
+/** PENDING with no transition to report the hash: the UI only checks the status */
+const PENDING_NO_REPORT: LegEvent = { ...PENDING, action: { ...PENDING.action!, transitions: AWAIT } }
 
 describe('provider events that carry a surface', () => {
-  it('legStepFromEvent uses the event surface and transitions; default AWAIT; terminal events drop surfaces', () => {
-    const cur = { state: 'PROCESSING' as const, status: 'processing' as const, transitions: [], ref: 'r', surface: { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'PHP' } }
-    const a = legStepFromEvent(cur, PENDING)
-    expect(a).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'WALLET_TX' }, transitions: [{ name: 'submit_tx' }] })
-    const b = legStepFromEvent(cur, { ...PENDING, transitions: undefined } as LegEvent)
-    expect(b.transitions).toEqual([expect.objectContaining({ kind: 'AWAIT' })])
-    expect(b.surface?.kind).toBe('WALLET_TX')
-    const c = legStepFromEvent(cur, { ref: 'r', status: 'processing' })
-    expect(c.surface?.kind).toBe('QR') // no event surface: keep the current one
-    const d = legStepFromEvent(cur, { ...PENDING, status: 'succeeded' })
-    expect(d.surface).toBeUndefined()
-    expect(d.transitions).toEqual([])
+  it('an event action replaces the current one; an action-less event keeps it, or waits with AWAIT; other statuses drop it', () => {
+    const qr = { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'PHP' }
+    const cur: LegStep = { status: 'requires_action', ref: 'r', action: { kind: 'payment', surface: qr, transitions: AWAIT } }
+    const a = mergeLegStep(cur, eventStep(PENDING))
+    expect(stateFor(a)).toBe('PAYMENT')
+    expect(a).toMatchObject({ status: 'requires_action', action: { surface: { kind: 'WALLET_TX' }, transitions: [{ name: 'submit_tx' }] } })
+    // No action in the event: keep the current surface while the user must act.
+    const b = mergeLegStep(cur, eventStep({ ref: 'r', status: 'requires_action' }))
+    expect(b.action?.surface).toEqual(qr)
+    // No action and no current one (the leg was processing): an AWAIT poll and no surface.
+    const b2 = mergeLegStep({ status: 'processing', ref: 'r' }, eventStep({ ref: 'r', status: 'requires_action' }))
+    expect(b2.action).toMatchObject({ kind: 'payment', transitions: [expect.objectContaining({ kind: 'AWAIT' })] })
+    expect(b2.action?.surface).toBeUndefined()
+    const c = mergeLegStep(cur, eventStep({ ref: 'r', status: 'processing' }))
+    expect(c.action).toBeUndefined()
+    expect(stateFor(c)).toBe('PROCESSING')
+    const d = mergeLegStep(a, eventStep({ ref: 'r', status: 'succeeded' }))
+    expect(d.action).toBeUndefined()
+    expect(stateFor(d)).toBe('COMPLETED')
   })
 
   it('a webhook with a WALLET_TX surface switches the step; the user then submits the hash', async () => {
@@ -365,7 +388,8 @@ describe('provider events that carry a surface', () => {
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
     expect(now.body.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX', chain: 'eip155:8453' }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT' }] })
     const sent = await t.call<PublicSession>(`/sessions/${s.id}/transitions/submit_tx`, s.clientSecret, { inputs: { txHash: TX } })
-    expect(sent.body.step).toMatchObject({ state: 'PROCESSING', progress: { legs: [{ txHash: TX }] } })
+    expect(sent.body.step.state).toBe('PROCESSING')
+    expect(sent.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0, ...(explorerTxUrl('eip155:8453', TX) ? { explorerUrl: explorerTxUrl('eip155:8453', TX) } : {}) }])
   })
 
   it('with custody app, the treasury sends a WALLET_TX that arrives by webhook, once per step', async () => {
@@ -376,11 +400,154 @@ describe('provider events that carry a surface', () => {
     const post = () => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(PENDING) }))
     await post()
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
-    expect(now.body.step).toMatchObject({ state: 'PROCESSING', progress: { legs: [{ txHash: TX }] } })
+    expect(now.body.step.state).toBe('PROCESSING')
+    expect(now.body.payment!.legs[0]!.transactions).toEqual([{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0, ...(explorerTxUrl('eip155:8453', TX) ? { explorerUrl: explorerTxUrl('eip155:8453', TX) } : {}) }])
     expect(treasury.send).toHaveBeenCalledTimes(1)
     // A replayed webhook for the same step does not send twice.
     await post()
     expect(treasury.send).toHaveBeenCalledTimes(1)
+  })
+
+  it('a payout returned after success sends session.reversed once', async () => {
+    const t = make({}, [eventOfframp()])
+    const s = await t.create()
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10')
+    const post = (ev: LegEvent) => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(ev) }))
+    await post({ ref: 'order_1', status: 'succeeded' })
+    await post({ ref: 'order_1', status: 'reversed' })
+    const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
+    expect(now.body).toMatchObject({ status: 'reversed', step: { state: 'REVERSED' } })
+    expect(t.hooks.map((h) => h.type)).toEqual(expect.arrayContaining(['session.succeeded', 'session.reversed']))
+    expect(t.hooks.filter((h) => h.type === 'session.reversed')).toHaveLength(1)
+    expect(t.hooks.filter((h) => h.type.startsWith('withdrawal.'))).toEqual([])
+  })
+
+  it('the treasury sends at most once per session when the provider fails after the send, then sends the webhook again', async () => {
+    const sent: string[] = []
+    const treasury = { send: vi.fn(async (i: TreasurySendInput) => (sent.push(i.idempotencyKey), { hash: TX })) }
+    // The provider API fails once when the server reports the hash (after the treasury sent).
+    const base = eventOfframp()
+    let fail = true
+    const flaky = {
+      ...base,
+      async transition(...args: Parameters<NonNullable<typeof base.transition>>) {
+        if (fail) {
+          fail = false
+          throw new Error('provider API 500')
+        }
+        return base.transition!(...args)
+      },
+    }
+    const t = make({ treasury }, [flaky])
+    const s = await t.create({ source: SRC_APP })
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10', false)
+    const post = () => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(PENDING) }))
+    expect((await post()).status).toBe(500)
+    expect(sent).toHaveLength(1)
+    // The provider sends the webhook again. The funds left: the user never sees a WALLET_TX to sign.
+    expect((await post()).status).toBe(200)
+    const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
+    expect(now.body.step.state).toBe('PROCESSING')
+    expect(now.body.step.surface).toBeUndefined()
+    // No new payment can start, so the treasury cannot send a second time.
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'bank_transfer', amount: '10' })
+    if (q.status === 200) await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })
+    await post()
+    expect(sent).toHaveLength(1)
+  })
+
+  it('a provider failure after the treasury sent is final: no new attempt, no second payout', async () => {
+    const sent: string[] = []
+    const treasury = { send: vi.fn(async (i: TreasurySendInput) => (sent.push(i.idempotencyKey), { hash: TX })) }
+    const t = make({ treasury }, [eventOfframp()])
+    const s = await t.create({ source: SRC_APP })
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10', false)
+    const post = (ev: LegEvent) => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(ev) }))
+    expect((await post(PENDING)).status).toBe(200)
+    expect(sent).toHaveLength(1)
+    // The provider then fails the order. The treasury funds already left: this is not a retryable attempt.
+    expect((await post({ ref: 'order_1', status: 'failed' })).status).toBe(200)
+    const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
+    expect(now.body.status).toBe('failed')
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'bank_transfer', amount: '10' })
+    expect(q.status).not.toBe(200)
+    expect(sent).toHaveLength(1)
+  })
+
+  it('a treasury error that is not a TreasuryRefusedError is final: the funds may have left', async () => {
+    let calls = 0
+    // For example, the hot wallet broadcast the payout, then timed out before it returned the hash.
+    const t = make({ treasury: { send: async () => { calls++; throw new Error('RPC timeout after broadcast') } } })
+    const s = await t.create({ source: SRC_APP })
+    const { session } = await run(t, s, TO_ARB, 'wallet', '5', false)
+    expect(session.step.state).toBe('FAILED')
+    expect(session.status).toBe('failed')
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '5' })
+    expect(q.status).not.toBe(200)
+    expect(calls).toBe(1)
+  })
+
+  it('a failure after the treasury sent, inside select, leaves no state that starts a second payment', async () => {
+    const sent: string[] = []
+    let refuse = true
+    const treasury = {
+      send: vi.fn(async (i: TreasurySendInput) => {
+        // The first withdrawal is refused (an empty hot wallet): the session is FAILED.
+        if (refuse) {
+          refuse = false
+          throw new TreasuryRefusedError('hot wallet empty')
+        }
+        sent.push(i.idempotencyKey)
+        return { hash: TX }
+      }),
+    }
+    const base = mockAdapter({ settleMs: 0, crypto: true, offramp: true })
+    let failReport = false
+    const flaky = {
+      ...base,
+      async transition(...args: Parameters<NonNullable<typeof base.transition>>) {
+        if (failReport) {
+          failReport = false
+          throw new Error('provider API 500')
+        }
+        return base.transition!(...args)
+      },
+    }
+    const t = make({ treasury }, [flaky])
+    const s = await t.create({ source: SRC_APP })
+    const first = await run(t, s, TO_ARB, 'wallet', '30', false)
+    expect(first.session.step.state).toBe('FAILED')
+    // The second try: the treasury sends, then the provider fails when the server reports the hash.
+    failReport = true
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '30' })
+    expect((await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })).status).toBe(500)
+    expect(sent).toHaveLength(1)
+    // The saved session shows the payment in progress, not the old FAILED state.
+    expect((await t.ramp.sessions.retrieve(s.id))!.step.state).toBe('PROCESSING')
+    const again = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '30' })
+    if (again.status === 200) expect((await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: again.body.quotes[0]!.id })).status).toBe(409)
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    expect(sent).toHaveLength(1)
+  })
+
+  it('an earlier attempt to another target does not become the payment again: no completion with the wrong destination', async () => {
+    const t = make({}, [eventOfframp()])
+    const s = await t.create()
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10')
+    const post = (ev: LegEvent) => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(ev) }))
+    await post(PENDING)
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(200)
+    // The user picks another target. Then the payout of the left attempt (in PHP) arrives.
+    expect((await t.call(`/sessions/${s.id}/target`, s.clientSecret, { type: 'fiat', currency: 'USD' })).status).toBe(200)
+    await post({ ref: 'order_1', status: 'succeeded' })
+    const now = (await t.ramp.sessions.retrieve(s.id))!
+    expect(now.destination).toMatchObject({ type: 'fiat', currency: 'USD' })
+    expect(now.status).not.toBe('succeeded')
+    expect(t.hooks.filter((h) => h.type === 'withdrawal.succeeded')).toHaveLength(0)
+    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'earlier_attempt', attempt: 0 })
   })
 
   it('without a transition to report the hash, the treasury step waits in PROCESSING', async () => {
@@ -388,9 +555,10 @@ describe('provider events that carry a surface', () => {
     const t = make({ treasury }, [eventOfframp()])
     const s = await t.create({ source: SRC_APP })
     await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10', false)
-    await t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify({ ...PENDING, transitions: undefined }) }))
+    await t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(PENDING_NO_REPORT) }))
     const now = await t.call<PublicSession>(`/sessions/${s.id}`, s.clientSecret)
-    expect(now.body.step).toMatchObject({ state: 'PROCESSING', transitions: [{ kind: 'AWAIT' }], progress: { legs: [{ status: 'processing', txHash: TX }] } })
+    expect(now.body.step).toMatchObject({ state: 'PROCESSING', transitions: [{ kind: 'AWAIT' }] })
+    expect(now.body.payment!.legs[0]).toMatchObject({ status: 'processing', transactions: [{ role: 'source', chain: 'eip155:8453', hash: TX, legIndex: 0 }] })
     expect(now.body.step.surface).toBeUndefined()
   })
 })
@@ -410,19 +578,19 @@ describe('address format', () => {
 describe('withdraw sessions: locked target', () => {
   const OTHER = '0x3333333333333333333333333333333333333333'
 
-  it('sets the target at creation; /target answers 409 TARGET_LOCKED for the client secret and a pay link', async () => {
+  it('sets the target at creation; /target answers 409 DESTINATION_LOCKED for the client secret and a pay link', async () => {
     const t = make()
-    const s = await t.create({ target: { ...TO_ARB, address: ` ${ARB_ADDR} ` } as never, lockTarget: true })
+    const s = await t.create({ destination: { ...TO_ARB, address: ` ${ARB_ADDR} ` } as never, lockDestination: true })
     const pub = (await t.ramp.sessions.retrieve(s.id))!
-    expect(pub).toMatchObject({ targetLocked: true, destination: { type: 'crypto', chain: 'eip155:42161', address: ARB_ADDR, symbol: 'USDC', decimals: 6 } })
-    expect(t.hooks.find((h) => h.type === 'session.created')!.data.object.session).toMatchObject({ targetLocked: true, destination: { address: ARB_ADDR } })
+    expect(pub).toMatchObject({ destinationLocked: true, destination: { type: 'crypto', chain: 'eip155:42161', address: ARB_ADDR, symbol: 'USDC', decimals: 6 } })
+    expect(t.hooks.find((h) => h.type === 'session.created')!.data.object.session).toMatchObject({ destinationLocked: true, destination: { address: ARB_ADDR } })
 
     for (const secret of [s.clientSecret, (await t.ramp.sessions.payLink(s.id))!.url.split('/pay/')[1]!]) {
       const r = await t.call(`/sessions/${s.id}/target`, secret, { ...TO_ARB, address: OTHER })
       expect(r.status).toBe(409)
-      expect(r.body.error).toMatchObject({ code: 'TARGET_LOCKED', retryable: false })
+      expect(r.body.error).toMatchObject({ code: 'DESTINATION_LOCKED', retryable: false })
       // The same target is refused too: a locked target takes no /target call at all.
-      expect((await t.call(`/sessions/${s.id}/target`, secret, { type: 'fiat', currency: 'PHP' })).body.error?.code).toBe('TARGET_LOCKED')
+      expect((await t.call(`/sessions/${s.id}/target`, secret, { type: 'fiat', currency: 'PHP' })).body.error?.code).toBe('DESTINATION_LOCKED')
     }
     expect((await t.ramp.sessions.retrieve(s.id))!.destination).toMatchObject({ address: ARB_ADDR })
 
@@ -433,38 +601,38 @@ describe('withdraw sessions: locked target', () => {
     const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '10' })
     const sel = await t.call<PublicSession>(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })
     expect(sel.status).toBe(200)
-    expect(sel.body.targetLocked).toBe(true)
+    expect(sel.body.destinationLocked).toBe(true)
     expect(JSON.stringify(sel.body.step.surface).toLowerCase()).toContain(ARB_ADDR.slice(2))
   })
 
-  it('a fiat target can be locked; a target without lockTarget can still change', async () => {
+  it('a fiat target can be locked; a target without lockDestination can still change', async () => {
     const t = make()
-    const f = await t.create({ target: { type: 'fiat', currency: 'php' }, lockTarget: true })
-    expect((await t.ramp.sessions.retrieve(f.id))!).toMatchObject({ targetLocked: true, destination: { type: 'fiat', currency: 'PHP' } })
+    const f = await t.create({ destination: { type: 'fiat', currency: 'php' }, lockDestination: true })
+    expect((await t.ramp.sessions.retrieve(f.id))!).toMatchObject({ destinationLocked: true, destination: { type: 'fiat', currency: 'PHP' } })
     expect((await t.call(`/sessions/${f.id}/target`, f.clientSecret, TO_ARB)).status).toBe(409)
     expect((await t.call<PlanResult>(`/sessions/${f.id}/plan`, f.clientSecret, {})).body.currency).toBe('PHP')
 
-    const open = await t.create({ target: TO_ARB as never })
+    const open = await t.create({ destination: TO_ARB as never })
     const pub = (await t.ramp.sessions.retrieve(open.id))!
-    expect(pub.targetLocked).toBeUndefined()
+    expect(pub.destinationLocked).toBeUndefined()
     expect(pub.destination).toMatchObject({ address: ARB_ADDR })
     expect((await t.call(`/sessions/${open.id}/target`, open.clientSecret, { ...TO_ARB, address: OTHER })).status).toBe(200)
     expect((await t.ramp.sessions.retrieve(open.id))!.destination).toMatchObject({ address: OTHER })
   })
 
-  it('checks the target at creation like /target: format, allowedTargets and screenAddress', async () => {
+  it('checks the target at creation like /target: format, allowedDestinations and screenAddress', async () => {
     const screenAddress = vi.fn(async (address: string) => address !== OTHER)
     const t = make({ screenAddress })
-    await expect(t.create({ lockTarget: true })).rejects.toMatchObject({ status: 400, error: { message: '`lockTarget` needs `target`.' } })
-    await expect(t.create({ target: TO_ARB as never, lockTarget: 'yes' as never })).rejects.toMatchObject({ status: 400 })
-    await expect(t.ramp.sessions.create({ userId: 'u', destination: { type: 'fiat', currency: 'PHP' } as never, target: { type: 'fiat', currency: 'PHP' } })).rejects.toMatchObject({
+    await expect(t.create({ lockDestination: true })).rejects.toMatchObject({ status: 400, error: { message: '`lockDestination` needs `destination`.' } })
+    await expect(t.create({ destination: TO_ARB as never, lockDestination: 'yes' as never })).rejects.toMatchObject({ status: 400 })
+    await expect(t.ramp.sessions.create({ userId: 'u', lockDestination: true, destination: { type: 'fiat', currency: 'PHP' } })).rejects.toMatchObject({
       status: 400,
       error: { message: expect.stringMatching(/Only a withdraw session/) },
     })
-    await expect(t.create({ target: { ...TO_ARB, address: '0x12' } as never, lockTarget: true })).rejects.toMatchObject({ status: 400 })
-    await expect(t.create({ target: { type: 'cash' } as never, lockTarget: true })).rejects.toMatchObject({ status: 400 })
-    await expect(t.create({ target: TO_ARB as never, lockTarget: true, allowedTargets: { fiat: {} } })).rejects.toMatchObject({ status: 403, error: { code: 'TARGET_NOT_ALLOWED' } })
-    await expect(t.create({ target: { ...TO_ARB, address: OTHER } as never, lockTarget: true })).rejects.toMatchObject({ status: 403, error: { code: 'ADDRESS_REJECTED' } })
+    await expect(t.create({ destination: { ...TO_ARB, address: '0x12' } as never, lockDestination: true })).rejects.toMatchObject({ status: 400 })
+    await expect(t.create({ destination: { type: 'cash' } as never, lockDestination: true })).rejects.toMatchObject({ status: 400 })
+    await expect(t.create({ destination: TO_ARB as never, lockDestination: true, allowedDestinations: { fiat: {} } })).rejects.toMatchObject({ status: 403, error: { code: 'DESTINATION_NOT_ALLOWED' } })
+    await expect(t.create({ destination: { ...TO_ARB, address: OTHER } as never, lockDestination: true })).rejects.toMatchObject({ status: 403, error: { code: 'ADDRESS_REJECTED' } })
     expect(screenAddress).toHaveBeenCalledWith(OTHER, 'eip155:42161')
     // No session was stored for a refused target: no webhook either.
     expect(t.hooks.filter((h) => h.type === 'session.created')).toHaveLength(0)

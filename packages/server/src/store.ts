@@ -1,21 +1,29 @@
 import type { ScopedKV } from '@openrampkit/adapter'
 import type {
-  AllowedTargets,
+  AllowedDestinations,
+  Delivery,
+  CancelReason,
   Destination,
   Direction,
   LegQuote,
   LegStep,
+  OpenRampError,
   Pathway,
   PlanResult,
   Quote,
   SessionStatus,
+  StateName,
   Step,
   WithdrawSource,
 } from '@openrampkit/core'
+import { isStepDetailCode } from '@openrampkit/core'
+import { migrateToV3 } from './migrate-v3.js'
 
 export type ActiveLeg = {
   adapterId: string
   legId: string
+  /** Display name of the leg's provider, when the payment began. Records from schema 2 have none. */
+  provider?: string
   quote: LegQuote
   deliverTo?: { address: string }
   ref?: string
@@ -24,6 +32,10 @@ export type ActiveLeg = {
   lastCheckedAt?: number
   /** Withdraw with app custody: idempotency keys of WALLET_TX steps already sent by the treasury */
   treasurySent?: string[]
+  /** The check of the reported output against the quote (see `Delivery`). Set once the leg reports an output. */
+  delivery?: Omit<Delivery, 'legIndex'>
+  /** Set when a provider event moved the leg from `processing` back to `requires_action` (allowed once) */
+  surfaceReopened?: boolean
 }
 
 export type StoredQuote = {
@@ -40,6 +52,8 @@ export type ActivePayment = {
   pathway: Pathway
   legs: ActiveLeg[]
   index: number
+  /** The session destination when this payment began. A withdraw target can change after a restart. */
+  destination?: Destination
 }
 
 /** An earlier payment attempt, kept after a restart. Its provider refs stay indexed, so a late event still finds it. */
@@ -67,17 +81,27 @@ export type OutboxEvent = {
 export type SessionRecord = {
   id: string
   secretHash: string
+  /**
+   * Schema of this record (see `SESSION_SCHEMA` and `migrateRecord`). Records written before this field
+   * existed have none: they are schema 0. Not the same as `version`.
+   */
+  schema?: number
+  /** Optimistic-lock counter: each write adds 1 (see `SessionStore.put`). Not the record schema. */
   version: number
   userId: string
+  /** The app's own id (`CreateSessionInput.externalId`), unique per app */
+  externalId?: string
+  /** Hash of the create input with `externalId`: a repeated create must match it */
+  externalHash?: string
   direction: Direction
   /** Deposit: set at creation. Withdraw: the target the user picked, absent until then. */
   destination?: Destination
   /** Withdraw only */
   source?: WithdrawSource
   /** Withdraw only */
-  allowedTargets?: AllowedTargets
-  /** Withdraw only: the app set the target at creation with `lockTarget`. `/target` refuses changes. */
-  targetLocked?: boolean
+  allowedDestinations?: AllowedDestinations
+  /** Withdraw only: the app set the target at creation with `lockDestination`. `/target` refuses changes. */
+  destinationLocked?: boolean
   /** Ids of pay links that no longer work (see `sessions.revokePayLink`) */
   revokedPayLinks?: string[]
   country?: string
@@ -91,6 +115,10 @@ export type SessionRecord = {
   metadata?: Record<string, string>
   livemode: boolean
   status: SessionStatus
+  /** The error of the last failed attempt, or of the final failure. Cleared when a new payment starts. */
+  lastError?: OpenRampError
+  /** Set when the session was canceled */
+  canceled?: { at: number; reason: CancelReason }
   createdAt: number
   expiresAt: number
   walletConnected?: boolean
@@ -112,6 +140,24 @@ export type SessionRecord = {
   timeline?: TimelineEntry[]
   /** Set when an operator forced a final state with `admin.resolve`. Provider events then change the legs only. */
   resolution?: Resolution
+  /** Set when a provider refunded or reversed a leg after it succeeded. The session is then `REVERSED`. */
+  reversal?: Reversal
+  /** Provider event ids applied to this session (`adapterId:ref:eventId`), newest last. At most 50. */
+  providerEvents?: string[]
+}
+
+/** A refund or a chargeback after a leg succeeded (see `SessionRecord.reversal`) */
+export type Reversal = {
+  /** When the server learnt it (ms) */
+  at: number
+  /** The leg that the provider took back */
+  index: number
+  adapterId: string
+  legId: string
+  /** The new leg status */
+  status: 'refunded' | 'reversed'
+  /** The session state before the reversal, e.g. COMPLETED */
+  previous: StateName
 }
 
 /** One entry of the session timeline */
@@ -158,6 +204,12 @@ export interface SessionStore {
   kv: {
     get<T = unknown>(key: string): Promise<T | undefined>
     put(key: string, value: unknown, ttlSec?: number): Promise<void>
+    /**
+     * Optional: write only when the key has no live value, as one atomic step. Returns true when it
+     * wrote. Adapters get it through `ScopedKV.putIfAbsent` (see `claimOnce`). The memory, Redis and
+     * Durable Object stores have it. Workers KV has no atomic operation, so its store leaves it out.
+     */
+    putIfAbsent?(key: string, value: unknown, ttlSec: number): Promise<boolean>
   }
   /**
    * Optional atomic work queue. All built-in stores have one. A store without it gets a fallback that
@@ -167,6 +219,133 @@ export interface SessionStore {
 }
 
 export class VersionConflictError extends Error {}
+
+/** The schema that this server writes in `SessionRecord.schema`. */
+export const SESSION_SCHEMA = 3
+
+/** True for a session record. A custom store without a `queue` also keeps queue records (`__queue:*`). */
+function isSessionRecord(rec: unknown): rec is SessionRecord {
+  const r = rec as Partial<SessionRecord> | null
+  return !!r && typeof r === 'object' && typeof r.id === 'string' && typeof r.secretHash === 'string' && !!r.step
+}
+
+/**
+ * Bring a stored session record up to `SESSION_SCHEMA`. The server runs it on every store read, so a
+ * record written by an earlier version loads and works. It changes the record in place, returns it, and
+ * runs again with no effect (idempotent). The next write saves the result.
+ *
+ * Schema 0 to 1 (records with no `schema`): `updatedAt` from `createdAt`; `ActivePayment.n` from the number
+ * of earlier attempts, and `n` of each earlier attempt from its place; empty `quotes`, `startUrls`,
+ * `notified` and `outbox` when absent; each step `sub` in lower case when that is in `STEP_SUBS`, else removed.
+ *
+ * Schema 1 to 2 (see `migrateToV2`): the new status names (`requires_payment_method`, `requires_action`,
+ * `succeeded`), `Amount.value`, and the withdraw names `allowedDestinations` and `destinationLocked`.
+ *
+ * Schema 2 to 3 (see `migrateToV3` in migrate-v3.ts): the adapter contract v2 shapes. Quotes get typed fees, a
+ * `guarantee` and an `expiresAt`.
+ *
+ * A record with a newer schema (written by a newer server) is returned as it is. Other records (for
+ * example the queue records of a custom store) are returned as they are.
+ */
+export function migrateRecord<T>(rec: T): T {
+  if (!isSessionRecord(rec)) return rec
+  const from = rec.schema ?? 0
+  if (from >= SESSION_SCHEMA) return rec
+  if (from < 1) {
+    rec.updatedAt ??= rec.createdAt
+    rec.quotes ??= {}
+    rec.startUrls ??= {}
+    rec.notified ??= []
+    rec.outbox ??= []
+    rec.attempts?.forEach((p, i) => {
+      p.n ??= i
+    })
+    if (rec.active) rec.active.n ??= rec.attempts?.length ?? 0
+    // `sub` was free text (for example 'SETTLING'); in schema 1 it is a closed list (lower case).
+    const steps = [rec.step, ...[rec.active, ...(rec.attempts ?? [])].flatMap((p) => p?.legs.map((l) => l.step) ?? [])] as Array<{ sub?: string } | undefined>
+    for (const step of steps) {
+      if (step?.sub === undefined || isStepDetailCode(step.sub)) continue
+      const lower = String(step.sub).toLowerCase()
+      if (isStepDetailCode(lower)) step.sub = lower
+      else delete step.sub
+    }
+  }
+  if (from < 2) migrateToV2(rec)
+  if (from < 3) migrateToV3(rec)
+  rec.schema = SESSION_SCHEMA
+  return rec
+}
+
+/** Schema 1 status names (see `migrateRecord`) */
+const V1_STATUS: Record<string, SessionStatus> = { open: 'requires_payment_method', awaiting_user: 'requires_action', completed: 'succeeded' }
+/** Schema 1 event names in `notified` keys */
+const V1_EVENTS: Record<string, string> = { 'session.completed': 'session.succeeded', 'withdrawal.completed': 'withdrawal.succeeded' }
+
+/** Rename `amount` to `value` in every `{ amount, asset }` (an `Amount`) under `v`, in place. */
+function renameAmounts(v: unknown): void {
+  if (!v || typeof v !== 'object') return
+  if (Array.isArray(v)) {
+    for (const x of v) renameAmounts(x)
+    return
+  }
+  const o = v as Record<string, unknown>
+  const asset = o.asset as { kind?: unknown } | undefined
+  if ('amount' in o && !('value' in o) && asset && typeof asset === 'object' && typeof asset.kind === 'string') {
+    o.value = o.amount
+    delete o.amount
+  }
+  for (const x of Object.values(o)) renameAmounts(x)
+}
+
+/**
+ * Schema 1 to 2: the session status `open` is `requires_payment_method`, `awaiting_user` is
+ * `requires_action` and `completed` is `succeeded`; the leg status `awaiting_user` is `requires_action`;
+ * every `Amount` is `{ value, asset }` (was `{ amount, asset }`); `notified` keys use the new event names;
+ * the withdraw fields `allowedTargets` and `targetLocked` are `allowedDestinations` and `destinationLocked`.
+ * Events already in the outbox keep the body they were made with.
+ */
+function migrateToV2(rec: SessionRecord): void {
+  const status = V1_STATUS[rec.status as string]
+  if (status) rec.status = status
+  const legStatus = (step: { status?: string } | undefined) => {
+    if (step?.status === 'awaiting_user') step.status = 'requires_action'
+  }
+  for (const p of [rec.active, ...(rec.attempts ?? [])]) for (const l of p?.legs ?? []) legStatus(l.step)
+  for (const l of (rec.step as { progress?: { legs?: Array<{ status?: string }> } }).progress?.legs ?? []) legStatus(l)
+  // The withdraw names: `allowedTargets` is `allowedDestinations`, `targetLocked` is `destinationLocked`.
+  const old = rec as SessionRecord & { allowedTargets?: SessionRecord['allowedDestinations']; targetLocked?: boolean }
+  if (old.allowedTargets !== undefined) {
+    old.allowedDestinations ??= old.allowedTargets
+    delete old.allowedTargets
+  }
+  if (old.targetLocked !== undefined) {
+    old.destinationLocked ??= old.targetLocked
+    delete old.targetLocked
+  }
+  rec.notified = rec.notified.map((k) => {
+    const [name] = k.split(':', 1)
+    const next = name ? V1_EVENTS[name] : undefined
+    return next ? `${next}${k.slice(name!.length)}` : k
+  })
+  const { outbox: _outbox, timeline: _timeline, ...rest } = rec
+  renameAmounts(rest)
+}
+
+/**
+ * The store that the server uses: `store`, with `migrateRecord` on every `get`. `put`, `kv` and `queue`
+ * are the same as in `store`.
+ */
+export function migratingStore(store: SessionStore): SessionStore {
+  return {
+    get: async (id) => {
+      const rec = await store.get(id)
+      return rec ? migrateRecord(rec) : rec
+    },
+    put: (rec, expectedVersion) => store.put(rec, expectedVersion),
+    kv: store.kv,
+    ...(store.queue ? { queue: store.queue } : {}),
+  }
+}
 
 type QueueEntry = { dueAt: number; token?: string }
 
@@ -254,6 +433,13 @@ export function memoryStore(): SessionStore {
       },
       async put(key, value, ttlSec) {
         kv.set(key, { v: JSON.stringify(value), ...(ttlSec ? { exp: Date.now() + ttlSec * 1000 } : {}) })
+      },
+      // No `await` between the read and the write, so this is atomic in one process.
+      async putIfAbsent(key, value, ttlSec) {
+        const e = kv.get(key)
+        if (e && !(e.exp && e.exp < Date.now())) return false
+        kv.set(key, { v: JSON.stringify(value), ...(ttlSec ? { exp: Date.now() + ttlSec * 1000 } : {}) })
+        return true
       },
     },
     queue: memoryQueue(),
@@ -349,8 +535,10 @@ export function cloudflareKvStore(ns: KVNamespaceLike, opts: { sessionTtlSec?: n
 }
 
 export function scopedKV(store: SessionStore, prefix: string): ScopedKV {
+  const kv = store.kv
   return {
-    get: (key) => store.kv.get(`${prefix}:${key}`),
-    put: (key, value, ttl) => store.kv.put(`${prefix}:${key}`, value, ttl),
+    get: (key) => kv.get(`${prefix}:${key}`),
+    put: (key, value, ttl) => kv.put(`${prefix}:${key}`, value, ttl),
+    ...(kv.putIfAbsent ? { putIfAbsent: (key: string, value: unknown, ttl: number) => kv.putIfAbsent!(`${prefix}:${key}`, value, ttl) } : {}),
   }
 }

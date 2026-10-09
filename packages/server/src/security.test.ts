@@ -4,8 +4,9 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { Adapter } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
-import { USDC } from '@openrampkit/core'
+import { USDC, timingSafeEqual } from '@openrampkit/core'
 import type { LegSpec, Surface } from '@openrampkit/core'
+import { safeEqual } from './crypto.js'
 import { createOpenRamp } from './index.js'
 import type { OpenRampConfig, TreasurySendInput } from './index.js'
 
@@ -38,10 +39,10 @@ function surfaceAdapter(surface: Surface): Adapter {
   return createAdapter({
     id: 'surf', name: 'Surf', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'surf', legId: leg.legId, input: amountIn!, output: { amount: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'surf', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
-      return { state: 'PAYMENT', status: 'awaiting_user', ref: `r-${Math.random()}`, surface, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
+      return { status: 'requires_action', ref: `r-${Math.random()}`, action: { kind: 'payment', surface, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] } }
     },
   })
 }
@@ -53,6 +54,12 @@ async function selectWith(adapter: Adapter, livemode = false) {
   const q = await (await call(`/sessions/${s.id}/quotes`, post(s.clientSecret, { method: 'card', amount: '10' }))).json()
   return (await call(`/sessions/${s.id}/select`, post(s.clientSecret, { quoteId: q.quotes[0].id }))).json()
 }
+
+describe('constant-time compare', () => {
+  it('the server uses the one implementation from core', () => {
+    expect(safeEqual).toBe(timingSafeEqual)
+  })
+})
 
 describe('config: secret lengths', () => {
   it('refuses a short webhooks.secret and a short tasksToken', () => {

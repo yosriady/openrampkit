@@ -7,7 +7,7 @@
 
 import { reconnect } from '@wagmi/core'
 import { fromBaseUnits, lamportsToSol } from '@openrampkit/core'
-import type { OrkEvent } from '@openrampkit/core'
+import type { ClientEvent, PublicSession } from '@openrampkit/core'
 import { openDeposit } from '@openrampkit/web'
 import type { DepositHandle, Theme } from '@openrampkit/web'
 import { BASE_URL } from '../server.js'
@@ -20,12 +20,18 @@ import type { SolanaDevnet } from './solana-wallet.js'
 import { createTestnetWallet, hasInjectedWallet } from './wallet.js'
 import type { WalletState } from './wallet.js'
 
+/** The transaction to link to: the delivery (or the settlement) first, else the one the user sent */
+function paymentHash(session: PublicSession): string | undefined {
+  const txs = session.payment?.legs.flatMap((l) => l.transactions) ?? []
+  return (txs.find((t) => t.role === 'destination' || t.role === 'settlement') ?? txs.find((t) => t.role === 'source'))?.hash
+}
+
 export type TestnetEnv = {
   /** Where the widget goes */
   container: HTMLElement
   theme: Theme
   locale: string
-  onEvent: (e: OrkEvent) => void
+  onEvent: (e: ClientEvent) => void
   setBanner(text: string): void
   setCode(text: string): void
 }
@@ -383,7 +389,7 @@ export function startTestnet(env: TestnetEnv) {
     opened.done.then(
       (session) => {
         if (handle !== opened) return
-        showSolanaResult(cfg, session.step.progress?.legs.find((l) => l.txHash)?.txHash)
+        showSolanaResult(cfg, paymentHash(session))
         void sync()
       },
       () => {},
@@ -439,7 +445,7 @@ export function startTestnet(env: TestnetEnv) {
     opened.done.then(
       (session) => {
         if (handle !== opened) return
-        const hash = session.step.progress?.legs.find((l) => l.txHash)?.txHash
+        const hash = paymentHash(session)
         showResult(n, hash)
         void sync()
       },

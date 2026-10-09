@@ -5,7 +5,7 @@
 // to the destination address.
 // - KYC first. Bridge needs a customer with approved KYC and the endorsement for the rail
 //   (`base` for USD, `sepa`, `spei`, `pix`, `faster_payments`). The adapter creates a KYC link
-//   (POST /v0/kyc_links) and sends the user to Bridge's hosted ToS and KYC pages (REDIRECT, state KYC).
+//   (POST /v0/kyc_links) and sends the user to Bridge's hosted ToS and KYC pages (REDIRECT, a `kyc` action).
 //   When the app already has a Bridge customer id, it gives it with the `customer` hook.
 // - Then POST /v0/customers/{id}/virtual_accounts, and the modal shows the bank details (BANK_FIELDS,
 //   or a QR of the Pix BR Code for BRL).
@@ -27,10 +27,27 @@
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
-import { POLL as POLLS, awaitPoll, createAdapter, erc20TransferData, fetchJson, httpErrorToOrk, randomHex } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, QuoteInput, StartInput } from '@openrampkit/adapter'
 import {
-  OrkException,
+  POLL as POLLS,
+  awaitPoll,
+  cachedJson,
+  claimOnce,
+  createAdapter,
+  erc20TransferData,
+  fetchJson,
+  findDeliverAsset,
+  httpErrorToOpenRamp,
+  importRsaPublicKey,
+  legStepFromEvent,
+  quoteExpiresAt,
+  randomHex,
+  resolveEnv,
+  rsaVerify,
+  statusMap,
+} from '@openrampkit/adapter'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import {
+  OpenRampException,
   USDC,
   bps as applyBps,
   cmp,
@@ -39,13 +56,13 @@ import {
   isDecimal,
   isSolanaChain,
   minorUnits,
-  orkError,
+  openRampError,
   roundTo,
   sub,
   toBaseUnits,
   toScaled,
 } from '@openrampkit/core'
-import type { Amount, CryptoAsset, FieldSpec, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, Surface, TxRequest } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, FieldSpec, Fee, LegQuote, LegSpec, LegStatus, LegStep, PollSpec, StepDetailCode, Surface, TxRequest } from '@openrampkit/core'
 
 export type BridgeCustomerHint = {
   /** An existing Bridge customer id. The adapter skips the KYC link and checks this customer. */
@@ -61,7 +78,7 @@ export type BridgeOptions = {
   /** The webhook endpoint's public key (PEM), from POST /v0/webhooks or the dashboard */
   webhookPublicKey: string
   /** Default 'production' (https://api.bridge.xyz). 'sandbox' uses https://api.sandbox.bridge.xyz. */
-  env?: 'sandbox' | 'production'
+  env?: AdapterEnv
   /** API base URL without `/v0`. Overrides `env`. */
   apiUrl?: string
   /** Your fee in percent of each deposit and payout, as a decimal string ('0.5' = 0.5%). Sent as `developer_fee_percent`. */
@@ -135,6 +152,9 @@ export const BRIDGE_CHAINS: BridgeChain[] = [
   { chain: SOLANA, rail: 'solana', usdc: USDC[SOLANA]! },
 ]
 
+/** USDC on each Bridge network, for `findDeliverAsset` */
+const DELIVERABLE = BRIDGE_CHAINS.map((c) => ({ chain: c.chain, token: c.usdc, c }))
+
 /**
  * Countries and regions where Bridge does not serve customers
  * (https://apidocs.bridge.xyz/platform/customers/compliance/supported-countries-list, 2026-10-05):
@@ -154,6 +174,71 @@ const REC_TTL_SEC = 30 * DAY
 const RATE_TTL_SEC = 30
 /** "reject events older than 10 minutes" */
 const WEBHOOK_TOLERANCE_MS = 10 * 60_000
+
+// ---------- provider status tables ----------
+
+/**
+ * KYC link `kyc_status`. `verify`: the user acts in Bridge's KYC page. `review`: Bridge reviews. A status
+ * that is not in the table sends the user to the KYC link when there is one (Bridge's page shows what
+ * is left), else waits in review.
+ */
+const KYC_STATUS = statusMap<'verify' | 'review' | 'approved' | 'rejected'>('Bridge KYC link', {
+  not_started: 'verify',
+  incomplete: 'verify',
+  awaiting_questionnaire: 'verify',
+  awaiting_ubo: 'verify',
+  under_review: 'review',
+  manual_review: 'review',
+  paused: 'review',
+  approved: 'approved',
+  rejected: 'rejected',
+  offboarded: 'rejected',
+})
+
+type VaEventMap = { status: LegStatus; detail?: StepDetailCode; rank: number } | 'ignore'
+
+/**
+ * Virtual account event `type` to the leg status of one deposit. `rank`: the later stage of a deposit
+ * wins in the history. `ignore`: account events that are not about a payment. A type that is not in
+ * the table is no event (it is logged), and the deposit keeps its last known stage.
+ */
+const VA_EVENT = statusMap<VaEventMap>('Bridge virtual account', {
+  funds_scheduled: { status: 'processing', detail: 'settling', rank: 0 },
+  funds_received: { status: 'processing', detail: 'settling', rank: 1 },
+  in_review: { status: 'processing', detail: 'delayed', rank: 2 },
+  payment_submitted: { status: 'processing', detail: 'settling', rank: 3 },
+  refund_in_flight: { status: 'processing', detail: 'refunding', rank: 4 },
+  payment_processed: { status: 'succeeded', rank: 5 },
+  // TO VERIFY: the docs table says `refunded`, the OpenAPI enum says `refund`. Accept both.
+  refund: { status: 'refunded', rank: 5 },
+  refunded: { status: 'refunded', rank: 5 },
+  refund_failed: { status: 'failed', rank: 5 },
+  microdeposit: 'ignore',
+  account_update: 'ignore',
+  activation: 'ignore',
+  deactivation: 'ignore',
+})
+
+/**
+ * Transfer `state` to the leg status of a payout. `awaiting_funds`: the user has not sent the USDC
+ * yet. A state that is not in the table is no event (it is logged), and `status()` keeps the last
+ * known step.
+ */
+const TRANSFER_STATE = statusMap<{ status: LegStatus; detail?: StepDetailCode } | 'awaiting_funds'>('Bridge transfer', {
+  awaiting_funds: 'awaiting_funds',
+  in_review: { status: 'processing', detail: 'delayed' },
+  funds_received: { status: 'processing', detail: 'settling' },
+  payment_submitted: { status: 'processing', detail: 'settling' },
+  refund_in_flight: { status: 'processing', detail: 'refunding' },
+  payment_processed: { status: 'succeeded' },
+  refunded: { status: 'refunded' },
+  canceled: { status: 'failed' },
+  error: { status: 'failed' },
+  undeliverable: { status: 'failed' },
+  returned: { status: 'failed' },
+  refund_failed: { status: 'failed' },
+  missing_return_policy: { status: 'failed' },
+})
 
 // ---------- Bridge objects ----------
 
@@ -235,6 +320,8 @@ type LegRec = {
   payTo?: string
   payAmount?: string
   txHash?: string
+  /** Payout: the last step from a known transfer state, for a state that is not in `TRANSFER_STATE` */
+  lastStep?: LegStep
 }
 
 type UserRec = { customerId?: string; kycLinkId?: string }
@@ -251,7 +338,7 @@ function dec(s: string | null | undefined): string | undefined {
   return typeof s === 'string' && isDecimal(s) ? s : undefined
 }
 
-const kycRejected = () => orkError('KYC_REJECTED', { message: 'Bridge could not verify your identity.', recovery: 'choose_other' })
+const kycRejected = () => openRampError('KYC_REJECTED', { message: 'Bridge could not verify your identity.', recovery: 'choose_other' })
 
 /** Parse `t=<ms>,v0=<base64>` */
 export function parseBridgeSignature(header: string): { t?: string; v0: string[] } {
@@ -267,17 +354,9 @@ export function parseBridgeSignature(header: string): { t?: string; v0: string[]
   return out
 }
 
-function b64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64)
-  const out = new Uint8Array(new ArrayBuffer(bin.length))
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
-}
-
-/** Import an SPKI public key in PEM form ("-----BEGIN PUBLIC KEY-----"). Accepts `\n` escapes from env files. */
+/** Import an SPKI public key in PEM form ("-----BEGIN PUBLIC KEY-----") or base64. Accepts `\n` escapes from env files. */
 export async function importBridgePublicKey(pem: string): Promise<CryptoKey> {
-  const body = pem.replace(/\\n/g, '\n').replace(/-----(BEGIN|END) PUBLIC KEY-----/g, '').replace(/\s+/g, '')
-  return crypto.subtle.importKey('spki', b64ToBytes(body), { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify'])
+  return importRsaPublicKey(pem)
 }
 
 /**
@@ -289,23 +368,16 @@ export async function verifyBridgeSignature(key: CryptoKey, header: string, rawB
   const ts = Number(t)
   if (!t || !v0.length || !Number.isFinite(ts)) return false
   if (Math.abs(now - ts) > WEBHOOK_TOLERANCE_MS) return false
-  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${t}.${rawBody}`))
-  for (const sig of v0) {
-    let bytes: Uint8Array<ArrayBuffer>
-    try {
-      bytes = b64ToBytes(sig)
-    } catch {
-      continue
-    }
-    if (await crypto.subtle.verify({ name: 'RSASSA-PKCS1-v1_5' }, key, bytes, digest)) return true
-  }
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${t}.${rawBody}`)))
+  for (const sig of v0) if (await rsaVerify(key, digest, sig)) return true
   return false
 }
 
 // ---------- the adapter ----------
 
 export function bridge(opts: BridgeOptions) {
-  const api = (opts.apiUrl ?? (opts.env === 'sandbox' ? 'https://api.sandbox.bridge.xyz' : 'https://api.bridge.xyz')).replace(/\/+$/, '')
+  const env = resolveEnv('bridge', opts.env, undefined, 'production')
+  const api = (opts.apiUrl ?? (env === 'sandbox' ? 'https://api.sandbox.bridge.xyz' : 'https://api.bridge.xyz')).replace(/\/+$/, '')
   const pick = <T extends { id: string }>(list: T[]) => list.filter((r) => !opts.legs || opts.legs.includes(r.id))
   const depositRails = pick(BRIDGE_DEPOSIT_RAILS)
   const payoutRails = opts.withdraw === false ? [] : pick(BRIDGE_PAYOUT_RAILS)
@@ -326,7 +398,6 @@ export function bridge(opts: BridgeOptions) {
       eta: r.eta,
       surfaces: r.currency === 'BRL' ? ['QR', 'REDIRECT', 'FORM'] : ['BANK_FIELDS', 'REDIRECT', 'FORM'],
       requires: ['provider_kyc'],
-      capabilities: ['webhooks', 'polling', 'exact_output'],
     })),
     ...payoutRails.map<LegSpec>((r) => ({
       id: r.id,
@@ -339,7 +410,6 @@ export function bridge(opts: BridgeOptions) {
       eta: r.eta,
       surfaces: ['FORM', 'WALLET_TX', 'REDIRECT'],
       requires: ['provider_kyc'],
-      capabilities: ['webhooks', 'polling'],
     })),
   ]
   const depositById = new Map(depositRails.map((r) => [r.id, r]))
@@ -363,7 +433,7 @@ export function bridge(opts: BridgeOptions) {
         ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
       })
     } catch (e) {
-      throw httpErrorToOrk(e, 'Bridge', { what, log: ctx.log })
+      throw httpErrorToOpenRamp(e, 'Bridge', { what, log: ctx.log })
     }
   }
 
@@ -372,7 +442,7 @@ export function bridge(opts: BridgeOptions) {
 
   async function loadRec(ref: string, ctx: Pick<AdapterContext, 'shared'>): Promise<LegRec> {
     const rec = await ctx.shared.get<LegRec>(recKey(ref))
-    if (!rec) throw new OrkException(orkError('NOT_FOUND', { message: 'This Bridge payment is not known.' }), 404)
+    if (!rec) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'This Bridge payment is not known.' }), 404)
     return rec
   }
 
@@ -388,16 +458,20 @@ export function bridge(opts: BridgeOptions) {
   /** Units of `to` per unit of `from`, from GET /v0/exchange_rates (`buy_rate` includes Bridge's FX fee). */
   async function rate(from: string, to: string, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<string> {
     if (from === to) return '1'
-    const key = `rate:${from}:${to}`
-    const cached = await ctx.shared.get<string>(key)
-    if (cached) return cached
-    const r = await call<{ buy_rate?: string; midmarket_rate?: string }>(ctx, 'GET', `/exchange_rates?from=${from}&to=${to}`, 'price this currency')
-    // TO VERIFY: `buy_rate` is "the rate for buying the target currency, including Bridge's fee". We read it
-    // as the rate the user gets when converting `from` into `to`.
-    const v = dec(r.buy_rate) ?? dec(r.midmarket_rate)
-    if (!v || cmp(v, '0') <= 0) throw new OrkException(orkError('NO_QUOTES', { message: 'Bridge returned no exchange rate.' }), 422)
-    await ctx.shared.put(key, v, RATE_TTL_SEC)
-    return v
+    return cachedJson(
+      ctx.shared,
+      `rate:${from}:${to}`,
+      RATE_TTL_SEC,
+      async () => {
+        const r = await call<{ buy_rate?: string; midmarket_rate?: string }>(ctx, 'GET', `/exchange_rates?from=${from}&to=${to}`, 'price this currency')
+        // TO VERIFY: `buy_rate` is "the rate for buying the target currency, including Bridge's fee". We read it
+        // as the rate the user gets when converting `from` into `to`.
+        const v = dec(r.buy_rate) ?? dec(r.midmarket_rate)
+        if (!v || cmp(v, '0') <= 0) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Bridge returned no exchange rate.' }), 422)
+        return v
+      },
+      { valid: (v) => !!v },
+    )
   }
 
   /** Fees in percent of the input (developer fee) and in bps (Bridge fee, from the options) */
@@ -407,11 +481,16 @@ export function bridge(opts: BridgeOptions) {
     return fromScaled(toScaled(dev, WORK) + toScaled(bridgeFee, WORK), WORK)
   }
 
-  function feesFor(amount: string, currency: string, digits: number): Fee[] {
+  /**
+   * Fees in `asset` (the input asset), taken from the input. `fx`: the leg converts between currencies,
+   * and Bridge's `buy_rate` includes its FX fee without saying how much (a fee with no amount).
+   */
+  function feesFor(amount: string, asset: Asset, digits: number, fx: boolean): Fee[] {
     const fees: Fee[] = []
-    if (opts.bridgeFeeBps) fees.push({ kind: 'provider', label: 'Bridge fee', amount: roundTo(applyBps(amount, opts.bridgeFeeBps), digits), currency })
+    if (opts.bridgeFeeBps) fees.push({ kind: 'provider', label: 'Bridge fee', amount: { value: roundTo(applyBps(amount, opts.bridgeFeeBps), digits), asset }, included: true })
+    if (fx) fees.push({ kind: 'provider', label: 'FX fee in the rate', amount: null, included: true })
     if (opts.developerFeePercent && cmp(opts.developerFeePercent, '0') > 0) {
-      fees.push({ kind: 'app', label: 'App fee', amount: roundTo(div(toScaledMul(amount, opts.developerFeePercent), '100'), digits), currency })
+      fees.push({ kind: 'app', label: 'App fee', amount: { value: roundTo(div(toScaledMul(amount, opts.developerFeePercent), '100'), digits), asset }, included: true })
     }
     return fees
   }
@@ -420,10 +499,11 @@ export function bridge(opts: BridgeOptions) {
     return fromScaled((toScaled(a, WORK) * toScaled(b, WORK)) / 10n ** BigInt(WORK), WORK)
   }
 
+  /** The Bridge network for USDC on `asset`'s chain. NO_QUOTES for another chain or another token (never USDC instead). */
   function chainFor(asset: CryptoAsset | undefined): BridgeChain {
-    const c = asset && BRIDGE_CHAINS.find((x) => x.chain === asset.chain)
-    if (!c) throw new OrkException(orkError('NO_QUOTES', { message: 'Bridge does not deliver to this network.', recovery: 'choose_other' }), 422)
-    return c
+    const d = findDeliverAsset(DELIVERABLE, asset)
+    if (!d) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Bridge does not deliver this token on this network.', recovery: 'choose_other' }), 422)
+    return d.c
   }
 
   function usdcAsset(c: BridgeChain): CryptoAsset {
@@ -431,8 +511,8 @@ export function bridge(opts: BridgeOptions) {
   }
 
   function checkLimits(amount: string, min: string, max: string | undefined, currency: string) {
-    if (cmp(amount, min) < 0) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${min} ${currency}.` }), 422)
-    if (max && cmp(amount, max) > 0) throw new OrkException(orkError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${max} ${currency}.` }), 422)
+    if (cmp(amount, min) < 0) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { message: `The minimum for this method is ${min} ${currency}.` }), 422)
+    if (max && cmp(amount, max) > 0) throw new OpenRampException(openRampError('AMOUNT_TOO_HIGH', { message: `The maximum for this method is ${max} ${currency}.` }), 422)
   }
 
   async function depositQuote(r: DepositRail, input: QuoteInput, ctx: AdapterContext): Promise<LegQuote> {
@@ -443,9 +523,9 @@ export function bridge(opts: BridgeOptions) {
     const keep = sub('1', feeFraction())
     let fiat: string
     if (input.amountIn) {
-      fiat = roundTo(input.amountIn.amount, digits)
+      fiat = roundTo(input.amountIn.value, digits)
     } else {
-      const out = input.amountOut?.amount ?? '0'
+      const out = input.amountOut?.value ?? '0'
       // out = fiat * keep * usdPer, rounded up to the fiat minor unit so that the user gets at least `out`
       const raw = div(div(out, usdPer), keep)
       const rounded = roundTo(raw, digits)
@@ -456,12 +536,14 @@ export function bridge(opts: BridgeOptions) {
     return {
       adapterId: 'bridge',
       legId: r.id,
-      input: { amount: fiat, asset: { kind: 'fiat', currency: cur } },
-      output: { amount: output, asset: usdcAsset(c) },
-      fees: feesFor(fiat, cur, digits),
+      input: { value: fiat, asset: { kind: 'fiat', currency: cur } },
+      output: { value: output, asset: usdcAsset(c) },
+      fees: feesFor(fiat, { kind: 'fiat', currency: cur }, digits, cur !== 'USD'),
+      // `estimate`: Bridge has no rate lock, and it converts what the bank transfer brings, when it arrives.
+      guarantee: 'estimate',
       eta: r.eta,
       // Bridge has no rate lock; the rate moves about every 30 s. The bank transfer settles later at the rate of that day.
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: quoteExpiresAt(10),
       limits: { min: r.min, ...(r.max ? { max: r.max } : {}), currency: cur },
       data: { nonce: randomHex(8) },
     }
@@ -476,20 +558,22 @@ export function bridge(opts: BridgeOptions) {
     const keep = sub('1', feeFraction())
     let usdc: string
     if (input.amountIn) {
-      usdc = roundTo(input.amountIn.amount, 6)
+      usdc = roundTo(input.amountIn.value, 6)
     } else {
-      usdc = roundTo(div(div(input.amountOut?.amount ?? '0', perUsd), keep), 6)
+      usdc = roundTo(div(div(input.amountOut?.value ?? '0', perUsd), keep), 6)
     }
     checkLimits(usdc, r.min, undefined, 'USDC')
     const output = roundTo(toScaledMul(toScaledMul(usdc, keep), perUsd), digits)
     return {
       adapterId: 'bridge',
       legId: r.id,
-      input: { amount: usdc, asset: usdcAsset(c) },
-      output: { amount: output, asset: { kind: 'fiat', currency: cur } },
-      fees: feesFor(usdc, 'USDC', 6),
+      input: { value: usdc, asset: usdcAsset(c) },
+      output: { value: output, asset: { kind: 'fiat', currency: cur } },
+      fees: feesFor(usdc, usdcAsset(c), 6, cur !== 'USD'),
+      // `estimate`: Bridge has no rate lock; it sets the rate when it pays out the transfer.
+      guarantee: 'estimate',
       eta: r.eta,
-      expiresAt: new Date(Date.now() + 10 * 60_000).toISOString(),
+      expiresAt: quoteExpiresAt(10),
       limits: { min: r.min, currency: 'USDC' },
       data: { nonce: randomHex(8) },
     }
@@ -504,22 +588,30 @@ export function bridge(opts: BridgeOptions) {
 
   function kycFormStep(ref: string, missing: Array<'full_name' | 'email'>): LegStep {
     return {
-      state: 'KYC',
-      sub: 'KYC_DETAILS',
-      status: 'awaiting_user',
+      status: 'requires_action',
+      action: {
+        kind: 'kyc',
+        surface: { kind: 'FORM', fields: missing.map((m) => KYC_FIELDS[m]) },
+        transitions: [{ name: 'submit_kyc', kind: 'SUBMIT', label: 'Continue to verification' }],
+      },
+      detail: { code: 'kyc_details' },
       ref,
-      surface: { kind: 'FORM', fields: missing.map((m) => KYC_FIELDS[m]) },
-      transitions: [{ name: 'submit_kyc', kind: 'SUBMIT', label: 'Continue to verification' }],
     }
   }
 
-  function redirectStep(ref: string, url: string, sub: string): LegStep {
-    if (!/^https:\/\//.test(url)) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge returned an unsafe verification link.' }), 502)
-    return { state: 'KYC', sub, status: 'awaiting_user', ref, surface: { kind: 'REDIRECT', url, popup: true, provider: 'Bridge' }, transitions: [awaitPoll(KYC_POLL)] }
+  function redirectStep(ref: string, url: string, code: StepDetailCode): LegStep {
+    if (!/^https:\/\//.test(url)) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge returned an unsafe verification link.' }), 502)
+    return {
+      status: 'requires_action',
+      action: { kind: 'kyc', surface: { kind: 'REDIRECT', url, popup: true, provider: 'Bridge' }, transitions: [awaitPoll(KYC_POLL)] },
+      detail: { code },
+      ref,
+    }
   }
 
-  const reviewStep = (ref: string): LegStep => ({ state: 'KYC', sub: 'KYC_REVIEW', status: 'processing', ref, transitions: [awaitPoll(KYC_POLL)] })
-  const failStep = (ref: string, error = kycRejected()): LegStep => ({ state: 'FAILED', status: 'failed', ref, transitions: [], error })
+  /** Bridge reviews the identity: the leg waits in the KYC phase. */
+  const reviewStep = (ref: string): LegStep => ({ status: 'processing', phase: 'kyc', detail: { code: 'kyc_review' }, ref, poll: KYC_POLL })
+  const failStep = (ref: string, error = kycRejected()): LegStep => ({ status: 'failed', ref, error })
 
   async function createKycLink(ref: string, rec: LegRec, endorsement: string, fullName: string, email: string, ctx: AdapterContext): Promise<KycLink> {
     const link = await call<KycLink>(
@@ -569,18 +661,18 @@ export function bridge(opts: BridgeOptions) {
   }
 
   async function linkStep(ref: string, rec: LegRec, link: KycLink, endorsement: string, ctx: AdapterContext): Promise<LegStep | undefined> {
-    if (link.kyc_status === 'rejected' || link.kyc_status === 'offboarded') return failStep(ref)
-    if (link.tos_status !== 'approved' && link.tos_link) return redirectStep(ref, link.tos_link, 'KYC_TERMS')
-    if (link.kyc_status === 'approved' && link.customer_id) {
+    // No status yet: the user has not started. An unknown status (logged): the KYC page, when there is one.
+    const kyc = link.kyc_status === undefined ? 'verify' : (KYC_STATUS(link.kyc_status, ctx.log) ?? 'verify')
+    if (kyc === 'rejected') return failStep(ref)
+    if (link.tos_status !== 'approved' && link.tos_link) return redirectStep(ref, link.tos_link, 'kyc_terms')
+    if (kyc === 'approved' && link.customer_id) {
       if (rec.customerId !== link.customer_id) {
         rec.customerId = link.customer_id
         await saveRec(ref, rec, ctx)
       }
       return customerStep(ref, rec, endorsement, ctx, link)
     }
-    if (link.kyc_link && ['not_started', 'incomplete', 'awaiting_questionnaire', 'awaiting_ubo', undefined].includes(link.kyc_status)) {
-      return redirectStep(ref, link.kyc_link, 'KYC_VERIFY')
-    }
+    if (link.kyc_link && kyc === 'verify') return redirectStep(ref, link.kyc_link, 'kyc_verify')
     return reviewStep(ref)
   }
 
@@ -588,17 +680,17 @@ export function bridge(opts: BridgeOptions) {
     const c = await call<Customer>(ctx, 'GET', `/customers/${encodeURIComponent(rec.customerId!)}`, 'check your account')
     if (c.status === 'rejected' || c.status === 'offboarded') return failStep(ref)
     if (c.status === 'paused' || c.status === 'deposits_restricted') {
-      return failStep(ref, orkError('PROVIDER_DECLINED', { message: 'Bridge cannot take payments on this account now. Contact support.', recovery: 'contact_support' }))
+      return failStep(ref, openRampError('PROVIDER_DECLINED', { message: 'Bridge cannot take payments on this account now. Contact support.', recovery: 'contact_support' }))
     }
     const e = c.endorsements?.find((x) => x.name === endorsement)
     if (c.status === 'active' && (!c.endorsements || e?.status === 'approved')) return undefined
     if (e?.status === 'revoked') return failStep(ref)
     // Not approved yet (or the rail's endorsement needs more steps): send the user back to the KYC link when we have one.
     // TO VERIFY: how to add an endorsement to a customer that was approved without it (a new KYC link with the endorsement?).
-    if (link?.kyc_link && c.status !== 'under_review') return redirectStep(ref, link.kyc_link, 'KYC_VERIFY')
+    if (link?.kyc_link && c.status !== 'under_review') return redirectStep(ref, link.kyc_link, 'kyc_verify')
     if (!link && rec.kycLinkId) {
       const l = await call<KycLink>(ctx, 'GET', `/kyc_links/${encodeURIComponent(rec.kycLinkId)}`, 'check identity verification')
-      if (l.kyc_link && c.status !== 'under_review' && l.kyc_status !== 'under_review') return redirectStep(ref, l.kyc_link, 'KYC_VERIFY')
+      if (l.kyc_link && c.status !== 'under_review' && l.kyc_status !== 'under_review') return redirectStep(ref, l.kyc_link, 'kyc_verify')
     }
     return reviewStep(ref)
   }
@@ -628,17 +720,15 @@ export function bridge(opts: BridgeOptions) {
   function depositSurface(rec: LegRec): Surface {
     const i = rec.instructions ?? {}
     const cur = rec.input.asset.kind === 'fiat' ? rec.input.asset.currency : 'USD'
-    if (i.br_code) return { kind: 'QR', payload: i.br_code, amount: rec.input.amount, currency: cur, method: 'pix' }
-    return bankFields(i, rec.input.amount, cur)
+    if (i.br_code) return { kind: 'QR', payload: i.br_code, amount: rec.input.value, currency: cur, method: 'pix' }
+    return bankFields(i, rec.input.value, cur)
   }
 
   const depositPaymentStep = (ref: string, rec: LegRec): LegStep => ({
-    state: 'PAYMENT',
-    sub: 'BANK_DETAILS',
-    status: 'awaiting_user',
+    status: 'requires_action',
+    action: { kind: 'payment', surface: depositSurface(rec), transitions: [awaitPoll(BANK_POLL)] },
+    detail: { code: 'bank_details' },
     ref,
-    surface: depositSurface(rec),
-    transitions: [awaitPoll(BANK_POLL)],
   })
 
   /** One virtual account per customer, currency, chain and address, reused across sessions. */
@@ -659,7 +749,7 @@ export function bridge(opts: BridgeOptions) {
         },
         ctx.idempotencyKey(`bridge:va:${ref}`),
       )
-      if (!created.id || !created.source_deposit_instructions) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return bank details.' }), 502)
+      if (!created.id || !created.source_deposit_instructions) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return bank details.' }), 502)
       va = { id: created.id, instructions: created.source_deposit_instructions }
       await ctx.shared.put(vaKey, va, REC_TTL_SEC)
     }
@@ -670,41 +760,37 @@ export function bridge(opts: BridgeOptions) {
     await ctx.shared.put(`vaRef:${va.id}`, ref, REC_TTL_SEC)
   }
 
-  /** Map a virtual account event of one deposit to a leg event. Returns undefined for non-payment events. */
-  function vaEvent(ref: string, rec: LegRec, ev: VaEvent): LegEvent | undefined {
-    const hash = ev.destination_tx_hash ?? ev.receipt?.destination_tx_hash
-    switch (ev.type) {
-      case 'funds_scheduled':
-      case 'funds_received':
-      case 'in_review':
-      case 'payment_submitted':
-      case 'refund_in_flight':
-        return { ref, status: 'processing', ...(hash ? { txHash: hash } : {}) }
-      case 'payment_processed': {
-        // "For outgoing events such as payment_submitted and payment_processed, this is the amount of funds sent to the destination."
-        const out = dec(ev.receipt?.final_amount) ?? dec(ev.amount)
-        return { ref, status: 'succeeded', ...(hash ? { txHash: hash } : {}), ...(out ? { output: { amount: out, asset: rec.asset } } : {}) }
-      }
-      // TO VERIFY: the docs table says `refunded`, the OpenAPI enum says `refund`. Accept both.
-      case 'refund':
-      case 'refunded':
-        return { ref, status: 'refunded' }
-      case 'refund_failed':
-        return { ref, status: 'failed', error: orkError('DELIVERY_FAILED', { message: 'Bridge could not deliver or refund this deposit. Contact support.', recovery: 'contact_support' }) }
-      default:
-        return undefined // microdeposit, account_update, activation, deactivation
-    }
+  /** The `VA_EVENT` entry of a payment event; undefined for account events and unknown types (logged with `log`). */
+  function vaMap(type: string, log?: Pick<Logger, 'warn'>): Exclude<VaEventMap, 'ignore'> | undefined {
+    const m = VA_EVENT(type, log)
+    return m === 'ignore' ? undefined : m
   }
 
-  const RANK: Record<string, number> = { payment_processed: 5, refund: 5, refunded: 5, refund_failed: 5, refund_in_flight: 4, payment_submitted: 3, in_review: 2, funds_received: 1, funds_scheduled: 0 }
+  /** Map a virtual account event of one deposit to a leg event. Returns undefined for non-payment events and unknown types. */
+  function vaEvent(ref: string, rec: LegRec, ev: VaEvent, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
+    const m = vaMap(ev.type, log)
+    if (!m) return undefined
+    const hash = ev.destination_tx_hash ?? ev.receipt?.destination_tx_hash
+    const base = {
+      ref,
+      ...(ev.deposit_id ? { providerRef: ev.deposit_id } : {}),
+      // Bridge's transaction delivers the USDC to the destination address.
+      ...(hash ? { transactions: [{ role: 'destination' as const, chain: rec.asset.chain, hash }] } : {}),
+    }
+    if (m.status === 'succeeded') {
+      // "For outgoing events such as payment_submitted and payment_processed, this is the amount of funds sent to the destination."
+      const out = dec(ev.receipt?.final_amount) ?? dec(ev.amount)
+      return { ...base, status: 'succeeded', ...(out ? { output: { value: out, asset: rec.asset } } : {}) }
+    }
+    if (m.status === 'failed') {
+      return { ...base, status: 'failed', error: openRampError('DELIVERY_FAILED', { message: 'Bridge could not deliver or refund this deposit. Contact support.', recovery: 'contact_support' }) }
+    }
+    return { ...base, status: m.status, ...(m.detail ? { detail: { code: m.detail, providerStatus: ev.type } } : {}) }
+  }
 
   /** Claim a deposit for this leg. The first leg that sees a deposit keeps it. */
-  async function claim(ref: string, depositId: string, ctx: Pick<AdapterContext, 'shared'>): Promise<boolean> {
-    const k = `dep:${depositId}`
-    const owner = await ctx.shared.get<string>(k)
-    if (owner && owner !== ref) return false
-    if (!owner) await ctx.shared.put(k, ref, REC_TTL_SEC)
-    return true
+  function claim(ref: string, depositId: string, ctx: Pick<AdapterContext, 'shared'>): Promise<boolean> {
+    return claimOnce(ctx.shared, `dep:${depositId}`, ref, REC_TTL_SEC)
   }
 
   function after(ev: VaEvent, rec: LegRec): boolean {
@@ -722,14 +808,15 @@ export function bridge(opts: BridgeOptions) {
     )
     const byDeposit = new Map<string, VaEvent[]>()
     for (const ev of res.data ?? []) {
-      if (!ev.deposit_id || RANK[ev.type] === undefined || !after(ev, rec)) continue
+      if (!ev.deposit_id || !vaMap(ev.type, ctx.log) || !after(ev, rec)) continue
       ;(byDeposit.get(ev.deposit_id) ?? byDeposit.set(ev.deposit_id, []).get(ev.deposit_id)!).push(ev)
     }
     // Oldest deposit first: the first deposit after the session started belongs to it.
     const deposits = [...byDeposit.entries()].sort((a, b) => minTime(a[1]) - minTime(b[1]))
     for (const [depositId, events] of deposits) {
       if (!(await claim(ref, depositId, ctx))) continue
-      const best = [...events].sort((a, b) => (RANK[b.type] ?? -1) - (RANK[a.type] ?? -1))[0]!
+      const rank = (e: VaEvent) => vaMap(e.type)?.rank ?? -1
+      const best = [...events].sort((a, b) => rank(b) - rank(a))[0]!
       const le = vaEvent(ref, rec, best)
       if (le) return stepFromEvent(le)
     }
@@ -773,27 +860,36 @@ export function bridge(opts: BridgeOptions) {
   }
 
   const payoutFormStep = (ref: string, r: PayoutRail): LegStep => ({
-    state: 'PAYMENT',
-    sub: 'PAYOUT_ACCOUNT',
-    status: 'awaiting_user',
+    status: 'requires_action',
+    action: { kind: 'payment', surface: { kind: 'FORM', fields: payoutFields(r) }, transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }] },
+    detail: { code: 'payout_account' },
     ref,
-    surface: { kind: 'FORM', fields: payoutFields(r) },
-    transitions: [{ name: 'submit_details', kind: 'SUBMIT', label: 'Continue' }],
   })
 
   function sendStep(ref: string, rec: LegRec): LegStep {
     const a = rec.asset
-    const amount = toBaseUnits(rec.payAmount ?? rec.input.amount, 6)
+    const amount = toBaseUnits(rec.payAmount ?? rec.input.value, 6)
     const tx: TxRequest = isSolanaChain(a.chain)
       ? { kind: 'solana', type: 'transfer', to: rec.payTo!, mint: a.token, amount, decimals: 6 }
       : { to: a.token, data: erc20TransferData(rec.payTo!, amount), value: '0', chainId: evmChainId(a.chain)! }
     return {
-      state: 'PAYMENT',
-      sub: 'SEND_CRYPTO',
-      status: 'awaiting_user',
+      status: 'requires_action',
+      action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: a.chain, txs: [tx] }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] },
+      detail: { code: 'send_crypto' },
       ref,
-      surface: { kind: 'WALLET_TX', chain: a.chain, txs: [tx] },
-      transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+      ...(rec.transferId ? { providerRef: rec.transferId } : {}),
+    }
+  }
+
+  /** The user sent the USDC (`txHash`): the payout waits for the transfer to confirm. */
+  function sentStep(ref: string, rec: LegRec, txHash: string | undefined): LegStep {
+    return {
+      status: 'processing',
+      detail: { code: 'confirming' },
+      ref,
+      ...(rec.transferId ? { providerRef: rec.transferId } : {}),
+      poll: BANK_POLL,
+      ...(txHash ? { transactions: [{ role: 'source', chain: rec.asset.chain, hash: txHash }] } : {}),
     }
   }
 
@@ -802,8 +898,8 @@ export function bridge(opts: BridgeOptions) {
     return typeof v === 'string' ? v.trim() : ''
   }
 
-  function bad(message: string): OrkException {
-    return new OrkException(orkError('BAD_REQUEST', { message }), 400)
+  function bad(message: string): OpenRampException {
+    return new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
   }
 
   /** The POST body for an external account, from the FORM inputs. Validates the formats. */
@@ -847,7 +943,7 @@ export function bridge(opts: BridgeOptions) {
       '/transfers',
       'start the payout',
       {
-        amount: rec.input.amount,
+        amount: rec.input.value,
         on_behalf_of: rec.customerId,
         client_reference_id: ref,
         ...(opts.developerFeePercent ? { developer_fee_percent: opts.developerFeePercent } : {}),
@@ -859,64 +955,64 @@ export function bridge(opts: BridgeOptions) {
       ctx.idempotencyKey(`bridge:transfer:${ref}`),
     )
     const to = t.source_deposit_instructions?.to_address
-    if (!t.id || !to) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return a deposit address.' }), 502)
+    if (!t.id || !to) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return a deposit address.' }), 502)
     rec.transferId = t.id
     rec.payTo = to
-    rec.payAmount = dec(t.source_deposit_instructions?.amount) ?? rec.input.amount
+    rec.payAmount = dec(t.source_deposit_instructions?.amount) ?? rec.input.value
     await saveRec(ref, rec, ctx)
     await ctx.shared.put(`tr:${t.id}`, ref, REC_TTL_SEC)
   }
 
-  function transferEvent(ref: string, rec: LegRec | undefined, t: Transfer): LegEvent | undefined {
-    const hash = t.receipt?.destination_tx_hash ?? t.receipt?.source_tx_hash
-    switch (t.state) {
-      case 'awaiting_funds':
-        return undefined
-      case 'in_review':
-      case 'funds_received':
-      case 'payment_submitted':
-      case 'refund_in_flight':
-        return { ref, status: 'processing' }
-      case 'payment_processed': {
-        const out = dec(t.receipt?.final_amount)
-        const cur = rec && payoutById.get(rec.legId)?.currency
-        return { ref, status: 'succeeded', ...(hash ? { txHash: hash } : {}), ...(out && cur ? { output: { amount: out, asset: { kind: 'fiat', currency: cur } } } : {}) }
-      }
-      case 'refunded':
-        return { ref, status: 'refunded' }
-      case 'canceled':
-      case 'error':
-      case 'undeliverable':
-      case 'returned':
-      case 'refund_failed':
-      case 'missing_return_policy':
-        return { ref, status: 'failed', error: orkError('DELIVERY_FAILED', { message: `Bridge could not pay out (${t.state}). Contact support.`, recovery: 'contact_support' }) }
-      default:
-        return { ref, status: 'processing' }
+  /**
+   * Map a transfer to a leg event. Undefined for `awaiting_funds` (the user has not sent the USDC yet)
+   * and for a state that is not in `TRANSFER_STATE` (logged with `log`).
+   */
+  function transferEvent(ref: string, rec: LegRec | undefined, t: Transfer, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
+    const m = TRANSFER_STATE(t.state, log)
+    if (!m || m === 'awaiting_funds') return undefined
+    // The user's USDC transfer to Bridge. A payout delivers fiat, so there is no destination transaction.
+    const src = t.receipt?.source_tx_hash
+    const base = {
+      ref,
+      ...(t.id ? { providerRef: t.id } : {}),
+      ...(src ? { transactions: [{ role: 'source' as const, ...(rec ? { chain: rec.asset.chain } : {}), hash: src }] } : {}),
     }
+    if (m.status === 'succeeded') {
+      const out = dec(t.receipt?.final_amount)
+      const cur = rec && payoutById.get(rec.legId)?.currency
+      return { ...base, status: 'succeeded', ...(out && cur ? { output: { value: out, asset: { kind: 'fiat', currency: cur } } } : {}) }
+    }
+    if (m.status === 'failed') {
+      return { ...base, status: 'failed', error: openRampError('DELIVERY_FAILED', { message: `Bridge could not pay out (${t.state}). Contact support.`, recovery: 'contact_support' }) }
+    }
+    return { ...base, status: m.status, ...(m.detail ? { detail: { code: m.detail, providerStatus: t.state } } : {}) }
+  }
+
+  /** Keep the last step of a known transfer state in the leg record (written only when it changes). */
+  async function keepLastStep(ref: string, rec: LegRec, step: LegStep, ctx: Pick<AdapterContext, 'shared'>): Promise<void> {
+    if (JSON.stringify(rec.lastStep) === JSON.stringify(step)) return
+    rec.lastStep = step
+    await saveRec(ref, rec, ctx)
   }
 
   async function payoutStatus(ref: string, rec: LegRec, ctx: AdapterContext): Promise<LegStep> {
     const t = await call<Transfer>(ctx, 'GET', `/transfers/${encodeURIComponent(rec.transferId!)}`, 'check the payout')
+    const known = TRANSFER_STATE(t.state, ctx.log)
+    // An unknown state (logged): keep the last known step. Never `processing` by default.
+    if (!known && rec.lastStep) return rec.lastStep
     const ev = transferEvent(ref, rec, t)
-    if (!ev) return rec.txHash ? { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, txHash: rec.txHash, transitions: [awaitPoll(BANK_POLL)] } : sendStep(ref, rec)
-    return stepFromEvent(ev)
+    // awaiting_funds, or an unknown state before any known one: the user still sends the USDC, or has sent it.
+    if (!ev) return rec.txHash ? sentStep(ref, rec, rec.txHash) : sendStep(ref, rec)
+    const step = stepFromEvent(ev)
+    await keepLastStep(ref, rec, step, ctx)
+    return step
   }
 
   // ---------- the state machine ----------
 
+  /** The `status()` step of a provider event: the same v2 shape, with the bank poll for a step that waits. */
   function stepFromEvent(ev: LegEvent): LegStep {
-    const extra = { ref: ev.ref, ...(ev.txHash ? { txHash: ev.txHash } : {}), ...(ev.output ? { output: ev.output } : {}) }
-    const map: Record<LegStatus, LegStep> = {
-      pending: { state: 'PROCESSING', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
-      awaiting_user: { state: 'PAYMENT', status: 'awaiting_user', transitions: [awaitPoll(BANK_POLL)], ...extra },
-      processing: { state: 'PROCESSING', sub: 'SETTLING', status: 'processing', transitions: [awaitPoll(BANK_POLL)], ...extra },
-      succeeded: { state: 'COMPLETED', status: 'succeeded', transitions: [], ...extra },
-      failed: { state: 'FAILED', status: 'failed', transitions: [], ...extra, ...(ev.error ? { error: ev.error } : {}) },
-      refunded: { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra },
-      expired: { state: 'EXPIRED', status: 'expired', transitions: [], ...extra },
-    }
-    return map[ev.status]
+    return legStepFromEvent(ev, ev.ref, BANK_POLL)
   }
 
   /** Move the leg as far as it can go now, and return the step for the user. */
@@ -948,12 +1044,13 @@ export function bridge(opts: BridgeOptions) {
   function railOf(legId: string): { deposit?: DepositRail; payout?: PayoutRail } {
     const deposit = depositById.get(legId)
     const payout = payoutById.get(legId)
-    if (!deposit && !payout) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Bridge leg ${legId}` }), 400)
+    if (!deposit && !payout) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Bridge leg ${legId}` }), 400)
     return { ...(deposit ? { deposit } : {}), ...(payout ? { payout } : {}) }
   }
 
   return createAdapter({
     id: 'bridge',
+    env,
     name: 'Bridge',
     legs,
 
@@ -969,12 +1066,12 @@ export function bridge(opts: BridgeOptions) {
       const src = input.quote.input.asset
       let rec: LegRec
       if (deposit) {
-        if (out.kind !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: 'Bridge deposits deliver USDC.' }), 400)
+        if (out.kind !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Bridge deposits deliver USDC.' }), 400)
         const address = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-        if (!address) throw new OrkException(orkError('BAD_REQUEST', { message: 'Bridge needs a wallet address to deliver to.' }), 400)
+        if (!address) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Bridge needs a wallet address to deliver to.' }), 400)
         rec = { kind: 'deposit', legId: input.leg.legId, userId: ctx.session.userId, since: Date.now(), input: input.quote.input, asset: out, address }
       } else {
-        if (src.kind !== 'crypto') throw new OrkException(orkError('BAD_REQUEST', { message: 'Bridge payouts take USDC.' }), 400)
+        if (src.kind !== 'crypto') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Bridge payouts take USDC.' }), 400)
         const from = input.source?.address
         rec = { kind: 'payout', legId: input.leg.legId, userId: ctx.session.userId, since: Date.now(), input: input.quote.input, asset: src, ...(from ? { fromAddress: from } : {}) }
       }
@@ -1008,21 +1105,21 @@ export function bridge(opts: BridgeOptions) {
           externalAccountBody(r, inputs),
           ctx.idempotencyKey(`bridge:ea:${ref}`),
         )
-        if (!ea.id) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not save the bank account.' }), 502)
+        if (!ea.id) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not save the bank account.' }), 502)
         rec.externalAccountId = ea.id
         await saveRec(ref, rec, ctx)
         return advance(ref, rec, ctx)
       }
       if (name === 'submit_tx') {
-        if (rec.kind !== 'payout' || !rec.transferId) throw new OrkException(orkError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
+        if (rec.kind !== 'payout' || !rec.transferId) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
         const txHash = typeof inputs?.txHash === 'string' ? inputs.txHash : undefined
         if (txHash) {
           rec.txHash = txHash
           await saveRec(ref, rec, ctx)
         }
-        return { state: 'PROCESSING', sub: 'CONFIRMING', status: 'processing', ref, transitions: [awaitPoll(BANK_POLL)], ...(txHash ? { txHash } : {}) }
+        return sentStep(ref, rec, txHash)
       }
-      throw new OrkException(orkError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${name} is not supported.` }), 409)
     },
 
     async status({ ref }, ctx) {
@@ -1031,6 +1128,8 @@ export function bridge(opts: BridgeOptions) {
     },
 
     webhook: {
+      // Without the webhookPublicKey, no webhook can verify (see `resultChannels`).
+      configured: !!opts.webhookPublicKey,
       async verify(req, rawBody, ctx) {
         // An empty key would accept nothing useful; refuse clearly (for example an unset environment variable).
         if (!opts.webhookPublicKey) {
@@ -1065,7 +1164,7 @@ export function bridge(opts: BridgeOptions) {
           if (!ref) return []
           const rec = await ctx.shared.get<LegRec>(recKey(ref))
           if (!rec || !after(ev, rec) || !(await claim(ref, ev.deposit_id, ctx))) return []
-          const le = vaEvent(ref, rec, ev)
+          const le = vaEvent(ref, rec, ev, ctx.log)
           return le ? [le] : []
         }
         if (env.event_category === 'transfer') {
@@ -1073,7 +1172,9 @@ export function bridge(opts: BridgeOptions) {
           const ref = t.client_reference_id ?? (t.id ? await ctx.shared.get<string>(`tr:${t.id}`) : undefined)
           if (!ref || !t.state) return []
           const rec = await ctx.shared.get<LegRec>(recKey(ref))
-          const le = transferEvent(ref, rec, t)
+          const le = transferEvent(ref, rec, t, ctx.log)
+          // The status poll keeps this step when Bridge later reports a state that is not in the table.
+          if (le && rec) await keepLastStep(ref, rec, stepFromEvent(le), ctx)
           return le ? [le] : []
         }
         // kyc_link and customer events: the status poll moves the KYC step on.

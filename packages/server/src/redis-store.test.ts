@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fromNodeRedis, fromNodeRedisV4, redisStore } from './redis-store.js'
+import { KV_PUT_IF_ABSENT_SCRIPT, fromNodeRedis, fromNodeRedisV4, redisStore } from './redis-store.js'
 import type { RedisLike } from './redis-store.js'
 import { VersionConflictError } from './store.js'
 
@@ -20,7 +20,14 @@ function fakeRedis(opts: { autoParse?: boolean } = {}): RedisLike & { data: Map<
       ex.set(k, o?.ex)
       return 'OK'
     },
-    async eval(_script, keys, args) {
+    async eval(script, keys, args) {
+      if (script === KV_PUT_IF_ABSENT_SCRIPT) {
+        // SET NX, with EX when the TTL is above 0
+        if (data.has(keys[0]!)) return 0
+        data.set(keys[0]!, args[0]!)
+        ex.set(keys[0]!, Number(args[1]) > 0 ? Number(args[1]) : undefined)
+        return 1
+      }
       const [key] = keys
       const [expected, json, ttl] = args
       const cur = data.get(key!)
@@ -55,6 +62,16 @@ describe('redisStore', () => {
       await store.kv.put('y', 'v')
       expect(r.ex.get('openramp:k:y')).toBeUndefined()
     }
+  })
+
+  it('kv.putIfAbsent: SET NX with EX, one atomic script call', async () => {
+    const r = fakeRedis()
+    const store = redisStore(r)
+    expect(await store.kv.putIfAbsent!('used', 'a', 1.5)).toBe(true)
+    expect(r.ex.get('openramp:k:used')).toBe(2)
+    expect(await store.kv.putIfAbsent!('used', 'b', 60)).toBe(false)
+    expect(await store.kv.get('used')).toBe('a')
+    expect(KV_PUT_IF_ABSENT_SCRIPT).toContain("'NX', 'EX'")
   })
 
   it('fromNodeRedis maps ioredis-style calls', async () => {

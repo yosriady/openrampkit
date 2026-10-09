@@ -1,9 +1,9 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
-import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
+import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 import type { FakeRoute } from '@openrampkit/adapter/testing'
 import { PEER_OPT_IN_ERROR, PEER_RAILS, peer } from './index.js'
 import type { PeerOptions } from './index.js'
@@ -13,7 +13,7 @@ const SECRET = 'whsec_peer_test'
 const opts: PeerOptions = { enabled: true, apiKey: KEY, webhookSecret: SECRET, env: 'sandbox' }
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
 const BASE_USDC_FULL = { ...BASE_USDC, symbol: 'USDC', decimals: 6 }
-const money = (amount: string, currency = 'USD') => ({ amount, asset: { kind: 'fiat' as const, currency } })
+const money = (amount: string, currency = 'USD') => ({ value: amount, asset: { kind: 'fiat' as const, currency } })
 const env = <T>(responseObject: T, message = 'ok') => ({ success: true, message, responseObject, statusCode: 200 })
 
 const leg = (legId: string, currency = 'USD'): PathwayLeg => ({
@@ -90,8 +90,10 @@ describe('peer adapter', () => {
     expect(Object.fromEntries(ob.searchParams)).toEqual({ currency: 'USD', paymentPlatform: 'venmo', chainId: '8453', sortBy: 'price', sortDirection: 'asc', limit: '50' })
     // 100 USD at 1.01 USD/USDC = 99.00990099 USDC; fee 2.95% = 2.920792; out = 96.089109
     expect(q.input).toEqual(money('100.00'))
-    expect(q.output).toEqual({ amount: '96.089109', asset: BASE_USDC_FULL })
-    expect(q.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: '2.920792', currency: 'USDC' }])
+    expect(q.output).toEqual({ value: '96.089109', asset: BASE_USDC_FULL })
+    expect(q.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: { value: '2.920792', asset: BASE_USDC_FULL }, included: true }])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(q.data).toMatchObject({ rail: 'venmo', currency: 'USD', amount: '100.00', quoteCount: 3 })
   })
 
@@ -99,17 +101,18 @@ describe('peer adapter', () => {
     const eurBook = fakeFetch(routes([{ match: 'api.zkp2p.xyz/v3/orderbook', reply: () => BOOK([entry('860000000000000000', '1000000', '1000000000')]) }]))
     const w = await peer({ ...opts, feeBps: 495 }).quote({ leg: leg('wise', 'EUR'), amountIn: money('86', 'EUR') }, makeCtx({ fetch: eurBook.fetch }))
     // 86 EUR / 0.86 = 100 USDC; 4.95% fee
-    expect(w.output.amount).toBe('95.05')
+    expect(w.output.value).toBe('95.05')
     expect(eurBook.calls[0]!.body).toMatchObject({ fiatCurrency: 'EUR', enabledRails: ['wise'] })
 
     const payee = await peer({ ...opts, feePayer: 'PAYEE' }).quote({ leg: leg('zelle'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch(routes()).fetch }))
-    expect(payee.input.amount).toBe('103.04')
-    expect(payee.output.amount).toBe('99.009901')
-    expect(payee.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: '3.04', currency: 'USD' }])
+    expect(payee.input.value).toBe('103.04')
+    expect(payee.output.value).toBe('99.009901')
+    expect(payee.fees).toEqual([{ kind: 'provider', label: 'Peer fee', amount: money('3.04'), included: true }])
+    expect(payee.guarantee).toBe('estimate')
 
     const down = fakeFetch(routes([{ match: 'api.zkp2p.xyz', status: 503, reply: () => ({}) }]))
     const q = await peer(opts).quote({ leg: leg('cashapp'), amountIn: money('50') }, makeCtx({ fetch: down.fetch }))
-    expect(q.output.amount).toBe('48.525')
+    expect(q.output.value).toBe('48.525')
     // No orderbook and not USD: cannot price
     await expect(peer(opts).quote({ leg: leg('revolut', 'GBP'), amountIn: money('50', 'GBP') }, makeCtx({ fetch: down.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
     // No entry can fill the amount (too large for every seller)
@@ -128,7 +131,7 @@ describe('peer adapter', () => {
     const f = fakeFetch(routes()).fetch
     await expect(a.quote({ leg: leg('venmo', 'EUR'), amountIn: money('100', 'EUR') }, makeCtx({ fetch: f }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
     await expect(a.quote({ leg: leg('venmo'), amountIn: money('9.99') }, makeCtx({ fetch: f }))).rejects.toMatchObject({ error: { code: 'AMOUNT_TOO_LOW' } })
-    await expect(a.quote({ leg: leg('venmo'), amountOut: { amount: '10', asset: BASE_USDC } }, makeCtx({ fetch: f }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(a.quote({ leg: leg('venmo'), amountOut: { value: '10', asset: BASE_USDC } }, makeCtx({ fetch: f }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
     await expect(a.quote({ leg: leg('venmo'), amountIn: money('100') }, makeCtx({ fetch: f, destination: { type: 'merchant', currency: 'USD' } }))).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const run = (status: number, body: unknown) => a.quote({ leg: leg('venmo'), amountIn: money('100') }, makeCtx({ fetch: fakeFetch([{ match: '/quotes/availability', status, reply: () => body }]).fetch }))
     await expect(run(401, { success: false, message: 'Invalid API key', responseObject: null, statusCode: 401 })).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
@@ -144,8 +147,9 @@ describe('peer adapter', () => {
     const q = await a.quote({ leg: leg('venmo'), amountIn: money('100') }, ctx)
     const step = await a.start({ leg: leg('venmo'), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: ORDER.id })
-    expect(step.surface).toEqual({ kind: 'REDIRECT', url: `https://pay.peer.xyz/?order=${ORDER.id}&token=tok_123&method=venmo`, popup: true, provider: 'Peer' })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment' }, ref: ORDER.id, providerRef: ORDER.id })
+    expect(step.action?.surface).toEqual({ kind: 'REDIRECT', url: `https://pay.peer.xyz/?order=${ORDER.id}&token=tok_123&method=venmo`, popup: true, provider: 'Peer' })
     const post = calls.find((c) => c.url.endsWith('/api/v1/orders'))!
     expect(post.method).toBe('POST')
     expect(post.headers.get('x-api-key')).toBe(KEY)
@@ -154,11 +158,12 @@ describe('peer adapter', () => {
     expect(post.body).toEqual({
       requestedFiatAmount: '100.00', requestedFiatCurrency: 'USD', destinationAddress: '0xd16e', destinationChainId: 8453, destinationToken: 'USDC',
       enabledRails: ['venmo'], successUrl: 'https://app.test/api/openramp/return', cancelUrl: 'https://app.test/api/openramp/return', dynamicOrdersEnabled: false,
-      feePayer: 'SPLIT', buyerFeeShareBps: 5000, idempotencyKey: idem, notes: { orkSessionId: 'sess_1', orkUserId: 'u_42', env: 'sandbox' },
+      feePayer: 'SPLIT', buyerFeeShareBps: 5000, idempotencyKey: idem, notes: { openrampSessionId: 'sess_1', openrampUserId: 'u_42', env: 'sandbox' },
     })
     // A retry of the same start reuses the saved checkout URL (the API replay has no token)
     const again = await a.start({ leg: leg('venmo'), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
-    expect(again.surface).toEqual(step.surface)
+    expect(again.action?.surface).toEqual(step.action?.surface)
+    expect(again.providerRef).toBe(ORDER.id)
     expect(calls.filter((c) => c.url.endsWith('/api/v1/orders'))).toHaveLength(1)
   })
 
@@ -167,7 +172,7 @@ describe('peer adapter', () => {
     const ctx = makeCtx({ fetch: fakeFetch(routes()).fetch })
     const q = await a.quote({ leg: leg('wise', 'USD'), amountIn: money('20') }, ctx)
     const step = await a.start({ leg: leg('wise'), quote: q }, ctx)
-    expect(step.surface).toEqual({
+    expect(step.action?.surface).toEqual({
       kind: 'IFRAME',
       url: `https://pay.peer.xyz/?order=${ORDER.id}&token=tok_123&method=wise&embed=true`,
       origin: 'https://pay.peer.xyz',
@@ -186,22 +191,37 @@ describe('peer adapter', () => {
   })
 
   it('status: GET /api/v1/orders/{id} maps order and payment state', async () => {
-    const run = async (order: Record<string, unknown>, currentPayment: Record<string, unknown> | null) => {
+    const run = async (order: Record<string, unknown>, currentPayment: Record<string, unknown> | null, log = recordingLog()) => {
       const { fetch, calls } = fakeFetch([{ match: `/api/v1/orders/${ORDER.id}`, reply: () => env({ order: { ...ORDER, ...order }, merchant: { environment: 'SANDBOX' }, currentPayment }) }])
-      const s = await peer(opts).status!({ leg: leg('venmo'), ref: ORDER.id }, makeCtx({ fetch }))
+      const s = await peer(opts).status!({ leg: leg('venmo'), ref: ORDER.id }, makeCtx({ fetch, log }))
       expect(calls[0]!.method).toBe('GET')
       expect(checkLegStep(s)).toEqual([])
       return s
     }
-    expect(await run({}, null)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await run({}, { id: 'p', status: 'CREATED', rail: 'venmo' })).toMatchObject({ state: 'PAYMENT' })
-    expect(await run({}, { id: 'p', status: 'EXPIRED' })).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await run({}, { id: 'p', status: 'FAILED' })).toMatchObject({ state: 'PAYMENT' })
-    expect(await run({ status: 'PARTIALLY_FULFILLED' }, { status: 'SETTLED' })).toMatchObject({ state: 'PROCESSING' })
-    expect(await run({ status: 'FULFILLED', remainingUsdcAmount: '0' }, { status: 'SETTLED', netSettledUsdcAmount: '96.09', fulfillTransaction: '0xabc' })).toMatchObject({
-      state: 'COMPLETED', status: 'succeeded', txHash: '0xabc', output: { amount: '96.09', asset: BASE_USDC_FULL },
+    const unpaid = await run({}, null)
+    expect(stateFor(unpaid)).toBe('PAYMENT')
+    expect(unpaid).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
+    expect(unpaid.action?.surface).toBeUndefined()
+    expect(stateFor(await run({}, { id: 'p', status: 'CREATED', rail: 'venmo' }))).toBe('PAYMENT')
+    expect(await run({}, { id: 'p', status: 'EXPIRED' })).toMatchObject({ status: 'requires_action' })
+    expect(stateFor(await run({}, { id: 'p', status: 'FAILED' }))).toBe('PAYMENT')
+    const partial = await run({ status: 'PARTIALLY_FULFILLED' }, { status: 'SETTLED' })
+    expect(stateFor(partial)).toBe('PROCESSING')
+    expect(partial).toMatchObject({ providerRef: ORDER.id, detail: { code: 'processing', providerStatus: 'PARTIALLY_FULFILLED' } })
+    const done = await run({ status: 'FULFILLED', remainingUsdcAmount: '0' }, { status: 'SETTLED', netSettledUsdcAmount: '96.09', fulfillTransaction: '0xabc' })
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({
+      status: 'succeeded', providerRef: ORDER.id, transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc' }], output: { value: '96.09', asset: BASE_USDC_FULL },
     })
-    expect(await run({ status: 'CANCELLED' }, null)).toMatchObject({ state: 'FAILED', error: { code: 'PAYMENT_FAILED' } })
+    const cancelled = await run({ status: 'CANCELLED' }, null)
+    expect(stateFor(cancelled)).toBe('FAILED')
+    expect(cancelled).toMatchObject({ error: { code: 'PAYMENT_FAILED' } })
+    // An unknown order status is logged and is not processing: a payment poll (the server never moves a leg back)
+    const log = recordingLog()
+    const unknown = await run({ status: 'ON_HOLD_NEW' }, null, log)
+    expect(unknown.status).toBe('requires_action')
+    expect(unknown.status).not.toBe('processing')
+    expect(log.warnings.join(' ')).toContain('unknown provider status')
     const nf = fakeFetch([{ match: '/api/v1/orders/', status: 404, reply: () => ({ success: false, message: 'Order not found' }) }])
     await expect(peer(opts).status!({ leg: leg('venmo'), ref: 'x' }, makeCtx({ fetch: nf.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })
@@ -230,10 +250,14 @@ describe('peer adapter', () => {
     const parse = (b: string) => a.webhook!.parse(b, wctx)
     const settled = { id: 'pay_1', status: 'SETTLED', rail: 'venmo', netSettledUsdcAmount: '49.5', fulfillTransaction: '0xabc' }
     expect(await parse(hook('ORDER_FULFILLED', { status: 'FULFILLED' }, settled))).toEqual([
-      { ref: ORDER.id, status: 'succeeded', txHash: '0xabc', output: { amount: '49.5', asset: BASE_USDC_FULL } },
+      { ref: ORDER.id, providerRef: ORDER.id, status: 'succeeded', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc' }], output: { value: '49.5', asset: BASE_USDC_FULL } },
     ])
     expect(await parse(hook('PAYMENT_SETTLED', { status: 'FULFILLED' }, settled))).toMatchObject([{ status: 'succeeded' }])
-    expect(await parse(hook('PAYMENT_SETTLED', { status: 'PARTIALLY_FULFILLED' }, settled))).toEqual([{ ref: ORDER.id, status: 'processing' }])
+    expect(await parse(hook('PAYMENT_SETTLED', { status: 'PARTIALLY_FULFILLED' }, settled))).toEqual([
+      { ref: ORDER.id, providerRef: ORDER.id, status: 'processing', detail: { code: 'processing', providerStatus: 'PARTIALLY_FULFILLED' } },
+    ])
+    // An unknown order status gives no event (never processing)
+    expect(await parse(hook('PAYMENT_SETTLED', { status: 'SOMETHING_NEW' }, settled))).toEqual([])
     expect(await parse(hook('ORDER_CANCELLED', { status: 'CANCELLED' }))).toMatchObject([{ ref: ORDER.id, status: 'failed', error: { code: 'PAYMENT_FAILED' } }])
     for (const t of ['PAYMENT_CREATED', 'PAYMENT_FAILED', 'PAYMENT_EXPIRED', 'PAYMENT_CANCELLED', 'ORDER_CREATED', 'ORDER_RESIZED', 'PAYMENT_BRIDGE_PENDING']) {
       expect(await parse(hook(t, {}, { id: 'pay_1', status: 'EXPIRED' }))).toEqual([])
@@ -275,6 +299,7 @@ describe('peer adapter', () => {
         { leg: leg('venmo'), quote: { amountIn: money('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: leg('wise', 'USD'), quote: { amountIn: money('25') } },
       ],
+      errorPaths: [{ leg: leg('venmo'), quote: { amountIn: money('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'x-webhook-signature': sig, 'x-webhook-timestamp': ts } }), events: 1 },
         { name: 'unsigned', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body }), valid: false },
@@ -283,8 +308,9 @@ describe('peer adapter', () => {
     expect(report.problems).toEqual([])
   })
 
+  // Live calls to the provider: allow 30 s, not the 5 s vitest default.
   it.runIf(process.env.LIVE === '1')('live: the public orderbook has USD liquidity on some rail', async () => {
     const legs = await peer({ ...opts, rails: ['venmo', 'cashapp', 'zelle', 'paypal'] }).catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, { fetch, log: silentLog, shared: memoryKV() })
     expect(legs.length).toBeGreaterThan(0)
-  })
+  }, 30_000)
 })

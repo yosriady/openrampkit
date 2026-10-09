@@ -20,7 +20,7 @@ const DEST = { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip15
 
 const ADAPTERS: Record<string, () => Adapter> = {
   moonpay: () => moonpay({ publishableKey: 'pk_test_x', secretKey: 'sk_test_x', env: 'sandbox' }),
-  transak: () => transak({ apiKey: 'k', apiSecret: 's', referrerDomain: 'app.test', env: 'staging' }),
+  transak: () => transak({ apiKey: 'k', apiSecret: 's', referrerDomain: 'app.test', env: 'sandbox' }),
   coinbase: () => coinbase({ apiKeyId: 'id', apiKeySecret: 'secret' }),
   stripe: () => stripe({ secretKey: 'sk_test_x', publishableKey: 'pk_test_x', webhookSecret: 'whsec_x' }),
   meld: () => meld({ apiKey: 'k', env: 'sandbox' }),

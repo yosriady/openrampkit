@@ -1,7 +1,7 @@
 // Solana devnet in testnet mode: error messages, the wallet guard and the session. Pure code with no
 // Wallet Standard registry import, so the unit tests run in Node.
 
-import { fromSplAmount, isSolanaTx, lamportsToSol, orkError } from '@openrampkit/core'
+import { fromSplAmount, isSolanaTx, lamportsToSol, openRampError } from '@openrampkit/core'
 import type { TxRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
 import type { CreateSessionInput } from '@openrampkit/server'
 import type { Wallet } from '@wallet-standard/base'
@@ -117,7 +117,7 @@ export type SolanaGuardOptions = {
  * - It turns wallet errors into short messages that the widget shows.
  */
 export function guardSolanaWallet(base: WalletAdapter, g: SolanaGuardOptions): WalletAdapter {
-  const fail = (message: string) => orkError('BAD_REQUEST', { message, recovery: 'retry_payment' })
+  const fail = (message: string) => openRampError('BAD_REQUEST', { message, recovery: 'retry_payment' })
   const ctx = { symbol: g.token.symbol, faucet: g.token.faucet, gasFaucet: g.gasFaucet }
   const min = g.minLamports ?? MIN_FEE_LAMPORTS
   return {

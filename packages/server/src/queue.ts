@@ -10,6 +10,8 @@ import type { Runtime } from './runtime.js'
 
 export const OUTBOX_QUEUE = 'outbox'
 export const OPEN_QUEUE = 'open-sessions'
+/** Expired sessions whose payment may still arrive: polled at a slower rate (`latePayments`) */
+export const GRACE_QUEUE = 'grace-sessions'
 
 const fallbacks = new WeakMap<SessionStore, StoreQueue>()
 

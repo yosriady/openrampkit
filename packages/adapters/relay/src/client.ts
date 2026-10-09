@@ -1,0 +1,110 @@
+// The Relay HTTP API and the JSON-RPC calls, with the options of one adapter instance.
+
+import { cachedJson, evmRpc, fetchJson } from '@openrampkit/adapter'
+import type { AdapterContext, Logger } from '@openrampkit/adapter'
+import { OpenRampException, chainName, openRampError } from '@openrampkit/core'
+import type { CryptoAsset } from '@openrampkit/core'
+import { DEFAULT_LOG_BLOCK_RANGE, DEFAULT_RPC_URLS, DEFAULT_TOLERANCE_BPS, EVM_NATIVE, SOLANA_NATIVE } from './config.js'
+import type { RelayOptions } from './config.js'
+import { isSolana, knownDecimals, relayChainId, relayCurrency, toOpenRamp } from './helpers.js'
+import type { SolTx } from './solana.js'
+import type { RelayRequest } from './types.js'
+
+/** What the parts of one adapter instance share: its options and its API and RPC calls */
+export type RelayRuntime = ReturnType<typeof createRuntime>
+
+export function createRuntime(opts: RelayOptions) {
+  const baseUrl = (opts.baseUrl ?? 'https://api.relay.link').replace(/\/+$/, '')
+  let warnedV2 = false
+  const toleranceBps = Math.max(0, Math.min(10_000, Math.round(opts.amountToleranceBps ?? DEFAULT_TOLERANCE_BPS)))
+  const logBlockRange = BigInt(Math.max(1, Math.floor(opts.logBlockRange ?? DEFAULT_LOG_BLOCK_RANGE)))
+  /** The `slippageTolerance` (bps) sent with every quote, or undefined when Relay picks it */
+  const slippageBps = opts.slippageBps !== undefined ? Math.max(0, Math.min(10_000, Math.round(opts.slippageBps))) : undefined
+
+  /**
+   * Warn once, on the first adapter call, when no API key is set. Relay's announced policy: from
+   * 2026-10-02, every `POST /quote/v2` needs a valid API key (https://docs.relay.link/references/api/api-keys).
+   * Some keyless quotes still worked on 2026-10-09, but Relay can refuse them at any time. A quote with a
+   * `referrer` and no key is refused now (401 UNAUTHORIZED_QUOTE). Status then also uses /requests/v2,
+   * which retires on 2026-11-24.
+   */
+  function warnNoKey(log: Pick<Logger, 'warn'>) {
+    if (opts.apiKey || warnedV2) return
+    warnedV2 = true
+    log.warn(
+      'relay: no apiKey. Relay requires an API key for quotes (POST /quote/v2, used for quotes and deposit addresses) under its announced policy from 2026-10-02. Some keyless quotes may still work today, but Relay can refuse them at any time (401 UNAUTHORIZED_QUOTE). Status also uses deprecated GET /requests/v2 (Relay retires it on 2026-11-24). Always set relay({ apiKey }), for example from RELAY_API_KEY.',
+    )
+  }
+
+  const headers = (): Record<string, string> => (opts.apiKey ? { 'x-api-key': opts.apiKey } : {})
+
+  async function api<T>(ctx: Pick<AdapterContext, 'fetch'>, path: string, body?: unknown): Promise<T> {
+    return fetchJson<T>(ctx.fetch, `${baseUrl}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: headers(),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      timeoutMs: 8000,
+    })
+  }
+
+  /** Relay requests (`GET /requests/v3` with a key, else the deprecated `/requests/v2`) */
+  async function listRequests(ctx: Pick<AdapterContext, 'fetch' | 'log'>, query: string): Promise<RelayRequest[]> {
+    warnNoKey(ctx.log)
+    const path = opts.apiKey ? '/requests/v3' : '/requests/v2'
+    const res = await api<{ requests?: RelayRequest[] }>(ctx, `${path}?${query}`)
+    return res.requests ?? []
+  }
+
+  async function decimalsOf(ctx: Pick<AdapterContext, 'fetch' | 'shared'> & Partial<Pick<AdapterContext, 'log'>>, asset: CryptoAsset): Promise<number> {
+    if (typeof asset.decimals === 'number') return asset.decimals
+    const known = knownDecimals(asset.chain, asset.token)
+    if (known !== undefined) return known
+    return cachedJson(
+      ctx.shared,
+      `dec:${asset.chain}:${isSolana(asset.chain) ? asset.token : asset.token.toLowerCase()}`,
+      7 * 24 * 60 * 60,
+      async () => {
+        const list = await api<Array<{ decimals: number }>>(ctx, '/currencies/v2', {
+          chainIds: [relayChainId(asset.chain)],
+          address: relayCurrency(asset.chain, asset.token),
+          limit: 1,
+        }).catch((e) => {
+          throw toOpenRamp(e, ctx.log)
+        })
+        const d = list?.[0]?.decimals
+        if (typeof d !== 'number') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Relay does not know this token.' }))
+        return d
+      },
+      { valid: (d) => typeof d === 'number' },
+    )
+  }
+
+  function refundTo(originChain: string): string {
+    if (opts.refundTo && opts.refundTo !== 'origin') return opts.refundTo
+    return isSolana(originChain) ? SOLANA_NATIVE : EVM_NATIVE
+  }
+
+  function baseBody(origin: CryptoAsset, dest: CryptoAsset) {
+    return {
+      originChainId: relayChainId(origin.chain),
+      originCurrency: relayCurrency(origin.chain, origin.token),
+      destinationChainId: relayChainId(dest.chain),
+      destinationCurrency: relayCurrency(dest.chain, dest.token),
+      ...(opts.referrer ? { referrer: opts.referrer } : {}),
+      ...(slippageBps !== undefined ? { slippageTolerance: String(slippageBps) } : {}),
+      ...(opts.appFee && opts.appFee.bps > 0 ? { appFees: [{ recipient: opts.appFee.recipient, fee: String(Math.round(opts.appFee.bps)) }] } : {}),
+    }
+  }
+
+  async function rpc<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, method: string, params: unknown[]): Promise<T> {
+    const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
+    if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
+    return evmRpc<T>(ctx.fetch, url, method, params, { log: ctx.log })
+  }
+
+  function solanaTx(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, signature: string) {
+    return rpc<SolTx | null>(ctx, chain, 'getTransaction', [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }])
+  }
+
+  return { opts, toleranceBps, slippageBps, logBlockRange, warnNoKey, api, listRequests, decimalsOf, refundTo, baseBody, rpc, solanaTx }
+}

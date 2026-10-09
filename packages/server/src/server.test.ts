@@ -20,7 +20,7 @@ function setup(opts: { webhooks?: boolean } = {}) {
     baseUrl: BASE,
     adapters: [mockAdapter({ settleMs: 30, crypto: true, bridge: true })],
     logger: { debug() {}, info() {}, warn() {}, error() {} },
-    ...(opts.webhooks ? { webhooks: { url: 'http://app.local/hooks', secret: 'whsec_test_0123456789' }, fetch: appFetch } : {}),
+    ...(opts.webhooks ? { webhooks: { url: 'http://app.local/hooks', secret: 'whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw' }, fetch: appFetch } : {}),
   })
   // The client calls the handler directly (no network).
   const fetchToHandler: typeof fetch = async (input, init) => ramp.handle(new Request(String(input), init))
@@ -68,7 +68,7 @@ describe('server + controller, mock provider', () => {
     await waitFor(() => c.getSnapshot().screen === 'result')
     const done = await c.done
     expect(done.step.state).toBe('COMPLETED')
-    expect(done.step.progress!.legs.map((l) => l.status)).toEqual(['succeeded', 'succeeded'])
+    expect(done.payment!.legs.map((l) => l.status)).toEqual(['succeeded', 'succeeded'])
     c.destroy()
   })
 
@@ -125,7 +125,7 @@ describe('server + controller, mock provider', () => {
     const paid = await fetchToHandler(`${BASE}/adapters/mock/pay`, { method: 'POST', body: form })
     expect(paid.status).toBe(200)
     await waitFor(() => c.getSnapshot().screen === 'result')
-    expect((await c.done).status).toBe('completed')
+    expect((await c.done).status).toBe('succeeded')
     c.destroy()
   })
 
@@ -152,7 +152,7 @@ describe('server + controller, mock provider', () => {
     await c.sendWalletTransactions()
     expect(wallet.sent).toHaveLength(1)
     await waitFor(() => c.getSnapshot().screen === 'result')
-    expect((await c.done).step.progress!.legs[0]!.txHash).toMatch(/^0x/)
+    expect((await c.done).payment!.legs[0]!.transactions.map((t) => t.hash)).toContainEqual(expect.stringMatching(/^0x/))
     c.destroy()
   })
 
@@ -169,7 +169,7 @@ describe('server + controller, mock provider', () => {
     await c.submitAmount()
     const q = c.getSnapshot().quotes[0]!
     expect(q.output.asset).toEqual({ kind: 'fiat', currency: 'IDR' })
-    expect(q.output.amount).toBe('148950')
+    expect(q.output.value).toBe('148950')
     await c.confirm()
     await c.fire('simulate_payment')
     await waitFor(() => c.getSnapshot().screen === 'result')
@@ -206,11 +206,12 @@ describe('server + controller, mock provider', () => {
     await waitFor(() => c.getSnapshot().screen === 'result')
     const types = delivered.map((d) => JSON.parse(d.body).type)
     expect(types).toContain('session.created')
-    expect(types).toContain('session.completed')
-    const last = delivered.find((d) => JSON.parse(d.body).type === 'session.completed')!
-    expect(await verifyWebhook('whsec_test_0123456789', last.headers, last.body)).toBe(true)
+    expect(types).toContain('session.succeeded')
+    const last = delivered.find((d) => JSON.parse(d.body).type === 'session.succeeded')!
+    expect(await verifyWebhook('whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw', last.headers, last.body)).toBe(true)
     expect(await verifyWebhook('whsec_wrong', last.headers, last.body)).toBe(false)
-    expect(JSON.parse(last.body).data.object.metadata).toEqual({ order: 'o1' })
+    // The backend view: userId and metadata are on the session
+    expect(JSON.parse(last.body).data.object.session).toMatchObject({ userId: 'u6', metadata: { order: 'o1' } })
     c.destroy()
   })
 })

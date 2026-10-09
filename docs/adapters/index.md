@@ -19,9 +19,11 @@ createOpenRamp({
 })
 ```
 
+To get the keys and webhook secrets for each provider, see [Get provider keys](../guide/provider-keys.md).
+
 Each adapter is its own package, for example `@openrampkit/adapter-relay`. The packages are not on npm yet. See [Try it before the npm release](../guide/installation.md#try-it-before-the-npm-release).
 
-Each adapter id may appear once. The server refuses an adapter built for another API version.
+Each adapter id may appear once. The server refuses an adapter built for another API version. The adapters on this page use version 2 of the adapter contract (`ADAPTER_API_VERSION = 2`).
 
 For withdrawals, three adapters have legs today: Relay (`wallet`, to any address), Swapped (`sell-*`, to cash) and Mock (`wallet` and `offramp`). See [Withdrawals](../guide/withdraw.md).
 
@@ -29,7 +31,7 @@ For withdrawals, three adapters have legs today: Relay (`wallet`, to any address
 
 | Adapter | Package | Legs | Methods | Countries | Surfaces | Account | Status |
 |---|---|---|---|---|---|---|---|
-| [Relay](./relay.md) | `@openrampkit/adapter-relay` | `wallet`, `transfer`, `bridge` | wallet, transfer | All | `WALLET_TX`, `DEPOSIT_ADDRESS` | Optional API key | Working |
+| [Relay](./relay.md) | `@openrampkit/adapter-relay` | `wallet`, `transfer`, `bridge` | wallet, transfer | All | `WALLET_TX`, `DEPOSIT_ADDRESS` | API key (Relay requires one for quotes from 2 Oct 2026; always set it) | Working |
 | [LI.FI](./lifi.md) | `@openrampkit/adapter-lifi` | `wallet` | wallet | All | `WALLET_TX` | Optional API key | New; some details TO VERIFY |
 | [Swapped](./swapped.md) | `@openrampkit/adapter-swapped` | One per Swapped payment group (live catalog); `sell-*` payout legs for withdrawals | card, Apple Pay, Google Pay, bank transfer, VietQR, MoMo, GCash, GoPay, DANA, PIX, UPI, BLIK, SPEI, mobile money and more; payouts: bank transfer, Skrill, PIX, Interac | Per method, from the catalog; not US-TX | `IFRAME` (sell: then `WALLET_TX`) | Yes | Working; status polling is TO VERIFY |
 | [Coinbase](./coinbase.md) | `@openrampkit/adapter-coinbase` | `card`, `apple_pay`, `google_pay`, `ach` | card, Apple Pay, Google Pay, ACH (US) | Where Coinbase operates, not JP | `REDIRECT` | Yes (CDP) | Working; several details TO VERIFY |
@@ -38,7 +40,6 @@ For withdrawals, three adapters have legs today: Relay (`wallet`, to any address
 | [MoonPay](./moonpay.md) | `@openrampkit/adapter-moonpay` | `card`, `apple_pay`, `google_pay`, `ach`, `sepa`, `gbp_bank`, `gbp_open_banking`, `pix`, `paypal`, `venmo`, `revolut_pay`, `interac` | Same; `gbp_bank` is Faster Payments, `gbp_open_banking` is pay by bank | Where MoonPay allows buying (live catalog) | `REDIRECT` (or `IFRAME`) | Yes | New; some details TO VERIFY |
 | [Stripe](./stripe.md) | `@openrampkit/adapter-stripe` | `card`, `apple_pay`, `google_pay`, `ach` | Same | US (not HI) and EU | `PROVIDER_SDK` (or `REDIRECT`) | Yes, with onramp approval | New; some details TO VERIFY |
 | [Xendit](./xendit.md) | `@openrampkit/adapter-xendit` | One per country and channel, e.g. `id-qris` | QRIS, DANA, OVO, ShopeePay, QR Ph, GCash, Maya, GrabPay, PromptPay, TrueMoney, Touch 'n Go, MoMo, ZaloPay, PayNow | ID, PH, TH, MY, VN, SG | `QR`, `REDIRECT`, `DEEPLINK` | Yes | Working (merchant destination only) |
-| [Kotani Pay](./kotani.md) | `@openrampkit/adapter-kotani` | One per country and method, e.g. `ke-mpesa`; `sell-*` payout legs for withdrawals | M-Pesa, mobile money, bank transfer (bank checkout) | KE, GH, UG, TZ, ZM, RW, CM, CI, SN, CD; bank checkout in ZA (NG TO VERIFY) | `FORM`, `REDIRECT` (sell: then `WALLET_TX`) | Yes (self-serve sandbox) | New; some details TO VERIFY |
 | [Mock](./mock.md) | `@openrampkit/adapter-mock` | `card`, `local`, `payin`, optional `wallet`, `transfer`, `bridge`, `offramp` | Every common method | All (local methods in SEA) | `REDIRECT`, `QR`, `WALLET_TX`, `DEPOSIT_ADDRESS`, `FORM` | No | For tests; moves no money |
 | [Meld](./meld.md) | `@openrampkit/adapter-meld` | One per payment method (live catalog) | card, Apple Pay, Google Pay, UPI, IMPS, PIX, SEPA, SEPA Instant, ACH, iDEAL, Bancontact, BLIK, PayID, SPEI, PSE, Khipu, M-Pesa, mobile money and more | Per method and country | `REDIRECT` | Yes | New; in progress; some details TO VERIFY |
 | [Onramper](./onramper.md) | `@openrampkit/adapter-onramper` | One per payment type (live catalog) | card, Apple Pay, Google Pay, SEPA, SEPA Instant, ACH, PIX, UPI, IMPS, iDEAL, Bancontact, Faster Payments, pay by bank, SPEI, Bancolombia, Khipu and more | Per method and country | `REDIRECT` | Yes (with a signing key) | New; in progress; some details TO VERIFY |
@@ -48,6 +49,29 @@ For withdrawals, three adapters have legs today: Relay (`wallet`, to any address
 See [Payment methods](../concepts/payment-methods.md) for each method, its countries and its adapters.
 
 "TO VERIFY" means the source code marks a provider detail as not yet checked against the live API. Each adapter page lists them.
+
+## Quote guarantees and provider references
+
+Each quote says how firm its output is (`guarantee`). The server uses the weakest guarantee of the legs for a pathway. Each started leg can also report the provider's own order id (`providerRef`). Apps show it to the user for provider support.
+
+| Adapter | Guarantee | Fees with no stated amount | `providerRef` |
+|---|---|---|---|
+| Relay | `min_output` for a `wallet` quote through Relay (`minOutput` is Relay `minimumAmount`); `estimate` for deposit-address legs; `firm` for a same-chain, same-token transfer | none | Relay request id |
+| LI.FI | `min_output` (`minOutput` is LI.FI `toAmountMin`) | none | LI.FI `transactionId`, else the source hash |
+| Swapped | `estimate` | none | Swapped `order_id` |
+| Coinbase | `estimate` | none | Guest order id, or the Coinbase transaction id |
+| Binance | `estimate` | the Binance fee, when Binance names another currency | the leg ref (`externalOrderId`) |
+| Transak | `estimate` | none | Transak order id |
+| MoonPay | `estimate` | none | MoonPay transaction id |
+| Stripe | `estimate` | none | the onramp session id (also the leg ref) |
+| Xendit | `firm` | none | the payment request id (also the leg ref) |
+| Mock | `firm` for fiat legs and plain transfers; `min_output` (50 bps) for bridge and swap legs | none | the leg ref |
+| Meld | `estimate` | none | Meld transaction id |
+| Onramper | `estimate` | the "included in rate" fee of an onramp that sends no fee fields | Onramper `transactionId` |
+| Bridge | `estimate` | the FX fee in the rate (EUR, MXN, BRL, GBP) | Bridge `deposit_id` or transfer id |
+| Peer | `estimate` | none | Peer order id (also the leg ref) |
+
+A fee with no stated amount has `amount: null`. The UI then does not show "No fees". Each adapter page lists its fee kinds and whether each fee is `included` in the quote.
 
 ## Provider webhooks
 
@@ -59,7 +83,7 @@ Adapters with a `webhook` handler receive provider callbacks at:
 
 For example `https://app.example.com/api/openramp/webhooks/swapped`. Register this URL in the provider's dashboard. The adapter verifies the signature and turns the payload into leg events. The server finds the session by the provider reference and updates it. Repeated webhooks are safe: a leg that already ended ignores later events.
 
-Adapters without webhooks (Relay) are driven by status checks: the browser's poll (`GET /sessions/:id/step`), and the [background sweep](../api/server.md#background-sweep) (or `openramp.sessions.refresh(id)`) after the user leaves.
+Adapters without webhooks (Relay and LI.FI) are driven by status checks: the browser's poll (`GET /sessions/:id/step`), and the [background sweep](../api/server.md#background-sweep) (or `openramp.sessions.refresh(id)`) after the user leaves.
 
 ## Adapter routes
 
@@ -69,7 +93,11 @@ An adapter may serve its own pages at `{baseUrl}/adapters/{adapterId}/*`. The mo
 
 - **Static legs plus a live catalog.** Swapped, Coinbase, Transak, MoonPay, Meld, Onramper and Peer declare static legs and refine them with `catalog()` at plan time (cached in the store). If the catalog call fails, the server logs a warning and uses the static legs.
 - **Delivery for hops.** Onramp adapters deliver to `deliverTo.address` when the server gives one (the Relay deposit address in a two-leg pathway), else to the session's destination address.
-- **References.** Every started leg returns a `ref` (an order id, a deposit address or a request id). Webhooks and status checks find the leg by it.
+- **References.** Every started leg returns a `ref` (an order id, a deposit address or a request id). Webhooks and status checks find the leg by it. When the provider has its own order id, the leg also reports it as `providerRef`.
+- **Status tables.** Each adapter maps provider statuses with `statusMap` from `@openrampkit/adapter`. An unknown provider status gives no new step: the adapter logs it once, and the leg keeps its current step. It never becomes `processing` (or anything else) by accident. The raw provider status goes to `detail.providerStatus`.
+- **Quote expiry.** Every quote has an `expiresAt`. The adapters set it with `quoteExpiresAt(minutes, providerExpiry?)`.
+- **Transactions.** Adapters report onchain transactions with a role: `source` (into the leg), `destination` (the delivery), `settlement` or `refund`. The server adds the leg index and the explorer link.
+- **Signatures.** Stripe, Coinbase, MoonPay, Meld and Peer verify webhooks with `verifyTimestampedHmac` from `@openrampkit/adapter`.
 
 ## Wallets
 

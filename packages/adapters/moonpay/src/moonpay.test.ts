@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 import { MOONPAY_METHODS, moonpay } from './index.js'
@@ -11,7 +11,7 @@ const SK = 'sk_test_secret'
 const WK = 'wk_test_webhook'
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
 const ETH_USDC = { kind: 'crypto' as const, chain: 'eip155:1', token: USDC['eip155:1']! }
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 
 const leg = (legId: string, to = BASE_USDC, currency = 'USD'): PathwayLeg => ({
   adapterId: 'moonpay',
@@ -69,13 +69,14 @@ describe('moonpay adapter', () => {
     for (const [legId, pm] of [['gbp_bank', 'gbp_bank_transfer'], ['gbp_open_banking', 'gbp_open_banking_payment']] as const) {
       const { fetch, calls } = fakeFetch([{ match: '/buy_quote', reply: () => ({ ...QUOTE, baseCurrencyCode: 'gbp' }) }])
       const ctx = makeCtx({ fetch, session: { country: 'GB' } })
-      const gbp = { amount: '100', asset: { kind: 'fiat' as const, currency: 'GBP' } }
+      const gbp = { value: '100', asset: { kind: 'fiat' as const, currency: 'GBP' } }
       const q = await a.quote({ leg: leg(legId, BASE_USDC, 'GBP'), amountIn: gbp }, ctx)
       const qp = new URL(calls[0]!.url).searchParams
       expect(qp.get('paymentMethod')).toBe(pm)
       expect(qp.get('baseCurrencyCode')).toBe('gbp')
       const step = await a.start({ leg: leg(legId, BASE_USDC, 'GBP'), quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
-      const url = new URL(step.surface!.kind === 'REDIRECT' ? step.surface!.url.split('&signature=')[0]! : '')
+      const surface = step.action!.surface!
+      const url = new URL(surface.kind === 'REDIRECT' ? surface.url.split('&signature=')[0]! : '')
       expect(url.searchParams.get('paymentMethod')).toBe(pm)
       expect(url.searchParams.get('baseCurrencyCode')).toBe('gbp')
     }
@@ -92,25 +93,27 @@ describe('moonpay adapter', () => {
       apiKey: PK, baseCurrencyCode: 'usd', paymentMethod: 'credit_debit_card', areFeesIncluded: 'true', baseCurrencyAmount: '100.00', walletAddress: '0xabc',
     })
     expect(q.input).toEqual(usd('100'))
-    expect(q.output).toEqual({ amount: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'MoonPay fee', amount: '4.99', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.39', currency: 'USD' },
+      { kind: 'provider', label: 'MoonPay fee', amount: usd('4.99'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0.39'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(q.data).toMatchObject({ currencyCode: 'usdc_base', paymentMethod: 'credit_debit_card' })
   })
 
   it('quote: exact output, other chains and the extra fee', async () => {
     const { fetch, calls } = fakeFetch([{ match: '/buy_quote', reply: () => ({ ...QUOTE, extraFeeAmount: 1, quoteCurrencyCode: 'usdc' }) }])
     const a = moonpay({ ...opts, extraFeePercentage: 1 })
-    const q = await a.quote({ leg: leg('apple_pay', ETH_USDC), amountOut: { amount: '50', asset: ETH_USDC } }, makeCtx({ fetch }))
+    const q = await a.quote({ leg: leg('apple_pay', ETH_USDC), amountOut: { value: '50', asset: ETH_USDC } }, makeCtx({ fetch }))
     const u = new URL(calls[0]!.url)
     expect(u.pathname).toBe('/v3/currencies/usdc/buy_quote')
     expect(u.searchParams.get('quoteCurrencyAmount')).toBe('50')
     expect(u.searchParams.get('baseCurrencyAmount')).toBeNull()
     expect(u.searchParams.get('paymentMethod')).toBe('apple_pay')
     expect(u.searchParams.get('extraFeePercentage')).toBe('1')
-    expect(q.fees.find((f) => f.kind === 'app')).toEqual({ kind: 'app', label: 'App fee', amount: '1', currency: 'USD' })
+    expect(q.fees.find((f) => f.kind === 'app')).toEqual({ kind: 'app', label: 'App fee', amount: usd('1'), included: true })
     expect(q.output.asset).toMatchObject({ chain: 'eip155:1' })
   })
 
@@ -144,9 +147,12 @@ describe('moonpay adapter', () => {
     const q = await a.quote({ leg: leg('card'), amountIn: usd('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     expect(step.ref).toMatch(/^ork_[0-9a-f]{24}$/)
-    const s = step.surface!
+    // No MoonPay transaction exists before the user pays in the widget.
+    expect(step.providerRef).toBeUndefined()
+    const s = step.action!.surface!
     if (s.kind !== 'REDIRECT') throw new Error('expected REDIRECT')
     expect(s.popup).toBe(true)
     const [unsigned, sigPart] = s.url.split('&signature=')
@@ -176,7 +182,7 @@ describe('moonpay adapter', () => {
     const ctx = makeCtx({ fetch })
     const q = await a.quote({ leg: leg('card'), amountIn: usd('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote: q }, ctx)
-    const s = step.surface!
+    const s = step.action!.surface!
     if (s.kind !== 'IFRAME') throw new Error('expected IFRAME')
     expect(s.origin).toBe('https://buy-sandbox.moonpay.com')
     expect(s.url.startsWith('https://buy-sandbox.moonpay.com/?apiKey=')).toBe(true)
@@ -189,7 +195,7 @@ describe('moonpay adapter', () => {
   it('start: needs a wallet address', async () => {
     const a = moonpay(opts)
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', currency: 'USD' } })
-    const quote = { adapterId: 'moonpay', legId: 'card', input: usd('10'), output: { amount: '9', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'moonpay', legId: 'card', input: usd('10'), output: { value: '9', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z' }
     await expect(a.start({ leg: leg('card'), quote }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 
@@ -202,15 +208,32 @@ describe('moonpay adapter', () => {
       expect(checkLegStep(s)).toEqual([])
       return s
     }
-    expect(await status([TX('completed', { cryptoTransactionId: '0xhash' })])).toMatchObject({
-      state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { amount: '94.55', asset: { chain: 'eip155:8453' } },
+    const done = await status([TX('completed', { cryptoTransactionId: '0xhash' })])
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({
+      status: 'succeeded', providerRef: 'tx_1', transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }], output: { value: '94.55', asset: { chain: 'eip155:8453' } },
     })
-    expect(await status(TX('failed'))).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'PAYMENT_FAILED' } })
-    expect(await status([TX('failed'), TX('pending')])).toMatchObject({ state: 'PROCESSING', status: 'processing' })
-    expect(await status([TX('waitingPayment')])).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await status([TX('waitingAuthorization')])).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await status({ message: 'Transaction not found' }, 404)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: 'ork_abc' })
-    expect(await status([])).toMatchObject({ state: 'PAYMENT' })
+    const failed = await status(TX('failed'))
+    expect(stateFor(failed)).toBe('FAILED')
+    expect(failed).toMatchObject({ status: 'failed', providerRef: 'tx_1', error: { code: 'PAYMENT_FAILED' } })
+    const pending = await status([TX('failed'), TX('pending', { id: 'tx_2' })])
+    expect(stateFor(pending)).toBe('PROCESSING')
+    expect(pending).toMatchObject({ status: 'processing', providerRef: 'tx_2', detail: { code: 'processing', providerStatus: 'pending' } })
+    for (const st of ['waitingPayment', 'waitingAuthorization']) {
+      const s = await status([TX(st)])
+      expect(stateFor(s)).toBe('PAYMENT')
+      // A status poll: no surface, so the UI keeps the widget
+      expect(s).toMatchObject({ status: 'requires_action', providerRef: 'tx_1', action: { kind: 'payment', transitions: [{ kind: 'AWAIT' }] } })
+      expect(s.action!.surface).toBeUndefined()
+    }
+    const notFound = await status({ message: 'Transaction not found' }, 404)
+    expect(notFound).toMatchObject({ status: 'requires_action', ref: 'ork_abc' })
+    expect(notFound.providerRef).toBeUndefined()
+    expect(stateFor(await status([]))).toBe('PAYMENT')
+    // An unknown MoonPay status is never `processing`: a status poll that keeps the current step
+    const unknown = await status([TX('somethingNew')])
+    expect(unknown.status).not.toBe('processing')
+    expect(unknown).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
     await expect(status({}, 500)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
   })
 
@@ -229,12 +252,23 @@ describe('moonpay adapter', () => {
     expect(await moonpay({ ...opts, webhookKey: undefined }).webhook!.verify(req(sig(t)), body, wctx)).toBe(false)
 
     expect(await a.webhook!.parse(body, wctx)).toEqual([
-      { ref: 'ork_abc', status: 'succeeded', txHash: '0xhash', output: { amount: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      {
+        ref: 'ork_abc',
+        status: 'succeeded',
+        providerRef: 'tx_1',
+        transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }],
+        output: { value: '94.55', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
     expect(await parse({ type: 'transaction_failed', data: TX('failed') })).toMatchObject([{ status: 'failed' }])
-    expect(await parse({ type: 'transaction_created', data: TX('waitingPayment') })).toEqual([{ ref: 'ork_abc', status: 'awaiting_user' }])
-    expect(await parse({ type: 'transaction_updated', data: TX('pending') })).toMatchObject([{ status: 'processing' }])
+    expect(await parse({ type: 'transaction_created', data: TX('waitingPayment') })).toEqual([{ ref: 'ork_abc', status: 'requires_action', providerRef: 'tx_1' }])
+    expect(await parse({ type: 'transaction_updated', data: TX('pending') })).toMatchObject([{ status: 'processing', detail: { code: 'processing', providerStatus: 'pending' } }])
+    // An unknown status: no event, and the unknown value is logged
+    const warnings: string[] = []
+    const log = { ...wctx.log, warn: (msg: string) => void warnings.push(msg) }
+    expect(await a.webhook!.parse(JSON.stringify({ type: 'transaction_updated', data: TX('brandNewStatus') }), { ...wctx, log })).toEqual([])
+    expect(warnings.some((w) => w.includes('unknown provider status'))).toBe(true)
     expect(await parse({ type: 'identity_check_updated', data: {} })).toEqual([])
     expect(await parse({ type: 'transaction_updated', data: TX('completed', { externalTransactionId: null }) })).toEqual([])
     expect(await a.webhook!.parse('not json', wctx)).toEqual([])
@@ -282,8 +316,9 @@ describe('moonpay adapter', () => {
       fetch,
       fixtures: [
         { leg: leg('card'), quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
-        { leg: leg('sepa', BASE_USDC, 'EUR'), quote: { amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx: makeCtx({ fetch, session: { country: 'DE' } }) },
+        { leg: leg('sepa', BASE_USDC, 'EUR'), quote: { amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, ctx: makeCtx({ fetch, session: { country: 'DE' } }) },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'moonpay-signature-v2': good } }), events: 1 },
         { name: 'unsigned', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body }), valid: false },
@@ -293,11 +328,19 @@ describe('moonpay adapter', () => {
     expect(report.quotes).toHaveLength(2)
   })
 
-  it.runIf(process.env.LIVE === '1')('live: public countries and a test-mode quote', async () => {
-    const a = moonpay(opts)
+  // LIVE=1 with a real key in MOONPAY_PUBLISHABLE_KEY. A fake key proves nothing, so without one the test skips.
+  // Test mode sells USDC only as `usdc` (Ethereum): usdc_base, usdc_arbitrum, usdc_optimism and usdc_polygon are not in test mode.
+  it.runIf(process.env.LIVE === '1')('live: public countries and a real test-mode quote for usdc (MOONPAY_PUBLISHABLE_KEY)', async ({ skip }) => {
+    const publishableKey = process.env.MOONPAY_PUBLISHABLE_KEY
+    skip(!publishableKey, 'MOONPAY_PUBLISHABLE_KEY is not set. Set a pk_test_ key to quote against MoonPay test mode.')
+    const a = moonpay({ ...opts, publishableKey: publishableKey!, env: publishableKey!.startsWith('pk_live_') ? 'production' : 'sandbox' })
     const legs = await a.catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, { fetch, log: silentLog, shared: memoryKV() })
     expect(legs.find((l) => l.id === 'card')!.regions.allow).toContain('US')
-    const q = await a.quote({ leg: leg('card', ETH_USDC), amountIn: usd('100') }, makeCtx({ fetch }))
-    expect(Number(q.output.amount)).toBeGreaterThan(50)
-  })
+    const q = await a.quote({ leg: leg('card', ETH_USDC), amountIn: usd('100') }, makeCtx({ fetch, session: { country: 'US' } }))
+    expect(checkLegQuote(q)).toEqual([])
+    expect(q.data).toMatchObject({ currencyCode: 'usdc' })
+    expect(q.output.asset).toMatchObject({ chain: 'eip155:1', token: USDC['eip155:1'] })
+    expect(Number(q.output.value)).toBeGreaterThan(50)
+    expect(Number(q.output.value)).toBeLessThan(110)
+  }, 30_000)
 })

@@ -33,7 +33,7 @@ test('flow: Vietnam VietQR to Monad', async ({ page }) => {
   await m.screenshot({ path: out('05-vn-processing') })
   await expect(m).toContainText('Deposit complete', { timeout: 30_000 })
   await m.screenshot({ path: out('06-vn-complete') })
-  await expect(page.getByTestId('webhooks')).toContainText('session.completed', { timeout: 30_000 })
+  await expect(page.getByTestId('webhooks')).toContainText('session.succeeded', { timeout: 30_000 })
   await page.screenshot({ path: out('00-playground') })
 })
 

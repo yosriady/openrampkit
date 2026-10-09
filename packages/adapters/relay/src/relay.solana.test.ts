@@ -3,12 +3,15 @@
 
 import { describe, expect, it } from 'vitest'
 import { checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { SOLANA_MAINNET, SOLANA_USDC_MINT, TEMPO_MAINNET, TEMPO_USDC, USDC, planPathways } from '@openrampkit/core'
-import type { CryptoAsset, Destination, PathwayLeg } from '@openrampkit/core'
+import { SOLANA_MAINNET, SOLANA_USDC_MINT, TEMPO_MAINNET, TEMPO_USDC, USDC, planPathways, stateFor } from '@openrampkit/core'
+import type { CryptoAsset, Destination, LegStep, PathwayLeg } from '@openrampkit/core'
 import { RELAY_SOLANA_CHAIN_ID, relay } from './index.js'
 import type { RelayQuoteResponse } from './index.js'
 import { fakeFetch, makeCtx, memoryKV } from '@openrampkit/adapter/testing'
 import type { FakeCall } from '@openrampkit/adapter/testing'
+
+/** A leg step with its UI state (`stateFor`) and its transaction hashes by role, for assertions */
+const v = (s: LegStep) => ({ ...s, state: stateFor(s), tx: Object.fromEntries((s.transactions ?? []).map((t) => [t.role, t.hash])) })
 
 const SOL = SOLANA_MAINNET
 const SOL_RPC = 'api.mainnet-beta.solana.com'
@@ -165,9 +168,9 @@ describe('relay: Solana destination', () => {
   it('EVM wallet to Solana USDC: the mint keeps its case and the recipient is the Solana address', async () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => intoSolanaQuote() }])
     const ctx = makeCtx({ fetch, destination: solDest })
-    const q = await relay().quote({ leg: leg('wallet', SOL_USDC, SOL_DEST), amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: EVM_USER } }, ctx)
+    const q = await relay().quote({ leg: leg('wallet', SOL_USDC, SOL_DEST), amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: EVM_USER } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q.output).toMatchObject({ amount: '9.966541', asset: { chain: SOL, token: SOLANA_USDC_MINT, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toMatchObject({ value: '9.966541', asset: { chain: SOL, token: SOLANA_USDC_MINT, symbol: 'USDC', decimals: 6 } })
     expect(calls[0]!.body).toMatchObject({ user: EVM_USER, recipient: SOL_DEST, originChainId: 8453, destinationChainId: RELAY_SOLANA_CHAIN_ID, destinationCurrency: SOLANA_USDC_MINT })
   })
 
@@ -179,14 +182,14 @@ describe('relay: Solana destination', () => {
     const a = relay({ apiKey: 'k' })
     const ctx = makeCtx({ fetch, destination: solDest })
     const transfer = leg('transfer', SOL_USDC, SOL_DEST)
-    const q = await a.quote({ leg: transfer, amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, ctx)
+    const q = await a.quote({ leg: transfer, amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, ctx)
     expect(calls[0]!.body).toMatchObject({ user: '0x000000000000000000000000000000000000dEaD', recipient: SOL_DEST, useDepositAddress: true, refundTo: '0x0000000000000000000000000000000000000000' })
     expect(q.data).toMatchObject({ depositAddress: DEPOSIT })
     const step = await a.start({ leg: transfer, quote: q }, ctx)
-    expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', address: DEPOSIT, symbol: 'USDC' })
+    expect(step.action?.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: 'eip155:8453', address: DEPOSIT, symbol: 'USDC' })
     const done = await a.status!({ leg: transfer, ref: step.ref! }, ctx)
     expect(checkLegStep(done)).toEqual([])
-    expect(done).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '9.966541', asset: { chain: SOL, token: SOLANA_USDC_MINT } } })
+    expect(v(done)).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG }, output: { value: '9.966541', asset: { chain: SOL, token: SOLANA_USDC_MINT } } })
   })
 
   it('the deposit address cache key keeps the case of a Solana recipient', async () => {
@@ -194,7 +197,7 @@ describe('relay: Solana destination', () => {
     const store = memoryKV()
     const a = relay()
     const transfer = leg('transfer', SOL_USDC, SOL_DEST)
-    await a.quote({ leg: transfer, amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, makeCtx({ fetch, store, destination: solDest }))
+    await a.quote({ leg: transfer, amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token } }, makeCtx({ fetch, store, destination: solDest }))
     const key = `da:${SOL_DEST}:eip155:8453:${BASE_USDC.token}:${SOL}:${SOLANA_USDC_MINT}`
     expect(await store.get(key)).toBe(DEPOSIT)
   })
@@ -207,9 +210,9 @@ describe('relay: Solana origin (wallet)', () => {
   it('quotes with a Solana placeholder user when the connected address is EVM', async () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => solanaOriginQuote() }])
     const ctx = makeCtx({ fetch, destination: baseDest })
-    const q = await relay().quote({ leg: walletLeg, amountIn: { amount: '10', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT, address: EVM_USER } }, ctx)
+    const q = await relay().quote({ leg: walletLeg, amountIn: { value: '10', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT, address: EVM_USER } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q.input).toMatchObject({ amount: '10', asset: { chain: SOL, token: SOLANA_USDC_MINT, symbol: 'USDC', decimals: 6 } })
+    expect(q.input).toMatchObject({ value: '10', asset: { chain: SOL, token: SOLANA_USDC_MINT, symbol: 'USDC', decimals: 6 } })
     expect(calls[0]!.body).toMatchObject({ user: '11111111111111111111111111111111', originChainId: RELAY_SOLANA_CHAIN_ID, originCurrency: SOLANA_USDC_MINT })
   })
 
@@ -220,13 +223,13 @@ describe('relay: Solana origin (wallet)', () => {
     ])
     const a = relay()
     const ctx = makeCtx({ fetch, destination: baseDest })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: SOL_USDC }, source: solSource }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: SOL_USDC }, source: solSource }, ctx)
     expect(calls[0]!.body).toMatchObject({ user: SOL_USER })
     const step = await a.start({ leg: walletLeg, quote: q, source: solSource }, ctx)
     expect(calls).toHaveLength(1) // fresh quote for the same user: reused
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', ref: '0xsolreq', surface: { kind: 'WALLET_TX', chain: SOL } })
-    const txs = (step.surface as { txs: unknown[] }).txs
+    expect(v(step)).toMatchObject({ state: 'PAYMENT', ref: '0xsolreq', providerRef: '0xsolreq', action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: SOL } } })
+    const txs = (step.action?.surface as { txs: unknown[] }).txs
     expect(txs).toEqual([
       {
         kind: 'solana',
@@ -238,15 +241,15 @@ describe('relay: Solana origin (wallet)', () => {
     // an EVM hash is not a Solana signature
     await expect(a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: `0x${'ab'.repeat(32)}` } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     const t = await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
-    expect(t).toMatchObject({ state: 'PROCESSING', txHash: SIG })
-    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: '0xdest' })
+    expect(v(t)).toMatchObject({ state: 'PROCESSING', tx: { source: SIG } })
+    expect(v(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'COMPLETED', tx: { destination: '0xdest' } })
   })
 
   it('re-quotes for the Solana user when the quote was built with a placeholder', async () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => solanaOriginQuote() }])
     const a = relay()
     const ctx = makeCtx({ fetch, destination: baseDest })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT } }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT } }, ctx)
     await a.start({ leg: walletLeg, quote: q, source: solSource }, ctx)
     expect(calls).toHaveLength(2)
     expect(calls[1]!.body).toMatchObject({ user: SOL_USER })
@@ -256,7 +259,7 @@ describe('relay: Solana origin (wallet)', () => {
     const { fetch } = fakeFetch([{ method: 'POST', match: '/quote/v2', reply: () => solanaOriginQuote() }])
     const a = relay()
     const ctx = makeCtx({ fetch, destination: baseDest })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '10', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT, address: EVM_USER } }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '10', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT, address: EVM_USER } }, ctx)
     await expect(a.start({ leg: walletLeg, quote: q, source: { chain: SOL, token: SOLANA_USDC_MINT, address: EVM_USER } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST', message: 'Connect a Solana wallet to pay from Solana.' } })
   })
 })
@@ -268,7 +271,7 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
   async function startDirect(fetch: typeof globalThis.fetch, shared = memoryKV()) {
     const a = relay()
     const ctx = makeCtx({ fetch, shared, destination: solDest })
-    const q = await a.quote({ leg: walletLeg, amountIn: { amount: '12.5', asset: SOL_USDC }, source: solSource }, ctx)
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '12.5', asset: SOL_USDC }, source: solSource }, ctx)
     const step = await a.start({ leg: walletLeg, quote: q, source: solSource }, ctx)
     return { a, ctx, q, step }
   }
@@ -278,22 +281,23 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply: solanaRpc(rpc) }])
     const { a, ctx, q, step } = await startDirect(fetch)
     expect(q.fees).toEqual([])
-    expect(q.output).toMatchObject({ amount: '12.5', asset: { chain: SOL, token: SOLANA_USDC_MINT } })
-    expect(step.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '12500000', decimals: 6 }] })
+    expect(q.guarantee).toBe('firm')
+    expect(q.output).toMatchObject({ value: '12.5', asset: { chain: SOL, token: SOLANA_USDC_MINT } })
+    expect(step.action?.surface).toEqual({ kind: 'WALLET_TX', chain: SOL, txs: [{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: SOLANA_USDC_MINT, amount: '12500000', decimals: 6 }] })
     expect(calls).toHaveLength(0)
 
     // waiting for the signature
-    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(v(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
     // unknown to the RPC yet, then only processed: still confirming
-    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
+    expect(v(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'PROCESSING', detail: { code: 'confirming' } })
     rpc.statuses[SIG] = { err: null, confirmationStatus: 'processed' }
-    expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'PROCESSING', sub: 'confirming' })
+    expect(v(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'PROCESSING', detail: { code: 'confirming' } })
     rpc.statuses[SIG] = { err: null, confirmationStatus: 'confirmed' }
     rpc.txs[SIG] = splTx(12_500_000n, { pre: 1_000_000n })
     const done = await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)
     expect(checkLegStep(done)).toEqual([])
-    expect(done).toMatchObject({ state: 'COMPLETED', txHash: SIG })
+    expect(v(done)).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG } })
     const sent = calls.map((c) => (c.body as { method: string }).method)
     expect(sent).toContain('getSignatureStatuses')
     expect(sent).toContain('getTransaction')
@@ -309,8 +313,8 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
       await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
       return a.status!({ leg: walletLeg, ref: step.ref! }, ctx)
     }
-    expect(await pay()).toMatchObject({ state: 'COMPLETED' })
-    expect(await pay()).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+    expect(v(await pay())).toMatchObject({ state: 'COMPLETED' })
+    expect(v(await pay())).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
   })
 
   it('fails when the transaction failed, pays too little, pays another owner or mint, or is older than the leg', async () => {
@@ -326,7 +330,7 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
       const { fetch } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply: solanaRpc({ statuses: { [SIG]: status }, txs: { [SIG]: tx } }) }])
       const { a, ctx, step } = await startDirect(fetch)
       await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
-      expect(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED', message } })
+      expect(v(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'FAILED', error: { code: 'DELIVERY_FAILED', message } })
     }
   })
 
@@ -341,11 +345,11 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
     const native: CryptoAsset = { kind: 'crypto', chain: SOL, token: 'native' }
     const ctx = makeCtx({ fetch, destination: { type: 'crypto', chain: SOL, token: 'native', address: SOL_DEST } })
     const nativeLeg = leg('wallet', native, SOL_DEST)
-    const q = await a.quote({ leg: nativeLeg, amountIn: { amount: '1.5', asset: native }, source: { chain: SOL, token: 'native', address: SOL_USER } }, ctx)
+    const q = await a.quote({ leg: nativeLeg, amountIn: { value: '1.5', asset: native }, source: { chain: SOL, token: 'native', address: SOL_USER } }, ctx)
     const step = await a.start({ leg: nativeLeg, quote: q }, ctx)
-    expect((step.surface as { txs: unknown[] }).txs).toEqual([{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: 'native', amount: '1500000000', decimals: 9 }])
+    expect((step.action?.surface as { txs: unknown[] }).txs).toEqual([{ kind: 'solana', type: 'transfer', to: SOL_DEST, mint: 'native', amount: '1500000000', decimals: 9 }])
     await a.transition!({ leg: nativeLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
-    expect(await a.status!({ leg: nativeLeg, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED' })
+    expect(v(await a.status!({ leg: nativeLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'COMPLETED' })
   })
 
   it('transfer leg to the destination itself: finds new deposits to its token account, each signature once', async () => {
@@ -361,29 +365,206 @@ describe('relay: same-chain Solana moves are checked on chain', () => {
     const transfer = leg('transfer', SOL_USDC, SOL_DEST)
     const run = async (id = 'sess_1') => {
       const ctx = makeCtx({ fetch, shared, destination: solDest, session: { id } as never })
-      const q = await a.quote({ leg: transfer, amountIn: { amount: '0', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT } }, ctx)
+      const q = await a.quote({ leg: transfer, amountIn: { value: '0', asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT } }, ctx)
       const step = await a.start({ leg: transfer, quote: q }, ctx)
       return { ctx, step }
     }
     const { ctx, step } = await run()
     // the address is the destination itself; no eth_blockNumber on Solana
-    expect(step.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, address: SOL_DEST, token: SOLANA_USDC_MINT, symbol: 'USDC' })
+    expect(step.action?.surface).toMatchObject({ kind: 'DEPOSIT_ADDRESS', chain: SOL, address: SOL_DEST, token: SOLANA_USDC_MINT, symbol: 'USDC' })
     expect(calls).toHaveLength(0)
-    expect(await a.status!({ leg: transfer, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    expect(v(await a.status!({ leg: transfer, ref: step.ref! }, ctx))).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
     // an old deposit and a failed one do not count
     rpc.signatures = [
       { signature: SIG2, err: null, blockTime: now - 7200 },
       { signature: 'Fail1111111111111111111111111111111111111111111111111111111111111111', err: { x: 1 }, blockTime: now },
     ]
-    expect(await a.status!({ leg: transfer, ref: step.ref! }, ctx)).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await a.status!({ leg: transfer, ref: step.ref! }, ctx))).toMatchObject({ state: 'PAYMENT' })
     rpc.signatures = [{ signature: SIG, err: null, blockTime: now }, ...rpc.signatures]
     const done = await a.status!({ leg: transfer, ref: step.ref! }, ctx)
-    expect(done).toMatchObject({ state: 'COMPLETED', txHash: SIG, output: { amount: '4' } })
+    expect(v(done)).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG }, output: { value: '4' } })
     // the same deposit does not complete another session that watches the same address
     const other = await run('sess_2')
-    expect(await a.status!({ leg: transfer, ref: other.step.ref! }, other.ctx)).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await a.status!({ leg: transfer, ref: other.step.ref! }, other.ctx))).toMatchObject({ state: 'PAYMENT' })
     // and the first session still sees its own deposit
-    expect(await a.status!({ leg: transfer, ref: step.ref! }, ctx)).toMatchObject({ state: 'COMPLETED', txHash: SIG })
+    expect(v(await a.status!({ leg: transfer, ref: step.ref! }, ctx))).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG } })
+  })
+})
+
+describe('relay: Solana transfer to the destination itself, each signature claimed once', () => {
+  const SIG3 = '3VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW'
+  const transfer = leg('transfer', SOL_USDC, SOL_DEST)
+  const used = (sig: string) => `txused:${SOL}:${sig}`
+
+  /** memoryKV with an atomic putIfAbsent, like the built-in server stores. Records the TTL of each write. */
+  function atomicKV() {
+    const kv = memoryKV()
+    const ttls = new Map<string, number | undefined>()
+    const put = kv.put.bind(kv)
+    kv.put = async (key, value, ttlSec) => {
+      ttls.set(key, ttlSec)
+      await put(key, value, ttlSec)
+    }
+    kv.putIfAbsent = async (key, value, ttlSec) => {
+      // check and write with no await between them: atomic in one JS thread
+      if (kv.data.has(key)) return false
+      await kv.put(key, value, ttlSec)
+      return true
+    }
+    return Object.assign(kv, { ttls })
+  }
+
+  /** A fake Solana RPC; `gate` holds getTransaction replies until `gate` calls wait (both sessions read the store first) */
+  function chain(gate = 0) {
+    const rpc = {
+      tokenAccounts: [SOL_DEST_ATA],
+      signatures: [] as Array<{ signature: string; err: unknown; blockTime: number }>,
+      txs: {} as Record<string, unknown>,
+    }
+    const base = solanaRpc(rpc)
+    let waiting: Array<() => void> = []
+    const reply = async (c: FakeCall) => {
+      if (gate && (c.body as { method: string }).method === 'getTransaction') {
+        await new Promise<void>((resolve) => {
+          waiting.push(resolve)
+          if (waiting.length >= gate) {
+            for (const r of waiting) r()
+            waiting = []
+          }
+        })
+      }
+      return base(c)
+    }
+    const { fetch } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply }])
+    const now = Math.floor(Date.now() / 1000)
+    /** A confirmed SPL transfer of `amount` to the destination, `ago` seconds ago (newest first, like the RPC) */
+    const send = (signature: string, amount: bigint, ago = 0) => {
+      rpc.txs[signature] = splTx(amount, { blockTime: now - ago })
+      rpc.signatures = [...rpc.signatures, { signature, err: null, blockTime: now - ago }].sort((x, y) => y.blockTime - x.blockTime)
+    }
+    return { fetch, send }
+  }
+
+  async function session(fetch: typeof globalThis.fetch, shared: ReturnType<typeof memoryKV>, id: string, amount: string) {
+    const a = relay()
+    const ctx = makeCtx({ fetch, shared, destination: solDest, session: { id } as never })
+    const q = await a.quote({ leg: transfer, amountIn: { value: amount, asset: SOL_USDC }, source: { chain: SOL, token: SOLANA_USDC_MINT } }, ctx)
+    const step = await a.start({ leg: transfer, quote: q }, ctx)
+    return { owner: `${id}:${step.ref!}`, status: () => a.status!({ leg: transfer, ref: step.ref! }, ctx) }
+  }
+
+  /** Drop the open-leg list of the address, as if `addWatcher` (a read, then a write) lost both entries */
+  async function forgetWatchers(shared: ReturnType<typeof memoryKV>) {
+    for (const k of [...shared.data.keys()]) if (k.startsWith('watch:')) await shared.put(k, [])
+  }
+
+  it('two sessions and one payment: only the session of that amount completes; the other is ambiguous, then waits', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s4 = await session(fetch, shared, 'sess_4', '4')
+    const s3 = await session(fetch, shared, 'sess_3', '3')
+    send(SIG, 4_000_000n, 10)
+    // 4 USDC is at least the minimum of both legs, and exact for sess_4 only: sess_3 does not take it
+    expect(v(await s3.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(shared.data.has(used(SIG))).toBe(false)
+    expect(v(await s4.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG }, output: { value: '4' } })
+    expect(shared.data.get(used(SIG))).toBe(s4.owner)
+    expect(shared.ttls.get(used(SIG))).toBe(90 * 24 * 3600)
+    // sess_4 is done (its watch is gone) and holds the signature: sess_3 waits for its own payment
+    expect(v(await s3.status())).toMatchObject({ state: 'PAYMENT', status: 'requires_action' })
+    expect(await s3.status()).not.toHaveProperty('sub')
+    // a retry of sess_4 gives the same answer
+    expect(v(await s4.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG }, output: { value: '4' } })
+  })
+
+  it('two sessions of the same amount and one payment: neither completes (ambiguous)', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    const s2 = await session(fetch, shared, 'sess_2', '4')
+    send(SIG, 4_000_000n, 10)
+    expect(v(await s1.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(shared.data.has(used(SIG))).toBe(false)
+  })
+
+  it('no amount up front: completes when no other open leg watches the address, else ambiguous', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '0')
+    send(SIG, 1_000_000n, 10)
+    expect(v(await s1.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG }, output: { value: '1' } })
+    const s2 = await session(fetch, shared, 'sess_2', '0')
+    const s3 = await session(fetch, shared, 'sess_3', '0')
+    send(SIG2, 2_000_000n, 0)
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(v(await s3.status())).toMatchObject({ state: 'PAYMENT', detail: { code: 'ambiguous_deposit' } })
+    expect(shared.data.has(used(SIG2))).toBe(false)
+  })
+
+  it('small transfers do not add up, and a third-party transfer below the minimum does not complete', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '12.5')
+    send(SIG, 1_000_000n, 40) // a third party sends 1 USDC to the shared address
+    expect(v(await s1.status())).toMatchObject({ state: 'PAYMENT' })
+    send(SIG2, 6_000_000n, 30)
+    send(SIG3, 6_500_000n, 20) // 13.5 in all, but no single signature pays 12.4375
+    expect(v(await s1.status())).toMatchObject({ state: 'PAYMENT' })
+    for (const sig of [SIG, SIG2, SIG3]) expect(shared.data.has(used(sig))).toBe(false)
+  })
+
+  it('two sessions race on the same signature (atomic store): exactly one claims it', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain(2)
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    const s2 = await session(fetch, shared, 'sess_2', '4')
+    // without their watches, neither leg sees the other: only the claim can stop a double completion
+    await forgetWatchers(shared)
+    send(SIG, 4_000_000n, 10)
+    // both checks read the store before either one claims
+    const results = await Promise.all([s1.status(), s2.status()])
+    expect(results.filter((r) => stateFor(r) === 'COMPLETED')).toHaveLength(1)
+    expect(results.filter((r) => stateFor(r) === 'PAYMENT')).toHaveLength(1)
+    const winner = stateFor(results[0]!) === 'COMPLETED' ? s1 : s2
+    expect(shared.data.get(used(SIG))).toBe(winner.owner)
+  })
+
+  it('a replayed signature is refused: by another transfer session and by a same-chain wallet payment', async () => {
+    const shared = atomicKV()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    send(SIG, 4_000_000n, 10)
+    expect(v(await s1.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG } })
+    const s2 = await session(fetch, shared, 'sess_2', '4')
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT' })
+    expect(shared.data.get(used(SIG))).toBe(s1.owner)
+    // the wallet path uses the same key
+    const walletLeg = leg('wallet', SOL_USDC, SOL_DEST)
+    const solSource = { chain: SOL, token: SOLANA_USDC_MINT, address: SOL_USER }
+    const { fetch: walletFetch } = fakeFetch([{ method: 'POST', match: SOL_RPC, reply: solanaRpc({ statuses: { [SIG]: { err: null, confirmationStatus: 'finalized' } }, txs: { [SIG]: splTx(4_000_000n) } }) }])
+    const a = relay()
+    const ctx = makeCtx({ fetch: walletFetch, shared, destination: solDest })
+    const q = await a.quote({ leg: walletLeg, amountIn: { value: '4', asset: SOL_USDC }, source: solSource }, ctx)
+    const step = await a.start({ leg: walletLeg, quote: q, source: solSource }, ctx)
+    await a.transition!({ leg: walletLeg, ref: step.ref!, name: 'submit_tx', inputs: { txHash: SIG } }, ctx)
+    expect(v(await a.status!({ leg: walletLeg, ref: step.ref! }, ctx))).toMatchObject({ state: 'FAILED', error: { message: 'This transaction was already used for another payment.' } })
+  })
+
+  it('a store without putIfAbsent (write, then read back): one session claims the signature, the other waits', async () => {
+    const shared = memoryKV()
+    expect(shared.putIfAbsent).toBeUndefined()
+    const { fetch, send } = chain()
+    const s1 = await session(fetch, shared, 'sess_1', '4')
+    const s2 = await session(fetch, shared, 'sess_2', '10')
+    send(SIG, 4_000_000n, 10)
+    // below the minimum of sess_2: not a rival, not taken by sess_2
+    expect(v(await s2.status())).toMatchObject({ state: 'PAYMENT' })
+    expect(v(await s1.status())).toMatchObject({ state: 'COMPLETED', tx: { destination: SIG }, output: { value: '4' } })
+    expect(shared.data.get(used(SIG))).toBe(s1.owner)
+    const s3 = await session(fetch, shared, 'sess_3', '4')
+    expect(v(await s3.status())).toMatchObject({ state: 'PAYMENT' })
+    expect(shared.data.get(used(SIG))).toBe(s1.owner)
   })
 })
 
@@ -402,8 +583,8 @@ describe('relay: Tempo', () => {
     ])
     const tempo: CryptoAsset = { kind: 'crypto', chain: TEMPO_MAINNET, token: TEMPO_USDC }
     const ctx = makeCtx({ fetch, destination: { type: 'crypto', chain: TEMPO_MAINNET, token: TEMPO_USDC, address: EVM_DEST } })
-    const q = await relay().quote({ leg: leg('wallet', tempo, EVM_DEST), amountIn: { amount: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: EVM_USER } }, ctx)
+    const q = await relay().quote({ leg: leg('wallet', tempo, EVM_DEST), amountIn: { value: '10', asset: BASE_USDC }, source: { chain: BASE_USDC.chain, token: BASE_USDC.token, address: EVM_USER } }, ctx)
     expect(calls[0]!.body).toMatchObject({ destinationChainId: 4217, destinationCurrency: TEMPO_USDC })
-    expect(q.output).toMatchObject({ amount: '9.971627', asset: { chain: TEMPO_MAINNET, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toMatchObject({ value: '9.971627', asset: { chain: TEMPO_MAINNET, symbol: 'USDC', decimals: 6 } })
   })
 })

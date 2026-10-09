@@ -26,17 +26,20 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  cachedJson,
   createAdapter,
   fetchJson,
-  hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   legStepFromEvent,
+  quoteExpiresAt,
   randomHex,
-  timingSafeEqual,
+  resolveEnv,
+  statusMap,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
-import { OrkException, USDC, bps, cmp, fromScaled, isDecimal, orkError, roundTo, sub, toScaled } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
+import { OpenRampException, USDC, bps, cmp, fromScaled, isDecimal, openRampError, roundTo, sub, toScaled } from '@openrampkit/core'
+import type { CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode, Surface } from '@openrampkit/core'
 
 export type PeerRail = 'venmo' | 'cashapp' | 'zelle' | 'chime' | 'paypal' | 'revolut' | 'wise'
 
@@ -47,8 +50,11 @@ export type PeerOptions = {
   apiKey: string
   /** Webhook signing secret (`responseObject.secret` from POST /api/v1/webhooks) */
   webhookSecret: string
-  /** Which key you pass. Sandbox and live use the same hosts with separate keys, webhooks and secrets. */
-  env: 'sandbox' | 'live'
+  /**
+   * Which key you pass: 'sandbox' or 'production'. Sandbox and production use the same hosts with separate keys,
+   * webhooks and secrets. 'live' is a deprecated alias of 'production'.
+   */
+  env: AdapterEnv | 'live'
   /** Rails to offer. Default: all of venmo, cashapp, zelle, chime, paypal, revolut, wise. */
   rails?: string[]
   /** Who pays the Peer fee and the seller's spread. Default: the merchant setting (we assume MERCHANT for estimates). */
@@ -92,6 +98,18 @@ const BASE = 'eip155:8453'
 const BASE_USDC: CryptoAsset = { kind: 'crypto', chain: BASE, token: USDC[BASE]!, symbol: 'USDC', decimals: 6 }
 const POLL: PollSpec = POLLS.checkout
 const TOLERANCE_SEC = 5 * 60
+
+/**
+ * Peer order status -> leg status. `null`: CREATED, the user has not paid yet, or a payment attempt
+ * expired, failed or was cancelled and the user can still pay (a late settlement can still fulfil the
+ * order): no event. A status that is not in the table is logged once and gives no event either.
+ */
+const ORDER_STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode } | null>('Peer', {
+  CREATED: null,
+  PARTIALLY_FULFILLED: { status: 'processing', detail: 'processing' },
+  FULFILLED: { status: 'succeeded' },
+  CANCELLED: { status: 'failed' },
+})
 const ORDERBOOK_TTL_SEC = 5 * 60
 const ORDER_TTL_SEC = 7 * 24 * 60 * 60
 /** Platform minimum per order: 10 USDC (createCheckout errors: AMOUNT_BELOW_MIN) */
@@ -158,6 +176,7 @@ export function peer(opts: PeerOptions) {
   if ((opts as { enabled?: unknown } | undefined)?.enabled !== true) throw new Error(PEER_OPT_IN_ERROR)
   if (!opts.apiKey) throw new Error('peer: apiKey is required')
   if (!opts.webhookSecret) throw new Error('peer: webhookSecret is required (Peer reports settlement only by webhook)')
+  const env = resolveEnv('peer', opts.env === 'live' ? undefined : opts.env, { value: opts.env === 'live' ? 'production' : undefined, option: "env: 'live'" }, undefined)
   const api = (opts.apiUrl ?? 'https://api.pay.peer.xyz').replace(/\/+$/, '')
   const checkoutBase = (opts.checkoutUrl ?? 'https://pay.peer.xyz').replace(/\/+$/, '')
   const checkoutOrigin = new URL(checkoutBase).origin
@@ -179,24 +198,23 @@ export function peer(opts: PeerOptions) {
     // One payment window is 1 hour; settlement follows the attestation.
     eta: { min: 120, max: 3600 },
     surfaces: [surfaceKind],
-    capabilities: ['webhooks', 'polling'],
   })
   const legs = defs.map((d) => legFor(d))
 
   function def(legId: string): RailDef {
     const d = byRail.get(legId)
-    if (!d) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Peer rail ${legId}` }), 400)
+    if (!d) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Peer rail ${legId}` }), 400)
     return d
   }
 
-  function toOrk(e: unknown, what: string, log: Pick<Logger, 'warn'>): OrkException {
+  function toOpenRamp(e: unknown, what: string, log: Pick<Logger, 'warn'>): OpenRampException {
     const code = (e as { body?: { errorCode?: string } } | undefined)?.body?.errorCode
-    if (code === 'AMOUNT_BELOW_MIN' || code === 'AMOUNT_BELOW_MERCHANT_MIN') return new OrkException(orkError('AMOUNT_TOO_LOW'), 422)
+    if (code === 'AMOUNT_BELOW_MIN' || code === 'AMOUNT_BELOW_MERCHANT_MIN') return new OpenRampException(openRampError('AMOUNT_TOO_LOW'), 422)
     if (code === 'AMOUNT_ABOVE_MERCHANT_MAX' || code === 'MERCHANT_MONTHLY_VOLUME_LIMIT_EXCEEDED' || code === 'MERCHANT_MONTHLY_ORDER_LIMIT_EXCEEDED') {
-      return new OrkException(orkError('AMOUNT_TOO_HIGH', { message: 'Peer cannot take this amount right now.', recovery: 'choose_other' }), 422)
+      return new OpenRampException(openRampError('AMOUNT_TOO_HIGH', { message: 'Peer cannot take this amount right now.', recovery: 'choose_other' }), 422)
     }
-    if (code === 'NO_ELIGIBLE_PAYMENT_RAILS') return new OrkException(orkError('NO_QUOTES', { message: 'Peer: this payment app is not enabled for the merchant.' }), 422)
-    return httpErrorToOrk(e, 'Peer', { what, log })
+    if (code === 'NO_ELIGIBLE_PAYMENT_RAILS') return new OpenRampException(openRampError('NO_QUOTES', { message: 'Peer: this payment app is not enabled for the merchant.' }), 422)
+    return httpErrorToOpenRamp(e, 'Peer', { what, log })
   }
 
   async function payApi<T>(ctx: Pick<AdapterContext, 'fetch'>, method: 'GET' | 'POST', path: string, body?: unknown, extra: Record<string, string> = {}): Promise<T> {
@@ -212,14 +230,11 @@ export function peer(opts: PeerOptions) {
   }
 
   async function orderbook(ctx: Pick<AdapterContext, 'fetch' | 'shared'>, rail: string, currency: string): Promise<OrderbookEntry[]> {
-    const key = `ob:${rail}:${currency}`
-    const cached = await ctx.shared.get<OrderbookEntry[]>(key)
-    if (cached) return cached
-    const q = new URLSearchParams({ currency, paymentPlatform: rail, chainId: '8453', sortBy: 'price', sortDirection: 'asc', limit: '50' })
-    const res = await fetchJson<Envelope<{ entries?: OrderbookEntry[] }>>(ctx.fetch, `${orderbookApi}/v3/orderbook?${q}`)
-    const entries = (res.responseObject?.entries ?? []).filter((e) => (e.paymentPlatform ?? rail) === rail)
-    await ctx.shared.put(key, entries, ORDERBOOK_TTL_SEC)
-    return entries
+    return cachedJson(ctx.shared, `ob:${rail}:${currency}`, ORDERBOOK_TTL_SEC, async () => {
+      const q = new URLSearchParams({ currency, paymentPlatform: rail, chainId: '8453', sortBy: 'price', sortDirection: 'asc', limit: '50' })
+      const res = await fetchJson<Envelope<{ entries?: OrderbookEntry[] }>>(ctx.fetch, `${orderbookApi}/v3/orderbook?${q}`)
+      return (res.responseObject?.entries ?? []).filter((e) => (e.paymentPlatform ?? rail) === rail)
+    })
   }
 
   /** Gross USDC for `fiat` at the best orderbook price that can fill it (price: fiat per USDC, 18 decimals) */
@@ -239,28 +254,32 @@ export function peer(opts: PeerOptions) {
     return best
   }
 
-  function eventFrom(order: PeerOrder, payment: PeerPayment | null | undefined): LegEvent | undefined {
+  /**
+   * The event for a Peer order, or undefined while the user can still pay (CREATED) and for an unknown
+   * order status (logged once; the leg keeps its current step). The Peer order id is both our ref and
+   * the `providerRef`.
+   */
+  function eventFrom(order: PeerOrder, payment: PeerPayment | null | undefined, log?: Pick<Logger, 'warn'>): LegEvent | undefined {
     const ref = order.id
     if (!ref) return undefined
-    switch (order.status) {
-      case 'FULFILLED': {
-        const net = dec(payment?.netSettledUsdcAmount) ?? dec(order.netSettledUsdcAmount)
-        const txHash = payment?.fulfillTransaction ?? undefined
-        return { ref, status: 'succeeded', ...(txHash ? { txHash } : {}), ...(net ? { output: { amount: net, asset: BASE_USDC } } : {}) }
-      }
-      case 'PARTIALLY_FULFILLED':
-        return { ref, status: 'processing' }
-      case 'CANCELLED':
-        return { ref, status: 'failed', error: orkError('PAYMENT_FAILED', { message: 'The Peer order was cancelled.', recovery: 'choose_other' }) }
-      default:
-        // CREATED: the user has not paid yet, or a payment attempt expired / failed / was cancelled and
-        // the user can still pay (late settlement can still fulfil the order).
-        return undefined
+    const m = ORDER_STATUS(order.status, log)
+    if (!m) return undefined
+    const ev: LegEvent = { ref, providerRef: ref, status: m.status }
+    if (m.detail) ev.detail = { code: m.detail, providerStatus: order.status }
+    if (m.status === 'failed') ev.error = openRampError('PAYMENT_FAILED', { message: 'The Peer order was cancelled.', recovery: 'choose_other' })
+    if (m.status === 'succeeded') {
+      const net = dec(payment?.netSettledUsdcAmount) ?? dec(order.netSettledUsdcAmount)
+      // The release of the seller's escrowed USDC to the destination address on Base
+      const hash = payment?.fulfillTransaction
+      if (hash) ev.transactions = [{ role: 'destination', chain: BASE, hash }]
+      if (net) ev.output = { value: net, asset: BASE_USDC }
     }
+    return ev
   }
 
   return createAdapter({
     id: 'peer',
+    env,
     name: 'Peer',
     legs,
 
@@ -279,13 +298,13 @@ export function peer(opts: PeerOptions) {
 
     async quote(input, ctx) {
       const d = def(input.leg.legId)
-      if (!input.amountIn || input.amountIn.asset.kind !== 'fiat') throw new OrkException(orkError('NO_QUOTES', { message: 'Peer quotes need a fiat amount.' }), 422)
+      if (!input.amountIn || input.amountIn.asset.kind !== 'fiat') throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Peer quotes need a fiat amount.' }), 422)
       const currency = input.amountIn.asset.currency.toUpperCase()
-      if (!d.currencies.includes(currency)) throw new OrkException(orkError('NO_QUOTES', { message: `Peer has no ${currency} on this payment app.` }), 422)
-      const amount = roundTo(input.amountIn.amount, 2)
-      if (currency === 'USD' && cmp(amount, MIN_USDC) < 0) throw new OrkException(orkError('AMOUNT_TOO_LOW', { message: `The minimum on Peer is ${MIN_USDC} USD.` }), 422)
+      if (!d.currencies.includes(currency)) throw new OpenRampException(openRampError('NO_QUOTES', { message: `Peer has no ${currency} on this payment app.` }), 422)
+      const amount = roundTo(input.amountIn.value, 2)
+      if (currency === 'USD' && cmp(amount, MIN_USDC) < 0) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { message: `The minimum on Peer is ${MIN_USDC} USD.` }), 422)
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
 
       let avail: Availability
       try {
@@ -300,12 +319,12 @@ export function peer(opts: PeerOptions) {
           nearbyQuotesCount: 2,
         })
       } catch (e) {
-        throw toOrk(e, 'price this amount', ctx.log)
+        throw toOpenRamp(e, 'price this amount', ctx.log)
       }
       if (!avail.available) {
         const near = [...(avail.nearbySuggestions?.below ?? []), ...(avail.nearbySuggestions?.above ?? [])].map((s) => s.suggestedAmount).filter((s) => isDecimal(s))
         const hint = near.length ? ` Try ${near.slice(0, 3).map((s) => roundTo(s, 2)).join(' or ')} ${currency}.` : ''
-        throw new OrkException(orkError('NO_QUOTES', { message: `Peer has no ${d.rail} liquidity for this amount right now.${hint}` }), 422)
+        throw new OpenRampException(openRampError('NO_QUOTES', { message: `Peer has no ${d.rail} liquidity for this amount right now.${hint}` }), 422)
       }
 
       // Estimate: the orderbook price that fills the amount (includes the seller's spread), else 1:1 for USD.
@@ -316,7 +335,7 @@ export function peer(opts: PeerOptions) {
         ctx.log.warn('peer: orderbook unavailable; estimating without it', { error: String((e as Error)?.message ?? e).slice(0, 200) })
       }
       if (!gross && currency === 'USD') gross = amount
-      if (!gross) throw new OrkException(orkError('NO_QUOTES', { message: `Peer could not price ${currency} on ${d.rail} right now.` }), 422)
+      if (!gross) throw new OpenRampException(openRampError('NO_QUOTES', { message: `Peer could not price ${currency} on ${d.rail} right now.` }), 422)
 
       const fees: Fee[] = []
       let inputAmount = amount
@@ -324,23 +343,27 @@ export function peer(opts: PeerOptions) {
       if (opts.feePayer === 'PAYEE') {
         // Buyer pays: checkout grosses the price up so the full principal settles.
         inputAmount = roundTo(fromScaled((toScaled(amount, 18) * 10_000n) / BigInt(10_000 - feeBps), 18), 2)
-        fees.push({ kind: 'provider', label: 'Peer fee', amount: roundTo(sub(inputAmount, amount), 2), currency })
+        // The fee is part of `input` (the grossed-up fiat), so the quote counts it.
+        fees.push({ kind: 'provider', label: 'Peer fee', amount: { value: roundTo(sub(inputAmount, amount), 2), asset: { kind: 'fiat', currency } }, included: true })
         output = usdc(gross)
       } else {
         // Merchant pays (default) or split (TO VERIFY: split is estimated like merchant pays): fee comes off the USDC.
         const fee = usdc(bps(gross, feeBps))
-        fees.push({ kind: 'provider', label: 'Peer fee', amount: fee, currency: 'USDC' })
+        fees.push({ kind: 'provider', label: 'Peer fee', amount: { value: fee, asset: BASE_USDC }, included: true })
         output = usdc(sub(gross, fee))
       }
       return {
         adapterId: 'peer',
         legId: d.rail,
-        input: { amount: inputAmount, asset: { kind: 'fiat', currency } },
-        output: { amount: output, asset: BASE_USDC },
+        input: { value: inputAmount, asset: { kind: 'fiat', currency } },
+        output: { value: output, asset: BASE_USDC },
         fees,
+        // An estimate: the price comes from the current orderbook, and a seller fills the order only when
+        // the user pays. Availability reserves no liquidity and locks no rate.
+        guarantee: 'estimate',
         eta: { min: 120, max: 3600 },
         // Availability is advisory and reserves nothing.
-        expiresAt: new Date(Date.now() + 2 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(2),
         limits: { min: MIN_USDC, currency: 'USD' },
         data: { rail: d.rail, currency, amount, nonce: randomHex(8), ...(avail.quoteCount !== undefined ? { quoteCount: avail.quoteCount } : {}) },
       }
@@ -350,9 +373,9 @@ export function peer(opts: PeerOptions) {
       const d = def(input.leg.legId)
       const data = (input.quote.data ?? {}) as { rail?: string; currency?: string; amount?: string; nonce?: string }
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Peer needs a wallet address to deliver to.' }))
       const currency = data.currency ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency : 'USD')
-      const amount = data.amount ?? roundTo(input.quote.input.amount, 2)
+      const amount = data.amount ?? roundTo(input.quote.input.value, 2)
       const idem = sanitizeKey(ctx.idempotencyKey(`peer-${d.rail}-${data.nonce ?? randomHex(8)}`))
       const saved = await ctx.store.get<{ ref: string; url: string }>(`idem:${idem}`)
       let ref: string
@@ -377,14 +400,14 @@ export function peer(opts: PeerOptions) {
             ...(opts.feePayer ? { feePayer: opts.feePayer } : {}),
             ...(opts.feePayer === 'SPLIT' && opts.buyerFeeShareBps !== undefined ? { buyerFeeShareBps: opts.buyerFeeShareBps } : {}),
             idempotencyKey: idem,
-            notes: { orkSessionId: ctx.session.id, orkUserId: ctx.session.userId, env: opts.env },
+            notes: { openrampSessionId: ctx.session.id, openrampUserId: ctx.session.userId, env },
           }, { 'idempotency-key': idem })
         } catch (e) {
-          throw toOrk(e, 'start the order', ctx.log)
+          throw toOpenRamp(e, 'start the order', ctx.log)
         }
         if (!res.order?.id || !res.orderToken) {
           // An idempotent replay has no token and we lost the first URL: the user must start again.
-          throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Peer did not return a checkout link. Start again.' }), 502)
+          throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Peer did not return a checkout link. Start again.' }), 502)
         }
         ref = res.order.id
         const u = new URL(`${checkoutBase}/`)
@@ -411,7 +434,7 @@ export function peer(opts: PeerOptions) {
       } else {
         surface = { kind: 'REDIRECT', url, popup: true, provider: 'Peer' }
       }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'awaiting_user', ref }
+      return { status: 'requires_action', action: { kind: 'payment', surface, transitions: [awaitPoll(POLL)] }, ref, providerRef: ref }
     },
 
     async status(input, ctx) {
@@ -419,19 +442,25 @@ export function peer(opts: PeerOptions) {
       try {
         res = await payApi(ctx, 'GET', `/api/v1/orders/${encodeURIComponent(input.ref)}`)
       } catch (e) {
-        throw toOrk(e, 'find this order', ctx.log)
+        throw toOpenRamp(e, 'find this order', ctx.log)
       }
-      return legStepFromEvent(res.order ? eventFrom({ ...res.order, id: input.ref }, res.currentPayment) : undefined, input.ref, POLL)
+      // CREATED and an unknown status give no event: a payment poll. The server ignores it when the leg is
+      // already further (it never moves a leg back), so the leg keeps its current step.
+      return legStepFromEvent(res.order ? eventFrom({ ...res.order, id: input.ref }, res.currentPayment, ctx.log) : undefined, input.ref, POLL)
     },
 
     webhook: {
       async verify(req, rawBody) {
-        const sig = req.headers.get('x-webhook-signature')
         const ts = req.headers.get('x-webhook-timestamp')
-        if (!sig || !ts || !/^\d+$/.test(ts)) return false
-        if (Math.abs(Date.now() / 1000 - Number(ts)) > TOLERANCE_SEC) return false
-        const expected = await hmacSha256(opts.webhookSecret, `${ts}.${rawBody}`, 'hex')
-        return timingSafeEqual(sig.trim().toLowerCase(), expected)
+        // Peer sends Unix seconds only
+        if (ts && !/^\d+$/.test(ts)) return false
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          header: req.headers.get('x-webhook-signature'),
+          timestamp: ts,
+          toleranceSec: TOLERANCE_SEC,
+        })
       },
       async parse(rawBody, ctx) {
         let ev: { type?: string; data?: { order?: PeerOrder | null; payment?: PeerPayment | null; test?: boolean } }
@@ -446,7 +475,7 @@ export function peer(opts: PeerOptions) {
         switch (ev.type) {
           case 'ORDER_FULFILLED':
           case 'PAYMENT_SETTLED': {
-            const out = eventFrom(order, ev.data?.payment)
+            const out = eventFrom(order, ev.data?.payment, ctx.log)
             return out ? [out] : []
           }
           case 'ORDER_CANCELLED':

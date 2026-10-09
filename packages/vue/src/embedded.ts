@@ -1,6 +1,6 @@
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, shallowRef, watch, watchEffect } from 'vue'
 import type { DefineComponent, PropType } from 'vue'
-import type { OrkEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
+import type { ClientEvent, PublicSession, WalletAdapter } from '@openrampkit/core'
 import type { DepositController } from '@openrampkit/client'
 import type { Messages, OpenRampModal } from '@openrampkit/web'
 import type { Appearance, Theme } from '@openrampkit/web/theme'
@@ -17,7 +17,7 @@ export type OpenRampEmbeddedProps = {
   messages?: Partial<Messages>
   /** BCP 47 locale. Defaults to the provider's `locale` */
   locale?: string
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: ClientEvent) => void
   onComplete?: (session: PublicSession) => void
   /** Called when the user presses Close on a result or error screen */
   onClose?: (session: PublicSession | undefined) => void
@@ -39,7 +39,7 @@ export const OpenRampEmbedded: DefineComponent<OpenRampEmbeddedProps> = defineCo
     appearance: Object as PropType<Appearance>,
     messages: Object as PropType<Partial<Messages>>,
     locale: String,
-    onEvent: Function as PropType<(e: OrkEvent) => void>,
+    onEvent: Function as PropType<(e: ClientEvent) => void>,
     onComplete: Function as PropType<(session: PublicSession) => void>,
     onClose: Function as PropType<(session: PublicSession | undefined) => void>,
     onController: Function as PropType<(controller: DepositController) => void>,

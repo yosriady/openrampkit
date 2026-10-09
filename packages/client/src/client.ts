@@ -1,7 +1,7 @@
 // HTTP client for the app's OpenRampKit server handler.
 
-import { orkError } from '@openrampkit/core'
-import type { OrkError, PlanResult, PublicSession, Quote } from '@openrampkit/core'
+import { openRampError } from '@openrampkit/core'
+import type { OpenRampError, PlanResult, PublicQuote, PublicSession } from '@openrampkit/core'
 
 export type ClientOptions = {
   /** Base URL of the OpenRampKit server handler, e.g. `/api/openramp` or `https://ramp.example.workers.dev` */
@@ -9,35 +9,35 @@ export type ClientOptions = {
   fetch?: typeof fetch
 }
 
-export class OrkClientError extends Error {
-  constructor(readonly error: OrkError, readonly status: number) {
+export class OpenRampClientError extends Error {
+  constructor(readonly error: OpenRampError, readonly status: number) {
     super(error.message)
   }
 }
 
 /**
- * Map anything thrown by the client, the controller or a wallet to an `OrkError`.
- * Accepts `OrkClientError`, objects that carry an `OrkError` in `.error` (like core's `OrkException`),
- * plain `OrkError` objects, `Error`s and other values.
+ * Map anything thrown by the client, the controller or a wallet to an `OpenRampError`.
+ * Accepts `OpenRampClientError`, objects that carry an `OpenRampError` in `.error` (like core's `OpenRampException`),
+ * plain `OpenRampError` objects, `Error`s and other values.
  */
-export function toOrkError(e: unknown): OrkError {
-  if (e instanceof OrkClientError) return e.error
-  if (isOrkError(e)) return e
-  if (e && typeof e === 'object' && 'error' in e && isOrkError((e as { error: unknown }).error)) return (e as { error: OrkError }).error
-  return orkError('INTERNAL', { message: e instanceof Error ? e.message : String(e) })
+export function toOpenRampError(e: unknown): OpenRampError {
+  if (e instanceof OpenRampClientError) return e.error
+  if (isOpenRampError(e)) return e
+  if (e && typeof e === 'object' && 'error' in e && isOpenRampError((e as { error: unknown }).error)) return (e as { error: OpenRampError }).error
+  return openRampError('INTERNAL', { message: e instanceof Error ? e.message : String(e) })
 }
 
-function isOrkError(v: unknown): v is OrkError {
-  return !!v && typeof v === 'object' && typeof (v as OrkError).code === 'string' && typeof (v as OrkError).message === 'string'
+function isOpenRampError(v: unknown): v is OpenRampError {
+  return !!v && typeof v === 'object' && typeof (v as OpenRampError).code === 'string' && typeof (v as OpenRampError).message === 'string'
 }
 
-/** Error for a non-OK response that has no `OrkError` body, for example an HTML 502 page from a proxy. */
-function httpError(status: number): OrkError {
-  if (status === 401 || status === 403) return orkError('UNAUTHORIZED')
-  if (status === 404) return orkError('NOT_FOUND')
-  if (status === 429) return orkError('RATE_LIMITED')
-  if (status >= 500) return orkError('PROVIDER_UNAVAILABLE', { message: 'The service is not available right now.' })
-  return orkError('INTERNAL')
+/** Error for a non-OK response that has no `OpenRampError` body, for example an HTML 502 page from a proxy. */
+function httpError(status: number): OpenRampError {
+  if (status === 401 || status === 403) return openRampError('UNAUTHORIZED')
+  if (status === 404) return openRampError('NOT_FOUND')
+  if (status === 429) return openRampError('RATE_LIMITED')
+  if (status >= 500) return openRampError('PROVIDER_UNAVAILABLE', { message: 'The service is not available right now.' })
+  return openRampError('INTERNAL')
 }
 
 export function createOpenRampClient(opts: ClientOptions) {
@@ -55,14 +55,14 @@ export function createOpenRampClient(opts: ClientOptions) {
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     })
     const text = await res.text()
-    let json: { error?: OrkError } | undefined
+    let json: { error?: OpenRampError } | undefined
     try {
       json = text ? JSON.parse(text) : {}
     } catch {
       json = undefined
     }
-    if (!res.ok) throw new OrkClientError(isOrkError(json?.error) ? json.error : httpError(res.status), res.status)
-    if (json === undefined) throw new OrkClientError(orkError('INTERNAL', { message: 'The server sent a response that is not valid.' }), res.status)
+    if (!res.ok) throw new OpenRampClientError(isOpenRampError(json?.error) ? json.error : httpError(res.status), res.status)
+    if (json === undefined) throw new OpenRampClientError(openRampError('INTERNAL', { message: 'The server sent a response that is not valid.' }), res.status)
     return json as T
   }
 
@@ -83,12 +83,14 @@ export function createOpenRampClient(opts: ClientOptions) {
       },
     ) => call<PlanResult>(secret, 'POST', `/sessions/${sessionId(secret)}/target`, body),
     quotes: (secret: string, body: { method: string; amount: string; amountSide: 'source' | 'destination'; source?: { chain: string; token: string } }) =>
-      call<{ quotes: Quote[]; errors: OrkError[] }>(secret, 'POST', `/sessions/${sessionId(secret)}/quotes`, body),
+      call<{ quotes: PublicQuote[]; errors: OpenRampError[] }>(secret, 'POST', `/sessions/${sessionId(secret)}/quotes`, body),
     select: (secret: string, body: { quoteId: string; walletAddress?: string }) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/select`, body, idemKey()),
     transition: (secret: string, name: string, inputs?: Record<string, unknown>) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/transitions/${encodeURIComponent(name)}`, { inputs: inputs ?? {} }, idemKey()),
     step: (secret: string) => call<PublicSession>(secret, 'GET', `/sessions/${sessionId(secret)}/step`),
+    /** Cancel the session while no payment is under way (`POST /sessions/:id/cancel`) */
+    cancel: (secret: string) => call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/cancel`, {}, idemKey()),
   }
 }
 

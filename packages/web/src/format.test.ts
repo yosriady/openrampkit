@@ -45,9 +45,9 @@ describe('amounts', () => {
   })
 
   it('formatAmount handles fiat and crypto assets', () => {
-    expect(formatAmount({ amount: '10', asset: { kind: 'fiat', currency: 'USD' } })).toBe('$10.00')
-    expect(formatAmount({ amount: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'USDC' } })).toBe('10 USDC')
-    expect(formatAmount({ amount: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x' } })).toBe('10')
+    expect(formatAmount({ value: '10', asset: { kind: 'fiat', currency: 'USD' } })).toBe('$10.00')
+    expect(formatAmount({ value: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x', symbol: 'USDC' } })).toBe('10 USDC')
+    expect(formatAmount({ value: '10', asset: { kind: 'crypto', chain: 'eip155:1', token: '0x' } })).toBe('10')
   })
 
   it('crypto tickers with 3 letters are not fiat (regression: "ETH 0.00")', () => {
@@ -78,21 +78,26 @@ describe('amounts', () => {
   })
 })
 
+const USD = { kind: 'fiat' as const, currency: 'USD' }
+const ETH = { kind: 'crypto' as const, chain: 'eip155:8453', token: 'native', symbol: 'ETH', decimals: 18 }
+
 describe('fees', () => {
   it('sums per currency and skips zero fees', () => {
     expect(
       formatFees([
-        { kind: 'provider', label: 'a', amount: '1.2', currency: 'USD' },
-        { kind: 'network', label: 'b', amount: '0.3', currency: 'USD' },
-        { kind: 'network', label: 'c', amount: '0.0001', currency: 'ETH' },
-        { kind: 'app', label: 'd', amount: '0', currency: 'EUR' },
+        { kind: 'provider', label: 'a', amount: { value: '1.2', asset: USD }, included: true },
+        { kind: 'network', label: 'b', amount: { value: '0.3', asset: USD }, included: true },
+        { kind: 'network', label: 'c', amount: { value: '0.0001', asset: ETH }, included: false },
+        { kind: 'app', label: 'd', amount: { value: '0', asset: { kind: 'fiat', currency: 'EUR' } }, included: true },
+        { kind: 'provider', label: 'e', amount: null, included: true },
       ]),
     ).toBe('$1.50 + 0.0001 ETH')
   })
 
   it('returns undefined when there are no fees', () => {
     expect(formatFees([])).toBeUndefined()
-    expect(formatFees([{ kind: 'app', label: 'x', amount: '0.00', currency: 'USD' }])).toBeUndefined()
+    expect(formatFees([{ kind: 'app', label: 'x', amount: { value: '0.00', asset: USD }, included: true }])).toBeUndefined()
+    expect(formatFees([{ kind: 'app', label: 'x', amount: null, included: true }])).toBeUndefined()
   })
 })
 

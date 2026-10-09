@@ -21,16 +21,20 @@ import {
   awaitPoll,
   createAdapter,
   fetchJson,
-  hmacSha256,
-  httpErrorToOrk,
+  httpErrorToOpenRamp,
   httpStatus,
   legStepFromEvent,
+  parseSignatureHeader,
+  quoteExpiresAt,
   randomHex,
-  timingSafeEqual,
+  requireDeliverAsset,
+  resolveEnv,
+  statusMap,
+  verifyTimestampedHmac,
 } from '@openrampkit/adapter'
-import type { AdapterContext, LegEvent, Logger } from '@openrampkit/adapter'
-import { OrkException, USDC, isDecimal, orkError, roundTo } from '@openrampkit/core'
-import type { CryptoAsset, Fee, LegSpec, PollSpec, Surface } from '@openrampkit/core'
+import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
+import { OpenRampException, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, PollSpec, StepDetailCode, Surface } from '@openrampkit/core'
 
 export type StripeOptions = {
   /** Secret key (sk_live_... or sk_test_...). A restricted key with onramp access also works. */
@@ -45,6 +49,18 @@ export type StripeOptions = {
   methods?: string[]
   /** Default https://api.stripe.com */
   apiUrl?: string
+  /**
+   * 'sandbox' (test mode) or 'production' (live mode). Default: from the key prefix (`sk_test_`, `rk_test_`:
+   * sandbox; `sk_live_`, `rk_live_`: production). A value that does not agree with the key throws.
+   */
+  env?: AdapterEnv
+}
+
+/** The Stripe mode of a secret or restricted key, from its prefix */
+export function stripeKeyEnv(key: string): AdapterEnv | undefined {
+  if (/^(sk|rk)_test_/.test(key)) return 'sandbox'
+  if (/^(sk|rk)_live_/.test(key)) return 'production'
+  return undefined
 }
 
 type StripeNetwork = 'ethereum' | 'base' | 'polygon' | 'solana' | 'avalanche'
@@ -128,13 +144,20 @@ export const STRIPE_METHODS: MethodDef[] = [
 /** "only available in the EU and the US (excluding Hawaii)" */
 const DENY = ['US-HI']
 
+/**
+ * Stripe onramp session statuses (https://docs.stripe.com/crypto/onramp/api-reference#session-object).
+ * An unknown status is no event: the leg keeps its current step.
+ */
+const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('Stripe', {
+  initialized: { status: 'requires_action' },
+  requires_payment: { status: 'requires_action' },
+  fulfillment_processing: { status: 'processing', detail: 'processing' },
+  fulfillment_complete: { status: 'succeeded' },
+  rejected: { status: 'failed' },
+})
+
 function num(s: string | undefined | null): string | undefined {
   return s && isDecimal(s) ? s : undefined
-}
-
-function money(m: StripeMoney): string | undefined {
-  if (!m) return undefined
-  return num(typeof m === 'string' ? m : m.amount)
 }
 
 /** Stripe form encoding: nested keys like `wallet_addresses[base_network]` and arrays like `destination_networks[]` */
@@ -144,19 +167,17 @@ function form(params: Array<[string, string | undefined]>): string {
   return q.toString()
 }
 
+/** The `t` and `v1` values of a `Stripe-Signature` header (several `v1` during a secret rotation) */
 export function parseStripeSignature(header: string): { t?: string; v1: string[] } {
-  const out: { t?: string; v1: string[] } = { v1: [] }
-  for (const part of header.split(',')) {
-    const i = part.indexOf('=')
-    const k = part.slice(0, i).trim()
-    const v = part.slice(i + 1).trim()
-    if (k === 't') out.t = v
-    else if (k === 'v1') out.v1.push(v)
-  }
-  return out
+  const parts = parseSignatureHeader(header)
+  const t = parts.t?.[0]
+  return { ...(t ? { t } : {}), v1: parts.v1 ?? [] }
 }
 
 export function stripe(opts: StripeOptions) {
+  const keyEnv = stripeKeyEnv(opts.secretKey)
+  const env = resolveEnv('stripe', opts.env, undefined, keyEnv)
+  if (opts.env && keyEnv && opts.env !== keyEnv) throw new Error(`stripe: env is '${opts.env}', but secretKey is a ${keyEnv === 'sandbox' ? 'test mode' : 'live mode'} key`)
   const api = (opts.apiUrl ?? 'https://api.stripe.com').replace(/\/+$/, '')
   const auth = `Basic ${btoa(`${opts.secretKey}:`)}`
   const surfaceKind = opts.surface === 'redirect' ? 'REDIRECT' : 'PROVIDER_SDK'
@@ -175,16 +196,12 @@ export function stripe(opts: StripeOptions) {
     eta: d.eta,
     surfaces: [surfaceKind],
     requires: ['provider_kyc'],
-    capabilities: ['webhooks', 'polling', 'exact_output'],
   }))
   const byId = new Map(defs.map((d) => [d.id, d]))
 
-  function deliverFor(asset: CryptoAsset | undefined): DeliverAsset {
-    if (asset && asset.chain !== '*') {
-      const f = STRIPE_DELIVER_ASSETS.find((d) => d.chain === asset.chain && (d.chain.startsWith('eip155:') ? d.token.toLowerCase() === asset.token.toLowerCase() : d.token === asset.token))
-      if (f) return f
-    }
-    return STRIPE_DELIVER_ASSETS[0]!
+  /** The asset Stripe delivers for `asset`. NO_QUOTES when Stripe does not deliver that token on that chain (never another token). */
+  function deliverFor(asset: Asset | undefined): DeliverAsset {
+    return requireDeliverAsset(STRIPE_DELIVER_ASSETS, asset, 'Stripe')
   }
 
   function assetOf(d: DeliverAsset): CryptoAsset {
@@ -196,17 +213,17 @@ export function stripe(opts: StripeOptions) {
     const region = ctx.session.region?.toUpperCase()
     const hit = d.deny.some((x) => (x === 'EU' ? !!country && EU.includes(country) : x.includes('-') ? region === x : country === x))
     if (hit) {
-      throw new OrkException(orkError('REGION_UNSUPPORTED', { message: `Stripe does not sell USDC on ${d.network} in your region.`, recovery: 'choose_other' }), 422)
+      throw new OpenRampException(openRampError('REGION_UNSUPPORTED', { message: `Stripe does not sell USDC on ${d.network} in your region.`, recovery: 'choose_other' }), 422)
     }
   }
 
   /** 400s about the customer's country mean "not in your region"; other 4xx about the request mean "no quote". */
-  function toOrk(e: unknown, what: string, log: Pick<Logger, 'warn'>): OrkException {
+  function toOpenRamp(e: unknown, what: string, log: Pick<Logger, 'warn'>): OpenRampException {
     const code = ((e as { body?: { error?: { code?: string } } })?.body?.error?.code) ?? ''
     if (code === 'crypto_onramp_unsupported_country' || code === 'crypto_onramp_unsupportable_customer') {
-      return new OrkException(orkError('REGION_UNSUPPORTED', { message: 'Stripe cannot sell crypto to you in your region.', recovery: 'choose_other' }), 422)
+      return new OpenRampException(openRampError('REGION_UNSUPPORTED', { message: 'Stripe cannot sell crypto to you in your region.', recovery: 'choose_other' }), 422)
     }
-    return httpErrorToOrk(e, 'Stripe', { what, noQuoteStatuses: [400, 422], log })
+    return httpErrorToOpenRamp(e, 'Stripe', { what, noQuoteStatuses: [400, 422], log })
   }
 
   async function call<T>(ctx: Pick<AdapterContext, 'fetch'>, method: 'GET' | 'POST', path: string, body?: string, idem?: string): Promise<T> {
@@ -221,45 +238,53 @@ export function stripe(opts: StripeOptions) {
     })
   }
 
-  function eventFrom(s: OnrampSession, refOverride?: string): LegEvent | undefined {
+  function eventFrom(s: OnrampSession, log: Pick<Logger, 'warn'>, refOverride?: string): LegEvent | undefined {
     const ref = refOverride ?? s.id
     if (!ref) return undefined
+    const m = STATUS(s.status, log)
+    if (!m) return undefined
     const td = s.transaction_details ?? {}
     const d = STRIPE_DELIVER_ASSETS.find((x) => x.network === td.destination_network || (x.network === 'base' && td.destination_network === 'base_network'))
     const amount = num(td.destination_amount)
-    const output = d && amount && (td.destination_currency ?? 'usdc').toLowerCase() === 'usdc' ? { amount, asset: assetOf(d) } : undefined
-    switch (s.status) {
-      case 'fulfillment_complete':
-        return { ref, status: 'succeeded', ...(td.transaction_id ? { txHash: td.transaction_id } : {}), ...(output ? { output } : {}) }
-      case 'fulfillment_processing':
-        return { ref, status: 'processing', ...(output ? { output } : {}) }
-      case 'rejected':
-        return { ref, status: 'failed', error: orkError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
-      case 'initialized':
-      case 'requires_payment':
-        return { ref, status: 'awaiting_user' }
+    const output = d && amount && (td.destination_currency ?? 'usdc').toLowerCase() === 'usdc' ? { value: amount, asset: assetOf(d) } : undefined
+    // The onramp session id is both our ref and Stripe's order id.
+    const base: LegEvent = { ref, status: m.status, ...(s.id ? { providerRef: s.id } : {}), ...(m.detail ? { detail: { code: m.detail, providerStatus: s.status! } } : {}) }
+    switch (m.status) {
+      case 'succeeded':
+        return {
+          ...base,
+          // The delivery to the user's wallet
+          ...(td.transaction_id ? { transactions: [{ role: 'destination' as const, hash: td.transaction_id, ...(d ? { chain: d.chain } : {}) }] } : {}),
+          ...(output ? { output } : {}),
+        }
+      case 'processing':
+        return { ...base, ...(output ? { output } : {}) }
+      case 'failed':
+        return { ...base, error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       default:
-        return undefined
+        // requires_action: the user still pays in the onramp. No action: the UI keeps the onramp.
+        return base
     }
   }
 
   return createAdapter({
     id: 'stripe',
+    ...(env ? { env } : {}),
     name: 'Stripe',
     legs,
 
     async quote(input, ctx) {
       const d = byId.get(input.leg.legId)
-      if (!d) throw new OrkException(orkError('BAD_REQUEST', { message: `Unknown Stripe leg ${input.leg.legId}` }), 400)
+      if (!d) throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Unknown Stripe leg ${input.leg.legId}` }), 400)
       const target = deliverFor(input.leg.to.asset.kind === 'crypto' ? input.leg.to.asset : undefined)
       checkRegion(target, ctx)
       const fiatAsset = input.amountIn?.asset ?? input.leg.from.asset
       const fiat = (fiatAsset.kind === 'fiat' ? fiatAsset.currency : 'USD').toLowerCase()
-      if (fiat !== 'usd' && fiat !== 'eur') throw new OrkException(orkError('NO_QUOTES', { message: 'Stripe takes USD or EUR only.' }), 422)
+      if (fiat !== 'usd' && fiat !== 'eur') throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Stripe takes USD or EUR only.' }), 422)
       const q = form([
         ['source_currency', fiat],
-        ['source_amount', input.amountIn ? roundTo(input.amountIn.amount, 2) : undefined],
-        ['destination_amount', !input.amountIn ? input.amountOut?.amount : undefined],
+        ['source_amount', input.amountIn ? roundTo(input.amountIn.value, 2) : undefined],
+        ['destination_amount', !input.amountIn ? input.amountOut?.value : undefined],
         ['destination_currencies[]', 'usdc'],
         ['destination_networks[]', target.network],
       ])
@@ -273,32 +298,36 @@ export function stripe(opts: StripeOptions) {
           res = await call<QuotesResponse>(ctx, 'GET', `/v1/crypto/onramp/quotes?${q}`)
         }
       } catch (e) {
-        throw toOrk(e, 'price this amount', ctx.log)
+        throw toOpenRamp(e, 'price this amount', ctx.log)
       }
       const quotes = res.destination_network_quotes ?? {}
       const list = quotes[target.network] ?? quotes[WALLET_KEY[target.network]] ?? []
       const nq = list.find((x) => (x.destination_currency ?? '').toLowerCase() === 'usdc')
       const out = num(nq?.destination_amount)
       const total = num(nq?.source_total_amount)
-      if (!nq || !out || !total) throw new OrkException(orkError('NO_QUOTES', { message: 'Stripe did not return a quote for this amount.' }), 422)
+      if (!nq || !out || !total) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Stripe did not return a quote for this amount.' }), 422)
       const cur = fiat.toUpperCase()
+      // source_total_amount (the quote input) is the source amount plus both fees, so each fee is included.
+      const fiatAmt = (value: string): Amount => ({ value, asset: { kind: 'fiat', currency: cur } })
       const fees: Fee[] = []
       const txFee = num(nq.fees?.transaction_fee_monetary)
       const netFee = num(nq.fees?.network_fee_monetary)
-      if (txFee) fees.push({ kind: 'provider', label: 'Stripe fee', amount: txFee, currency: cur })
-      if (netFee) fees.push({ kind: 'network', label: 'Network fee', amount: netFee, currency: cur })
+      if (txFee) fees.push({ kind: 'provider', label: 'Stripe fee', amount: fiatAmt(txFee), included: true })
+      if (netFee) fees.push({ kind: 'network', label: 'Network fee', amount: fiatAmt(netFee), included: true })
       return {
         adapterId: 'stripe',
         legId: d.id,
-        input: { amount: total, asset: { kind: 'fiat', currency: cur } },
-        output: { amount: out, asset: assetOf(target) },
+        input: { value: total, asset: { kind: 'fiat', currency: cur } },
+        output: { value: out, asset: assetOf(target) },
         fees,
+        // Stripe's onramp quotes are indicative: the session sets the crypto price when the user pays.
+        guarantee: 'estimate',
         eta: d.eta,
-        expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        expiresAt: quoteExpiresAt(5),
         data: {
           network: target.network,
           sourceCurrency: fiat,
-          ...(input.amountIn ? { sourceAmount: roundTo(input.amountIn.amount, 2) } : { destinationAmount: out }),
+          ...(input.amountIn ? { sourceAmount: roundTo(input.amountIn.value, 2) } : { destinationAmount: out }),
           nonce: randomHex(8),
         },
       }
@@ -309,7 +338,7 @@ export function stripe(opts: StripeOptions) {
       const target = deliverFor(input.quote.output.asset.kind === 'crypto' ? input.quote.output.asset : undefined)
       const network = data.network ?? target.network
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
-      if (!wallet) throw new OrkException(orkError('BAD_REQUEST', { message: 'Stripe needs a wallet address to deliver to.' }))
+      if (!wallet) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Stripe needs a wallet address to deliver to.' }))
       const body = form([
         [`wallet_addresses[${WALLET_KEY[network]}]`, wallet],
         ['lock_wallet_address', 'true'],
@@ -319,7 +348,7 @@ export function stripe(opts: StripeOptions) {
         ['destination_networks[]', network],
         ['source_currency', data.sourceCurrency ?? (input.quote.input.asset.kind === 'fiat' ? input.quote.input.asset.currency.toLowerCase() : 'usd')],
         ['source_amount', data.sourceAmount],
-        ['destination_amount', data.sourceAmount ? undefined : data.destinationAmount ?? input.quote.output.amount],
+        ['destination_amount', data.sourceAmount ? undefined : data.destinationAmount ?? input.quote.output.value],
         ['customer_ip_address', ctx.session.ip],
         ['metadata[ork_session]', ctx.session.id],
         ['metadata[ork_leg]', input.leg.legId],
@@ -328,11 +357,11 @@ export function stripe(opts: StripeOptions) {
       try {
         s = await call<OnrampSession>(ctx, 'POST', '/v1/crypto/onramp_sessions', body, ctx.idempotencyKey(`stripe:${data.nonce ?? randomHex(8)}`))
       } catch (e) {
-        throw toOrk(e, 'start the purchase', ctx.log)
+        throw toOpenRamp(e, 'start the purchase', ctx.log)
       }
-      if (!s.id || !s.client_secret) throw new OrkException(orkError('PROVIDER_UNAVAILABLE', { message: 'Stripe did not return an onramp session.' }), 502)
+      if (!s.id || !s.client_secret) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Stripe did not return an onramp session.' }), 502)
       if (s.status === 'rejected') {
-        return { state: 'FAILED', status: 'failed', transitions: [], ref: s.id, error: orkError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
+        return { status: 'failed', ref: s.id, providerRef: s.id, error: openRampError('PROVIDER_DECLINED', { message: 'Stripe declined this purchase.', recovery: 'choose_other' }) }
       }
       let surface: Surface
       if (opts.surface === 'redirect' && s.redirect_url) {
@@ -345,7 +374,7 @@ export function stripe(opts: StripeOptions) {
           params: { clientSecret: s.client_secret, publishableKey: opts.publishableKey, sessionId: s.id, ...(s.redirect_url ? { redirectUrl: s.redirect_url } : {}) },
         }
       }
-      return { state: 'PAYMENT', surface, transitions: [awaitPoll(POLL)], status: 'awaiting_user', ref: s.id }
+      return { status: 'requires_action', action: { kind: 'payment', surface, transitions: [awaitPoll(POLL)] }, ref: s.id, providerRef: s.id }
     },
 
     async status(input, ctx) {
@@ -353,9 +382,11 @@ export function stripe(opts: StripeOptions) {
       try {
         s = await call<OnrampSession>(ctx, 'GET', `/v1/crypto/onramp_sessions/${encodeURIComponent(input.ref)}`)
       } catch (e) {
-        throw toOrk(e, 'find this purchase', ctx.log)
+        throw toOpenRamp(e, 'find this purchase', ctx.log)
       }
-      return legStepFromEvent(eventFrom(s, input.ref), input.ref, POLL)
+      // An unknown status: a status poll. The server never moves a leg back, so a leg that already
+      // moved on keeps its step.
+      return legStepFromEvent(eventFrom(s, ctx.log, input.ref), input.ref, POLL)
     },
 
     webhook: {
@@ -365,14 +396,13 @@ export function stripe(opts: StripeOptions) {
           ctx.log.warn('stripe: webhookSecret is not set; rejecting webhook')
           return false
         }
-        const header = req.headers.get('stripe-signature')
-        if (!header) return false
-        const { t, v1 } = parseStripeSignature(header)
-        const ts = Number(t)
-        if (!t || !v1.length || !Number.isFinite(ts)) return false
-        if (Math.abs(Date.now() / 1000 - ts) > TOLERANCE_SEC) return false
-        const expected = await hmacSha256(opts.webhookSecret, `${t}.${rawBody}`, 'hex')
-        return v1.some((s) => timingSafeEqual(s.toLowerCase(), expected))
+        // `t=<unix s>,v1=<hex HMAC-SHA256 over "{t}.{body}">`; every v1 is tried
+        return verifyTimestampedHmac({
+          secret: opts.webhookSecret,
+          rawBody,
+          header: req.headers.get('stripe-signature'),
+          toleranceSec: TOLERANCE_SEC,
+        })
       },
       async parse(rawBody, ctx) {
         let ev: { type?: string; data?: { object?: OnrampSession } }
@@ -386,7 +416,7 @@ export function stripe(opts: StripeOptions) {
         if (ev.type !== 'crypto.onramp_session.updated' && ev.type !== 'crypto.onramp_session_updated') return []
         const s = ev.data?.object
         if (!s?.id) return []
-        const out = eventFrom(s)
+        const out = eventFrom(s, ctx.log)
         return out ? [out] : []
       },
     },

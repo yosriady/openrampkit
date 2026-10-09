@@ -88,7 +88,7 @@ describe.skipIf(!hasAnvil() && process.env.OPENRAMP_REQUIRE_ANVIL !== '1')('loca
       await c.submitAmount()
     }
     await waitFor(() => !c.getSnapshot().quotesLoading && c.getSnapshot().quotes.length > 0)
-    expect(c.getSnapshot().quotes[0]).toMatchObject({ output: { amount: '25' } })
+    expect(c.getSnapshot().quotes[0]).toMatchObject({ output: { value: '25' } })
     await c.confirm()
     const surface = c.getSnapshot().session!.step.surface!
     expect(surface).toMatchObject({ kind: 'WALLET_TX', chain: ANVIL_CHAIN })
@@ -99,7 +99,9 @@ describe.skipIf(!hasAnvil() && process.env.OPENRAMP_REQUIRE_ANVIL !== '1')('loca
     const done = await c.done
     expect(done.step.state).toBe('COMPLETED')
     expect(sent).toHaveLength(1)
-    expect(done.step.progress?.legs[0]).toMatchObject({ legId: 'onchain', status: 'succeeded', txHash: sent[0] })
+    // A same-chain transfer: the user's transaction is both the source and the delivery.
+    expect(done.payment?.legs[0]).toMatchObject({ legId: 'onchain', status: 'succeeded', transactions: [{ role: 'source', hash: sent[0] }, { role: 'destination', hash: sent[0] }] })
+    expect(done.result?.transactions.find((t) => t.role === 'destination')?.hash).toBe(sent[0])
 
     // A sweep refreshes open sessions; this one is already final.
     await ramp.sweep()
@@ -135,7 +137,7 @@ describe.skipIf(!hasAnvil() && process.env.OPENRAMP_REQUIRE_ANVIL !== '1')('loca
       expect(swept.sessions.changed).toBeGreaterThanOrEqual(1)
       const final = await client.getSession(s.clientSecret)
       expect(final.step.state).toBe('COMPLETED')
-      expect(final.step.progress?.legs[0]?.txHash).toBe(hash)
+      expect(final.payment?.legs[0]?.transactions.find((t) => t.role === 'destination')?.hash).toBe(hash)
     } finally {
       await rpc(chain.rpcUrl, 'evm_setAutomine', [true])
     }

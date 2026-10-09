@@ -5,7 +5,7 @@ import { vi } from 'vitest'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { MockOptions } from '@openrampkit/adapter-mock'
 import { USDC } from '@openrampkit/core'
-import type { Destination, MethodOption, OrkError, PlanResult, PublicSession, Quote, Step } from '@openrampkit/core'
+import type { Destination, MethodOption, OpenRampError, Payment, PaymentLeg, PlanResult, PublicSession, Quote, Step, Transaction } from '@openrampkit/core'
 import { createOpenRamp } from '@openrampkit/server'
 import type { OpenRampConfig } from '@openrampkit/server'
 import { createOpenRampClient } from './client.js'
@@ -34,14 +34,51 @@ export function step(p: Partial<Step> & { state: Step['state'] }): Step {
   return { sessionId: 'ors_1', transitions: [], ...p }
 }
 
+/** The session status that the server sets for a step state (a FAILED step is a failed attempt here) */
+const STATUS_FOR: Partial<Record<Step['state'], PublicSession['status']>> = {
+  AUTH: 'requires_action',
+  KYC: 'requires_action',
+  PAYMENT: 'requires_action',
+  PROCESSING: 'processing',
+  COMPLETED: 'succeeded',
+  EXPIRED: 'expired',
+  REFUNDED: 'refunded',
+  REVERSED: 'reversed',
+  BLOCKED: 'failed',
+  CANCELED: 'canceled',
+}
+
+/** A `PublicSession.payment` with test defaults for each leg */
+export function payment(legs: Array<Partial<Omit<PaymentLeg, 'transactions'>> & Pick<PaymentLeg, 'adapterId' | 'status'> & { transactions?: Array<Partial<Transaction> & { hash: string }> }>): Payment {
+  const usd = { value: '100', asset: { kind: 'fiat' as const, currency: 'USD' } }
+  return {
+    attempt: 0,
+    quoteId: 'q_1',
+    method: 'card',
+    provider: 'Test provider',
+    activeLeg: 0,
+    legs: legs.map((l, index) => ({
+      index,
+      legId: l.adapterId,
+      provider: '',
+      input: usd,
+      output: usd,
+      outputConfirmed: false,
+      ...l,
+      transactions: (l.transactions ?? []).map((t) => ({ role: 'destination' as const, chain: 'eip155:8453', legIndex: index, ...t })),
+    })),
+  }
+}
+
 export function session(s: Step | Step['state'], extra: Partial<PublicSession> = {}): PublicSession {
+  const st = typeof s === 'string' ? step({ state: s }) : s
   return {
     id: 'ors_1',
     direction: 'deposit',
     destination: BASE_DEST,
-    status: 'open',
+    status: STATUS_FOR[st.state] ?? 'requires_payment_method',
     currency: 'USD',
-    step: typeof s === 'string' ? step({ state: s }) : s,
+    step: st,
     expiresAt: new Date(Date.now() + 3600_000).toISOString(),
     livemode: false,
     ...extra,
@@ -83,10 +120,12 @@ export function quote(p: Partial<Quote> & { id: string }): Quote {
     method: 'card',
     provider: 'Test provider',
     legs: [],
-    input: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } },
-    output: { amount: '97.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } },
-    fees: [{ kind: 'provider', label: 'Fee', amount: '2.5', currency: 'USD' }],
+    input: { value: '100', asset: { kind: 'fiat', currency: 'USD' } },
+    output: { value: '97.5', asset: { kind: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']!, symbol: 'USDC', decimals: 6 } },
+    fees: [{ kind: 'provider', label: 'Fee', amount: { value: '2.5', asset: { kind: 'fiat', currency: 'USD' } }, included: true }],
+    guarantee: 'estimate',
     eta: { min: 60, max: 300 },
+    expiresAt: '2099-01-01T00:00:00.000Z',
     ...p,
   }
 }
@@ -99,7 +138,7 @@ export function fakeClient(over: Partial<{ [K in keyof OpenRampClient]: OpenRamp
     baseUrl: BASE,
     getSession: vi.fn(async () => session('SELECT_METHOD')),
     plan: vi.fn(async () => plan()),
-    quotes: vi.fn(async () => ({ quotes: [quote({ id: 'q1' }), quote({ id: 'q2', provider: 'Other' })], errors: [] as OrkError[] })),
+    quotes: vi.fn(async () => ({ quotes: [quote({ id: 'q1' }), quote({ id: 'q2', provider: 'Other' })], errors: [] as OpenRampError[] })),
     select: vi.fn(async () => session(step({ state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://pay.example/x', popup: true } }))),
     transition: vi.fn(async () => session(step({ state: 'PROCESSING' }))),
     step: vi.fn(async () => session(step({ state: 'PROCESSING' }))),

@@ -19,3 +19,4 @@ crons = ["* * * * *"]
 PUBLIC_URL = "http://localhost:8787"
 ALLOWED_ORIGINS = "http://localhost:3000"
 # Secrets (set with `wrangler secret put`): OPENRAMP_SECRET, APP_API_KEY, WEBHOOK_URL, WEBHOOK_SECRET
+# WEBHOOK_SECRET is a Standard Webhooks secret: whsec_ and base64 (generateWebhookSecret() in @openrampkit/server)

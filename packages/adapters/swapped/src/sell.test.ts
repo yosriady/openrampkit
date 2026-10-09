@@ -2,7 +2,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, fromBaseUnits } from '@openrampkit/core'
+import { USDC, fromBaseUnits, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { SWAPPED_PAYOUT_METHODS, swapped } from './index.js'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV } from '@openrampkit/adapter/testing'
@@ -49,29 +49,32 @@ describe('swapped sell legs', () => {
 
   it('quotes a crypto amount in two pricing calls (probe, then the estimated fiat amount)', async () => {
     const { fetch, calls } = fakeFetch([{ match: 'sell/pricing', reply: (c) => pricing((c.body as { fiat_amount: number }).fiat_amount) }])
-    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { amount: '100', asset: BASE_USDC } }, makeCtx({ fetch }))
+    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, makeCtx({ fetch }))
     expect(checkLegQuote(q)).toEqual([])
     expect(calls.map((c) => (c.body as { fiat_amount: number }).fiat_amount)).toEqual([100, 92])
     expect((calls[0]!.body as Record<string, unknown>)).toMatchObject({ api_key: PK, payout_method: 'bank-transfer', crypto_currency: 'USDC_BASE', fiat_currency: 'EUR' })
-    expect(q.input).toEqual({ amount: '100', asset: expect.objectContaining({ chain: 'eip155:8453' }) })
-    expect(q.output).toEqual({ amount: '90.16', asset: { kind: 'fiat', currency: 'EUR' } })
+    expect(q.input).toEqual({ value: '100', asset: expect.objectContaining({ chain: 'eip155:8453' }) })
+    expect(q.output).toEqual({ value: '90.16', asset: { kind: 'fiat', currency: 'EUR' } })
     expect(q.data).toMatchObject({ estimate: true, slug: 'bank-transfer' })
+    expect(q.guarantee).toBe('estimate')
+    expect(q.fees).toEqual([{ kind: 'provider', label: 'Swapped fee', amount: { value: '1.84', asset: { kind: 'fiat', currency: 'EUR' } }, included: true }])
     const bad = fakeFetch([{ match: 'sell/pricing', reply: () => ({ success: true, data: { crypto_amount: 0, fiat_amount_incl_fees: 0, fiat_amount_excl_fees: 0 } }) }])
-    await expect(a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { amount: '100', asset: BASE_USDC } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
   })
 
   it('starts a signed /sell widget with userSendsFunds=false and the locked crypto amount', async () => {
     const { fetch } = fakeFetch([{ match: 'sell/pricing', reply: (c) => pricing((c.body as { fiat_amount: number }).fiat_amount) }])
     const ctx = makeCtx({ fetch, session: { country: 'DK', email: 'a@b.test' } })
-    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { amount: '100', asset: BASE_USDC } }, ctx)
+    const q = await a.quote({ leg: sellLeg('bank-transfer', 'EUR'), amountIn: { value: '100', asset: BASE_USDC } }, ctx)
     const step = await a.start({ leg: sellLeg('bank-transfer', 'EUR'), quote: q }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'IFRAME', origin: 'https://widget.swapped.com' } })
-    const url = new URL((step.surface as { url: string }).url)
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'IFRAME', origin: 'https://widget.swapped.com' } } })
+    const url = new URL((step.action?.surface as { url: string }).url)
     expect(url.pathname).toBe('/sell')
     expect(Object.fromEntries(url.searchParams)).toMatchObject({ apiKey: PK, method: 'bank-transfer', userSendsFunds: 'false', cryptoCurrencyCode: 'USDC_BASE', cryptoCurrencyAmount: '100', fiatCurrencyCode: 'EUR', baseCountry: 'DK' })
     // signature: base64 HMAC of the query string (with '?') before `&signature=`
-    const raw = (step.surface as { url: string }).url
+    const raw = (step.action?.surface as { url: string }).url
     const search = raw.slice(raw.indexOf('?'), raw.indexOf('&signature='))
     expect(url.searchParams.get('signature')).toBe(createHmac('sha256', SK).update(search).digest('base64'))
   })
@@ -80,8 +83,9 @@ describe('swapped sell legs', () => {
     const ctx = makeWebhookCtx()
     const body = { order_type: 'sell', order_status: 'payment_pending', external_customer_id: 'u1.abc', order_crypto: 'USDC_BASE', order_crypto_amount: '100.5', order_crypto_address: '0x00000000000000000000000000000000000000AA' }
     const [ev] = await a.webhook!.parse(JSON.stringify(body), ctx) as Array<Record<string, unknown>>
-    expect(ev).toMatchObject({ ref: 'u1.abc', status: 'awaiting_user', transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] })
-    const surface = ev!.surface as { kind: string; chain: string; txs: Array<{ to: string; data: string; chainId: number; value: string }> }
+    expect(ev).toMatchObject({ ref: 'u1.abc', status: 'requires_action', action: { kind: 'payment', transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] } })
+    expect(checkLegStep(ev as never)).toEqual([])
+    const surface = (ev!.action as { surface: unknown }).surface as { kind: string; chain: string; txs: Array<{ to: string; data: string; chainId: number; value: string }> }
     expect(surface).toMatchObject({ kind: 'WALLET_TX', chain: 'eip155:8453' })
     const tx = surface.txs[0]!
     expect(tx).toMatchObject({ to: USDC['eip155:8453'], chainId: 8453, value: '0' })
@@ -96,9 +100,12 @@ describe('swapped sell legs', () => {
   it('maps sell payout_pending, order_completed and order_cancelled; buy order_completed stays processing', async () => {
     const ctx = makeWebhookCtx()
     const sell = (order_status: string, extra = {}) => a.webhook!.parse(JSON.stringify({ order_type: 'sell', order_status, external_customer_id: 'r', ...extra }), ctx)
-    expect(await sell('payout_pending', { transaction_id: '0xtx' })).toEqual([{ ref: 'r', status: 'processing', txHash: '0xtx' }])
-    expect(await sell('order_completed')).toEqual([{ ref: 'r', status: 'succeeded' }])
-    expect(await sell('order_broadcasted', { transaction_id: '0xt' })).toEqual([{ ref: 'r', status: 'succeeded', txHash: '0xt' }])
+    // The sell transaction id is the user's USDC transfer to Swapped: role source. order_id is the providerRef.
+    const payout = await sell('payout_pending', { transaction_id: '0xtx', order_id: 'ord-1', order_crypto: 'USDC_BASE' })
+    expect(payout).toMatchObject([{ ref: 'r', providerRef: 'ord-1', status: 'processing', detail: { code: 'settling', providerStatus: 'payout_pending' }, transactions: [{ role: 'source', hash: '0xtx', chain: 'eip155:8453' }] }])
+    expect(checkLegStep(payout[0]!)).toEqual([])
+    expect(await sell('order_completed')).toMatchObject([{ ref: 'r', status: 'succeeded' }])
+    expect(await sell('order_broadcasted', { transaction_id: '0xt' })).toMatchObject([{ ref: 'r', status: 'succeeded', transactions: [{ role: 'source', hash: '0xt' }] }])
     expect((await sell('order_cancelled'))[0]).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
     expect(await sell('something_else')).toEqual([])
     const buy = await a.webhook!.parse(JSON.stringify({ order_type: 'buy', order_status: 'order_completed', external_customer_id: 'r' }), ctx)
@@ -108,7 +115,9 @@ describe('swapped sell legs', () => {
   it('submit_tx moves the sell leg to processing; other transitions are refused', async () => {
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
     const s = await a.transition!({ leg: sellLeg('bank-transfer', 'EUR'), ref: 'r', name: 'submit_tx', inputs: { txHash: '0xabc' } }, ctx)
-    expect(s).toMatchObject({ state: 'PROCESSING', status: 'processing', txHash: '0xabc' })
+    expect(stateFor(s)).toBe('PROCESSING')
+    expect(s).toMatchObject({ status: 'processing', detail: { code: 'confirming' }, transactions: [{ role: 'source', hash: '0xabc' }] })
+    expect(checkLegStep(s)).toEqual([])
     await expect(a.transition!({ leg: sellLeg('bank-transfer', 'EUR'), ref: 'r', name: 'nope' }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
   })
 })

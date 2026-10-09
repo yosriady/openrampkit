@@ -1,6 +1,6 @@
 # Surfaces
 
-A **surface** is what the user must see or do in a step. Adapters return a surface in their `LegStep`. The modal draws it. The modal has no provider-specific code: a new provider works in the modal as long as it uses these kinds.
+A **surface** is what the user must see or do in a step. Adapters return a surface in the `action` of their `LegStep` (`action.surface`, with `status: 'requires_action'`). The modal draws it. The modal has no provider-specific code: a new provider works in the modal as long as it uses these kinds.
 
 ```ts
 type SurfaceKind = 'REDIRECT' | 'IFRAME' | 'PROVIDER_SDK' | 'QR' | 'DEEPLINK' | 'BANK_FIELDS'
@@ -158,7 +158,7 @@ A small form, for example extra details a provider needs. The first SUBMIT trans
 
 ## No surface
 
-A step without a surface (for example `PROCESSING` during a bridge hop) shows a spinner and the progress of each leg: "1. Test provider: done. 2. Relay: in progress".
+A step without a surface (for example `PROCESSING` during a bridge hop) shows a spinner and the progress of each leg from `session.payment.legs`: "1. Test provider: done. 2. Relay: in progress".
 
 ## Custom UIs
 

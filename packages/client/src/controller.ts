@@ -2,22 +2,27 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, accountFor, chainNamespace, cmp, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, orkError } from '@openrampkit/core'
+import { CHAINS, USDC, accountFor, chainNamespace, cmp, createClientEvent, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError } from '@openrampkit/core'
 import type {
   Direction,
   MethodOption,
-  OrkError,
-  OrkEvent,
+  OpenRampError,
+  ClientEvent,
+  ClientEventFields,
+  ClientEventType,
   PlanResult,
   PublicSession,
-  Quote,
+  PublicQuote,
   Step,
   Transition,
   WalletAdapter,
   WalletBalance,
 } from '@openrampkit/core'
-import { toOrkError } from './client.js'
+import { toOpenRampError } from './client.js'
 import type { OpenRampClient } from './client.js'
+
+/** The longest delay that `setTimeout` takes (2^31 - 1 ms); a longer one fires at once */
+const MAX_TIMER_MS = 2_147_483_647
 
 export type Tab = 'crypto' | 'cash'
 
@@ -40,12 +45,12 @@ export type Snapshot = {
   method?: MethodOption
   amount: string
   amountSide: 'source' | 'destination'
-  quotes: Quote[]
-  quoteErrors: OrkError[]
+  quotes: PublicQuote[]
+  quoteErrors: OpenRampError[]
   quotesLoading: boolean
   selectedQuoteId?: string
   busy: boolean
-  error?: OrkError
+  error?: OpenRampError
   walletConnected: boolean
   walletAddress?: string
   balances: WalletBalance[]
@@ -65,7 +70,7 @@ export type ControllerOptions = {
   wallet?: WalletAdapter
   /** Surfaces this UI can render. Defaults to all built-in ones. */
   surfaces?: string[]
-  onEvent?: (e: OrkEvent) => void
+  onEvent?: (e: ClientEvent) => void
   /** Refuse a session of the other direction (e.g. `openWithdraw()` with a deposit secret) */
   expect?: Direction
 }
@@ -96,7 +101,7 @@ export class RampController {
   private pollTimer: ReturnType<typeof setTimeout> | undefined
   private quoteTimer: ReturnType<typeof setTimeout> | undefined
   private resolveDone!: (s: PublicSession) => void
-  private rejectDone!: (e: OrkError) => void
+  private rejectDone!: (e: OpenRampError) => void
   private destroyed = false
   /** Resolves when the session reaches a terminal state */
   readonly done: Promise<PublicSession>
@@ -135,19 +140,14 @@ export class RampController {
     for (const l of this.listeners) l()
   }
 
-  private emit(type: string, object: unknown) {
-    this.opts.onEvent?.({
-      id: `evt_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`,
-      type,
-      created: Math.floor(Date.now() / 1000),
-      livemode: this.snap.session?.livemode ?? false,
-      ...(this.snap.session ? { sessionId: this.snap.session.id } : {}),
-      data: { object },
-    })
+  private emit<T extends ClientEventType>(type: T, object: ClientEventFields[T]) {
+    if (!this.opts.onEvent) return
+    const session = this.snap.session
+    this.opts.onEvent(createClientEvent(type, object, { livemode: session?.livemode ?? false, ...(session ? { sessionId: session.id } : {}) }) as ClientEvent)
   }
 
   private fail(e: unknown) {
-    const error = toOrkError(e)
+    const error = toOpenRampError(e)
     this.set({ busy: false, error })
     return error
   }
@@ -171,7 +171,7 @@ export class RampController {
       // Withdraw: the account on the source chain (an EVM and a Solana wallet can both be connected).
       const walletAddress: string | undefined = (session.source ? accountFor(accounts, session.source.chain) : undefined)?.address ?? accounts[0]?.address
       if (this.opts.expect && session.direction !== this.opts.expect) {
-        throw orkError('BAD_REQUEST', { message: `This is not a ${this.opts.expect} session.` })
+        throw openRampError('BAD_REQUEST', { message: `This is not a ${this.opts.expect} session.` })
       }
       this.set({ session, direction: session.direction, walletConnected: !!walletAddress, ...(walletAddress ? { walletAddress } : {}) })
       if (session.step.state !== 'SELECT_METHOD') return this.applySession(session)
@@ -230,12 +230,12 @@ export class RampController {
   // ---------- withdraw ----------
 
   /**
-   * The target the app set and locked at creation (`targetLocked`), else undefined. With a locked
+   * The target the app set and locked at creation (`destinationLocked`), else undefined. With a locked
    * target the controller skips the target screen and never calls `/target`.
    */
   lockedTarget(): Extract<NonNullable<PublicSession['destination']>, { type: 'crypto' | 'fiat' }> | undefined {
     const s = this.snap.session
-    const d = s?.direction === 'withdraw' && s.targetLocked ? s.destination : undefined
+    const d = s?.direction === 'withdraw' && s.destinationLocked ? s.destination : undefined
     return d && (d.type === 'crypto' || d.type === 'fiat') ? d : undefined
   }
 
@@ -243,7 +243,7 @@ export class RampController {
   withdrawTabs(): Tab[] {
     const locked = this.lockedTarget()
     if (locked) return [locked.type === 'crypto' ? 'crypto' : 'cash']
-    const allowed = this.snap.session?.allowedTargets
+    const allowed = this.snap.session?.allowedDestinations
     if (!allowed) return ['crypto', 'cash']
     return [...(allowed.crypto ? (['crypto'] as const) : []), ...(allowed.fiat ? (['cash'] as const) : [])]
   }
@@ -251,7 +251,7 @@ export class RampController {
   /** Networks the user may withdraw to: the allowed chains, else every chain with USDC plus the source chain. */
   withdrawChains(): string[] {
     const src = this.snap.session?.source
-    const allowed = this.snap.session?.allowedTargets?.crypto?.chains
+    const allowed = this.snap.session?.allowedDestinations?.crypto?.chains
     if (allowed?.length) return allowed
     const chains = Object.keys(USDC)
     if (src && !chains.includes(src.chain)) chains.unshift(src.chain)
@@ -262,7 +262,7 @@ export class RampController {
     const src = session.source
     const chains = this.withdrawChains()
     const chain = src && chains.includes(src.chain) ? src.chain : chains[0] ?? 'eip155:8453'
-    const allowedCur = session.allowedTargets?.fiat?.currencies?.map((c) => c.toUpperCase())
+    const allowedCur = session.allowedDestinations?.fiat?.currencies?.map((c) => c.toUpperCase())
     const local = currencyForCountry(session.country).toUpperCase()
     const cashCurrency = !allowedCur?.length || allowedCur.includes(local) ? local : allowedCur[0]!
     this.set({ target: { ...this.draftFor(chain, src), address: accountFor(this.accounts, chain)?.address ?? this.snap.walletAddress ?? '' }, cashCurrency })
@@ -280,7 +280,7 @@ export class RampController {
     }
     const tabs = this.withdrawTabs()
     if (!tabs.length) {
-      this.set({ screen: 'error', error: orkError('TARGET_NOT_ALLOWED') })
+      this.set({ screen: 'error', error: openRampError('DESTINATION_NOT_ALLOWED') })
       return
     }
     this.setTab(tabs[0]!)
@@ -331,7 +331,7 @@ export class RampController {
     const t = this.snap.target
     if (!t) return
     if (!isValidTargetAddress(t.chain, t.address)) {
-      this.set({ error: orkError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }) })
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'Enter a valid address for this network.' }) })
       return
     }
     this.set({ busy: true, error: undefined })
@@ -448,7 +448,7 @@ export class RampController {
   async submitAmount() {
     // `!(n > 0)` also rejects NaN (for example ".")
     if (!(Number(this.snap.amount) > 0)) {
-      this.set({ error: orkError('BAD_REQUEST', { message: 'Enter an amount.' }) })
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'Enter an amount.' }) })
       return
     }
     this.set({ screen: 'quotes', error: undefined })
@@ -476,11 +476,12 @@ export class RampController {
       this.set({ quotes: r.quotes, quoteErrors: r.errors, quotesLoading: false, ...(first ? { selectedQuoteId: first.id } : {}) })
       this.emit('quotes.shown', { method: m.method, count: r.quotes.length })
       // Re-quote shortly before the earliest expiry while the quote screen is open.
-      const exp = r.quotes.map((q) => (q.expiresAt ? Date.parse(q.expiresAt) : Infinity)).reduce((a, b) => Math.min(a, b), Infinity)
+      const exp = r.quotes.map((q) => Date.parse(q.expiresAt)).filter((t) => Number.isFinite(t)).reduce((a, b) => Math.min(a, b), Infinity)
       if (Number.isFinite(exp) && this.snap.screen === 'quotes') {
         this.quoteTimer = setTimeout(() => {
           if (this.snap.screen === 'quotes' && !this.snap.busy) void this.refreshQuotes()
-        }, Math.max(5_000, exp - Date.now() - 10_000))
+          // A timer longer than 2^31 - 1 ms fires at once, so cap it (a quote that lives for weeks).
+        }, Math.min(MAX_TIMER_MS, Math.max(5_000, exp - Date.now() - 10_000)))
       }
     } catch (e) {
       if (seq !== this.quoteSeq || this.destroyed) return
@@ -533,7 +534,7 @@ export class RampController {
     const step = this.snap.session?.step
     if (step?.surface?.kind !== 'WALLET_TX') return
     if (!this.opts.wallet) {
-      this.set({ error: orkError('BAD_REQUEST', { message: 'No wallet is connected.' }) })
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'No wallet is connected.' }) })
       return
     }
     const t = step.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'tx_hash')
@@ -602,7 +603,7 @@ export class RampController {
 
   close() {
     this.emit('modal.closed', { screen: this.snap.screen, state: this.snap.session?.step.state })
-    if (this.snap.session?.step.state !== 'COMPLETED') this.rejectDone(orkError('BAD_REQUEST', { message: 'Closed before completion.', recovery: 'choose_other' }))
+    if (this.snap.session?.step.state !== 'COMPLETED') this.rejectDone(openRampError('BAD_REQUEST', { message: 'Closed before completion.', recovery: 'choose_other' }))
     this.destroy()
   }
 
@@ -616,10 +617,11 @@ export class RampController {
   private applySession(session: PublicSession) {
     this.sessionSeq++
     const prev = this.snap.session?.step
-    const sameStep = !!prev && prev.state === session.step.state && prev.sub === session.step.sub && prev.legIndex === session.step.legIndex
+    const detail = session.step.detail?.code
+    const sameStep = !!prev && prev.state === session.step.state && prev.detail?.code === detail && prev.legIndex === session.step.legIndex
     this.set({ session, error: session.step.error, ...(sameStep ? {} : { surfaceClosed: false }) })
-    if (!prev || prev.state !== session.step.state || prev.sub !== session.step.sub) {
-      this.emit('step.changed', { state: session.step.state, sub: session.step.sub })
+    if (!prev || prev.state !== session.step.state || prev.detail?.code !== detail) {
+      this.emit('step.changed', { state: session.step.state, ...(detail ? { detail } : {}) })
     }
     const step = session.step
     if (isTerminal(step.state)) {
@@ -670,8 +672,9 @@ export class RampController {
       if (this.destroyed) return
       // A transition answered while this poll was in flight: its session is newer, so keep it.
       if (seq !== this.sessionSeq) return
-      const changed = s.step.state !== this.snap.session?.step.state || s.step.sub !== this.snap.session?.step.sub ||
-        JSON.stringify(s.step.progress) !== JSON.stringify(this.snap.session?.step.progress)
+      const cur = this.snap.session
+      const changed = s.step.state !== cur?.step.state || JSON.stringify(s.step.detail) !== JSON.stringify(cur?.step.detail) ||
+        JSON.stringify(s.payment) !== JSON.stringify(cur?.payment)
       if (changed) this.applySession(s)
       else this.schedulePoll(step, attempt + 1, startedAt)
     } catch {

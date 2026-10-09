@@ -6,7 +6,7 @@ import { createComponent, createRenderEffect, createSignal } from 'solid-js'
 import type { JSX } from 'solid-js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DepositController } from '@openrampkit/client'
-import type { OrkEvent } from '@openrampkit/core'
+import type { ClientEvent } from '@openrampkit/core'
 import type { OpenRampModal } from '@openrampkit/web'
 import { BASE, BASE_SOURCE, fakeClient, session, setupServer, sleep } from '../../client/src/testctx.js'
 import { DepositButton, OpenRampEmbedded, OpenRampProvider, WithdrawButton, darkTheme, lightTheme, useDepositController, useOpenRamp } from './index.js'
@@ -71,7 +71,7 @@ describe('OpenRampProvider and useOpenRamp', () => {
     let api!: OpenRampApi
     const events: string[] = []
     const perCall: string[] = []
-    render(withProvider({ baseUrl: BASE, theme: lightTheme(), onEvent: (e: OrkEvent) => events.push(e.type) }, () => createComponent(Capture, { onApi: (a) => (api = a) })))
+    render(withProvider({ baseUrl: BASE, theme: lightTheme(), onEvent: (e: ClientEvent) => events.push(e.type) }, () => createComponent(Capture, { onApi: (a) => (api = a) })))
     const r = document.getElementById('open')!
     expect(r.textContent).toBe('closed')
     const p = api.beginDeposit({ clientSecret: await newSecret(), onEvent: (e) => perCall.push(e.type) })

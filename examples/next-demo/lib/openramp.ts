@@ -27,7 +27,7 @@ export const openramp =
         ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]
         : []),
     ],
-    webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_dev_only_not_a_secret' },
+    webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_ZGV2LW9ubHktd2ViaG9vay1zZWNyZXQtbm90LWZvci1wcm9kdWN0aW9u' },
     // Admin tools and the ops dashboard at /api/openramp/admin, only when OPENRAMP_ADMIN_TOKEN is set
     // (at least 32 random characters). Put /admin behind your own auth or a VPN in production.
     ...(process.env.OPENRAMP_ADMIN_TOKEN ? { admin: { token: process.env.OPENRAMP_ADMIN_TOKEN } } : {}),

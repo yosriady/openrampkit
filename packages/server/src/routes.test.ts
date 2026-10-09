@@ -3,11 +3,11 @@ import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { Adapter, LegEvent } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
-import { USDC } from '@openrampkit/core'
-import type { LegSpec } from '@openrampkit/core'
+import { USDC, stateFor } from '@openrampkit/core'
+import type { LegSpec, LegStep } from '@openrampkit/core'
 import { cloudflareKvStore, createOpenRamp, memoryStore, VersionConflictError } from './index.js'
 import type { KVNamespaceLike, OpenRampConfig } from './index.js'
-import { sessionStatusFor, legStepFromEvent } from './legs.js'
+import { eventStep, mergeLegStep, sessionStatusFor } from './legs.js'
 
 const BASE = 'https://app.test/api/openramp'
 const SECRET = 's'.repeat(40)
@@ -35,6 +35,51 @@ describe('config validation', () => {
     const bad = { ...mockAdapter(), apiVersion: 99 }
     expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [bad] })).toThrow(/API v99/)
     expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), mockAdapter()] })).toThrow(/twice/)
+  })
+
+  it('checks adapter.env against livemode: refuses a sandbox adapter in a live server, warns on the reverse', () => {
+    const warnings: string[] = []
+    const logger = { ...quiet, warn: (m: string) => void warnings.push(m) }
+    const prod = createAdapter({ ...mockAdapter(), id: 'prod', env: 'production' })
+    const follows = createAdapter({ ...mockAdapter(), id: 'follows', env: undefined })
+    // The mock is a sandbox adapter.
+    expect(() => createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), prod], livemode: true, logger })).toThrow(/livemode is true, but these adapters use their sandbox environment: mock\./)
+    // Live server, production and session-following adapters: fine, no warning
+    createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [prod, follows], livemode: true, logger })
+    expect(warnings.filter((w) => w.includes('environment'))).toEqual([])
+    // Test server with a production adapter: one warning that names it
+    createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters: [mockAdapter(), prod, follows], logger })
+    const env = warnings.filter((w) => w.includes('production environment'))
+    expect(env).toHaveLength(1)
+    expect(env[0]).toContain(': prod.')
+  })
+
+  it('warns at start for an adapter with legs but no status() and no configured webhook', () => {
+    const warnings: string[] = []
+    const logger = { ...quiet, warn: (m: string) => void warnings.push(m) }
+    const base = mockAdapter()
+    const { status: _status, ...noStatus } = base
+    const verify = async () => true
+    const parse = async () => []
+    const start = (adapters: Adapter[]) => {
+      warnings.length = 0
+      createOpenRamp({ secret: SECRET, baseUrl: BASE, adapters, logger })
+      return warnings.filter((w) => w.includes('cannot learn the result'))
+    }
+    // status() polling: fine
+    expect(start([base])).toEqual([])
+    // A webhook that can verify, no status() (like Transak): fine
+    expect(start([createAdapter({ ...noStatus, id: 'hooks', webhook: { verify, parse } })])).toEqual([])
+    // A webhook without its secret, and no status(): warn, and name the adapter and its legs
+    const off = start([createAdapter({ ...noStatus, id: 'nosecret', webhook: { configured: false, verify, parse } })])
+    expect(off).toHaveLength(1)
+    expect(off[0]).toContain('adapter nosecret')
+    expect(off[0]).toContain(base.legs[0]!.id)
+    expect(off[0]).toContain('webhook is not configured')
+    // Neither: warn
+    expect(start([createAdapter({ ...noStatus, id: 'blind' })])[0]).toContain('it has no webhook')
+    // No legs: nothing to warn about
+    expect(start([createAdapter({ ...noStatus, id: 'empty', legs: [] })])).toEqual([])
   })
 })
 
@@ -149,7 +194,7 @@ describe('sessions', () => {
     expect(await ramp.sessions.retrieve('nope')).toBeNull()
     expect(await ramp.sessions.refresh('nope')).toBeNull()
     const s = await session(ramp)
-    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('open')
+    expect((await ramp.sessions.retrieve(s.id))!.status).toBe('requires_payment_method')
     expect((await ramp.sessions.refresh(s.id))!.step.state).toBe('SELECT_METHOD')
   })
 
@@ -199,7 +244,7 @@ describe('payment flow rules', () => {
     expect((await call(`/sessions/${s.id}/transitions/poll`, { method: 'POST', secret: s.clientSecret, body: '{}' })).status).toBe(409)
     const r = await (await call(`/sessions/${s.id}/transitions/restart`, { method: 'POST', secret: s.clientSecret, body: '{}' })).json()
     expect(r.step.state).toBe('SELECT_METHOD')
-    expect(r.status).toBe('open')
+    expect(r.status).toBe('requires_payment_method')
     expect((await call(`/sessions/${s.id}/transitions/simulate_payment`, { method: 'POST', secret: s.clientSecret, body: '{}' })).status).toBe(409)
   })
 
@@ -256,10 +301,10 @@ describe('provider webhooks in', () => {
   const hooked = createAdapter({
     id: 'hooked', name: 'Hooked', legs: [spec],
     async quote({ leg, amountIn }) {
-      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { amount: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+      return { adapterId: 'hooked', legId: leg.legId, input: amountIn!, output: { value: '9', asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 }, guarantee: 'estimate' as const, expiresAt: new Date(Date.now() + 3_600_000).toISOString() }
     },
     async start() {
-      return { state: 'PAYMENT', status: 'awaiting_user', ref: 'order-1', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
+      return { status: 'requires_action', ref: 'order-1', action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://provider.test/pay', popup: true }, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] } }
     },
     webhook: {
       async verify(req) { return req.headers.get('x-sig') === 'good' },
@@ -275,12 +320,13 @@ describe('provider webhooks in', () => {
     const q = await (await call(`/sessions/${s.id}/quotes`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ method: 'card', amount: '10' }) })).json()
     await call(`/sessions/${s.id}/select`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ quoteId: q.quotes[0].id }) })
 
-    const body = JSON.stringify([{ ref: 'order-1', status: 'succeeded', txHash: '0xabc' }])
+    const body = JSON.stringify([{ ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xabc' }] }])
     expect((await call('/webhooks/hooked', { method: 'POST', body, headers: { 'x-sig': 'bad' } })).status).toBe(401)
     expect((await call('/webhooks/hooked', { method: 'POST', body, headers: { 'x-sig': 'good' } })).status).toBe(200)
     const pub = await (await call(`/sessions/${s.id}`, { secret: s.clientSecret })).json()
     expect(pub.step.state).toBe('COMPLETED')
-    expect(pub.step.progress.legs[0].txHash).toBe('0xabc')
+    expect(pub.payment.legs[0]).toMatchObject({ provider: 'Hooked', ref: 'order-1', status: 'succeeded', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc', legIndex: 0 }] })
+    expect(pub.result.transactions).toEqual(pub.payment.legs[0].transactions)
     // a repeat of a terminal status is verified and ignored: 200
     expect((await call('/webhooks/hooked', { method: 'POST', body, headers: { 'x-sig': 'good' } })).status).toBe(200)
     // an unknown ref is not applied: 503, so the provider sends it again
@@ -288,11 +334,11 @@ describe('provider webhooks in', () => {
     expect(unknown.status).toBe(503)
     expect(unknown.headers.get('retry-after')).toBe('30')
     expect((await unknown.json()).error).toMatchObject({ code: 'PROVIDER_UNAVAILABLE', retryable: true })
-    expect(sent.filter((t) => t === 'session.completed')).toHaveLength(1)
+    expect(sent.filter((t) => t === 'session.succeeded')).toHaveLength(1)
     expect(sent).toContain('leg.succeeded')
   })
 
-  it('a failed provider event fails the session and notifies', async () => {
+  it('a failed provider event fails the attempt: back to requires_payment_method, with lastError and session.payment_failed', async () => {
     const sent: string[] = []
     const { ramp, call } = make({ webhooks: { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }, fetch: async (_u, init) => { sent.push(JSON.parse(String(init?.body)).type); return new Response('no', { status: 500 }) } }, [hooked])
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST })
@@ -301,27 +347,40 @@ describe('provider webhooks in', () => {
     await call(`/sessions/${s.id}/select`, { method: 'POST', secret: s.clientSecret, body: JSON.stringify({ quoteId: q.quotes[0].id }) })
     await call('/webhooks/hooked', { method: 'POST', body: JSON.stringify([{ ref: 'order-1', status: 'failed' }]), headers: { 'x-sig': 'good' } })
     const pub = await (await call(`/sessions/${s.id}`, { secret: s.clientSecret })).json()
-    expect(pub.status).toBe('failed')
-    expect(sent).toEqual(expect.arrayContaining(['leg.failed', 'session.failed']))
+    expect(pub.status).toBe('requires_payment_method')
+    expect(pub.step.state).toBe('FAILED')
+    expect(pub.lastError).toMatchObject({ code: expect.any(String) })
+    expect(sent).toEqual(expect.arrayContaining(['leg.failed', 'session.payment_failed']))
+    expect(sent).not.toContain('session.failed')
   })
 })
 
 describe('leg helpers', () => {
   it('maps states to session status', () => {
-    expect(sessionStatusFor('COMPLETED', true)).toBe('completed')
+    expect(sessionStatusFor('COMPLETED', true)).toBe('succeeded')
     expect(sessionStatusFor('BLOCKED', false)).toBe('failed')
     expect(sessionStatusFor('EXPIRED', true)).toBe('expired')
     expect(sessionStatusFor('REFUNDED', true)).toBe('refunded')
     expect(sessionStatusFor('PAYMENT', true)).toBe('processing')
-    expect(sessionStatusFor('SELECT_METHOD', false)).toBe('open')
+    expect(sessionStatusFor('SELECT_METHOD', false)).toBe('requires_payment_method')
   })
-  it('builds leg steps from events and drops the surface when terminal', () => {
-    const cur = { state: 'PAYMENT' as const, status: 'awaiting_user' as const, transitions: [], surface: { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'IDR' } }
-    expect(legStepFromEvent(cur, { ref: 'r', status: 'processing' })).toMatchObject({ state: 'PROCESSING', surface: cur.surface })
-    const done = legStepFromEvent(cur, { ref: 'r', status: 'succeeded' })
-    expect(done.state).toBe('COMPLETED')
-    expect(done.surface).toBeUndefined()
-    expect(legStepFromEvent(undefined, { ref: 'r', status: 'refunded' }).state).toBe('REFUNDED')
+  it('builds leg steps from events: keeps the action while the user must act, drops it after', () => {
+    const surface = { kind: 'QR' as const, payload: 'x', amount: '1', currency: 'IDR' }
+    const cur: LegStep = { status: 'requires_action', ref: 'r', action: { kind: 'payment', surface, transitions: [] }, transactions: [{ role: 'source', hash: '0xsrc' }] }
+    // A provider event is a LegStep with a ref and an event id; the event id does not reach the leg.
+    expect(eventStep({ ref: 'r', status: 'processing', eventId: 'e1' })).toEqual({ ref: 'r', status: 'processing' })
+    // An action-less requires_action event (a status poll while the user pays) keeps the current surface.
+    expect(mergeLegStep(cur, eventStep({ ref: 'r', status: 'requires_action' })).action).toMatchObject({ kind: 'payment', surface })
+    const processing = mergeLegStep(cur, eventStep({ ref: 'r', status: 'processing' }))
+    expect(stateFor(processing)).toBe('PROCESSING')
+    expect(processing.action).toBeUndefined()
+    const done = mergeLegStep(processing, eventStep({ ref: 'r', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xdst' }] }))
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done.action).toBeUndefined()
+    // The leg keeps every transaction, also when a later step leaves one out.
+    expect(done.transactions).toEqual([{ role: 'source', hash: '0xsrc' }, { role: 'destination', hash: '0xdst' }])
+    expect(done.ref).toBe('r')
+    expect(stateFor(mergeLegStep(undefined, eventStep({ ref: 'r', status: 'refunded' })))).toBe('REFUNDED')
   })
 })
 

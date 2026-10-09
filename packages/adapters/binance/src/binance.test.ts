@@ -1,6 +1,6 @@
 import { generateKeyPairSync, sign as nodeSign, verify as nodeVerify } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, makeWebhookCtx, recordingLog, runAdapterConformance } from '@openrampkit/adapter/testing'
 import type { FakeRoute } from '@openrampkit/adapter/testing'
@@ -62,7 +62,7 @@ const opts = (extra: Partial<Parameters<typeof binance>[0]> = {}) => ({
   ...extra,
 })
 
-const eur = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
+const eur = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'EUR' } })
 
 function webhookReq(body: string, headers: Record<string, string>) {
   return new Request('https://app.test/api/openramp/webhooks/binance', { method: 'POST', headers, body })
@@ -78,6 +78,7 @@ describe('binance adapter: conformance', () => {
     const report = await runAdapterConformance(adapter, {
       ctx: () => makeCtx({ fetch, session: { country: 'DE' } }),
       fixtures: [{ leg, quote: { amountIn: eur('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } }],
+      errorPaths: [{ leg, quote: { amountIn: eur('100') }, ctx: (f) => makeCtx({ fetch: f, session: { country: 'DE' } }) }],
       webhooks: [
         { name: 'signed', request: () => webhookReq(body, { 'x-bn-connect-signature': sig, 'x-bn-connect-timestamp': ts, 'x-bn-connect-for': 'client-1' }), rawBody: body, events: 1 },
         { name: 'bad signature', request: () => webhookReq(body, { 'x-bn-connect-signature': bnbSign(body, '1'), 'x-bn-connect-timestamp': ts, 'x-bn-connect-for': 'client-1' }), rawBody: body, valid: false },
@@ -86,9 +87,20 @@ describe('binance adapter: conformance', () => {
       ],
     })
     expect(report.problems).toEqual([])
-    expect(report.steps[0]).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', surface: { kind: 'REDIRECT', url: 'https://www.binance.com/en/connect/abc', popup: true, provider: 'Binance' } })
-    expect(report.steps[1]).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xabc' })
-    expect(report.events[0]).toEqual([{ ref: 'ork1', status: 'succeeded', txHash: '0xabc', output: { amount: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } }])
+    expect(stateFor(report.steps[0]!)).toBe('PAYMENT')
+    expect(report.steps[0]).toMatchObject({ status: 'requires_action', action: { kind: 'payment', surface: { kind: 'REDIRECT', url: 'https://www.binance.com/en/connect/abc', popup: true, provider: 'Binance' } } })
+    expect(report.steps[0]!.providerRef).toBe(report.steps[0]!.ref)
+    expect(stateFor(report.steps[1]!)).toBe('COMPLETED')
+    expect(report.steps[1]).toMatchObject({ status: 'succeeded', transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc' }] })
+    expect(report.events[0]).toEqual([
+      {
+        ref: 'ork1',
+        providerRef: 'ork1',
+        status: 'succeeded',
+        transactions: [{ role: 'destination', chain: 'eip155:8453', hash: '0xabc' }],
+        output: { value: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
+    ])
   })
 
   it('declares one exchange leg, REDIRECT, with Binance regions', () => {
@@ -153,11 +165,12 @@ describe('binance adapter: quote', () => {
       adapterId: 'binance',
       legId: 'account',
       input: eur('100'),
-      output: { amount: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      output: { value: '98.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
       fees: [
-        { kind: 'provider', label: 'Binance fee', amount: '1', currency: 'EUR' },
-        { kind: 'network', label: 'Network fee', amount: '0.5', currency: 'USDC' },
+        { kind: 'provider', label: 'Binance fee', amount: eur('1'), included: true },
+        { kind: 'network', label: 'Network fee', amount: { value: '0.5', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } }, included: true },
       ],
+      guarantee: 'estimate',
       data: { amountType: 1, network: 'BASE', payMethodCode: 'BUY_WALLET', estimate: true },
     })
     expect(Date.parse(q.expiresAt!)).toBeGreaterThan(Date.now())
@@ -167,11 +180,22 @@ describe('binance adapter: quote', () => {
     const { fetch, calls } = fakeFetch(routes(20, { quote: () => ok({ ...QUOTE, totalAmount: '50.75', feeAmount: '0', networkFee: null }) }))
     const arb = { kind: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']! }
     const l: PathwayLeg = { ...leg, to: { asset: arb, location: { kind: 'address', address: DEST } } }
-    const q = await binance(opts()).quote({ leg: l, amountOut: { amount: '50.123456789', asset: arb } }, makeCtx({ fetch }))
+    const q = await binance(opts()).quote({ leg: l, amountOut: { value: '50.123456789', asset: arb } }, makeCtx({ fetch }))
     expect(calls[0]!.body).toMatchObject({ amountType: 2, requestedAmount: '50.12345678', network: 'ARBITRUM' })
     expect(q.input).toEqual(eur('50.75'))
-    expect(q.output.amount).toBe('50.12345678')
+    expect(q.output.value).toBe('50.12345678')
     expect(q.fees).toEqual([])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
+  })
+
+  it('maps a fee in the delivered crypto, and a fee in another crypto as amount null', async () => {
+    const usdcFee = fakeFetch(routes(20, { quote: () => ok({ ...QUOTE, feeCurrency: 'usdc', networkFee: null }) }))
+    const a = await binance(opts()).quote({ leg, amountIn: eur('100') }, makeCtx({ fetch: usdcFee.fetch }))
+    expect(a.fees).toEqual([{ kind: 'provider', label: 'Binance fee', amount: { value: '1', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } }, included: true }])
+    const bnbFee = fakeFetch(routes(20, { quote: () => ok({ ...QUOTE, feeCurrency: 'BNB', networkFee: null }) }))
+    const b = await binance(opts()).quote({ leg, amountIn: eur('100') }, makeCtx({ fetch: bnbFee.fetch }))
+    expect(b.fees).toEqual([{ kind: 'provider', label: 'Binance fee', amount: null, included: true }])
   })
 
   it('omits payMethodCode when the app sets null', async () => {
@@ -229,7 +253,8 @@ describe('binance adapter: start', () => {
       clientIp: '203.0.113.7',
     })
     expect(step.ref).toMatch(/^ork[0-9a-f]{24}$/)
-    expect(step.transitions).toEqual([expect.objectContaining({ kind: 'AWAIT' })])
+    expect(step.action?.transitions).toEqual([expect.objectContaining({ kind: 'AWAIT' })])
+    expect(step.providerRef).toBe(step.ref)
   })
 
   it('delivers to deliverTo when the leg is the first of two', async () => {
@@ -269,14 +294,14 @@ describe('binance adapter: start', () => {
 })
 
 describe('binance adapter: status', () => {
-  const cases: Array<[number, string, string, string?]> = [
-    [0, 'PAYMENT', 'awaiting_user'],
-    [1, 'PROCESSING', 'processing'],
-    [2, 'PROCESSING', 'processing'],
-    [4, 'PROCESSING', 'processing'],
-    [10, 'PROCESSING', 'processing'],
-    [11, 'PROCESSING', 'processing'],
-    [15, 'PROCESSING', 'processing'],
+  const cases: Array<[number, string, string, string?, string?]> = [
+    [0, 'PAYMENT', 'requires_action'],
+    [1, 'PROCESSING', 'processing', undefined, 'processing'],
+    [2, 'PROCESSING', 'processing', undefined, 'processing'],
+    [4, 'PROCESSING', 'processing', undefined, 'processing'],
+    [10, 'PROCESSING', 'processing', undefined, 'settling'],
+    [11, 'PROCESSING', 'processing', undefined, 'settling'],
+    [15, 'PROCESSING', 'processing', undefined, 'processing'],
     [20, 'COMPLETED', 'succeeded'],
     [93, 'FAILED', 'failed', 'PAYMENT_FAILED'],
     [94, 'FAILED', 'failed', 'PAYMENT_FAILED'],
@@ -284,22 +309,45 @@ describe('binance adapter: status', () => {
     [97, 'FAILED', 'failed', 'PAYMENT_FAILED'],
     [98, 'FAILED', 'failed', 'DELIVERY_FAILED'],
     [99, 'FAILED', 'failed', 'PAYMENT_FAILED'],
-    [42, 'PAYMENT', 'awaiting_user'],
+    [42, 'PAYMENT', 'requires_action'],
   ]
-  it.each(cases)('status %i -> %s', async (code, state, status, errorCode) => {
+  it.each(cases)('status %i -> %s', async (code, state, status, errorCode, detail) => {
     const { fetch, calls } = fakeFetch(routes(code))
     const step = await binance(opts()).status!({ leg, ref: 'ork1' }, makeCtx({ fetch }))
     expect(calls[0]!.body).toEqual({ externalOrderId: 'ork1' })
-    expect(step).toMatchObject({ state, status, ref: 'ork1' })
+    expect(stateFor(step)).toBe(state)
+    expect(step).toMatchObject({ status, ref: 'ork1' })
+    if (status === 'requires_action') expect(step.action).toMatchObject({ kind: 'payment' })
+    else expect(step.providerRef).toBe('ork1')
     if (errorCode) expect(step.error?.code).toBe(errorCode)
-    if (code === 20) expect(step).toMatchObject({ txHash: '0xabc', output: { amount: '98.5' } })
+    if (detail) expect(step.detail?.code).toBe(detail)
+    if (code === 20) expect(step).toMatchObject({ transactions: [{ role: 'destination', hash: '0xabc' }], output: { value: '98.5' } })
+  })
+
+  it('names the Binance status in detail.providerStatus', async () => {
+    const { fetch } = fakeFetch(routes(11))
+    const step = await binance(opts()).status!({ leg, ref: 'ork1' }, makeCtx({ fetch }))
+    expect(step.detail).toEqual({ code: 'settling', providerStatus: 'WITHDRAW_PROCESSING' })
+    expect(step.poll).toBeDefined()
+  })
+
+  it('does not map an unknown status to processing: it logs it and keeps the payment poll', async () => {
+    const log = recordingLog()
+    const { fetch } = fakeFetch(routes(77))
+    const step = await binance(opts()).status!({ leg, ref: 'ork1' }, makeCtx({ fetch, log }))
+    expect(step.status).toBe('requires_action')
+    expect(step.status).not.toBe('processing')
+    expect(step.action).toMatchObject({ kind: 'payment' })
+    expect(step.action?.surface).toBeUndefined()
+    expect(log.warnings.join(' ')).toContain('unknown provider status')
   })
 
   it('leaves out the output when the network is not a deliver asset', async () => {
     const { fetch } = fakeFetch(routes(20, { order: () => ok(order('ork1', 20, { withdrawNetwork: 'TRX' })) }))
     const step = await binance(opts()).status!({ leg, ref: 'ork1' }, makeCtx({ fetch }))
-    expect(step.state).toBe('COMPLETED')
+    expect(stateFor(step)).toBe('COMPLETED')
     expect(step).not.toHaveProperty('output')
+    expect(step.transactions).toEqual([{ role: 'destination', hash: '0xabc' }])
   })
 })
 
@@ -339,11 +387,17 @@ describe('binance adapter: webhook', () => {
   it('parses a processing event, and ignores other event types, bad JSON and INIT', async () => {
     const a = binance(opts())
     const w = makeWebhookCtx({ log: recordingLog() })
-    expect(await a.webhook!.parse(body, w)).toEqual([{ ref: 'ork9', status: 'processing' }])
+    expect(await a.webhook!.parse(body, w)).toEqual([{ ref: 'ork9', providerRef: 'ork9', status: 'processing', detail: { code: 'settling', providerStatus: 'WITHDRAW_PROCESSING' } }])
     expect(await a.webhook!.parse(JSON.stringify({ webhookEventType: 'other_event', ...order('ork9', 20) }), w)).toEqual([])
     expect(await a.webhook!.parse('not json', w)).toEqual([])
     expect(await a.webhook!.parse(JSON.stringify(order('ork9', 0)), w)).toEqual([])
     expect(await a.webhook!.parse(JSON.stringify({ status: 20 }), w)).toEqual([])
+  })
+
+  it('gives no event for an unknown status (not processing)', async () => {
+    const log = recordingLog()
+    expect(await binance(opts()).webhook!.parse(JSON.stringify(order('ork9', 55)), makeWebhookCtx({ log }))).toEqual([])
+    expect(log.warnings.join(' ')).toContain('unknown provider status')
   })
 
   it('parses failures with a safe message', async () => {

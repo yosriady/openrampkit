@@ -13,12 +13,14 @@ lifi({
 })
 ```
 
+To get the keys, see [Get provider keys](../guide/provider-keys.md#lifi).
+
 ## Options
 
 | Option | Type | Default | Description |
 |---|---|---|---|
 | `apiKey` | `string` | none | Sent as `x-lifi-api-key`. Get it in the LI.FI Partner Portal. Keep it on the server. |
-| `baseUrl` | `string` | `https://li.quest/v1` | The LI.FI API |
+| `baseUrl` | `string` | `https://li.quest/v1` | The LI.FI API. There is no sandbox: `adapter.env` is always `production`. |
 | `integrator` | `string` | none | LI.FI `integrator`: your app name, for attribution and fees |
 | `feeBps` | `number` | none | Your fee in basis points. The adapter sends it as LI.FI `fee` (a fraction: 25 bps is `0.0025`). It needs `integrator`. The factory throws without it. |
 | `slippageBps` | `number` | none (LI.FI picks) | LI.FI `slippage` in basis points (50 is 0.5%) |
@@ -44,8 +46,9 @@ LI.FI refuses a quote with `fee` when the `integrator` has no fee wallet (error 
 
 - The adapter calls `GET /v1/quote` with `fromAmount` (exact input). When the amount is on the destination side, it calls `GET /v1/quote/toAmount` with `toAmount` (exact output).
 - LI.FI needs a `fromAddress`. Before the wallet is known, the quote uses a placeholder address. The start quotes again with the real address.
-- The quote output is `estimate.toAmount`. The quote data has `minOutput`: LI.FI `estimate.toAmountMin`, the smallest delivery after slippage.
-- Fees: each `estimate.feeCosts` entry is a provider fee. The integrator part (`feeSplit.integratorFee`) is the app fee. `estimate.gasCosts` is the network fee, added per gas token.
+- The quote output is `estimate.toAmount`. The guarantee is `min_output`. `LegQuote.minOutput` is LI.FI `estimate.toAmountMin`, the smallest delivery after slippage: the route reverts below it. `slippageBps` is LI.FI `action.slippage` in basis points, when LI.FI says it.
+- The quote expires after 1 minute (`quoteExpiresAt`), because its transaction goes stale.
+- Fees, each in its own token: each `estimate.feeCosts` entry is a `provider` fee. The integrator part (`feeSplit.integratorFee`) is the `app` fee. These fees have `included: true` (LI.FI takes them from the routed amount), unless LI.FI says `included: false`. `estimate.gasCosts` is the `network` fee, added per gas token, with `included: false`: the wallet pays it on top of `input`.
 - Unknown token decimals come from `GET /v1/token`, cached for 7 days in the shared store.
 - The adapter checks that the route is for the chains, the tokens and the receiver it asked for. Else it fails with `PROVIDER_UNAVAILABLE`.
 - No quote (`NO_QUOTES`) for: the same token on the same chain (Relay does a plain transfer), a destination with a settlement contract, or a source chain that is not EVM or Solana mainnet.
@@ -58,6 +61,8 @@ LI.FI refuses a quote with `fee` when the `integrator` has no fee wallet (error 
 - Solana: LI.FI returns a serialized transaction (base64) in `transactionRequest.data`. The adapter puts it in the `WALLET_TX` surface as a `SolanaTxRequest` (`type: 'transaction'`).
 - The leg ref is `lifi:<sessionId>:<random>`. The session store keeps the payment record for 7 days.
 - After the wallet sends, the client fires `submit_tx` with `{ txHash }` (EVM hash or Solana signature).
+- Transactions: the leg reports the source transaction that the wallet sent with the role `source`. It reports the delivery (`receiving.txHash`) with the role `destination` when the transfer completes. A token approval is not reported. The session shows them in `result.transactions`.
+- `providerRef` is the LI.FI `transactionId` from the status, else the source transaction hash.
 
 ## Status mapping
 
@@ -65,13 +70,21 @@ Status calls `GET /v1/status?txHash=...&fromChain=...&toChain=...`.
 
 | LI.FI status | Substatus | Leg |
 |---|---|---|
-| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, sub-state `not_found` |
-| `PENDING` | any | `processing`, the substatus in lower case is the sub-state |
+| HTTP 404 (code `1003`) or `NOT_FOUND` | | `processing`, detail code `confirming` (LI.FI has not indexed the transaction yet) |
+| `PENDING` | `WAIT_SOURCE_CONFIRMATIONS` | `processing`, detail code `confirming` |
+| `PENDING` | `WAIT_DESTINATION_TRANSACTION`, or none | `processing`, detail code `bridging` |
+| `PENDING` | `BRIDGE_NOT_AVAILABLE`, `CHAIN_NOT_AVAILABLE`, `UNKNOWN_ERROR` | `processing`, detail code `delayed` |
+| `PENDING` | `REFUND_IN_PROGRESS` | `processing`, detail code `refunding` |
+| `PENDING` | other | `processing`, detail code `processing` (the adapter logs the unknown substatus once) |
 | `DONE` | `COMPLETED` | `succeeded`, after the delivery checks below |
 | `DONE` | `PARTIAL` | `failed` with `DELIVERY_FAILED`: LI.FI delivered another token |
 | `DONE` or `FAILED` | `REFUNDED` | `refunded` |
 | `FAILED` | other | `failed` with `DELIVERY_FAILED` |
+
 | `INVALID` | | `failed` with `DELIVERY_FAILED` |
+| other | | `processing` with no detail code: the adapter logs the unknown status once. The leg never completes or fails on a status that it does not know. |
+
+The adapter maps the statuses with `statusMap` from `@openrampkit/adapter`. The raw LI.FI status or substatus goes to `detail.providerStatus`. The session timeline keeps each new value.
 
 ## One payment, one session
 
@@ -84,13 +97,17 @@ These checks stop one transaction from paying two sessions, and stop a short del
 
 ::: warning What the check does not cover
 - Native tokens and Solana destinations have no on-chain check. The leg uses the LI.FI status, and the source tx record.
-- The used records are in the LI.FI adapter's shared store. Another adapter (for example a Relay `transfer` leg on the same address) does not see them. Store `result.txHashes` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
+- The used records are in the LI.FI adapter's shared store. Another adapter (for example a Relay `transfer` leg on the same address) does not see them. Store the hashes of `result.transactions` with a unique constraint when you credit. See [Credit exactly once](../guide/webhooks.md#credit-exactly-once).
 - The shared store has no atomic "set if absent". The adapter writes the record, then reads it back. Two checks at the same moment on an eventually consistent store can still race.
 :::
 
 ## Webhooks
 
 The LI.FI adapter has no webhook handler. Status comes from polling: the browser's step poll, and the [background sweep](../api/server.md#background-sweep) (or `openramp.sessions.refresh(id)`) after the user leaves.
+
+## Sandbox limits
+
+LI.FI has no sandbox host: `staging.li.quest` returns `403`. Test with small quotes on the mainnet host only. Quotes move no money. Never send the transaction in a test. Checked on 9 Oct 2026. See [Get provider keys](../guide/provider-keys.md#sandbox-and-production).
 
 ## Verified vs TO VERIFY
 

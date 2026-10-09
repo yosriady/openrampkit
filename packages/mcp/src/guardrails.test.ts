@@ -193,9 +193,9 @@ describe('bound payout targets', () => {
 
     const s = (await ramp.sessions.retrieve(r.data.session_id))!
     expect(s.destination).toMatchObject({ type: 'crypto', chain: 'eip155:42161', address: OPS_WALLET })
-    expect(s.allowedTargets).toEqual({ crypto: { chains: ['eip155:42161'] } })
+    expect(s.allowedDestinations).toEqual({ crypto: { chains: ['eip155:42161'] } })
     // The target is set and locked at creation: no /target call, and nobody can change it later.
-    expect(s.targetLocked).toBe(true)
+    expect(s.destinationLocked).toBe(true)
     expect(paths.some((p) => p.endsWith('/target'))).toBe(false)
     expect(paths.filter((p) => p.startsWith(`/sessions/${s.id}/`)).map((p) => p.split('/').pop())).toEqual(['plan', 'quotes', 'select'])
     const cred = (await ramp.sessions.payLink(s.id))!.url.split('/pay/')[1]!
@@ -207,13 +207,13 @@ describe('bound payout targets', () => {
       }),
     )
     expect(change.status).toBe(409)
-    expect(((await change.json()) as { error: { code: string } }).error.code).toBe('TARGET_LOCKED')
+    expect(((await change.json()) as { error: { code: string } }).error.code).toBe('DESTINATION_LOCKED')
     expect(s.amountBounds).toEqual({ min: '20', max: '20', currency: 'USDC' })
     expect(sent).toHaveLength(1)
     expect(JSON.stringify(sent[0]!.txs).toLowerCase()).toContain(OPS_WALLET)
 
     const done = await call(client, 'wait_for_completion', { session_id: r.data.session_id, timeout_seconds: 20 })
-    expect(done.data.status).toBe('completed')
+    expect(done.data.status).toBe('succeeded')
 
     // Unknown names fail the schema; a target needs an exact amount.
     expect((await call(client, 'create_withdraw_session', { country: 'SG', target: 'attacker', amount: '5' })).isError).toBe(true)
@@ -257,7 +257,7 @@ describe('pay link revocation', () => {
     expect(await ops.revokePayLink(w.session_id)).toEqual({ session_id: w.session_id, revoked: true })
     expect((await ramp.handle(new Request(url))).status).toBe(410)
     // The MCP server still reads the session with its client secret.
-    expect((await ops.getSessionStatus(w.session_id)).status).toBe('open')
+    expect((await ops.getSessionStatus(w.session_id)).status).toBe('requires_payment_method')
 
     const bound = await ops.createWithdrawSession({ country: 'SG', target: 'ops', amount: '5' })
     await expect(ops.revokePayLink(bound.session_id)).rejects.toMatchObject({ code: 'NO_PAY_LINK' })

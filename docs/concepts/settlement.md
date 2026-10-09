@@ -16,7 +16,7 @@ Use it when you want these results:
 3. The contract pulls the amount from the wallet.
 4. The contract sends the amount to the recipient. Or, it runs the destination calls with the amount.
 5. The contract stores a receipt for the session id and emits `Settled`.
-6. The server reads the receipt and the `Settled` log. When they agree with the quote, the leg is complete.
+6. The server reads the receipt and the `Settled` log. When they agree with the quote, the leg is complete. `result.transactions` then has the `settle` transaction twice: as `source` and as `settlement`.
 
 Each session id settles one time only. A second `settle` for the same session id reverts.
 

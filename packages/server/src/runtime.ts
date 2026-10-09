@@ -1,11 +1,13 @@
-import { ADAPTER_API_VERSION } from '@openrampkit/adapter'
+import { ADAPTER_API_VERSION, resultChannels } from '@openrampkit/adapter'
 import type { Adapter, AdapterContext, Logger } from '@openrampkit/adapter'
-import { OrkException, normalizeToken, orkError } from '@openrampkit/core'
-import type { Destination, Pathway, PublicSession, SessionResult } from '@openrampkit/core'
+import { OpenRampException, normalizeToken, openRampError } from '@openrampkit/core'
+import type { Destination, Pathway, Payment, PaymentLeg, PublicSession, Session, SessionResult } from '@openrampkit/core'
 import { consoleLogger } from './config.js'
+import { webhookKey } from './crypto.js'
 import type { OpenRampConfig } from './config.js'
-import { memoryStore, scopedKV, VersionConflictError } from './store.js'
-import type { SessionRecord, SessionStore } from './store.js'
+import { memoryStore, migratingStore, scopedKV, VersionConflictError } from './store.js'
+import type { ActivePayment, SessionRecord, SessionStore } from './store.js'
+import { legTransactions } from './legs.js'
 
 /** Everything the server modules share. Built once per `createOpenRamp` call. */
 export type Runtime = {
@@ -27,9 +29,7 @@ export type Runtime = {
 export function createRuntime(config: OpenRampConfig): Runtime {
   if (!config.secret || config.secret.length < 32) throw new Error('OpenRamp: `secret` must be at least 32 characters')
   // An empty or short key makes a signature or a bearer token easy to guess.
-  if (config.webhooks && (typeof config.webhooks.secret !== 'string' || config.webhooks.secret.length < 16)) {
-    throw new Error('OpenRamp: `webhooks.secret` must be at least 16 characters')
-  }
+  if (config.webhooks) checkWebhookSecret(config.webhooks.secret)
   if (config.tasksToken !== undefined && (typeof config.tasksToken !== 'string' || config.tasksToken.length < 16)) {
     throw new Error('OpenRamp: `tasksToken` must be at least 16 characters')
   }
@@ -45,11 +45,14 @@ export function createRuntime(config: OpenRampConfig): Runtime {
   if (config.treasury && !config.treasury.address) {
     ;(config.logger ?? consoleLogger).warn('treasury has no `address`: quotes for app-custody withdrawals use a placeholder sender. Set treasury.address.')
   }
+  warnNoResultChannel(config.adapters, config.logger ?? consoleLogger)
+  checkAdapterEnvs(config.adapters, config.livemode ?? false, config.logger ?? consoleLogger)
   const base = config.baseUrl.replace(/\/$/, '')
   const adapters = new Map(config.adapters.map((a) => [a.id, a]))
   return {
     config,
-    store: config.store ?? memoryStore(),
+    // Every read brings an older record up to the current schema (see `migrateRecord`).
+    store: migratingStore(config.store ?? memoryStore()),
     log: config.logger ?? consoleLogger,
     fetch: config.fetch ?? ((...args: Parameters<typeof fetch>) => fetch(...args)),
     base,
@@ -58,7 +61,7 @@ export function createRuntime(config: OpenRampConfig): Runtime {
     livemode: config.livemode ?? false,
     adapter(id) {
       const a = adapters.get(id)
-      if (!a) throw new OrkException(orkError('INTERNAL', { message: `Adapter ${id} is not configured` }), 500)
+      if (!a) throw new OpenRampException(openRampError('INTERNAL', { message: `Adapter ${id} is not configured` }), 500)
       return a
     },
     metric(name, value, tags = {}) {
@@ -70,6 +73,59 @@ export function createRuntime(config: OpenRampConfig): Runtime {
         // A metrics failure must never break a payment.
       }
     },
+  }
+}
+
+/**
+ * A webhook secret is a Standard Webhooks secret (`whsec_` and base64 of 24 to 64 bytes; see
+ * `generateWebhookSecret()`), or a raw string of at least 16 characters.
+ */
+function checkWebhookSecret(secret: unknown): void {
+  if (typeof secret !== 'string') throw new Error('OpenRamp: `webhooks.secret` must be a string')
+  if (secret.startsWith('whsec_')) {
+    const n = webhookKey(secret).length
+    if (n < 24 || n > 64) throw new Error('OpenRamp: a `whsec_` webhook secret must hold 24 to 64 bytes (base64)')
+    return
+  }
+  if (secret.length < 16) throw new Error('OpenRamp: `webhooks.secret` must be at least 16 characters')
+}
+
+/**
+ * Check each adapter's provider environment (`adapter.env`) against `livemode`:
+ * - `livemode: true` with an adapter in `sandbox`: throw. Live sessions must never use test providers
+ *   (a test payment would complete a live session).
+ * - `livemode: false` with an adapter in `production`: warn. Test sessions then call providers that move real money.
+ * An adapter with no `env` follows each session's `livemode` and is not checked.
+ */
+function checkAdapterEnvs(adapters: Adapter[], livemode: boolean, log: Logger): void {
+  if (livemode) {
+    const sandbox = adapters.filter((a) => a.env === 'sandbox').map((a) => a.id)
+    if (sandbox.length) {
+      throw new Error(`OpenRamp: livemode is true, but these adapters use their sandbox environment: ${sandbox.join(', ')}. Set env: 'production' with live keys, or remove them.`)
+    }
+    return
+  }
+  const production = adapters.filter((a) => a.env === 'production').map((a) => a.id)
+  if (production.length) {
+    log.warn(`OpenRamp: livemode is false, but these adapters use their production environment and can move real money: ${production.join(', ')}. Set env: 'sandbox' for tests, or livemode: true in production.`, { adapters: production })
+  }
+}
+
+/**
+ * Warn once at start for each adapter with legs that has no way to learn a leg's result: no `status()`
+ * to poll and no webhook that can verify (for example Transak with no `status()`, or an adapter whose
+ * webhook secret is not set). Its payments would wait in PAYMENT or PROCESSING until they expire.
+ */
+function warnNoResultChannel(adapters: Adapter[], log: Logger): void {
+  for (const a of adapters) {
+    if (!a.legs.length) continue
+    const { polling, webhooks } = resultChannels(a)
+    if (polling || webhooks) continue
+    const why = a.webhook ? 'its webhook is not configured (set the webhook secret in its options)' : 'it has no webhook'
+    log.warn(
+      `OpenRamp: adapter ${a.id} cannot learn the result of its legs (${a.legs.map((l) => l.id).join(', ')}): it has no status() polling, and ${why}. Its payments will not complete.`,
+      { adapter: a.id },
+    )
   }
 }
 
@@ -109,7 +165,7 @@ export async function putVersioned(rt: Runtime, rec: SessionRecord): Promise<voi
     rec.version -= 1
     if (updatedAt === undefined) delete rec.updatedAt
     else rec.updatedAt = updatedAt
-    if (e instanceof VersionConflictError) throw new OrkException(orkError('CONFLICT'), 409)
+    if (e instanceof VersionConflictError) throw new OpenRampException(openRampError('CONFLICT'), 409)
     throw e
   }
 }
@@ -120,17 +176,51 @@ export function publicSession(rec: SessionRecord): PublicSession {
     direction: rec.direction,
     ...(rec.destination ? { destination: rec.destination } : {}),
     ...(rec.source ? { source: rec.source } : {}),
-    ...(rec.allowedTargets ? { allowedTargets: rec.allowedTargets } : {}),
-    ...(rec.targetLocked ? { targetLocked: true } : {}),
+    ...(rec.allowedDestinations ? { allowedDestinations: rec.allowedDestinations } : {}),
+    ...(rec.destinationLocked ? { destinationLocked: true } : {}),
     status: rec.status,
     ...(rec.country ? { country: rec.country } : {}),
     ...(rec.plan ? { currency: rec.plan.currency } : {}),
     ...(rec.locale ? { locale: rec.locale } : {}),
     ...(rec.amountBounds ? { amountBounds: rec.amountBounds } : {}),
     step: rec.step,
-    ...(rec.active ? { result: sessionResult(rec) } : {}),
+    ...(rec.active ? { payment: paymentView(rec.active), result: sessionResult(rec) } : {}),
+    ...(rec.lastError ? { lastError: rec.lastError } : {}),
+    ...(rec.canceled ? { canceled: { at: new Date(rec.canceled.at).toISOString(), reason: rec.canceled.reason } } : {}),
     expiresAt: new Date(rec.expiresAt).toISOString(),
     livemode: rec.livemode,
+  }
+}
+
+/** The backend view of a session: the browser view plus `userId` and `metadata`. Webhooks and `sessions.retrieve()` use it. */
+export function backendSession(rec: SessionRecord): Session {
+  return { ...publicSession(rec), userId: rec.userId, ...(rec.externalId ? { externalId: rec.externalId } : {}), metadata: rec.metadata ?? {} }
+}
+
+/**
+ * The payment in progress, for the app and the user: each leg with its provider, our reference, the
+ * provider's order id, the amounts and the transactions.
+ */
+export function paymentView(act: ActivePayment): Payment {
+  return {
+    attempt: act.n ?? 0,
+    quoteId: act.quoteId,
+    method: act.pathway.method,
+    provider: act.pathway.provider,
+    activeLeg: act.index,
+    legs: act.legs.map((l, i): PaymentLeg => ({
+      index: i,
+      adapterId: l.adapterId,
+      legId: l.legId,
+      provider: l.provider ?? (i === 0 ? act.pathway.provider : l.adapterId),
+      ...(l.ref ? { ref: l.ref } : {}),
+      ...(l.step?.providerRef ? { providerRef: l.step.providerRef } : {}),
+      status: l.step?.status ?? 'pending',
+      input: l.quote.input,
+      output: l.step?.output ?? l.quote.output,
+      outputConfirmed: !!l.step?.output,
+      transactions: legTransactions(act, i),
+    })),
   }
 }
 
@@ -140,20 +230,31 @@ export function sessionResult(rec: SessionRecord): SessionResult {
   const first = act.legs[0]!
   const last = act.legs[act.legs.length - 1]!
   const reported = last.step?.output
+  // The last leg whose delivery is not ok (what arrived at the end matters most), else the last leg
+  // with a checked output.
+  let k = act.legs.length - 1
+  while (k >= 0 && (!act.legs[k]!.delivery || act.legs[k]!.delivery!.status === 'ok')) k--
+  if (k === -1) {
+    k = act.legs.length - 1
+    while (k >= 0 && !act.legs[k]!.delivery) k--
+  }
+  const delivery = k === -1 ? undefined : act.legs[k]!.delivery
   return {
     method: act.pathway.method,
     provider: act.pathway.provider,
     input: first.quote.input,
     output: reported ?? last.quote.output,
-    outputConfirmed: !!reported,
+    // An output in another asset (or not a number) is not a confirmed delivery of the quote.
+    outputConfirmed: !!reported && (!last.delivery || last.delivery.status === 'ok' || last.delivery.status === 'short'),
     fees: act.legs.flatMap((l) => l.quote.fees),
-    txHashes: act.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h),
+    transactions: act.legs.flatMap((_, i) => legTransactions(act, i)),
+    ...(delivery ? { delivery: { ...delivery, legIndex: k } } : {}),
   }
 }
 
 /** The session destination. A withdraw session has one only after the user picks a target. */
 export function destinationOf(rec: SessionRecord): Destination {
-  if (!rec.destination) throw new OrkException(orkError('BAD_REQUEST', { message: 'Choose where to send the funds first.' }), 409)
+  if (!rec.destination) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Choose where to send the funds first.' }), 409)
   return rec.destination
 }
 

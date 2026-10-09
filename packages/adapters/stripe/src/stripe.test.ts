@@ -1,7 +1,7 @@
 import { createHmac } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed } from '@openrampkit/core'
+import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { fakeFetch, makeCtx, makeWebhookCtx, runAdapterConformance } from '@openrampkit/adapter/testing'
 import { parseStripeSignature, stripe } from './index.js'
@@ -13,7 +13,7 @@ const opts = { secretKey: SK, publishableKey: PK, webhookSecret: WH }
 const BASE_USDC = { kind: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! }
 const ETH_USDC = { kind: 'crypto' as const, chain: 'eip155:1', token: USDC['eip155:1']! }
 const POLY_USDC = { kind: 'crypto' as const, chain: 'eip155:137', token: USDC['eip155:137']! }
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 
 const leg = (legId: string, to: typeof BASE_USDC = BASE_USDC, currency = 'USD'): PathwayLeg => ({
   adapterId: 'stripe',
@@ -71,11 +71,13 @@ describe('stripe adapter', () => {
     ])
     expect(calls[0]!.headers.get('authorization')).toBe(`Basic ${Buffer.from(`${SK}:`).toString('base64')}`)
     expect(q.input).toEqual(usd('103.26'))
-    expect(q.output).toEqual({ amount: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Stripe fee', amount: '3.25', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.01', currency: 'USD' },
+      { kind: 'provider', label: 'Stripe fee', amount: usd('3.25'), included: true },
+      { kind: 'network', label: 'Network fee', amount: usd('0.01'), included: true },
     ])
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
   })
 
   it('quote: falls back to /v1/crypto/onramp/quotes on 404, supports exact output', async () => {
@@ -83,20 +85,20 @@ describe('stripe adapter', () => {
       { match: '/v1/crypto/onramp_quotes', status: 404, reply: () => ({ error: { message: 'Unrecognized request URL' } }) },
       { match: '/v1/crypto/onramp/quotes', reply: () => ({ destination_network_quotes: { ethereum: [{ destination_currency: 'usdc', destination_amount: '50', source_total_amount: '52.5', fees: { transaction_fee_monetary: '2.5' } }] } }) },
     ])
-    const q = await stripe(opts).quote({ leg: leg('card', ETH_USDC), amountOut: { amount: '50', asset: ETH_USDC } }, makeCtx({ fetch }))
+    const q = await stripe(opts).quote({ leg: leg('card', ETH_USDC), amountOut: { value: '50', asset: ETH_USDC } }, makeCtx({ fetch }))
     expect(calls.map((c) => new URL(c.url).pathname)).toEqual(['/v1/crypto/onramp_quotes', '/v1/crypto/onramp/quotes'])
     expect(new URL(calls[1]!.url).searchParams.get('destination_amount')).toBe('50')
     expect(new URL(calls[1]!.url).searchParams.get('source_amount')).toBeNull()
-    expect(q.output.amount).toBe('50')
-    expect(q.input.amount).toBe('52.5')
+    expect(q.output.value).toBe('50')
+    expect(q.input.value).toBe('52.5')
   })
 
   it('quote: region rules per asset (no Base USDC in the EU, no Polygon USDC in New York)', async () => {
     const { fetch, calls } = fakeFetch([{ match: '/onramp_quotes', reply: () => QUOTES }])
     const a = stripe(opts)
-    await expect(a.quote({ leg: leg('card', BASE_USDC, 'EUR'), amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, makeCtx({ fetch, session: { country: 'DE' } }))).rejects.toMatchObject({ error: { code: 'REGION_UNSUPPORTED' } })
+    await expect(a.quote({ leg: leg('card', BASE_USDC, 'EUR'), amountIn: { value: '100', asset: { kind: 'fiat', currency: 'EUR' } } }, makeCtx({ fetch, session: { country: 'DE' } }))).rejects.toMatchObject({ error: { code: 'REGION_UNSUPPORTED' } })
     await expect(a.quote({ leg: leg('card', POLY_USDC), amountIn: usd('100') }, makeCtx({ fetch, session: { country: 'US', region: 'US-NY' } }))).rejects.toMatchObject({ error: { code: 'REGION_UNSUPPORTED' } })
-    await expect(a.quote({ leg: leg('card', BASE_USDC, 'GBP'), amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'GBP' } } }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
+    await expect(a.quote({ leg: leg('card', BASE_USDC, 'GBP'), amountIn: { value: '100', asset: { kind: 'fiat', currency: 'GBP' } } }, makeCtx({ fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES' } })
     expect(calls).toHaveLength(0)
   })
 
@@ -121,8 +123,10 @@ describe('stripe adapter', () => {
     const q = await a.quote({ leg: leg('card'), amountIn: usd('100') }, ctx)
     const step = await a.start({ leg: leg('card'), quote: q, deliverTo: { address: '0xd16e' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user', ref: 'cos_123' })
-    expect(step.surface).toEqual({
+    expect(stateFor(step)).toBe('PAYMENT')
+    // The onramp session id is both our ref and Stripe's order id
+    expect(step).toMatchObject({ status: 'requires_action', action: { kind: 'payment', transitions: [{ kind: 'AWAIT' }] }, ref: 'cos_123', providerRef: 'cos_123' })
+    expect(step.action!.surface).toEqual({
       kind: 'PROVIDER_SDK', provider: 'stripe',
       params: { clientSecret: 'cos_123_secret_abc', publishableKey: PK, sessionId: 'cos_123', redirectUrl: 'https://crypto.link.com?session_hash=abc' },
     })
@@ -146,20 +150,21 @@ describe('stripe adapter', () => {
   })
 
   it('start: REDIRECT to the hosted onramp when asked, SDK fallback without redirect_url, rejected sessions fail', async () => {
-    const quote = { adapterId: 'stripe', legId: 'card', input: usd('103'), output: { amount: '97', asset: ETH_USDC }, fees: [], eta: { min: 1, max: 2 }, data: { network: 'ethereum', sourceCurrency: 'usd', sourceAmount: '100.00' } }
+    const quote = { adapterId: 'stripe', legId: 'card', input: usd('103'), output: { value: '97', asset: ETH_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: '2030-01-01T00:00:00.000Z', data: { network: 'ethereum', sourceCurrency: 'usd', sourceAmount: '100.00' } }
     const run = async (session: unknown, surface: 'sdk' | 'redirect' = 'redirect') => {
       const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/onramp_sessions', reply: () => session }])
       const step = await stripe({ ...opts, surface }).start({ leg: leg('card', ETH_USDC), quote }, makeCtx({ fetch }))
       return { step, body: new URLSearchParams(calls[0]!.raw!) }
     }
     const r1 = await run(SESSION('initialized'))
-    expect(r1.step.surface).toEqual({ kind: 'REDIRECT', url: 'https://crypto.link.com?session_hash=abc', popup: true, provider: 'Stripe' })
+    expect(r1.step.action!.surface).toEqual({ kind: 'REDIRECT', url: 'https://crypto.link.com?session_hash=abc', popup: true, provider: 'Stripe' })
     expect(r1.body.get('wallet_addresses[ethereum]')).toBe('0x000000000000000000000000000000000000beef')
     expect(r1.body.get('customer_ip_address')).toBeNull()
-    expect((await run(SESSION('initialized', { redirect_url: null }))).step.surface?.kind).toBe('PROVIDER_SDK')
+    expect((await run(SESSION('initialized', { redirect_url: null }))).step.action!.surface?.kind).toBe('PROVIDER_SDK')
     const rejected = (await run(SESSION('rejected'))).step
     expect(checkLegStep(rejected)).toEqual([])
-    expect(rejected).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'PROVIDER_DECLINED' } })
+    expect(stateFor(rejected)).toBe('FAILED')
+    expect(rejected).toMatchObject({ status: 'failed', ref: 'cos_123', providerRef: 'cos_123', error: { code: 'PROVIDER_DECLINED' } })
     await expect(run({ id: 'cos_1' })).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
   })
 
@@ -171,12 +176,28 @@ describe('stripe adapter', () => {
       expect(checkLegStep(step)).toEqual([])
       return step
     }
-    expect(await run(SESSION('initialized'))).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await run(SESSION('requires_payment'))).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    expect(await run(SESSION('fulfillment_processing'))).toMatchObject({ state: 'PROCESSING', status: 'processing' })
+    for (const st of ['initialized', 'requires_payment']) {
+      const s = await run(SESSION(st))
+      expect(stateFor(s)).toBe('PAYMENT')
+      // A status poll without a surface: the UI keeps the onramp
+      expect(s).toMatchObject({ status: 'requires_action', providerRef: 'cos_123', action: { kind: 'payment', transitions: [{ kind: 'AWAIT' }] } })
+      expect(s.action!.surface).toBeUndefined()
+    }
+    const processing = await run(SESSION('fulfillment_processing'))
+    expect(stateFor(processing)).toBe('PROCESSING')
+    expect(processing).toMatchObject({ status: 'processing', providerRef: 'cos_123', detail: { code: 'processing', providerStatus: 'fulfillment_processing' } })
     const done = await run(SESSION('fulfillment_complete', { transaction_details: { ...SESSION('x').transaction_details, transaction_id: '0xhash' } }))
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xhash', output: { amount: '97.912345', asset: { chain: 'eip155:8453' } } })
-    expect(await run(SESSION('rejected'))).toMatchObject({ state: 'FAILED', error: { code: 'PROVIDER_DECLINED' } })
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({
+      status: 'succeeded', providerRef: 'cos_123', transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }], output: { value: '97.912345', asset: { chain: 'eip155:8453' } },
+    })
+    const rejected = await run(SESSION('rejected'))
+    expect(stateFor(rejected)).toBe('FAILED')
+    expect(rejected).toMatchObject({ error: { code: 'PROVIDER_DECLINED' } })
+    // An unknown Stripe status is never `processing`: a status poll that keeps the current step
+    const unknown = await run(SESSION('fulfillment_paused'))
+    expect(unknown.status).not.toBe('processing')
+    expect(unknown).toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
   })
 
   it('webhook: Stripe-Signature (good, rotated v1, bad, missing, stale) and parse', async () => {
@@ -200,10 +221,19 @@ describe('stripe adapter', () => {
     expect(v1(1700000000, '{}')).toBe('ceb8863f7208fa249a6cd8f951e993c7563412aca65866f6272283debe143ab3')
 
     expect(await a.webhook!.parse(body, wctx)).toEqual([
-      { ref: 'cos_123', status: 'succeeded', txHash: '0xhash', output: { amount: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+      {
+        ref: 'cos_123',
+        status: 'succeeded',
+        providerRef: 'cos_123',
+        transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }],
+        output: { value: '97.912345', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } },
+      },
     ])
     const parse = (o: unknown) => a.webhook!.parse(JSON.stringify(o), wctx)
     expect(await parse({ type: 'crypto.onramp_session_updated', data: { object: SESSION('fulfillment_processing') } })).toMatchObject([{ status: 'processing' }])
+    expect(await parse({ type: 'crypto.onramp_session.updated', data: { object: SESSION('initialized') } })).toEqual([{ ref: 'cos_123', status: 'requires_action', providerRef: 'cos_123' }])
+    // An unknown status: no event
+    expect(await parse({ type: 'crypto.onramp_session.updated', data: { object: SESSION('fulfillment_paused') } })).toEqual([])
     expect(await parse({ type: 'payment_intent.succeeded', data: { object: { id: 'pi_1' } } })).toEqual([])
     expect(await parse({ type: 'crypto.onramp_session.updated', data: {} })).toEqual([])
     expect(await a.webhook!.parse('{', wctx)).toEqual([])
@@ -224,6 +254,7 @@ describe('stripe adapter', () => {
         { leg: leg('card'), quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT', status: 'COMPLETED' } },
         { leg: leg('ach'), quote: { amountIn: usd('100') } },
       ],
+      errorPaths: [{ leg: leg('card'), quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'stripe-signature': sig } }), events: 1 },
         { name: 'bad', rawBody: body, request: () => new Request('https://x/h', { method: 'POST', body, headers: { 'stripe-signature': `t=${t},v1=00` } }), valid: false },

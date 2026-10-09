@@ -3,7 +3,7 @@
 `@openrampkit/adapter-mock` is a test provider for local development, demos and tests. It moves no money. It exercises every common surface: a hosted redirect checkout, QR codes, a deposit address and a wallet transaction.
 
 ::: warning Test mode only
-Anyone who knows an order ref can mark a mock payment as paid on the mock checkout page. So the mock refuses live sessions: with `livemode: true`, `quote()` and `start()` fail with `PROVIDER_UNAVAILABLE`. Do not configure it in production.
+Anyone who knows an order ref can mark a mock payment as paid on the mock checkout page. So the mock is a sandbox adapter (`env: 'sandbox'`): a server with `livemode: true` does not start with it. It also refuses live sessions: with `livemode: true`, `quote()` and `start()` fail with `PROVIDER_UNAVAILABLE`. Do not configure it in production.
 :::
 
 ```ts
@@ -67,9 +67,9 @@ The `wallet` leg (with `crypto: true`) also serves withdrawals to a wallet: it a
 - Currencies: the test FX currencies below. Limits: 5 to 5000 USD.
 - Quote: 1 USDC is 1 USD, minus a 1% fee in USDC, converted at the test FX rate.
 - Steps:
-  1. `FORM` (sub-state `PAYOUT_ACCOUNT`): the payout account. Bank transfer asks for the account holder name, the bank name and the account number. GCash, MoMo and PromptPay ask for the name and a phone number. Transition `submit_details`.
-  2. `WALLET_TX` (sub-state `SEND_CRYPTO`): an ERC-20 USDC `transfer` of the quoted amount to a fake provider address. Transition `submit_tx`. With `custody: 'app'`, the server's treasury hook sends it.
-  3. `PROCESSING` (`SETTLING`) for `settleMs`, then `COMPLETED` with the quoted payout as the output.
+  1. `FORM` (detail code `payout_account`): the payout account. Bank transfer asks for the account holder name, the bank name and the account number. GCash, MoMo and PromptPay ask for the name and a phone number. Transition `submit_details`.
+  2. `WALLET_TX` (detail code `send_crypto`): an ERC-20 USDC `transfer` of the quoted amount to a fake provider address. Transition `submit_tx`. With `custody: 'app'`, the server's treasury hook sends it.
+  3. `PROCESSING` (detail code `settling`) for `settleMs`, then `COMPLETED` with the quoted payout as the output.
 
 ## Local chain leg
 
@@ -83,17 +83,17 @@ mockAdapter({
 
 - The destination must be an address on `chain` in `token`.
 - Quote: 1:1 with no fee.
-- Step 1: `WALLET_TX` (sub-state `SEND_CRYPTO`). The wallet sends an ERC-20 `transfer` of the quoted amount to the destination address. Transition `submit_tx` with the hash.
+- Step 1: `WALLET_TX` (detail code `send_crypto`). The wallet sends an ERC-20 `transfer` of the quoted amount to the destination address. Transition `submit_tx` with the hash.
 - Step 2: the adapter reads the receipt with `eth_getTransactionReceipt` at `rpcUrl`. The leg is `COMPLETED` when the receipt shows a `Transfer` of at least the quoted amount to the destination. It stays `PROCESSING` while there is no receipt. It is `FAILED` when the transaction reverted, pays less, pays another address or was already used for another payment.
 
-This is the same check that the Relay adapter does for a same-chain wallet payment. See [Testing with mocks](../guide/testing.md#real-chain-test-with-anvil).
+The leg reports the hash as the `source` transaction, and also as the `destination` transaction once the check passes. This is the same check that the Relay adapter does for a same-chain wallet payment. See [Testing with mocks](../guide/testing.md#real-chain-test-with-anvil).
 
 ### With a settlement contract
 
 When the destination has `settlement`, the leg pays through [OpenRampSettlement](../concepts/settlement.md) instead. The leg declares the `settlement` capability.
 
 - Step 1: `WALLET_TX` with two transactions from `buildSettlementTxs`: `approve` on the token, then `settle` for the session id. The destination `calls` go into `settle`.
-- Step 2: the adapter checks the session with `verifySettlement`. It searches the `Settled` log from the block at which the leg started. The leg is `COMPLETED` when the receipt pays the recipient at least the quoted amount with the session's calls. The transaction hash comes from the log, not from the browser.
+- Step 2: the adapter checks the session with `verifySettlement`. It searches the `Settled` log from the block at which the leg started. The leg is `COMPLETED` when the receipt pays the recipient at least the quoted amount with the session's calls. The transaction hash comes from the log, not from the browser. The leg reports it as the `settlement` transaction.
 - A poll also completes the leg when the contract already has the receipt, for example after a lost `submit_tx`.
 - The leg is `FAILED` when the transaction reverted, did not settle this session, or settled a different amount, recipient or call bundle.
 
@@ -115,7 +115,7 @@ mockAdapter({
 - The destination must be an owner address on `chain` in `mint`. Use `mint: 'native'` for SOL (9 decimals).
 - Quote: 1:1 with no fee.
 - At start, the leg reads the current slot with `getSlot`.
-- Step 1: `WALLET_TX` (sub-state `SEND_CRYPTO`) with one Solana `transfer` of the quoted amount to the destination. `@openrampkit/solana` builds it. Transition `submit_tx` with the base58 signature.
+- Step 1: `WALLET_TX` (detail code `send_crypto`) with one Solana `transfer` of the quoted amount to the destination. `@openrampkit/solana` builds it. Transition `submit_tx` with the base58 signature.
 - Step 2: the adapter checks the signature at `rpcUrl`:
   - `getSignatureStatuses`: the signature must be `confirmed` or `finalized`, with no error.
   - `getTransaction` (`jsonParsed`): the transaction must be in a slot at or after the start slot. Its SPL `transfer` and `transferChecked` instructions (or System Program transfers, for SOL) must move at least the quoted amount into a token account of the mint that the destination owns.
@@ -133,7 +133,10 @@ The check reads the instructions, not the balance change. Thus a transfer from t
 - `spreadBps` makes the test rate worse by that many basis points. The spread is not a fee line: it shows in the rate and in the amount the user gets.
 - Crypto legs: 1:1 minus 5 basis points (`feeBps.crypto`).
 - Default time estimates in seconds: `card` 60 to 300, `local` 10 to 120, `payin` 5 to 60, `offramp` 60 to 900.
-- Quotes expire after 60 seconds.
+- Quotes expire after 60 seconds (`quoteExpiresAt(1)`).
+- Guarantees: the fiat legs (`card`, `local`, `payin`, `offramp`) use a fixed test rate, so they are `firm`. A plain transfer (`onchain`, `solana-onchain`, and a `wallet` or `transfer` leg on one chain and one token) is `firm`. A `bridge` leg, and a `wallet` or `transfer` leg that changes the chain or the token, is `min_output`: `minOutput` is the output less 0.5%, and `slippageBps` is 50. So you can test the server's `min_output` path with no real provider.
+- Fees: each leg has one fee line with an amount and `included: true`. The fiat legs have a `provider` fee. A plain crypto transfer has a `network` fee, and a bridge or swap has a `bridge` fee.
+- `providerRef`: the leg ref, so you can test the provider reference in the UI and in the admin page.
 
 ## How to finish each leg
 
@@ -148,7 +151,7 @@ The check reads the instructions, not the balance change. Thus a transfer from t
 | `bridge` | Nothing: it is paid when it starts and settles after `settleMs` |
 | `offramp` | Fill in the payout form (`submit_details`), then send with a wallet adapter or the treasury (`submit_tx`) |
 
-After "paid", the leg is `PROCESSING` (sub-state `SETTLING`) until `settleMs` has passed, then `COMPLETED` with a fake transaction hash.
+After "paid", the leg is `PROCESSING` (detail code `settling`) until `settleMs` has passed, then `COMPLETED`. A leg with a crypto output gets a fake `destination` transaction. A fiat payout has none.
 
 | Hosted checkout | QR with the simulate button |
 |---|---|

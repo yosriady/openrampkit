@@ -1,6 +1,6 @@
-import { OrkException, currencyForCountry, orkError, planPathways, rankQuotes, cmp } from '@openrampkit/core'
-import type { Amount, Fee, LegQuote, OrkError, Pathway, PlanResult, Quote, SurfaceKind } from '@openrampkit/core'
-import { ALL_SURFACES, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
+import { OpenRampException, currencyForCountry, openRampError, planPathways, rankQuotes, cmp } from '@openrampkit/core'
+import type { Amount, Fee, LegQuote, OpenRampError, Pathway, PlanResult, PublicLegQuote, PublicQuote, Quote, QuoteGuarantee, SurfaceKind } from '@openrampkit/core'
+import { ALL_SURFACES, DEFAULT_QUOTE_TTL_MS, MAX_QUOTED_PATHWAYS, MAX_STORED_QUOTES } from './config.js'
 import { randomHex } from './crypto.js'
 import { adapterContext, destinationOf, withTimeout } from './runtime.js'
 import type { Runtime } from './runtime.js'
@@ -79,7 +79,7 @@ export async function quotePathway(rt: Runtime, rec: SessionRecord, p: Pathway, 
     const a = rt.adapter(leg.adapterId)
     legQuotes.push(
       await timed(rt, a.id, () => a.quote(
-        { leg, amountOut: { amount, asset: leg.to.asset }, ...(deliverTo[0] ? { deliverTo: deliverTo[0] } : {}), ...(source ? { source } : {}) },
+        { leg, amountOut: { value: amount, asset: leg.to.asset }, ...(deliverTo[0] ? { deliverTo: deliverTo[0] } : {}), ...(source ? { source } : {}) },
         adapterContext(rt, rec, a, p, 0),
       )),
     )
@@ -91,7 +91,7 @@ export async function quotePathway(rt: Runtime, rec: SessionRecord, p: Pathway, 
       const amountIn: Amount =
         i === 0
           ? {
-              amount,
+              value: amount,
               // An open-ended crypto source ('*', deposit from a wallet) takes the token the user picked.
               asset: source && leg.from.asset.kind === 'crypto' && leg.from.asset.chain === '*' ? { kind: 'crypto', chain: source.chain, token: source.token } : leg.from.asset,
             }
@@ -121,11 +121,31 @@ async function timed<T>(rt: Runtime, adapter: string, run: () => Promise<T>): Pr
   }
 }
 
+/** The order of quote guarantees, weakest first */
+const GUARANTEE_RANK: Record<QuoteGuarantee, number> = { estimate: 0, min_output: 1, firm: 2 }
+
+/**
+ * The expiry of a leg quote. A leg quote must have a valid `expiresAt` (adapter contract v2). When a
+ * third-party adapter leaves it out or sends no valid date, the quote lives `DEFAULT_QUOTE_TTL_MS`.
+ */
+function legExpiry(q: LegQuote, now: number): number {
+  const at = typeof q.expiresAt === 'string' ? Date.parse(q.expiresAt) : Number.NaN
+  return Number.isFinite(at) ? at : now + DEFAULT_QUOTE_TTL_MS
+}
+
+/**
+ * The pathway quote from its leg quotes. The guarantee is the weakest of the legs: a later leg
+ * cannot promise more than the leg that feeds it. `minOutput` and `slippageBps` come from the last
+ * leg, and only when the pathway guarantee is not `estimate`. `expiresAt` is the earliest leg expiry.
+ */
 export function combineLegQuotes(p: Pathway, legQuotes: LegQuote[]): Quote {
   const first = legQuotes[0]!
   const last = legQuotes[legQuotes.length - 1]!
   const fees: Fee[] = legQuotes.flatMap((q) => q.fees)
-  const expiries = legQuotes.map((q) => q.expiresAt).filter((x): x is string => !!x).sort()
+  const now = Date.now()
+  const expiresAt = Math.min(...legQuotes.map((q) => legExpiry(q, now)))
+  const guarantee = legQuotes.map((q) => q.guarantee ?? 'estimate').reduce((a, b) => (GUARANTEE_RANK[b] < GUARANTEE_RANK[a] ? b : a))
+  const minOutput = guarantee === 'firm' ? last.output : guarantee === 'min_output' ? last.minOutput : undefined
   return {
     id: `q_${randomHex(8)}`,
     pathwayId: p.id,
@@ -134,17 +154,37 @@ export function combineLegQuotes(p: Pathway, legQuotes: LegQuote[]): Quote {
     legs: legQuotes,
     input: first.input,
     output: last.output,
+    guarantee,
+    ...(minOutput ? { minOutput } : {}),
+    ...(guarantee !== 'estimate' && last.slippageBps !== undefined ? { slippageBps: last.slippageBps } : {}),
     fees,
     eta: legQuotes.reduce((acc, q) => ({ min: acc.min + q.eta.min, max: acc.max + q.eta.max }), { min: 0, max: 0 }),
-    ...(expiries.length ? { expiresAt: expiries[0]! } : {}),
+    expiresAt: new Date(expiresAt).toISOString(),
   }
 }
 
-/** Quote up to MAX_QUOTED_PATHWAYS pathways for a method in parallel. Failures become errors, not exceptions. */
-export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody): Promise<{ quotes: Quote[]; errors: OrkError[] }> {
+/**
+ * The browser view of a quote: each leg without its adapter `data`. That data can hold a provider
+ * URL with a session token, a request body, or a nonce that is an idempotency key. It stays in the
+ * server store (`StoredQuote`) and goes only to the adapter's `start()`.
+ */
+export function publicQuote(q: Quote): PublicQuote {
+  return { ...q, legs: q.legs.map(publicLegQuote) }
+}
+
+function publicLegQuote(l: LegQuote): PublicLegQuote {
+  const { data: _data, ...rest } = l
+  return rest
+}
+
+/**
+ * Quote up to MAX_QUOTED_PATHWAYS pathways for a method in parallel. Failures become errors, not exceptions.
+ * Returns the public view of each quote (see `publicQuote`); the full quotes go into `rec.quotes`.
+ */
+export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody): Promise<{ quotes: PublicQuote[]; errors: OpenRampError[] }> {
   if (!rec.plan) await plan(rt, rec, { walletConnected: rec.walletConnected ?? false })
   const candidates = rec.plan!.pathways.filter((p) => p.method === body.method && p.group !== 'unavailable')
-  if (!candidates.length) throw new OrkException(orkError('NO_QUOTES'), 422)
+  if (!candidates.length) throw new OpenRampException(openRampError('NO_QUOTES'), 422)
   // Withdraw: the source is fixed by the session. Deposit: the token the user picked in the client.
   const source =
     rec.direction === 'withdraw'
@@ -157,7 +197,7 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
     candidates.slice(0, MAX_QUOTED_PATHWAYS).map((p) => withTimeout(quotePathway(rt, rec, p, body.amount, body.amountSide ?? 'source', source), timeout)),
   )
   const out: Quote[] = []
-  const errors: OrkError[] = []
+  const errors: OpenRampError[] = []
   for (const s of settled) {
     if (s.status === 'fulfilled') {
       const bounds = boundsError(rec, s.value.stored.quote.input)
@@ -170,13 +210,13 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
     } else {
       const reason = s.reason as unknown
       const message = reason instanceof Error ? reason.message : String(reason)
-      // Only OrkErrors reach the browser: a raw error can quote a provider response.
-      errors.push(reason instanceof OrkException ? reason.error : orkError('PROVIDER_UNAVAILABLE'))
+      // Only OpenRampErrors reach the browser: a raw error can quote a provider response.
+      errors.push(reason instanceof OpenRampException ? reason.error : openRampError('PROVIDER_UNAVAILABLE'))
       rt.log.warn('quote failed', { error: message })
     }
   }
   pruneQuotes(rec)
-  return { quotes: rankQuotes(out), errors }
+  return { quotes: rankQuotes(out).map(publicQuote), errors }
 }
 
 function pruneQuotes(rec: SessionRecord) {
@@ -188,12 +228,12 @@ function pruneQuotes(rec: SessionRecord) {
  * Enforce the session's `amountBounds` on what the user pays. Checked when the bounds currency
  * matches the input: a fiat currency code, or a token symbol (e.g. USDC). Other inputs pass.
  */
-export function boundsError(rec: SessionRecord, input: Amount): OrkError | undefined {
+export function boundsError(rec: SessionRecord, input: Amount): OpenRampError | undefined {
   const b = rec.amountBounds
   if (!b) return undefined
   const code = input.asset.kind === 'fiat' ? input.asset.currency : input.asset.symbol
-  if (!code || code.toUpperCase() !== b.currency.toUpperCase() || cmp(input.amount, '0') <= 0) return undefined
-  if (b.min && cmp(input.amount, b.min) < 0) return orkError('AMOUNT_TOO_LOW', { message: `The minimum is ${b.min} ${b.currency}.`, recovery: 'requote' })
-  if (b.max && cmp(input.amount, b.max) > 0) return orkError('AMOUNT_TOO_HIGH', { message: `The maximum is ${b.max} ${b.currency}.`, recovery: 'requote' })
+  if (!code || code.toUpperCase() !== b.currency.toUpperCase() || cmp(input.value, '0') <= 0) return undefined
+  if (b.min && cmp(input.value, b.min) < 0) return openRampError('AMOUNT_TOO_LOW', { message: `The minimum is ${b.min} ${b.currency}.`, recovery: 'requote' })
+  if (b.max && cmp(input.value, b.max) > 0) return openRampError('AMOUNT_TOO_HIGH', { message: `The maximum is ${b.max} ${b.currency}.`, recovery: 'requote' })
   return undefined
 }

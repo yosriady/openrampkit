@@ -1,6 +1,6 @@
-import type { OrkError, OrkErrorCode } from './types.js'
+import type { OpenRampError, OpenRampErrorCode } from './types.js'
 
-const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
+const DEFAULT_MESSAGES: Partial<Record<OpenRampErrorCode, string>> = {
   REGION_UNSUPPORTED: 'This method is not available in your region.',
   AMOUNT_TOO_LOW: 'The amount is below the minimum for this method.',
   AMOUNT_TOO_HIGH: 'The amount is above the maximum for this method.',
@@ -9,6 +9,7 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
   PROVIDER_DECLINED: 'The provider declined this payment. Try another method.',
   KYC_REJECTED: 'The provider could not verify your identity.',
   PAYMENT_FAILED: 'The payment did not go through. You can try again.',
+  PAYMENT_REVERSED: 'The provider refunded or reversed this payment after it completed.',
   DELIVERY_FAILED: 'The funds could not be delivered. Contact support.',
   RATE_LIMITED: 'Too many requests. Wait a moment and try again.',
   PROVIDER_UNAVAILABLE: 'The provider is not available right now.',
@@ -17,14 +18,19 @@ const DEFAULT_MESSAGES: Partial<Record<OrkErrorCode, string>> = {
   UNAUTHORIZED: 'This session is not valid.',
   CONFLICT: 'The session changed at the same time. Try again.',
   ADDRESS_REJECTED: 'This address cannot receive withdrawals. Use another address.',
-  TARGET_NOT_ALLOWED: 'This app does not allow withdrawals to this target.',
-  TARGET_LOCKED: 'The app set where these funds go. You cannot change it.',
+  DESTINATION_NOT_ALLOWED: 'This app does not allow withdrawals to this target.',
+  DESTINATION_LOCKED: 'The app set where these funds go. You cannot change it.',
   BAD_REQUEST: 'The request is not valid.',
   NOT_FOUND: 'Not found.',
   INTERNAL: 'Something went wrong on our side.',
+  PROVIDER_ERROR: 'The provider could not complete this request. Try again or choose another method.',
+  CANCELED: 'This session was canceled.',
+  IDEMPOTENCY_MISMATCH: 'This Idempotency-Key was used with another request.',
+  EXTERNAL_ID_CONFLICT: 'This externalId is already used. Use a new externalId.',
+  CLOSED: 'The window was closed before the payment finished.',
 }
 
-const RETRYABLE: Partial<Record<OrkErrorCode, boolean>> = {
+const RETRYABLE: Partial<Record<OpenRampErrorCode, boolean>> = {
   CONFLICT: true,
   QUOTE_EXPIRED: true,
   NO_QUOTES: true,
@@ -34,7 +40,7 @@ const RETRYABLE: Partial<Record<OrkErrorCode, boolean>> = {
   INTERNAL: true,
 }
 
-export function orkError(code: OrkErrorCode, overrides: Partial<Omit<OrkError, 'code'>> = {}): OrkError {
+export function openRampError(code: OpenRampErrorCode, overrides: Partial<Omit<OpenRampError, 'code'>> = {}): OpenRampError {
   return {
     code,
     message: overrides.message ?? DEFAULT_MESSAGES[code] ?? 'Something went wrong.',
@@ -44,17 +50,17 @@ export function orkError(code: OrkErrorCode, overrides: Partial<Omit<OrkError, '
   }
 }
 
-/** Error class for throwing across boundaries; serializes to OrkError. */
-export class OrkException extends Error {
-  readonly error: OrkError
+/** Error class for throwing across boundaries; serializes to OpenRampError. */
+export class OpenRampException extends Error {
+  readonly error: OpenRampError
   readonly status: number
-  constructor(error: OrkError, status = 400) {
+  constructor(error: OpenRampError, status = 400) {
     super(error.message)
     this.error = error
     this.status = status
   }
 }
 
-export function isOrkError(value: unknown): value is OrkError {
+export function isOpenRampError(value: unknown): value is OpenRampError {
   return !!value && typeof value === 'object' && 'code' in value && 'message' in value
 }

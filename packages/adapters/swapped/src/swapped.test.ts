@@ -1,9 +1,11 @@
 import { createHmac } from 'node:crypto'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep } from '@openrampkit/adapter'
-import { USDC, isRegionAllowed, planPathways } from '@openrampkit/core'
+import { USDC, isRegionAllowed, planPathways, stateFor } from '@openrampkit/core'
 import type { PathwayLeg } from '@openrampkit/core'
 import { DEFAULT_DELIVER_ASSETS, swapped, swappedMethodId } from './index.js'
+import { resultChannels, webhookBodyKey } from '@openrampkit/adapter'
+import { createOpenRamp } from '@openrampkit/server'
 import { fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance, silentLog } from '@openrampkit/adapter/testing'
 
 const PK = 'pk_sandbox_rT9bW3sN6mJ8F5hP2cRqLvZ7SaD4XoY9'
@@ -99,13 +101,16 @@ describe('swapped adapter', () => {
     const { fetch, calls } = fakeFetch([{ method: 'POST', match: '/api/v1/merchant/pricing', reply: () => PRICING }])
     const a = swapped({ publicKey: PK, secretKey: SK, markup: 1 })
     const ctx = makeCtx({ fetch })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(q.output).toEqual({ amount: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
+    expect(q.output).toEqual({ value: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } })
     expect(q.fees).toEqual([
-      { kind: 'provider', label: 'Swapped fee', amount: '2.16', currency: 'USD' },
-      { kind: 'network', label: 'Network fee', amount: '0.02', currency: 'USD' },
+      { kind: 'provider', label: 'Swapped fee', amount: { value: '2.16', asset: { kind: 'fiat', currency: 'USD' } }, included: true },
+      { kind: 'network', label: 'Network fee', amount: { value: '0.02', asset: { kind: 'fiat', currency: 'USD' } }, included: true },
     ])
+    // the rate is set when the order executes
+    expect(q.guarantee).toBe('estimate')
+    expect(q.minOutput).toBeUndefined()
     expect(calls[0]!.url).toBe('https://widget.swapped.com/api/v1/merchant/pricing')
     expect(calls[0]!.body).toEqual({ api_key: PK, payment_method: 'creditcard', fiat_currency: 'USD', fiat_amount: 100, crypto_currency: 'USDC_BASE', region: 'US', markup: 1 })
   })
@@ -113,9 +118,9 @@ describe('swapped adapter', () => {
   it('quote: a failed pricing call is PROVIDER_UNAVAILABLE, an unsuccessful one is NO_QUOTES', async () => {
     const bad = fakeFetch([{ method: 'POST', match: '/pricing', status: 500, reply: () => ({}) }])
     const a = swapped({ publicKey: PK, secretKey: SK })
-    await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+    await expect(a.quote({ leg: cardLeg, amountIn: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
     const no = fakeFetch([{ method: 'POST', match: '/pricing', reply: () => ({ success: false, message: 'Amount too low' }) }])
-    await expect(a.quote({ leg: cardLeg, amountIn: { amount: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: no.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Swapped: Amount too low' } })
+    await expect(a.quote({ leg: cardLeg, amountIn: { value: '1', asset: { kind: 'fiat', currency: 'USD' } } }, makeCtx({ fetch: no.fetch }))).rejects.toMatchObject({ error: { code: 'NO_QUOTES', message: 'Swapped: Amount too low' } })
   })
 
   it('regional groups: BLIK (PL), SPEI (MX) and mobile money (KE) from the catalog, planned, quoted and started', async () => {
@@ -154,10 +159,10 @@ describe('swapped adapter', () => {
       expect(plan.methods[0]).toMatchObject({ method, group: 'recommended', providers: ['Swapped'] })
       const leg: PathwayLeg = { ...cardLeg, legId: group, from: { asset: { kind: 'fiat', currency }, location: { kind: 'user_account' } } }
       const ctx = makeCtx({ fetch, session: { country } })
-      const q = await a.quote({ leg, amountIn: { amount: '100', asset: { kind: 'fiat', currency } } }, ctx)
+      const q = await a.quote({ leg, amountIn: { value: '100', asset: { kind: 'fiat', currency } } }, ctx)
       expect(calls.find((c) => c.url.includes('/pricing'))!.body).toMatchObject({ payment_method: group, fiat_currency: currency, region: country })
       const step = await a.start({ leg, quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
-      expect(new URL((step.surface as { url: string }).url).searchParams.get('method')).toBe(group)
+      expect(new URL((step.action?.surface as { url: string }).url).searchParams.get('method')).toBe(group)
     }
   })
 
@@ -165,13 +170,14 @@ describe('swapped adapter', () => {
     const { fetch } = fakeFetch([{ method: 'POST', match: '/pricing', reply: () => PRICING }])
     const a = swapped({ publicKey: PK, secretKey: SK })
     const ctx = makeCtx({ fetch, session: { email: 'a@b.co', country: 'US', userId: 'u_42' } })
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
     const step = await a.start({ leg: cardLeg, quote: q, deliverTo: { address: '0xd16e0c839b6f652970c5d4d035d9cfcff5c185af' } }, ctx)
     expect(checkLegStep(step)).toEqual([])
-    expect(step.state).toBe('PAYMENT')
-    expect(step.status).toBe('awaiting_user')
+    expect(stateFor(step)).toBe('PAYMENT')
+    expect(step.status).toBe('requires_action')
+    expect(step.action?.kind).toBe('payment')
     expect(step.ref).toMatch(/^u_42\.[0-9a-f]{12}$/)
-    const s = step.surface!
+    const s = step.action!.surface!
     if (s.kind !== 'IFRAME') throw new Error('expected IFRAME')
     expect(s.origin).toBe('https://widget.swapped.com')
     expect(s.allow).toBe('accelerometer; autoplay; camera; encrypted-media; gyroscope; payment; clipboard-read; clipboard-write')
@@ -213,12 +219,12 @@ describe('swapped adapter', () => {
     const unset = swapped({ publicKey: PK, secretKey: '' })
     const emptySig = createHmac('sha256', '').update(broadcast).digest('base64')
     expect(await unset.webhook!.verify(req(broadcast, emptySig), broadcast, { log: silentLog, shared: memoryKV(), fetch })).toBe(false)
-    expect(await a.webhook!.parse(broadcast, { log: silentLog, shared: memoryKV(), fetch })).toEqual([
-      { ref: 'u_42.abc', status: 'succeeded', txHash: '0xhash', output: { amount: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
+    expect(await a.webhook!.parse(broadcast, { log: silentLog, shared: memoryKV(), fetch })).toMatchObject([
+      { ref: 'u_42.abc', providerRef: '9fcc', status: 'succeeded', transactions: [{ role: 'destination', hash: '0xhash', chain: 'eip155:8453' }], output: { value: '95.93', asset: { ...BASE_USDC, symbol: 'USDC', decimals: 6 } } },
     ])
     const parse = (o: object) => a.webhook!.parse(JSON.stringify(o), { log: silentLog, shared: memoryKV(), fetch })
     expect(await parse({ order_status: 'payment_pending', external_customer_id: 'u_42.abc' })).toEqual([])
-    expect(await parse({ order_status: 'order_completed', external_customer_id: 'u_42.abc', order_crypto: 'USDC_BASE', order_crypto_amount: '10' })).toMatchObject([{ status: 'processing' }])
+    expect(await parse({ order_status: 'order_completed', external_customer_id: 'u_42.abc', order_crypto: 'USDC_BASE', order_crypto_amount: '10' })).toMatchObject([{ status: 'processing', detail: { code: 'settling' } }])
     expect(await parse({ order_status: 'order_cancelled', external_customer_id: 'u_42.abc' })).toMatchObject([{ status: 'failed', error: { code: 'PAYMENT_FAILED' } }])
     expect(await parse({ order_status: 'order_broadcasted' })).toEqual([])
   })
@@ -232,7 +238,7 @@ describe('swapped adapter', () => {
 })
 
 
-const usd = (amount: string) => ({ amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
+const usd = (amount: string) => ({ value: amount, asset: { kind: 'fiat' as const, currency: 'USD' } })
 const signB64 = (body: string) => createHmac('sha256', SK).update(body).digest('base64')
 const hookReq = (body: string, headers: Record<string, string> = {}) => new Request('https://app.test/api/openramp/webhooks/swapped', { method: 'POST', body, headers })
 
@@ -243,6 +249,7 @@ describe('swapped conformance', () => {
     const report = await runAdapterConformance(swapped({ publicKey: PK, secretKey: SK }), {
       fetch,
       fixtures: [{ leg: cardLeg, quote: { amountIn: usd('100') }, expect: { start: 'PAYMENT' } }],
+      errorPaths: [{ leg: cardLeg, quote: { amountIn: usd('100') } }],
       webhooks: [
         { name: 'signed', rawBody: body, request: () => hookReq(body, { signature: signB64(body) }), events: 1 },
         { name: 'bad signature', rawBody: body, request: () => hookReq(body, { signature: signB64(`${body} `) }), valid: false },
@@ -278,21 +285,23 @@ describe('swapped errors and edge cases', () => {
     const a = swapped({ publicKey: PK, secretKey: SK, defaultCountry: 'vn', markup: 0.5 })
     const arb = { kind: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!.toUpperCase().replace('0X', '0x') }
     const leg: PathwayLeg = { ...cardLeg, legId: 'vietqr', to: { asset: arb, location: { kind: 'address', address: 'x' } } }
-    const q = await a.quote({ leg, amountOut: { amount: '50', asset: arb } }, makeCtx({ fetch, session: { country: undefined } }))
+    const q = await a.quote({ leg, amountOut: { value: '50', asset: arb } }, makeCtx({ fetch, session: { country: undefined } }))
     expect(checkLegQuote(q)).toEqual([])
     expect(calls[0]!.body).toEqual({ api_key: PK, payment_method: 'vietqr', fiat_currency: 'USD', crypto_currency: 'USDC_ARBITRUM', crypto_amount: 50, region: 'VN', markup: 0.5 })
-    expect(q.input.amount).toBe('52.5')
+    expect(q.input.value).toBe('52.5')
     expect(q.output.asset).toMatchObject({ chain: 'eip155:42161', decimals: 6 })
-    expect(q.fees).toEqual([{ kind: 'app', label: 'App fee', amount: '0.25', currency: 'USD' }])
+    expect(q.fees).toEqual([{ kind: 'app', label: 'App fee', amount: { value: '0.25', asset: { kind: 'fiat', currency: 'USD' } }, included: true }])
     expect(q.eta).toEqual({ min: 120, max: 1800 })
     const ap = await a.quote({ leg: { ...cardLeg, legId: 'apple-pay' }, amountIn: usd('10') }, makeCtx({ fetch }))
     expect(ap.eta).toEqual({ min: 120, max: 900 })
-    // unknown chain: the first deliver asset
-    const other = await a.quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: 'x' } } }, amountIn: usd('10') }, makeCtx({ fetch }))
-    expect((calls[2]!.body as { crypto_currency: string }).crypto_currency).toBe('USDC_BASE')
-    expect(other.data).toMatchObject({ currencyCode: 'USDC_BASE' })
+    // a token Swapped does not deliver: no quote (never the first deliver asset instead), and no Swapped call
+    await expect(a.quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: 'eip155:143', token: '0x1' }, location: { kind: 'address', address: 'x' } } }, amountIn: usd('10') }, makeCtx({ fetch }))).rejects.toMatchObject({
+      status: 422,
+      error: { code: 'NO_QUOTES', message: 'Swapped does not deliver 0x1 on eip155:143.' },
+    })
+    expect(calls).toHaveLength(2)
     // Swapped needs a fiat amount
-    await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { amount: '1', asset: BASE_USDC } }, makeCtx({ fetch }))).rejects.toMatchObject({
+    await expect(a.quote({ leg: { ...cardLeg, from: { asset: BASE_USDC, location: { kind: 'user_wallet' } } }, amountIn: { value: '1', asset: BASE_USDC } }, makeCtx({ fetch }))).rejects.toMatchObject({
       error: { code: 'BAD_REQUEST' },
     })
   })
@@ -306,19 +315,19 @@ describe('swapped errors and edge cases', () => {
     const q = await a.quote({ leg: { ...cardLeg, to: { asset: { kind: 'crypto', chain: SOL, token: mint }, location: { kind: 'address', address: 'x' } } }, amountIn: usd('10') }, makeCtx({ fetch }))
     expect((calls[0]!.body as { crypto_currency: string }).crypto_currency).toBe('USDC_SOLANA')
     expect(q.output.asset).toEqual({ kind: 'crypto', chain: SOL, token: mint })
-    expect(q.output.amount).toBe('95.93')
+    expect(q.output.value).toBe('95.93')
     expect(swapped({ publicKey: PK, secretKey: SK, deliverAssets: [] }).legs[0]!.to.asset).toMatchObject({ chains: { 'eip155:8453': [DEFAULT_DELIVER_ASSETS[0]!.token] } })
   })
 
   it('start: needs a wallet address; falls back to the leg and target when quote data is missing', async () => {
     const a = swapped({ publicKey: PK, secretKey: SK, markup: 1 })
-    const quote = { adapterId: 'swapped', legId: 'creditcard', input: usd('20'), output: { amount: '19', asset: BASE_USDC }, fees: [], eta: { min: 1, max: 2 } }
+    const quote = { adapterId: 'swapped', legId: 'creditcard', input: usd('20'), output: { value: '19', asset: BASE_USDC }, fees: [], guarantee: 'estimate' as const, eta: { min: 1, max: 2 }, expiresAt: new Date(Date.now() + 60_000).toISOString() }
     await expect(a.start({ leg: cardLeg, quote }, makeCtx({ fetch: fakeFetch([]).fetch, destination: { type: 'merchant', merchantId: 'm', currency: 'USD' } as never }))).rejects.toMatchObject({
       error: { code: 'BAD_REQUEST', message: 'Swapped needs a wallet address to deliver to.' },
     })
     const ctx = makeCtx({ fetch: fakeFetch([]).fetch, session: { email: undefined, country: undefined } })
     const step = await a.start({ leg: cardLeg, quote }, ctx)
-    const url = new URL((step.surface as { url: string }).url)
+    const url = new URL((step.action?.surface as { url: string }).url)
     expect(url.searchParams.get('currencyCode')).toBe('USDC_BASE')
     expect(url.searchParams.get('method')).toBe('creditcard')
     expect(url.searchParams.get('walletAddress')).toBe('0x000000000000000000000000000000000000beef')
@@ -327,8 +336,8 @@ describe('swapped errors and edge cases', () => {
     expect(url.searchParams.has('baseCountry')).toBe(false)
     expect(await ctx.store.get(`o:${step.ref}`)).toMatchObject({ currencyCode: 'USDC_BASE' })
     // a crypto-denominated quote input uses the currency stored in quote data
-    const s2 = await a.start({ leg: cardLeg, quote: { ...quote, input: { amount: '20', asset: BASE_USDC }, data: { fiat: 'EUR' } } }, ctx)
-    expect(new URL((s2.surface as { url: string }).url).searchParams.get('baseCurrencyCode')).toBe('EUR')
+    const s2 = await a.start({ leg: cardLeg, quote: { ...quote, input: { value: '20', asset: BASE_USDC }, data: { fiat: 'EUR' } } }, ctx)
+    expect(new URL((s2.action?.surface as { url: string }).url).searchParams.get('baseCurrencyCode')).toBe('EUR')
   })
 
   it('catalog: refused or empty answers throw and are not cached; errors throw; flat lists and all countries', async () => {
@@ -368,10 +377,12 @@ describe('swapped errors and edge cases', () => {
     expect(await a.webhook!.parse('not json', ctx)).toEqual([])
     expect(await a.webhook!.parse(JSON.stringify({ order_id: 'o1', order_status: 'order_broadcasted', external_customer_id: null }), ctx)).toEqual([])
     expect(log.warnings).toEqual(['swapped: webhook body is not JSON', 'swapped: notification without external_customer_id'])
-    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_broadcasted', external_customer_id: 'u.1', order_crypto: 'BTC', order_crypto_amount: 1 }), ctx)).toEqual([{ ref: 'u.1', status: 'succeeded' }])
-    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_completed', external_customer_id: 'u.1', order_crypto: 'USDC_BASE' }), ctx)).toEqual([{ ref: 'u.1', status: 'processing' }])
+    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_broadcasted', external_customer_id: 'u.1', order_crypto: 'BTC', order_crypto_amount: 1 }), ctx)).toMatchObject([{ ref: 'u.1', status: 'succeeded' }])
+    expect(await a.webhook!.parse(JSON.stringify({ order_status: 'order_completed', external_customer_id: 'u.1', order_crypto: 'USDC_BASE' }), ctx)).toMatchObject([{ ref: 'u.1', status: 'processing' }])
+    // An unknown status is no event (never processing by default), and it is logged.
     expect(await a.webhook!.parse(JSON.stringify({ order_status: 'something_new', external_customer_id: 'u.1' }), ctx)).toEqual([])
-    expect(log.warnings).toHaveLength(2)
+    expect(log.warnings).toHaveLength(3)
+    expect(log.warnings[2]).toContain('Swapped: unknown provider status')
     expect(await a.webhook!.verify(hookReq('{}', { signature: ` ${signB64('{}')} ` }), '{}', ctx)).toBe(true)
   })
 
@@ -390,11 +401,12 @@ describe('swapped errors and edge cases', () => {
 describe('swapped status polling (statusPolling: true)', () => {
   const orders = (list: unknown[]) => ({ data: { orders: list } })
 
-  it('is off by default; when on, legs declare polling', () => {
-    expect(swapped({ publicKey: PK, secretKey: SK }).status).toBeUndefined()
+  it('is off by default; when on, the adapter has status() (polling comes from it, not from a capability)', () => {
+    expect(resultChannels(swapped({ publicKey: PK, secretKey: SK }))).toEqual({ polling: false, webhooks: true })
     const a = swapped({ publicKey: PK, secretKey: SK, statusPolling: true })
     expect(a.status).toBeTypeOf('function')
-    expect(a.legs[0]!.capabilities).toEqual(['webhooks', 'polling'])
+    expect(resultChannels(a)).toEqual({ polling: true, webhooks: true })
+    expect(a.legs[0]!.capabilities).toBeUndefined()
   })
 
   it('signs get_transactions and maps every order status', async () => {
@@ -409,7 +421,9 @@ describe('swapped status polling (statusPolling: true)', () => {
     const ref = step.ref!
     const status = () => a.status!({ leg: cardLeg, ref }, ctx)
 
-    expect(await status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
+    const first = await status()
+    expect(stateFor(first)).toBe('PAYMENT')
+    expect(first).toMatchObject({ status: 'requires_action' })
     const call = calls.at(-1)!
     const { signature, ...unsigned } = call.body as Record<string, unknown>
     expect(signature).toBe(signB64(JSON.stringify(unsigned)))
@@ -417,21 +431,54 @@ describe('swapped status polling (statusPolling: true)', () => {
     expect(Date.parse(String(unsigned.start_date))).toBeLessThan(Date.now() - 59_000)
 
     list = [{ external_customer_id: 'someone-else', order_status: 'order_broadcasted' }, { external_customer_id: ref, order_status: 'payment_pending' }]
-    expect(await status()).toMatchObject({ state: 'PAYMENT', status: 'awaiting_user' })
-    list = [{ external_customer_id: ref, order_status: 'order_completed', order_crypto: 'USDC_BASE', order_crypto_amount: '95.93' }]
-    expect(await status()).toMatchObject({ state: 'PROCESSING', status: 'processing' })
-    list = [{ external_customer_id: ref, order_status: 'order_completed', transaction_id: '0xtx', order_crypto: 'USDC_BASE', order_crypto_amount: 95.93 }]
+    const paying = await status()
+    expect([stateFor(paying), paying.status]).toEqual(['PAYMENT', 'requires_action'])
+    list = [{ external_customer_id: ref, order_id: 'ord-7', order_status: 'order_completed', order_crypto: 'USDC_BASE', order_crypto_amount: '95.93' }]
+    const bought = await status()
+    expect([stateFor(bought), bought.status]).toEqual(['PROCESSING', 'processing'])
+    expect(bought.providerRef).toBe('ord-7')
+    list = [{ external_customer_id: ref, order_id: 'ord-7', order_status: 'order_completed', transaction_id: '0xtx', order_crypto: 'USDC_BASE', order_crypto_amount: 95.93 }]
     const done = await status()
-    expect(done).toMatchObject({ state: 'COMPLETED', status: 'succeeded', txHash: '0xtx', output: { amount: '95.93' } })
+    expect(stateFor(done)).toBe('COMPLETED')
+    expect(done).toMatchObject({ status: 'succeeded', providerRef: 'ord-7', transactions: [{ role: 'destination', hash: '0xtx', chain: 'eip155:8453' }], output: { value: '95.93' } })
     expect(checkLegStep(done)).toEqual([])
     list = [{ external_customer_id: ref, order_status: 'order_cancelled' }]
-    expect(await status()).toMatchObject({ state: 'FAILED', status: 'failed', error: { code: 'PAYMENT_FAILED' } })
+    const failed = await status()
+    expect(stateFor(failed)).toBe('FAILED')
+    expect(failed).toMatchObject({ status: 'failed', error: { code: 'PAYMENT_FAILED' } })
+  })
+
+  it('an unknown order status keeps the last known step (never processing by default), and is logged', async () => {
+    let list: unknown[] = []
+    const { fetch } = fakeFetch([
+      { method: 'POST', match: '/pricing', reply: () => PRICING },
+      { method: 'POST', match: '/get_transactions', reply: () => orders(list) },
+    ])
+    const a = swapped({ publicKey: PK, secretKey: SK, statusPolling: true })
+    const log = recordingLog()
+    const ctx = makeCtx({ fetch, log })
+    const step = await a.start({ leg: cardLeg, quote: await a.quote({ leg: cardLeg, amountIn: usd('100') }, ctx) }, ctx)
+    const ref = step.ref!
+    const status = () => a.status!({ leg: cardLeg, ref }, ctx)
+    // No known status yet: the user is still paying.
+    list = [{ external_customer_id: ref, order_status: 'order_new_kind_a' }]
+    const s1 = await status()
+    expect(s1.status).toBe('requires_action')
+    expect(checkLegStep(s1)).toEqual([])
+    expect(log.warnings.filter((w) => w.includes('unknown provider status'))).toHaveLength(1)
+    // After order_completed, an unknown status keeps processing.
+    list = [{ external_customer_id: ref, order_status: 'order_completed', order_crypto: 'USDC_BASE', order_crypto_amount: '95.93' }]
+    expect((await status()).status).toBe('processing')
+    list = [{ external_customer_id: ref, order_status: 'order_new_kind_b' }]
+    const s2 = await status()
+    expect(s2).toMatchObject({ status: 'processing', ref })
+    expect(checkLegStep(s2)).toEqual([])
   })
 
   it('works without a stored order and maps HTTP errors', async () => {
     const a = swapped({ publicKey: PK, secretKey: SK, statusPolling: true })
     const ok = fakeFetch([{ method: 'POST', match: '/get_transactions', reply: () => ({}) }])
-    expect(await a.status!({ leg: cardLeg, ref: 'u.x' }, makeCtx({ fetch: ok.fetch }))).toMatchObject({ state: 'PAYMENT' })
+    expect(stateFor(await a.status!({ leg: cardLeg, ref: 'u.x' }, makeCtx({ fetch: ok.fetch })))).toBe('PAYMENT')
     expect((ok.calls[0]!.body as Record<string, unknown>).start_date).toBeUndefined()
     const bad = fakeFetch([{ method: 'POST', match: '/get_transactions', status: 401, reply: () => ({ message: 'bad signature' }) }])
     await expect(a.status!({ leg: cardLeg, ref: 'u.x' }, makeCtx({ fetch: bad.fetch }))).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
@@ -444,8 +491,36 @@ describe('swapped live API', () => {
     const ctx = makeCtx({ fetch: globalThis.fetch, session: { country: 'US' } })
     const legs = await a.catalog!({ country: 'US', currency: 'USD', direction: 'deposit' }, ctx)
     expect(legs.map((l) => l.methods![0])).toContain('card')
-    const q = await a.quote({ leg: cardLeg, amountIn: { amount: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    const q = await a.quote({ leg: cardLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
     expect(checkLegQuote(q)).toEqual([])
-    expect(Number(q.output.amount)).toBeGreaterThan(80)
+    expect(Number(q.output.value)).toBeGreaterThan(80)
   }, 30_000)
+})
+
+describe('swapped webhook replay protection', () => {
+  const sign = (body: string) => createHmac('sha256', SK).update(body).digest('base64')
+  const ramp = () => createOpenRamp({ secret: 's'.repeat(40), baseUrl: 'https://app.test/api', adapters: [swapped({ publicKey: PK, secretKey: SK })], logger: silentLog })
+  const post = (r: ReturnType<typeof ramp>, body: string) =>
+    r.handle(new Request('https://app.test/api/webhooks/swapped', { method: 'POST', headers: { signature: sign(body) }, body }))
+
+  it('gives the body hash as the replay key and as the event id', async () => {
+    const a = swapped({ publicKey: PK, secretKey: SK })
+    const body = JSON.stringify({ order_status: 'order_cancelled', external_customer_id: 'u_42.abc' })
+    const key = await a.webhook!.replayKey!(new Request('https://app.test/w', { method: 'POST' }), body, makeWebhookCtx())
+    expect(key).toBe(await webhookBodyKey(body))
+    expect((await a.webhook!.parse(body, makeWebhookCtx()))[0]!.eventId).toBe(key!.slice(0, 32))
+  })
+
+  it('ignores a replayed signed body (200, nothing applied), and lets a retry of an unapplied body through', async () => {
+    const r = ramp()
+    const body = JSON.stringify({ order_status: 'payment_pending', external_customer_id: 'u_42.abc' })
+    expect(await (await post(r, body)).json()).toEqual({ received: true })
+    const replay = await post(r, body)
+    expect(replay.status).toBe(200)
+    expect(await replay.json()).toEqual({ received: true, duplicate: true })
+
+    const unknown = JSON.stringify({ order_status: 'order_cancelled', external_customer_id: 'u_unknown.1' })
+    expect((await post(r, unknown)).status).toBe(503)
+    expect((await post(r, unknown)).status).toBe(503)
+  })
 })
