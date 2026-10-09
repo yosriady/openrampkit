@@ -22,6 +22,7 @@ const LEG_STATUS_TO_STATE: Record<LegStatus, StateName> = {
   failed: 'FAILED',
   refunded: 'REFUNDED',
   expired: 'EXPIRED',
+  reversed: 'REVERSED',
 }
 
 /** Build the session step from the active leg. A finished leg that is not the last shows as PROCESSING. */
@@ -36,6 +37,10 @@ export function composeStep(rt: Runtime, rec: SessionRecord): Step {
       status: l.step?.status ?? ('pending' as const),
       ...(l.step?.txHash ? { txHash: l.step.txHash } : {}),
     })),
+  }
+  // A refund or a chargeback after success ends the session, whatever the other legs do.
+  if (rec.reversal) {
+    return { sessionId: rec.id, state: 'REVERSED', transitions: [], error: orkError('PAYMENT_REVERSED', { recovery: 'contact_support', legId: rec.reversal.legId }), progress, legIndex: act.index }
   }
   if (act.legs.every((l) => l.step?.status === 'succeeded')) {
     return { sessionId: rec.id, state: 'COMPLETED', transitions: [], progress, legIndex: act.index }
@@ -99,16 +104,29 @@ export function sessionStatusFor(state: StateName, hasActive: boolean): SessionS
   if (state === 'FAILED' || state === 'BLOCKED') return 'failed'
   if (state === 'EXPIRED') return 'expired'
   if (state === 'REFUNDED') return 'refunded'
+  if (state === 'REVERSED') return 'reversed'
   return hasActive ? 'processing' : 'open'
 }
 
 async function settleStatus(rt: Runtime, rec: SessionRecord) {
   const before = rec.status
   rec.status = sessionStatusFor(rec.step.state, !!rec.active)
-  if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded'].includes(rec.status)) {
-    await notify(rt, rec, `session.${rec.status}`)
-    if (rec.direction === 'withdraw' && (rec.status === 'completed' || rec.status === 'failed')) await notify(rt, rec, `withdrawal.${rec.status}`)
+  if (rec.status !== before && ['completed', 'failed', 'expired', 'refunded', 'reversed'].includes(rec.status)) {
+    const extra = rec.status === 'reversed' ? reversalDetail(rec) : undefined
+    await notify(rt, rec, `session.${rec.status}`, extra)
+    if (rec.direction === 'withdraw' && ['completed', 'failed', 'reversed'].includes(rec.status)) await notify(rt, rec, `withdrawal.${rec.status}`, extra)
   }
+}
+
+/** The extra fields of `session.reversed` and `withdrawal.reversed`. No time: the event id must not change. */
+function reversalDetail(rec: SessionRecord): Record<string, unknown> | undefined {
+  const r = rec.reversal
+  return r ? { index: r.index, adapterId: r.adapterId, legId: r.legId, legStatus: r.status, previous: r.previous } : undefined
+}
+
+/** True when a leg's new status takes back money: a chargeback, or a refund after the leg succeeded. */
+function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
+  return after === 'reversed' || (after === 'refunded' && before === 'succeeded')
 }
 
 /**
@@ -163,7 +181,8 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   const act = rec.active!
   const leg = act.legs[i]!
   const wrapped = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
-  if (leg.step?.status !== wrapped.status) {
+  const before = leg.step?.status
+  if (before !== wrapped.status) {
     addTimeline(rec, `leg.${wrapped.status}`, {
       index: i,
       adapterId: leg.adapterId,
@@ -180,6 +199,14 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   // An operator closed this session (`admin.resolve`). Keep the leg data for the record, but do not
   // send from the treasury, start the next leg, notify or change the session state.
   if (rec.resolution) return
+  if (!rec.reversal && isReversal(before, wrapped.status)) {
+    rec.reversal = { at: Date.now(), index: i, adapterId: leg.adapterId, legId: leg.legId, status: wrapped.status as 'refunded' | 'reversed', previous: rec.step.state }
+    rt.log.warn('the provider took back a payment; the session is REVERSED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: wrapped.status, previous: rec.step.state })
+    rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status: wrapped.status })
+    rec.step = composeStep(rt, rec)
+    await settleStatus(rt, rec)
+    return
+  }
   const sent = await treasuryStep(rt, rec, i, wrapped)
   if (sent) return setLegStep(rt, rec, i, sent)
   // Leg events of a later attempt get their own key (and so their own event id).
@@ -337,8 +364,15 @@ const MONEY_MOVED: LegStatus[] = ['processing', 'succeeded', 'refunded']
 async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
   const att = rec.attempts![k]!
   const leg = att.legs[i]!
-  if (leg.step?.status !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+  const before = leg.step?.status
+  if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
   leg.step = ls
+  if (isReversal(before, ls.status)) {
+    // The session moved on from this attempt, so its state stays. The timeline keeps the reversal.
+    rt.log.warn('the provider took back a payment of an earlier attempt', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
+    rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status: ls.status })
+    return
+  }
   if (!MONEY_MOVED.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
   if (rec.step.state === 'COMPLETED' || underway || rec.resolution) {

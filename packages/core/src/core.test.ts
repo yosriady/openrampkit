@@ -42,6 +42,11 @@ describe('table', () => {
     expect(isLegalLegMove('processing', 'awaiting_user')).toBe(false)
     expect(isLegalLegMove('failed', 'succeeded')).toBe(false)
     expect(isLegalLegMove('succeeded', 'succeeded')).toBe(false)
+    expect(isLegalLegMove('succeeded', 'refunded')).toBe(true)
+    expect(isLegalLegMove('succeeded', 'reversed')).toBe(true)
+    expect(isLegalLegMove('refunded', 'reversed')).toBe(false)
+    expect(isLegalLegMove('failed', 'refunded')).toBe(false)
+    expect(isTerminal('REVERSED')).toBe(true)
   })
 })
 

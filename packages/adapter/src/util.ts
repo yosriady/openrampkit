@@ -94,6 +94,8 @@ export function legStepFromEvent(ev: LegEvent | undefined, ref: string, poll: Po
       return { state: 'FAILED', status: 'failed', transitions: [], ...extra, ...(ev.error ? { error: ev.error } : {}) }
     case 'refunded':
       return { state: 'REFUNDED', status: 'refunded', transitions: [], ...extra }
+    case 'reversed':
+      return { state: 'REVERSED', status: 'reversed', transitions: [], ...extra }
     case 'expired':
       return { state: 'EXPIRED', status: 'expired', transitions: [], ...extra }
     default:

@@ -17,7 +17,7 @@ import { replayDeadLetters, saveSession } from './outbox.js'
 import { adminPage } from './admin-page.js'
 import { claimToken, OPEN_QUEUE, OUTBOX_QUEUE, queueOf } from './queue.js'
 import type { Runtime } from './runtime.js'
-import type { ActivePayment, OutboxEvent, PaymentAttempt, QueueItem, Resolution, SessionRecord, TimelineEntry } from './store.js'
+import type { ActivePayment, OutboxEvent, PaymentAttempt, QueueItem, Resolution, Reversal, SessionRecord, TimelineEntry } from './store.js'
 import { addTimeline } from './timeline.js'
 
 const DAY_MS = 24 * 60 * 60_000
@@ -219,6 +219,8 @@ export type AdminSession = AdminSessionSummary & {
   txHashes: string[]
   timeline: Array<Omit<TimelineEntry, 'at'> & { at: string }>
   resolution?: Omit<Resolution, 'at'> & { at: string }
+  /** Set when the provider refunded or reversed a leg after it succeeded */
+  reversal?: Omit<Reversal, 'at'> & { at: string }
 }
 
 function currencyOf(a: Amount): string {
@@ -334,6 +336,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
     txHashes: payments.flatMap(({ p }) => p.legs.map((l) => l.step?.txHash).filter((h): h is string => !!h)),
     timeline: (rec.timeline ?? []).map((t) => ({ ...t, at: iso(t.at)! })),
     ...(rec.resolution ? { resolution: { ...rec.resolution, at: iso(rec.resolution.at)! } } : {}),
+    ...(rec.reversal ? { reversal: { ...rec.reversal, at: iso(rec.reversal.at)! } } : {}),
   }
 }
 
@@ -341,7 +344,7 @@ export function adminView(rt: Runtime, rec: SessionRecord, now = Date.now()): Ad
 
 export type AdminListOptions = {
   direction?: Direction
-  /** A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`) or a step state (`PAYMENT`, ...) */
+  /** A session status (`open`, `processing`, `completed`, `failed`, `expired`, `refunded`, `reversed`) or a step state (`PAYMENT`, ...) */
   state?: string
   /** Only sessions created at least this many minutes ago */
   olderThan?: number

@@ -88,7 +88,7 @@ type PublicSession = {
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only, when the app set them
   targetLocked?: boolean          // withdraw only: true when the app set and locked the target
-  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
+  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string             // set after the first plan
   locale?: string               // only when the app set one

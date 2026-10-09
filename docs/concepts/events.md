@@ -58,11 +58,13 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 | `leg.failed` | One leg failed |
 | `session.completed` | Every leg succeeded |
 | `session.failed` | The step became `FAILED` or `BLOCKED` |
-| `session.refunded` | The step became `REFUNDED` |
+| `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed |
+| `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). The step became `REVERSED`. Take back or freeze the credit. |
 | `session.expired` | The session passed its expiry with no payment started, or with a leg that still waits for the user (found by the sweep, or by a request). Also sent when a leg ends as `expired`. |
 | `session.late_payment` | A payment that the user left with `restart` succeeded, but the session already completed, or another payment is in progress. Refund or credit it by hand. |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` |
+| `withdrawal.reversed` | Withdraw sessions: sent after `session.reversed` (for example, the bank returned the payout) |
 
 `data.object` for every webhook:
 
@@ -74,10 +76,25 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
   // leg.succeeded: index, adapterId, legId
   // leg.failed:    index, adapterId, error
   // session.late_payment: attempt, index, adapterId, legId, txHash (when known)
+  // session.reversed, withdrawal.reversed: index, adapterId, legId,
+  //   legStatus ('refunded' or 'reversed'), previous (the step state before, e.g. 'COMPLETED')
 }
 ```
 
 `data.object.session.result` (a [`SessionResult`](../api/core.md#sessionresult)) tells what the user paid and what arrived, once a payment started.
+
+### Refunds and chargebacks after success
+
+A provider can take back a payment after it completed: a refund, or a card chargeback. The adapter reports the leg as `refunded` or `reversed`. The server then:
+
+- keeps the leg with its new status (and the session's `result`),
+- adds `leg.refunded` (or `leg.reversed`) and `session.reversed` to the timeline,
+- sets the step to `REVERSED` (with the error `PAYMENT_REVERSED`) and the session status to `reversed`,
+- sends `session.reversed` once (and `withdrawal.reversed` for a withdrawal), with a deterministic event id.
+
+`REVERSED` is final. The session refuses `restart` and a new payment. A refund that comes before the payment completed is not a reversal: the step becomes `REFUNDED` and the server sends `session.refunded`, as before. A refund of an earlier attempt (one the user left with `restart`) goes into the timeline only.
+
+The server learns a reversal from a provider event (a webhook). It does not poll a completed session.
 
 Each event type (with its extra fields) is queued at most once per session. Leg events of a later payment attempt (after `restart`) are new events.
 

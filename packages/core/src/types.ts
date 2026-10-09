@@ -214,6 +214,7 @@ export type OrkErrorCode =
   | 'PROVIDER_DECLINED'
   | 'KYC_REJECTED'
   | 'PAYMENT_FAILED'
+  | 'PAYMENT_REVERSED'
   | 'DELIVERY_FAILED'
   | 'RATE_LIMITED'
   | 'PROVIDER_UNAVAILABLE'
@@ -251,6 +252,8 @@ export type StateName =
   | 'FAILED'
   | 'EXPIRED'
   | 'REFUNDED'
+  /** The payment completed, then the provider took it back (a refund or a chargeback after success) */
+  | 'REVERSED'
   | 'BLOCKED'
 
 /** An EVM transaction for the wallet to send */
@@ -362,6 +365,8 @@ export type LegStatus =
   | 'failed'
   | 'refunded'
   | 'expired'
+  /** The provider took back a payment (a chargeback or a reversal) */
+  | 'reversed'
 
 export type Step = {
   sessionId: string
@@ -391,7 +396,8 @@ export type LegStep = {
 
 // ---------- Sessions ----------
 
-export type SessionStatus = 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
+/** `reversed`: the payment completed, then the provider refunded it or took it back. Take back or freeze the credit. */
+export type SessionStatus = 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
 
 export type PublicSession = {
   id: string
@@ -444,11 +450,13 @@ export type OrkEventType =
   | 'session.failed'
   | 'session.expired'
   | 'session.refunded'
+  | 'session.reversed'
   | 'session.late_payment'
   | 'leg.succeeded'
   | 'leg.failed'
   | 'withdrawal.completed'
   | 'withdrawal.failed'
+  | 'withdrawal.reversed'
   | 'step.changed'
   | 'modal.opened'
   | 'modal.closed'

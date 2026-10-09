@@ -160,7 +160,7 @@ async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (rec.direction !== 'withdraw') return errorResponse(orkError('BAD_REQUEST', { message: 'Only withdraw sessions take a target.' }), 409)
   if (rec.targetLocked) return errorResponse(orkError('TARGET_LOCKED'), 409)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
-  if (rec.step.state === 'COMPLETED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED' || rec.status === 'expired') return errorResponse(orkError('BAD_REQUEST', { message: 'This withdrawal can no longer be changed.' }), 409)
   const body = await readJson<Record<string, unknown>>(req)
   const target = parseTarget(body)
   checkAllowed(rec, target)
@@ -184,6 +184,8 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (!stored) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (stored.quote.expiresAt && Date.parse(stored.quote.expiresAt) < Date.now()) return errorResponse(orkError('QUOTE_EXPIRED'), 410)
   if (rec.active && !isTerminal(rec.step.state)) return inProgress()
+  // A completed (or completed, then reversed) payment stays the session's payment.
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'REVERSED') return errorResponse(orkError('BAD_REQUEST', { message: 'This session already has a completed payment.' }), 409)
   const bounds = boundsError(rec, stored.quote.input)
   if (bounds) return errorResponse(bounds, 422)
   const walletAddress = walletAddressOf(body.walletAddress)
@@ -203,6 +205,8 @@ async function transitionRoute(rt: Runtime, req: Request, rec: SessionRecord, na
     if (rec.step.state === 'COMPLETED') {
       return errorResponse(orkError('BAD_REQUEST', { message: rec.direction === 'withdraw' ? 'This withdrawal is complete.' : 'This deposit is complete.' }), 409)
     }
+    // The payment completed and the provider took it back. The app decides what happens next.
+    if (rec.step.state === 'REVERSED') return errorResponse(orkError('BAD_REQUEST', { message: 'This payment was reversed. Start a new session.' }), 409)
     // Keep the left payment as an earlier attempt: the user may have paid it already (a bank transfer,
     // a QR code or a deposit address). A late provider event for it still applies (see `applyEvent`).
     archiveActive(rec)

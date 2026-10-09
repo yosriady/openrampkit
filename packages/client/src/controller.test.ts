@@ -114,6 +114,16 @@ describe('start', () => {
     expect(noCrypto.c.getSnapshot().tab).toBe('cash')
   })
 
+  it('shows the result for a REVERSED session and does not resolve done', async () => {
+    const client = fakeClient({ getSession: vi.fn(async () => session('REVERSED')) })
+    const { c } = make({}, client)
+    await c.start()
+    expect(c.getSnapshot()).toMatchObject({ screen: 'result', session: { step: { state: 'REVERSED' } } })
+    const done = c.done.then(() => 'resolved', () => 'rejected')
+    c.close()
+    await expect(done).resolves.toBe('rejected')
+  })
+
   it('resumes a session that is past SELECT_METHOD without planning', async () => {
     const client = fakeClient({ getSession: vi.fn(async () => session('COMPLETED')) })
     const { c } = make({}, client)

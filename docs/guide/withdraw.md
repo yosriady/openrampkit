@@ -232,6 +232,7 @@ For a withdraw session, the server sends the usual [session webhooks](./webhooks
 |---|---|
 | `withdrawal.completed` | The withdrawal completed. Sent after `session.completed`. |
 | `withdrawal.failed` | The withdrawal failed. Sent after `session.failed`. |
+| `withdrawal.reversed` | The withdrawal completed, then the provider took it back (for example, the bank returned the payout). Sent after `session.reversed`. |
 
 `data.object.session.result` tells what left and what arrived:
 

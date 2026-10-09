@@ -74,6 +74,7 @@ export const en = {
     FAILED: 'Payment failed',
     EXPIRED: 'Expired',
     REFUNDED: 'Refunded',
+    REVERSED: 'Reversed',
     BLOCKED: 'Not available',
   } as Record<string, string>,
   provider: 'the provider',
@@ -118,6 +119,7 @@ export const en = {
     succeeded: 'done',
     failed: 'failed',
     refunded: 'refunded',
+    reversed: 'reversed',
     expired: 'expired',
   } as Record<string, string>,
 
@@ -130,6 +132,7 @@ export const en = {
     FAILED: 'Payment failed',
     EXPIRED: 'Session expired',
     REFUNDED: 'Payment refunded',
+    REVERSED: 'Payment reversed',
     BLOCKED: 'Not available',
   } as Record<string, string>,
   failedBody: 'The payment did not go through.',

@@ -67,6 +67,7 @@ export const id: Messages = {
     FAILED: 'Pembayaran gagal',
     EXPIRED: 'Kedaluwarsa',
     REFUNDED: 'Dana dikembalikan',
+    REVERSED: 'Ditarik kembali',
     BLOCKED: 'Tidak tersedia',
   },
   provider: 'penyedia',
@@ -110,6 +111,7 @@ export const id: Messages = {
     succeeded: 'selesai',
     failed: 'gagal',
     refunded: 'dikembalikan',
+    reversed: 'ditarik kembali',
     expired: 'kedaluwarsa',
   },
 
@@ -121,6 +123,7 @@ export const id: Messages = {
     FAILED: 'Pembayaran gagal',
     EXPIRED: 'Sesi kedaluwarsa',
     REFUNDED: 'Pembayaran dikembalikan',
+    REVERSED: 'Pembayaran ditarik kembali',
     BLOCKED: 'Tidak tersedia',
   },
   failedBody: 'Pembayaran tidak berhasil.',

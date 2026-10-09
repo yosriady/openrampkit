@@ -2,7 +2,7 @@
 
 import type { Amount, MethodOption, OrkError, PublicSession, Quote, Surface } from '@openrampkit/core'
 
-export const TERMINAL = new Set(['completed', 'failed', 'expired', 'refunded'])
+export const TERMINAL = new Set(['completed', 'failed', 'expired', 'refunded', 'reversed'])
 
 export function amountText(a: Amount): string {
   const unit = a.asset.kind === 'fiat' ? a.asset.currency : (a.asset.symbol ?? a.asset.token)

@@ -30,7 +30,7 @@ type PublicSession = {
   source?: WithdrawSource         // withdraw only
   allowedTargets?: AllowedTargets // withdraw only
   targetLocked?: boolean          // withdraw only: the app set and locked the target
-  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded'
+  status: 'open' | 'processing' | 'completed' | 'failed' | 'expired' | 'refunded' | 'reversed'
   country?: string
   currency?: string
   locale?: string
@@ -177,7 +177,7 @@ Compares two strings in constant time for a given length, for tokens and signatu
 | `TRANSITION_TABLE` | `Record<StateName, { next: StateName[]; terminal: boolean }>` |
 | `TABLE_VERSION` | `1` |
 | `isTerminal(state)`, `isLegalMove(from, to)` | |
-| `TERMINAL_LEG_STATUSES`, `isLegTerminal(status)` | `succeeded`, `failed`, `refunded`, `expired` |
+| `TERMINAL_LEG_STATUSES`, `isLegTerminal(status)` | `succeeded`, `failed`, `refunded`, `expired`, `reversed` |
 | `LEG_STATUS_RANK`, `isLegalLegMove(from, to)` | The order of leg statuses. A provider event moves a leg only to a status of the same or a higher rank. See [Leg status](../concepts/flow.md#leg-status). |
 | `validateStep(step)` | Problems with a step's shape (AWAIT on a terminal state, duplicate transition names) |
 

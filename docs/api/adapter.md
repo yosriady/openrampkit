@@ -150,7 +150,7 @@ Types: `HttpError`, `FetchJsonInit`, `HttpErrorOptions`.
 |---|---|
 | `POLL` | `onchain` (2.5 s start, 10 s max, 30 min), `checkout` (4 s, 15 s, 60 min), `dev` (1.5 s, 5 s, 15 min) |
 | `awaitPoll(poll, name = 'poll')` | An AWAIT transition |
-| `legStepFromEvent(event, ref, poll)` | No event, `pending` or `awaiting_user`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`: those states. `processing`: `PROCESSING`. |
+| `legStepFromEvent(event, ref, poll)` | No event, `pending` or `awaiting_user`: `PAYMENT`. `succeeded`: `COMPLETED`. `failed`: `FAILED`. `refunded`, `expired`, `reversed`: those states. `processing`: `PROCESSING`. |
 | `decimalFrom(n, digits = 8)` | Provider number to an exact decimal string; missing or non-finite gives `'0'` |
 | `minWithToleranceBps(expectedBase, bps)` | The smallest amount (integer base units, as a string) that still counts as `expectedBase` when it can be up to `bps` basis points lower: `expected - floor(expected * bps / 10000)`, with bigint math. `minWithToleranceBps('999', 50)` is `'995'`. |
 | `randomHex(bytes = 8)` | Random hex string |

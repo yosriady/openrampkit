@@ -84,10 +84,12 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
 | `leg.failed` | One leg failed | `index`, `adapterId`, `error` |
 | `session.completed` | Every leg succeeded. **Credit here.** | |
 | `session.failed` | The step became `FAILED` or `BLOCKED` | |
-| `session.refunded` | The step became `REFUNDED` | |
+| `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed | |
+| `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). **Take back or freeze the credit.** | `index`, `adapterId`, `legId`, `legStatus`, `previous` |
 | `session.expired` | The session passed its expiry before the payment went on (no payment started, or the leg still waits for the user), or a leg expired | |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` | |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` | |
+| `withdrawal.reversed` | Withdraw sessions: sent after `session.reversed` | Same as `session.reversed` |
 
 The [background sweep](../api/server.md#background-sweep) finds expired sessions and sends `session.expired`. A request that loads an expired session (for example a browser poll) also sends it. Without a scheduled sweep, a session that nobody loads again never sends `session.expired`.
 
@@ -154,6 +156,28 @@ async function handle(event: { id: string; type: string; sessionId?: string; dat
 ```
 
 For a withdrawal, `result.input` is what left, and `result.output` is what the user received (or the estimate). See [Withdrawals](./withdraw.md#events).
+
+## Refunds and chargebacks after success
+
+A provider can take back a payment after `session.completed`: a refund, or a card chargeback. Then you get `session.reversed`, and `session.status` is `reversed`. You credited the user on `session.completed`, so take the credit back, or freeze it until you check the case:
+
+```ts
+if (event.type === 'session.reversed' && event.sessionId) {
+  const { userId, legStatus } = event.data.object
+  await db.transaction(async (tx) => {
+    // Once per session: a unique index on reversals.session_id
+    const inserted = await tx.reversals.insertIfAbsent({ sessionId: event.sessionId, userId, eventId: event.id, legStatus })
+    if (!inserted) return
+    const credit = await tx.credits.find({ sessionId: event.sessionId })
+    if (credit) await tx.balances.decrement(userId, credit.amount) // or freeze the balance and alert support
+  })
+}
+```
+
+- `session.reversed` comes at most once per session, with a stable event id. Deduplicate it like the other events.
+- `legStatus` is `refunded` (the provider refunded the user) or `reversed` (a chargeback or a returned payout).
+- For a withdrawal you also get `withdrawal.reversed`. The payout did not reach the user, so give the funds back to the user's balance, or contact the user.
+- The modal shows "Payment reversed" when the user still has it open.
 
 ::: warning Same-chain wallet transfers
 When the source token is the same as the destination token on the same chain, the Relay adapter sends a plain transfer without Relay. It checks the transaction receipt on chain: the transaction succeeded and paid the recipient at least the quoted amount. It does not check that the transaction is new or that the user sent it. Store `result.txHashes` with a unique constraint, so one transaction cannot complete two sessions.

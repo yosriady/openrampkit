@@ -12,7 +12,7 @@ import type { ConformanceProblem } from './testkit.js'
 import type { Adapter, AdapterContext, LegEvent, Logger, QuoteInput, ScopedKV, StartInput, WebhookContext } from './index.js'
 import type { Destination, LegQuote, LegStatus, LegStep, PathwayLeg, StateName } from '@openrampkit/core'
 
-const LEG_STATUSES: readonly LegStatus[] = ['pending', 'awaiting_user', 'processing', 'succeeded', 'failed', 'refunded', 'expired']
+const LEG_STATUSES: readonly LegStatus[] = ['pending', 'awaiting_user', 'processing', 'succeeded', 'failed', 'refunded', 'expired', 'reversed']
 
 // ---------------- KV ----------------
 

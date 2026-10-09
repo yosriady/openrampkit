@@ -15,11 +15,13 @@ export const TRANSITION_TABLE: Record<StateName, TableEntry> = {
   AUTH: { next: ['KYC', 'PAYMENT', 'FAILED', 'EXPIRED'], terminal: false },
   KYC: { next: ['KYC', 'PAYMENT', 'FAILED', 'EXPIRED'], terminal: false },
   PAYMENT: { next: ['PAYMENT', 'PROCESSING', 'COMPLETED', 'FAILED', 'EXPIRED', 'QUOTE'], terminal: false },
-  PROCESSING: { next: ['PROCESSING', 'PAYMENT', 'COMPLETED', 'FAILED', 'REFUNDED', 'EXPIRED'], terminal: false },
-  COMPLETED: { next: [], terminal: true },
+  PROCESSING: { next: ['PROCESSING', 'PAYMENT', 'COMPLETED', 'FAILED', 'REFUNDED', 'REVERSED', 'EXPIRED'], terminal: false },
+  // A provider can refund or reverse a payment after it completed (a chargeback).
+  COMPLETED: { next: ['REVERSED'], terminal: true },
   FAILED: { next: ['SELECT_METHOD'], terminal: true },
   EXPIRED: { next: [], terminal: true },
   REFUNDED: { next: [], terminal: true },
+  REVERSED: { next: [], terminal: true },
   BLOCKED: { next: ['SELECT_METHOD'], terminal: true },
 }
 
@@ -33,7 +35,7 @@ export function isLegalMove(from: StateName, to: StateName): boolean {
   return from === to || TRANSITION_TABLE[from].next.includes(to)
 }
 
-export const TERMINAL_LEG_STATUSES: LegStatus[] = ['succeeded', 'failed', 'refunded', 'expired']
+export const TERMINAL_LEG_STATUSES: LegStatus[] = ['succeeded', 'failed', 'refunded', 'expired', 'reversed']
 
 export function isLegTerminal(status: LegStatus): boolean {
   return TERMINAL_LEG_STATUSES.includes(status)
@@ -52,14 +54,16 @@ export const LEG_STATUS_RANK: Record<LegStatus, number> = {
   failed: 3,
   expired: 3,
   refunded: 4,
+  reversed: 4,
 }
 
 /**
  * True when a provider event may move a leg from `from` to `to`. A leg that is not final moves to the
- * same status or to a status of a higher rank. A final leg does not move.
+ * same status or to a status of a higher rank. A final leg does not move, with one exception: a
+ * `succeeded` leg can become `refunded` or `reversed` (the provider took the payment back).
  */
 export function isLegalLegMove(from: LegStatus, to: LegStatus): boolean {
-  if (isLegTerminal(from)) return false
+  if (isLegTerminal(from)) return from === 'succeeded' && (to === 'refunded' || to === 'reversed')
   return LEG_STATUS_RANK[to] >= LEG_STATUS_RANK[from]
 }
 

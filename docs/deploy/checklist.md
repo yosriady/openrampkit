@@ -46,6 +46,7 @@ Go through this list before real money moves.
 - [ ] The cron route refuses requests without the secret, and the secret is set in every environment that runs it.
 - [ ] You watch the logs for `webhook moved to dead letter after retries` (after `webhooks.retryHours`, default 24 hours) and `sweep: session check failed`. To send dead letters again, call `openramp.webhooks.replay(sessionId)` or use "Replay webhooks" in the [ops dashboard](../guide/admin.md#the-dashboard).
 - [ ] Your backend handles `session.late_payment` (a payment the user left with `restart` succeeded after another payment).
+- [ ] Your backend handles `session.reversed`: it takes back or freezes the credit of a payment that the provider refunded or charged back after it completed.
 - [ ] Each run has enough time: it retries up to `limit` (default 50) webhooks and checks up to `limit` open sessions, with provider calls for each.
 
 ## Admin and monitoring
@@ -76,6 +77,7 @@ Go through this list before real money moves.
 - [ ] With `custody: 'app'`: `treasury.send()` checks and debits the user's balance once per `idempotencyKey`, checks the recipient and amount of each transaction, and throws to refuse. The server does not know the user's balance.
 - [ ] With `custody: 'app'` and Relay: `treasury.address` is set.
 - [ ] You handle `withdrawal.failed`: check `result.txHashes` and the provider before you return funds to the user.
+- [ ] You handle `withdrawal.reversed`: the payout did not reach the user. Check the provider, then return the funds to the user.
 
 ## Adapters
 

@@ -1,5 +1,6 @@
 // Provider events that come late, twice or in the wrong order: the leg moves only forward, and an
-// event id that the session already applied is dropped.
+// event id that the session already applied is dropped. A refund or a chargeback after success
+// reverses the session.
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { LegEvent } from '@openrampkit/adapter'
@@ -7,6 +8,7 @@ import { USDC } from '@openrampkit/core'
 import type { LegSpec, LegStatus, LegStep } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
 import type { OpenRampConfig } from './index.js'
+import { eventId } from './notify.js'
 
 const BASE = 'https://app.test/api/openramp'
 const quiet = { debug() {}, info() {}, warn() {}, error() {} }
@@ -162,5 +164,53 @@ describe('P1-1: the leg moves only forward', () => {
     rec = await t.record(s.id)
     expect(rec.active!.legs[0]!.step!.txHash).toBe('0xbb')
     expect(rec.providerEvents).toHaveLength(2)
+  })
+})
+
+describe('P1-2: a refund or a chargeback after success', () => {
+  it('a refund after success makes the session REVERSED and sends session.reversed once, with a stable id', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'succeeded' }])
+    expect(t.app.of('session.completed')).toHaveLength(1)
+
+    expect(await t.hook([{ ref: s.ref, status: 'refunded' }])).toBe(200)
+    const rec = await t.record(s.id)
+    expect(rec.status).toBe('reversed')
+    expect(rec.step).toMatchObject({ state: 'REVERSED', transitions: [], error: { code: 'PAYMENT_REVERSED' }, progress: { legs: [{ status: 'refunded' }] } })
+    expect(rec.reversal).toMatchObject({ index: 0, adapterId: 'hooked', legId: 'hook', status: 'refunded', previous: 'COMPLETED' })
+    expect(rec.timeline!.map((e) => e.type)).toEqual(expect.arrayContaining(['leg.refunded', 'session.reversed']))
+
+    // The provider sends the refund again, then a chargeback: nothing new.
+    await t.hook([{ ref: s.ref, status: 'refunded' }])
+    await t.hook([{ ref: s.ref, status: 'reversed' }])
+    const reversed = t.app.of('session.reversed')
+    expect(reversed).toHaveLength(1)
+    const extra = { index: 0, adapterId: 'hooked', legId: 'hook', legStatus: 'refunded', previous: 'COMPLETED' }
+    expect(reversed[0]!.id).toBe(await eventId(s.id, `session.reversed:${JSON.stringify(extra)}`))
+    expect(reversed[0]!.data.object).toMatchObject({ ...extra, session: { status: 'reversed', step: { state: 'REVERSED' } } })
+    expect(t.app.of('session.refunded')).toHaveLength(0)
+    // Operators see it in the admin view.
+    expect(await t.ramp.admin.get(s.id)).toMatchObject({ status: 'reversed', state: 'REVERSED', reversal: { index: 0, status: 'refunded', previous: 'COMPLETED' } })
+  })
+
+  it('a chargeback (status reversed) after success does the same; the session refuses a restart', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'succeeded' }])
+    await t.hook([{ ref: s.ref, status: 'reversed' }])
+    expect((await t.record(s.id)).step.state).toBe('REVERSED')
+    expect(t.app.of('session.reversed')[0]!.data.object).toMatchObject({ legStatus: 'reversed' })
+    expect((await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)).status).toBe(409)
+  })
+
+  it('a refund before success is still REFUNDED, not REVERSED', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'processing' }])
+    await t.hook([{ ref: s.ref, status: 'refunded' }])
+    expect((await t.record(s.id)).step.state).toBe('REFUNDED')
+    expect(t.app.of('session.refunded')).toHaveLength(1)
+    expect(t.app.of('session.reversed')).toHaveLength(0)
   })
 })

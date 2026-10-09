@@ -93,6 +93,7 @@ describe('liveText', () => {
     expect(liveText(snap({ screen: 'result', session: failed }), undefined, en)).toBe('Payment failed')
     expect(liveText(snap({ screen: 'result', session: failed, direction: 'withdraw' }), undefined, en)).toBe('Withdrawal failed')
     expect(liveText(snap({ screen: 'result', session: session(step({ state: 'EXPIRED' })) }), undefined, en)).toBe('Session expired')
+    expect(liveText(snap({ screen: 'result', session: session(step({ state: 'REVERSED' })) }), undefined, en)).toBe('Payment reversed')
   })
 })
 
