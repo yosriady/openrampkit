@@ -75,7 +75,7 @@ Go through this list before real money moves.
 
 - [ ] `screenAddress` calls your sanctions or blocklist check. It fails closed: an error refuses the address.
 - [ ] `allowedDestinations` lists only the chains and currencies you support.
-- [ ] With `custody: 'app'`: `treasury.send()` checks and debits the user's balance once per `idempotencyKey`, checks the recipient and amount of each transaction, and throws to refuse. The server does not know the user's balance.
+- [ ] With `custody: 'app'`: `treasury.send()` checks and debits the user's balance once per `idempotencyKey`, checks the recipient and amount of each transaction, and throws `TreasuryRefusedError` to refuse (any other error makes the failure final). The server does not know the user's balance.
 - [ ] With `custody: 'app'` and Relay: `treasury.address` is set.
 - [ ] For withdrawals, you handle `session.failed`: check `result.txHashes` and the provider before you return funds to the user. `session.payment_failed` is not final: the user can try again.
 - [ ] For withdrawals, you handle `session.reversed`: the payout did not reach the user. Check the provider, then return the funds to the user.

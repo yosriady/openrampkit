@@ -123,12 +123,15 @@ The funds are in the user's own wallet. The modal shows the `WALLET_TX` step and
 Your app holds the funds (for example in a hot wallet or a custodial account). The user never signs. When the leg shows a `WALLET_TX` that waits for the user, the server calls your `treasury.send()` hook instead:
 
 ```ts
+import { createOpenRamp, TreasuryRefusedError } from '@openrampkit/server'
+
 createOpenRamp({
   // ...
   treasury: {
     address: '0xYourHotWallet', // optional: the sender, given to providers for exact quotes (Relay)
     async send({ sessionId, userId, chain, txs, idempotencyKey }) {
-      // Check and debit the user's balance first. Refuse by throwing.
+      // Check and debit the user's balance first. To refuse before you send anything:
+      if (!(await hasBalance(userId, txs))) throw new TreasuryRefusedError('Not enough balance')
       const hash = await hotWallet.sendAll(chain, txs, { idempotencyKey })
       return { hash } // the hash of the last transaction
     },
@@ -148,12 +151,14 @@ What the server does:
 - It marks the step as sent and saves the session (with the version check) before it calls the hook. When two requests start the same step at the same time, one save fails with `409 CONFLICT`, so only one request calls the hook. It calls the hook at most once per step, and the key lets you drop a retry on your side.
 - The saved session shows the leg as `processing` before the hook runs. When the server stops, or a provider call fails after the hook sent the funds, the session stays `PROCESSING`: it does not show the `WALLET_TX`, and it refuses `restart` and a new `select`. Thus a second payment cannot make the treasury send again. The sweep polls the provider. When the provider never sees the transfer, the session shows as stuck in the admin tools, and an operator closes it (`admin.resolve`).
 - It reports the hash to the adapter (the leg's `tx_hash` transition), or it waits for the provider to see the transfer.
-- When the hook throws, the leg fails with `PAYMENT_FAILED` ("The withdrawal could not be sent. Contact support."). The server reads a throw as "refused, nothing sent", so the user can try again. Throw only when your hook sent nothing. When the hook sent funds and then has a problem, return the hash and report the problem out of band.
+- When the hook throws, the leg fails with `PAYMENT_FAILED` ("The withdrawal could not be sent. Contact support.").
+  - A `TreasuryRefusedError` means "refused, nothing sent". The attempt fails, and the user can try again.
+  - Any other error means "the funds may have left" (for example a timeout after the broadcast). The failure is final (status `failed`), the session refuses a new attempt, and an operator resolves it. This fails closed, so an error can never cause a second payout.
 - When the treasury sent funds and the provider then fails the order, the failure is final (status `failed`). The session refuses a new attempt, so the treasury cannot send a second time. An operator resolves the session (`admin.resolve`) and refunds the user if the provider returned the funds.
 - Without a `treasury` hook, every method of an `app` session is in "Not available" with "Withdrawals are not set up for this app yet."
 
 ::: danger The server does not know the user's balance
-The server does not check that the user owns the funds that the treasury sends. `amountBounds` limits each withdrawal, but it does not know the balance. In `send()`, check the user's balance for this session, debit it (once per `idempotencyKey`), and throw to refuse. Also check the amount and the recipient of `txs`. An offramp such as Swapped sets the deposit address and the amount in its own webhook, so the transaction can differ from the quote.
+The server does not check that the user owns the funds that the treasury sends. `amountBounds` limits each withdrawal, but it does not know the balance. In `send()`, check the user's balance for this session, debit it (once per `idempotencyKey`), and throw `TreasuryRefusedError` to refuse. Also check the amount and the recipient of `txs`. An offramp such as Swapped sets the deposit address and the amount in its own webhook, so the transaction can differ from the quote.
 :::
 
 Set `treasury.address` when you use Relay. Relay builds its transactions for a sender address. Without it, quotes use a placeholder sender.

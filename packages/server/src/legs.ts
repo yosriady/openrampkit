@@ -3,7 +3,7 @@
 import type { LegEvent } from '@openrampkit/adapter'
 import { OpenRampException, bps, cmp, isDecimal, isFinalStatus, isLegalLegMove, isLegTerminal, isSafeLinkUrl, isStepSub, isTerminal, isWebUrl, openRampError, sub } from '@openrampkit/core'
 import type { Amount, AmountMismatch, Asset, LegStatus, LegStep, SessionStatus, StateName, Step } from '@openrampkit/core'
-import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_MAX_ATTEMPTS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS } from './config.js'
+import { DEFAULT_LATE_GRACE_HOURS, DEFAULT_MAX_ATTEMPTS, DEFAULT_OUTPUT_TOLERANCE_BPS, DEFAULT_POLL, REF_INDEX_TTL_SEC, START_URL_TTL_MS, STATUS_CHECK_MIN_INTERVAL_MS, isTreasuryRefused } from './config.js'
 import { hmacHex, randomHex, sha256Hex } from './crypto.js'
 import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
@@ -271,11 +271,12 @@ async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegS
   try {
     hash = (await treasury.send({ sessionId: rec.id, userId: rec.userId, chain, txs, idempotencyKey: key })).hash
   } catch (e) {
-    // The treasury contract: `send` throws only when it refused and sent nothing. Clear the mark, so
-    // this failure counts as "no money moved" and the user may try again. A hook that can fail after
-    // it sent must return (and report the problem out of band), never throw.
-    leg.treasurySent = (leg.treasurySent ?? []).filter((k) => k !== key)
-    rt.log.error('treasury send failed', { sessionId: rec.id, error: e instanceof Error ? e.message : String(e) })
+    // Fail closed: only an explicit `TreasuryRefusedError` proves that nothing was sent. Then the mark
+    // goes, and the user may try again. Any other error (a timeout after a broadcast, an RPC error)
+    // keeps the mark: the funds may have left, so the failure is final and an operator resolves it.
+    const refused = isTreasuryRefused(e)
+    if (refused) leg.treasurySent = (leg.treasurySent ?? []).filter((k) => k !== key)
+    rt.log.error(refused ? 'treasury refused the payout' : 'treasury send failed; the funds may have left, the session needs an operator', { sessionId: rec.id, error: e instanceof Error ? e.message : String(e) })
     return failed('The withdrawal could not be sent. Contact support.')
   }
   const t = ls.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'tx_hash')

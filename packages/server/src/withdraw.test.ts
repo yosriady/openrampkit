@@ -6,7 +6,7 @@ import type { LegEvent } from '@openrampkit/adapter'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import { USDC } from '@openrampkit/core'
 import type { PlanResult, PublicSession, Quote, WithdrawSource } from '@openrampkit/core'
-import { createOpenRamp, isValidAddress } from './index.js'
+import { TreasuryRefusedError, createOpenRamp, isValidAddress } from './index.js'
 import type { CreateSessionInput, OpenRampConfig, TreasurySendInput } from './index.js'
 import { legStepFromEvent } from './legs.js'
 
@@ -292,7 +292,7 @@ describe('withdraw with custody: app (treasury)', () => {
   })
 
   it('a failing treasury fails the attempt: session.payment_failed, and the user can try again', async () => {
-    const t = make({ treasury: { send: async () => { throw new Error('hot wallet empty') } } })
+    const t = make({ treasury: { send: async () => { throw new TreasuryRefusedError('hot wallet empty') } } })
     const s = await t.create({ source: SRC_APP })
     const { session } = await run(t, s, TO_ARB, 'wallet', '5', false)
     expect(session.step.state).toBe('FAILED')
@@ -461,6 +461,20 @@ describe('provider events that carry a surface', () => {
     expect(sent).toHaveLength(1)
   })
 
+  it('a treasury error that is not a TreasuryRefusedError is final: the funds may have left', async () => {
+    let calls = 0
+    // For example, the hot wallet broadcast the payout, then timed out before it returned the hash.
+    const t = make({ treasury: { send: async () => { calls++; throw new Error('RPC timeout after broadcast') } } })
+    const s = await t.create({ source: SRC_APP })
+    const { session } = await run(t, s, TO_ARB, 'wallet', '5', false)
+    expect(session.step.state).toBe('FAILED')
+    expect(session.status).toBe('failed')
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(409)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '5' })
+    expect(q.status).not.toBe(200)
+    expect(calls).toBe(1)
+  })
+
   it('a failure after the treasury sent, inside select, leaves no state that starts a second payment', async () => {
     const sent: string[] = []
     let refuse = true
@@ -469,7 +483,7 @@ describe('provider events that carry a surface', () => {
         // The first withdrawal is refused (an empty hot wallet): the session is FAILED.
         if (refuse) {
           refuse = false
-          throw new Error('hot wallet empty')
+          throw new TreasuryRefusedError('hot wallet empty')
         }
         sent.push(i.idempotencyKey)
         return { hash: TX }

@@ -465,7 +465,7 @@ sequenceDiagram
 
 For a fiat payout at an offramp (for example Swapped), the provider first shows its own page in an `IFRAME` for the payout details. Then a provider event carries a new `WALLET_TX` surface that pays the provider's deposit address.
 
-A failed withdrawal attempt sends `session.payment_failed`, and the user can try again. A final failure sends `session.failed`. When the treasury hook throws, the leg fails with `PAYMENT_FAILED` and the server does not send again for that step.
+A failed withdrawal attempt sends `session.payment_failed`, and the user can try again. A final failure sends `session.failed`. When the treasury hook throws `TreasuryRefusedError`, the leg fails with `PAYMENT_FAILED` and the user can try again. Any other error from the hook makes the failure final, because the funds may have left. The server never sends again for that step.
 
 ## Webhooks to your backend
 

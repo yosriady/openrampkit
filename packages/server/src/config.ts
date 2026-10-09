@@ -169,8 +169,29 @@ export type TreasurySendInput = {
 export type TreasuryHook = {
   /** Sender address, given to providers for exact quotes (e.g. Relay). Optional. */
   address?: string
-  /** Sign and send `txs` in order; return the hash of the last one. */
+  /**
+   * Sign and send `txs` in order; return the hash of the last one. To refuse (nothing was sent), throw
+   * `TreasuryRefusedError`: the attempt fails and the user may try again. Any other error is read as
+   * "the funds may have left": the failure is final, and an operator resolves the session.
+   */
   send(input: TreasurySendInput): Promise<{ hash: string }>
+}
+
+/**
+ * Throw this from `treasury.send` only when you are sure that nothing was sent (for example the hot
+ * wallet has too little balance, or your own limits refuse the payout). The user may then try again.
+ */
+export class TreasuryRefusedError extends Error {
+  readonly treasuryRefused = true
+  constructor(message = 'The treasury refused the payout.') {
+    super(message)
+    this.name = 'TreasuryRefusedError'
+  }
+}
+
+/** True for a `TreasuryRefusedError`, also across package copies. */
+export function isTreasuryRefused(e: unknown): boolean {
+  return e instanceof TreasuryRefusedError || (typeof e === 'object' && e !== null && (e as { treasuryRefused?: unknown }).treasuryRefused === true)
 }
 
 export const consoleLogger: Logger = {
