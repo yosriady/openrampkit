@@ -476,6 +476,23 @@ describe('provider events that carry a surface', () => {
     expect(sent).toHaveLength(1)
   })
 
+  it('an earlier attempt to another target does not become the payment again: no completion with the wrong destination', async () => {
+    const t = make({}, [eventOfframp()])
+    const s = await t.create()
+    await run(t, s, { type: 'fiat', currency: 'PHP' }, 'bank_transfer', '10')
+    const post = (ev: LegEvent) => t.ramp.handle(new Request(`${BASE}/webhooks/evt`, { method: 'POST', body: JSON.stringify(ev) }))
+    await post(PENDING)
+    expect((await t.call(`/sessions/${s.id}/transitions/restart`, s.clientSecret, {})).status).toBe(200)
+    // The user picks another target. Then the payout of the left attempt (in PHP) arrives.
+    expect((await t.call(`/sessions/${s.id}/target`, s.clientSecret, { type: 'fiat', currency: 'USD' })).status).toBe(200)
+    await post({ ref: 'order_1', status: 'succeeded' })
+    const now = (await t.ramp.sessions.retrieve(s.id))!
+    expect(now.destination).toMatchObject({ type: 'fiat', currency: 'USD' })
+    expect(now.status).not.toBe('completed')
+    expect(t.hooks.filter((h) => h.type === 'withdrawal.completed')).toHaveLength(0)
+    expect(t.hooks.find((h) => h.type === 'session.late_payment')!.data.object).toMatchObject({ reason: 'earlier_attempt', attempt: 0 })
+  })
+
   it('without a transition to report the hash, the treasury step waits in PROCESSING', async () => {
     const treasury = { send: vi.fn(async () => ({ hash: TX })) }
     const t = make({ treasury }, [eventOfframp()])

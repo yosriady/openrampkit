@@ -395,6 +395,7 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
     quoteId,
     pathway: stored.pathway,
     index: 0,
+    ...(rec.destination ? { destination: rec.destination } : {}),
     legs: stored.pathway.legs.map(
       (l, i): ActiveLeg => ({
         adapterId: l.adapterId,
@@ -491,8 +492,9 @@ const REVIVES: LegStatus[] = ['processing', 'succeeded']
  * A status for a leg of an earlier attempt (one the user left with `restart`). When money is under way
  * or arrived on it and the session has no other payment under way, that attempt becomes the active
  * payment again, so the session completes. A refund before success only updates the attempt. When
- * the session already completed or another payment is under way, a succeeded leg sends
- * `session.late_payment` instead, so the app can refund or credit by hand.
+ * the session already completed or another payment is under way, or the attempt paid to another
+ * withdraw target than the current one, a succeeded leg sends `session.late_payment` instead, so the
+ * app can refund or credit by hand.
  */
 async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: number, ls: LegStep): Promise<void> {
   const att = rec.attempts![k]!
@@ -513,8 +515,11 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   }
   if (!REVIVES.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
+  // The user picked another withdraw target after the restart: the session must not complete with a
+  // destination that this payment did not pay to.
+  const otherTarget = !!att.destination && JSON.stringify(att.destination) !== JSON.stringify(rec.destination)
   // A REVERSED or EXPIRED session: an earlier attempt never becomes its payment again.
-  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution) {
+  if (rec.step.state === 'COMPLETED' || rec.step.state === 'EXPIRED' || rec.reversal || underway || rec.resolution || otherTarget) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
       await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })

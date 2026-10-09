@@ -46,6 +46,8 @@ export type ActivePayment = {
   pathway: Pathway
   legs: ActiveLeg[]
   index: number
+  /** The session destination when this payment began. A withdraw target can change after a restart. */
+  destination?: Destination
 }
 
 /** An earlier payment attempt, kept after a restart. Its provider refs stay indexed, so a late event still finds it. */
