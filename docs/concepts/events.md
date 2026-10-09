@@ -77,7 +77,8 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
   // leg.failed:    index, adapterId, error
   // session.late_payment: attempt, index, adapterId, legId, txHash (when known)
   // session.reversed, withdrawal.reversed: index, adapterId, legId,
-  //   legStatus ('refunded' or 'reversed'), previous (the step state before, e.g. 'COMPLETED')
+  //   legStatus ('refunded' or 'reversed'), previous (the step state before, e.g. 'COMPLETED'),
+  //   attempt (only for an earlier attempt; the session state does not change)
 }
 ```
 
@@ -92,7 +93,13 @@ A provider can take back a payment after it completed: a refund, or a card charg
 - sets the step to `REVERSED` (with the error `PAYMENT_REVERSED`) and the session status to `reversed`,
 - sends `session.reversed` once (and `withdrawal.reversed` for a withdrawal), with a deterministic event id.
 
-`REVERSED` is final. The session refuses `restart` and a new payment. A refund that comes before the payment completed is not a reversal: the step becomes `REFUNDED` and the server sends `session.refunded`, as before. A refund of an earlier attempt (one the user left with `restart`) goes into the timeline only.
+`REVERSED` is final. After it, the server moves no more funds for the session: it does not start a next leg, it does not call the treasury, and later provider events change only the leg data (no `leg.*` events, no other session state). An earlier attempt that the provider pays later does not become the session's payment: the server sends `session.late_payment`. The session refuses `restart` and a new payment. An operator can still set another final state with `admin.resolve` and an audit note.
+
+A reversal also applies to a session that an operator closed with `admin.resolve`: the session becomes `REVERSED` and the server sends `session.reversed`.
+
+A refund or a chargeback of an earlier attempt (one the user left with `restart`) does not change the session state. The server sends `session.reversed` once for it, with the extra field `attempt` (the attempt number). You may have credited that payment by hand after `session.late_payment`.
+
+A refund that comes before the payment completed is not a reversal: the step becomes `REFUNDED` and the server sends `session.refunded`, as before.
 
 The server learns a reversal from a provider event (a webhook). It does not poll a completed session.
 

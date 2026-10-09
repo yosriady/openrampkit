@@ -124,6 +124,23 @@ function reversalDetail(rec: SessionRecord): Record<string, unknown> | undefined
   return r ? { index: r.index, adapterId: r.adapterId, legId: r.legId, legStatus: r.status, previous: r.previous } : undefined
 }
 
+/**
+ * The provider took back the money of leg `i` of the active payment. The session becomes REVERSED (a
+ * final state), and the server sends `session.reversed` (and `withdrawal.reversed`) once. The caller
+ * saves the session with `saveSession`, so the events go out with the change.
+ */
+async function reverse(rt: Runtime, rec: SessionRecord, i: number, status: 'refunded' | 'reversed'): Promise<void> {
+  const leg = rec.active!.legs[i]!
+  rec.reversal = { at: Date.now(), index: i, adapterId: leg.adapterId, legId: leg.legId, status, previous: rec.step.state }
+  rt.log.warn('the provider took back a payment; the session is REVERSED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status, previous: rec.step.state })
+  rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status })
+  rec.step = composeStep(rt, rec)
+  rec.status = 'reversed'
+  const extra = reversalDetail(rec)
+  await notify(rt, rec, 'session.reversed', extra)
+  if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
+}
+
 /** True when a leg's new status takes back money: a chargeback, or a refund after the leg succeeded. */
 function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
   return after === 'reversed' || (after === 'refunded' && before === 'succeeded')
@@ -135,7 +152,7 @@ function isReversal(before: LegStatus | undefined, after: LegStatus): boolean {
  * undefined when this step is not for the treasury (or it already sent this step).
  */
 async function treasuryStep(rt: Runtime, rec: SessionRecord, i: number, ls: LegStep): Promise<LegStep | undefined> {
-  if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0) return undefined
+  if (rec.direction !== 'withdraw' || rec.source?.custody !== 'app' || i !== 0 || rec.reversal) return undefined
   if (ls.surface?.kind !== 'WALLET_TX' || ls.status !== 'awaiting_user') return undefined
   const act = rec.active!
   const leg = act.legs[i]!
@@ -228,15 +245,19 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
     leg.ref = wrapped.ref
     await rt.store.kv.put(`ref:${leg.adapterId}:${wrapped.ref}`, rec.id, REF_INDEX_TTL_SEC)
   }
+  // A refund or a chargeback after success. This also applies to a session that an operator closed:
+  // the app must learn that the money went back.
+  if (!rec.reversal && (isReversal(before, wrapped.status) || wrapped.state === 'REVERSED')) {
+    await reverse(rt, rec, i, wrapped.status === 'refunded' ? 'refunded' : 'reversed')
+    return
+  }
   // An operator closed this session (`admin.resolve`). Keep the leg data for the record, but do not
   // send from the treasury, start the next leg, notify or change the session state.
   if (rec.resolution) return
-  if (!rec.reversal && isReversal(before, wrapped.status)) {
-    rec.reversal = { at: Date.now(), index: i, adapterId: leg.adapterId, legId: leg.legId, status: wrapped.status as 'refunded' | 'reversed', previous: rec.step.state }
-    rt.log.warn('the provider took back a payment; the session is REVERSED', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: wrapped.status, previous: rec.step.state })
-    rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status: wrapped.status })
+  // The session is REVERSED, and that is final. Keep the leg data, but move no more funds: no
+  // treasury send, no next leg, no leg events, no other session state.
+  if (rec.reversal) {
     rec.step = composeStep(rt, rec)
-    await settleStatus(rt, rec)
     return
   }
   const sent = await treasuryStep(rt, rec, i, wrapped)
@@ -255,6 +276,8 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
 }
 
 export async function startLeg(rt: Runtime, rec: SessionRecord, i: number): Promise<void> {
+  // A reversed session moves no more funds.
+  if (rec.reversal) return
   const act = rec.active!
   const leg = act.legs[i]!
   const a = rt.adapter(leg.adapterId)
@@ -400,14 +423,19 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   if (before !== ls.status) addTimeline(rec, `attempt.leg.${ls.status}`, { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
   leg.step = ls
   if (isReversal(before, ls.status)) {
-    // The session moved on from this attempt, so its state stays. The timeline keeps the reversal.
+    // The session moved on from this attempt, so its state stays. The app may have credited this
+    // payment by hand (`session.late_payment`), so it gets `session.reversed` with `attempt`.
     rt.log.warn('the provider took back a payment of an earlier attempt', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     rt.metric('payment.reversed', 1, { adapter: leg.adapterId, status: ls.status })
+    const extra = { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, legStatus: ls.status, previous: rec.step.state }
+    await notify(rt, rec, 'session.reversed', extra)
+    if (rec.direction === 'withdraw') await notify(rt, rec, 'withdrawal.reversed', extra)
     return
   }
   if (!MONEY_MOVED.includes(ls.status)) return
   const underway = rec.active?.legs.some((l) => l.step && MONEY_MOVED.includes(l.step.status))
-  if (rec.step.state === 'COMPLETED' || underway || rec.resolution) {
+  // A REVERSED session is final: an earlier attempt never becomes its payment again.
+  if (rec.step.state === 'COMPLETED' || rec.reversal || underway || rec.resolution) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
       await notify(rt, rec, 'session.late_payment', { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })

@@ -61,6 +61,41 @@ function hookedAdapter() {
   return { adapter, statusOf }
 }
 
+/** A bridge from USDC on Base to USDC on Arbitrum: the second leg of a two-leg pathway. */
+function bridgeAdapter() {
+  let n = 0
+  const starts: string[] = []
+  const spec: LegSpec = {
+    id: 'bridge', kind: 'bridge_swap',
+    from: { asset: { kind: 'crypto', chains: { 'eip155:8453': [USDC['eip155:8453']!] } }, location: ['address'] },
+    to: { asset: { kind: 'crypto', chains: { 'eip155:42161': [USDC['eip155:42161']!] } }, location: ['address'] },
+    regions: { allow: ['*'], deny: [] }, eta: { min: 1, max: 2 }, surfaces: ['DEPOSIT_ADDRESS'],
+  }
+  const adapter = createAdapter({
+    id: 'bridger', name: 'Bridger', legs: [spec],
+    async prepareDeposit() {
+      return { address: '0x00000000000000000000000000000000000000dd' }
+    },
+    async quote({ leg, amountIn }) {
+      return { adapterId: 'bridger', legId: leg.legId, input: amountIn!, output: { amount: amountIn!.amount, asset: leg.to.asset }, fees: [], eta: { min: 1, max: 2 } }
+    },
+    async start() {
+      const ref = `bridge-${++n}`
+      starts.push(ref)
+      return { state: 'PROCESSING', status: 'processing', ref, transitions: [{ name: 'poll', kind: 'AWAIT', poll: { intervalMs: 1000, backoff: 1, maxIntervalMs: 1000, giveUpAfterMs: 60000 } }] }
+    },
+    webhook: {
+      async verify() {
+        return true
+      },
+      async parse(raw) {
+        return JSON.parse(raw) as LegEvent[]
+      },
+    },
+  })
+  return { adapter, starts }
+}
+
 /** App backend that records each delivered webhook body. */
 function appBackend() {
   const sent: Array<{ id: string; type: string; data: { object: Record<string, unknown> } }> = []
@@ -73,9 +108,10 @@ function appBackend() {
 
 function make(extra: Partial<OpenRampConfig> = {}) {
   const hooked = hookedAdapter()
+  const bridge = bridgeAdapter()
   const app = appBackend()
   const store = memoryStore()
-  const ramp = createOpenRamp({ secret: 's'.repeat(40), baseUrl: BASE, adapters: [hooked.adapter], logger: quiet, webhooks: HOOKS, fetch: app.fetchFn, store, ...extra })
+  const ramp = createOpenRamp({ secret: 's'.repeat(40), baseUrl: BASE, adapters: [hooked.adapter, bridge.adapter], logger: quiet, webhooks: HOOKS, fetch: app.fetchFn, store, ...extra })
   const call = (path: string, init: RequestInit & { secret?: string } = {}) => {
     const headers = new Headers(init.headers)
     if (init.secret) headers.set('authorization', `Bearer ${init.secret}`)
@@ -83,19 +119,23 @@ function make(extra: Partial<OpenRampConfig> = {}) {
     return ramp.handle(new Request(`${BASE}${path}`, { ...init, headers }))
   }
   const post = (path: string, secret: string, body: unknown = {}) => call(path, { method: 'POST', secret, body: JSON.stringify(body) })
-  const hook = async (events: LegEvent[]) => (await call('/webhooks/hooked', { method: 'POST', body: JSON.stringify(events) })).status
+  const hook = async (events: LegEvent[], adapter = 'hooked') => (await call(`/webhooks/${adapter}`, { method: 'POST', body: JSON.stringify(events) })).status
   /** Create a session and start a card payment (state PAYMENT, waiting for the user). Returns the session and its order ref. */
-  async function toPayment(input: { ttlMinutes?: number } = {}) {
+  async function toPayment(input: { ttlMinutes?: number; destination?: typeof DEST } = {}) {
     const s = await ramp.sessions.create({ userId: 'u', country: 'SG', destination: DEST, ...input })
+    return { ...s, ref: await pay(s) }
+  }
+  /** Plan, quote and select a card payment for session `s`. Returns the new order ref. */
+  async function pay(s: { id: string; clientSecret: string }) {
     await post(`/sessions/${s.id}/plan`, s.clientSecret)
     const q = await (await post(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'card', amount: '10' })).json()
     const pub = await (await post(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.quotes[0].id })).json()
     expect(pub.step.state).toBe('PAYMENT')
     const rec = (await store.get(s.id))!
-    return { ...s, ref: rec.active!.legs[0]!.ref! }
+    return rec.active!.legs[0]!.ref!
   }
   const record = async (id: string) => (await store.get(id))!
-  return { ramp, store, call, post, hook, toPayment, record, app, statusOf: hooked.statusOf }
+  return { ramp, store, call, post, hook, toPayment, pay, record, app, statusOf: hooked.statusOf, bridgeStarts: bridge.starts }
 }
 
 afterEach(() => vi.useRealTimers())
@@ -212,6 +252,84 @@ describe('P1-2: a refund or a chargeback after success', () => {
     expect((await t.record(s.id)).step.state).toBe('REFUNDED')
     expect(t.app.of('session.refunded')).toHaveLength(1)
     expect(t.app.of('session.reversed')).toHaveLength(0)
+  })
+})
+
+describe('P1-2 review: a reversal is final, always notified, and stops all fund movement', () => {
+  const ARB = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: '0x000000000000000000000000000000000000beef' }
+
+  it('after a reversal on the first leg, later events of the next leg change nothing and send no leg or session events', async () => {
+    const t = make()
+    const s = await t.toPayment({ destination: ARB })
+    expect((await t.record(s.id)).active!.legs).toHaveLength(2)
+    await t.hook([{ ref: s.ref, status: 'succeeded' }])
+    expect(t.bridgeStarts).toHaveLength(1)
+    await t.hook([{ ref: s.ref, status: 'refunded' }])
+    expect((await t.record(s.id)).step.state).toBe('REVERSED')
+
+    await t.hook([{ ref: t.bridgeStarts[0]!, status: 'succeeded' }], 'bridger')
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('REVERSED')
+    expect(rec.status).toBe('reversed')
+    expect(rec.active!.legs[1]!.step!.status).toBe('succeeded') // the leg data is kept
+    expect(t.app.of('leg.succeeded').map((e) => e.data.object.index)).toEqual([0])
+    expect(t.app.of('session.completed')).toHaveLength(0)
+    expect(t.app.of('session.reversed')).toHaveLength(1)
+    expect(t.bridgeStarts).toHaveLength(1)
+  })
+
+  it('a reversal of an earlier attempt sends session.reversed once, with the attempt, and keeps the session state', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    const first = s.ref
+    expect((await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)).status).toBe(200)
+    const second = await t.pay(s)
+    await t.hook([{ ref: second, status: 'succeeded' }])
+    await t.hook([{ ref: first, status: 'succeeded' }])
+    expect(t.app.of('session.late_payment')).toHaveLength(1)
+
+    await t.hook([{ ref: first, status: 'refunded' }])
+    await t.hook([{ ref: first, status: 'refunded' }])
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('COMPLETED')
+    const reversed = t.app.of('session.reversed')
+    expect(reversed).toHaveLength(1)
+    const extra = { attempt: 0, index: 0, adapterId: 'hooked', legId: 'hook', legStatus: 'refunded', previous: 'COMPLETED' }
+    expect(reversed[0]!.data.object).toMatchObject(extra)
+    expect(reversed[0]!.id).toBe(await eventId(s.id, `session.reversed:${JSON.stringify(extra)}`))
+  })
+
+  it('a reversal of a session that an operator closed still sends session.reversed and makes it REVERSED', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    await t.hook([{ ref: s.ref, status: 'processing' }])
+    await t.ramp.admin.resolve(s.id, 'COMPLETED', 'credited by hand after a support call')
+    await t.hook([{ ref: s.ref, status: 'succeeded' }])
+    await t.hook([{ ref: s.ref, status: 'reversed' }])
+    const rec = await t.record(s.id)
+    expect(rec).toMatchObject({ status: 'reversed', step: { state: 'REVERSED' }, reversal: { status: 'reversed' } })
+    expect(t.app.of('session.reversed')).toHaveLength(1)
+  })
+
+  it('an earlier attempt paid after the reversal does not become the payment again', async () => {
+    const t = make()
+    const s = await t.toPayment()
+    const first = s.ref
+    await t.post(`/sessions/${s.id}/transitions/restart`, s.clientSecret)
+    const second = await t.pay(s)
+    await t.hook([{ ref: second, status: 'succeeded' }])
+    await t.hook([{ ref: second, status: 'reversed' }])
+    expect((await t.record(s.id)).step.state).toBe('REVERSED')
+
+    await t.hook([{ ref: first, status: 'succeeded' }])
+    const rec = await t.record(s.id)
+    expect(rec.step.state).toBe('REVERSED')
+    expect(rec.status).toBe('reversed')
+    expect(rec.active!.legs[0]!.ref).toBe(second)
+    expect(t.app.of('session.late_payment')).toHaveLength(1)
+    expect(t.app.of('session.completed')).toHaveLength(1)
+    const pub = await (await t.call(`/sessions/${s.id}`, { secret: s.clientSecret })).json()
+    expect(pub).toMatchObject({ status: 'reversed', step: { state: 'REVERSED' } })
   })
 })
 

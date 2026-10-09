@@ -85,7 +85,7 @@ function verify(secret: string, headers: Record<string, string>, body: string, t
 | `session.completed` | Every leg succeeded. **Credit here.** | |
 | `session.failed` | The step became `FAILED` or `BLOCKED` | |
 | `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed | |
-| `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). **Take back or freeze the credit.** | `index`, `adapterId`, `legId`, `legStatus`, `previous` |
+| `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). **Take back or freeze the credit.** | `index`, `adapterId`, `legId`, `legStatus`, `previous`, and `attempt` for an earlier attempt |
 | `session.expired` | The session passed its expiry before the payment went on (no payment started, or the leg still waits for the user), or a leg expired | |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` | |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` | |
@@ -177,6 +177,7 @@ if (event.type === 'session.reversed' && event.sessionId) {
 
 - `session.reversed` comes at most once per session, with a stable event id. Deduplicate it like the other events.
 - `legStatus` is `refunded` (the provider refunded the user) or `reversed` (a chargeback or a returned payout).
+- When the data has `attempt`, the reversal is for an earlier attempt that the user left with `restart`. The session state does not change. Take back only a credit that you gave by hand for that attempt (after `session.late_payment`).
 - For a withdrawal you also get `withdrawal.reversed`. The payout did not reach the user, so give the funds back to the user's balance, or contact the user.
 - The modal shows "Payment reversed" when the user still has it open.
 
