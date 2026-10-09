@@ -61,7 +61,7 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
 | `session.refunded` | The step became `REFUNDED`: the provider returned the payment before it completed |
 | `session.reversed` | The payment completed, then the provider refunded it or took it back (a chargeback). The step became `REVERSED`. Take back or freeze the credit. |
 | `session.expired` | The session passed its expiry with no payment started, or with a leg that still waits for the user (found by the sweep, or by a request). Also sent when a leg ends as `expired`. |
-| `session.late_payment` | A payment that the user left with `restart` succeeded, but the session already completed, or another payment is in progress. Refund or credit it by hand. |
+| `session.late_payment` | A payment arrived late. `reason: 'after_expiry'`: the session had expired, and the payment arrived after all (a webhook, or the sweep's grace poll); the session goes on and you also get `session.completed`. `reason: 'earlier_attempt'`: a payment that the user left with `restart` succeeded, but the session already completed (or was reversed), or another payment is in progress; refund or credit it by hand. |
 | `withdrawal.completed` | Withdraw sessions: sent after `session.completed` |
 | `withdrawal.failed` | Withdraw sessions: sent after `session.failed` |
 | `withdrawal.reversed` | Withdraw sessions: sent after `session.reversed` (for example, the bank returned the payout) |
@@ -75,7 +75,8 @@ The server sends these to `webhooks.url`, signed with `webhooks.secret`. See [We
   metadata: Record<string, string>  // from sessions.create(), or {}
   // leg.succeeded: index, adapterId, legId
   // leg.failed:    index, adapterId, error
-  // session.late_payment: attempt, index, adapterId, legId, txHash (when known)
+  // session.late_payment: reason ('after_expiry' or 'earlier_attempt'), index, adapterId, legId,
+  //   txHash (when known), attempt (earlier_attempt only)
   // session.reversed, withdrawal.reversed: index, adapterId, legId,
   //   legStatus ('refunded' or 'reversed'), previous (the step state before, e.g. 'COMPLETED'),
   //   attempt (only for an earlier attempt; the session state does not change)

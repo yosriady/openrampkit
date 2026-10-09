@@ -246,6 +246,7 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   const leg = act.legs[i]!
   const wrapped = await wrapSurface(rt, rec, checkSurfaceUrls(rt, rec, ls))
   const before = leg.step?.status
+  const wasExpired = rec.step.state === 'EXPIRED'
   if (before !== wrapped.status) {
     addTimeline(rec, `leg.${wrapped.status}`, {
       index: i,
@@ -282,6 +283,12 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   // Leg events of a later attempt get their own key (and so their own event id).
   const scope = act.n ? `a${act.n}` : undefined
   if (wrapped.status === 'succeeded') await notify(rt, rec, 'leg.succeeded', { index: i, adapterId: leg.adapterId, legId: leg.legId }, scope)
+  // The session expired while the user still had to pay, and the payment arrived after all (a
+  // webhook, or the grace poll of the sweep). The session goes on and can complete.
+  if (wasExpired && wrapped.status === 'succeeded') {
+    rt.log.warn('a payment arrived after the session expired; the session goes on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref })
+    await notify(rt, rec, 'session.late_payment', { reason: 'after_expiry', index: i, adapterId: leg.adapterId, legId: leg.legId, ...(wrapped.txHash ? { txHash: wrapped.txHash } : {}) }, scope)
+  }
   if (wrapped.status === 'failed') await notify(rt, rec, 'leg.failed', { index: i, adapterId: leg.adapterId, error: wrapped.error }, scope)
   if (wrapped.status === 'succeeded' && i === act.index && i < act.legs.length - 1 && !deliveredWrongAsset(leg)) {
     act.index = i + 1
@@ -369,9 +376,10 @@ export async function beginPayment(rt: Runtime, rec: SessionRecord, quoteId: str
 }
 
 /** Ask the active leg's adapter for status (rate-limited). Returns true when the session changed. */
-export async function refreshActive(rt: Runtime, rec: SessionRecord, force = false): Promise<boolean> {
+export async function refreshActive(rt: Runtime, rec: SessionRecord, force = false, opts: { late?: boolean } = {}): Promise<boolean> {
   const act = rec.active
-  if (!act || isTerminal(rec.step.state)) return false
+  // `late`: the sweep polls an EXPIRED session in its grace window (`latePayments`).
+  if (!act || (isTerminal(rec.step.state) && !(opts.late && rec.step.state === 'EXPIRED' && !rec.resolution && !rec.reversal))) return false
   const leg = act.legs[act.index]!
   if (!leg.ref || !leg.step || isLegTerminal(leg.step.status)) return false
   const a = rt.adapter(leg.adapterId)
@@ -455,7 +463,7 @@ async function applyToAttempt(rt: Runtime, rec: SessionRecord, k: number, i: num
   if (rec.step.state === 'COMPLETED' || rec.reversal || underway || rec.resolution) {
     rt.log.warn('payment on an earlier attempt after the session moved on', { sessionId: rec.id, adapterId: leg.adapterId, ref: leg.ref, status: ls.status })
     if (ls.status === 'succeeded') {
-      await notify(rt, rec, 'session.late_payment', { attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
+      await notify(rt, rec, 'session.late_payment', { reason: 'earlier_attempt', attempt: att.n ?? 0, index: i, adapterId: leg.adapterId, legId: leg.legId, ...(ls.txHash ? { txHash: ls.txHash } : {}) })
     }
     return
   }

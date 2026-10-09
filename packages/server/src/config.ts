@@ -112,6 +112,14 @@ export type OpenRampConfig = {
   admin?: AdminConfig
   /** Optional metrics callback. See `Telemetry`. */
   telemetry?: Telemetry
+  /**
+   * Late payments. When the sweep expires a session whose payment still waits for the user (for
+   * example a bank transfer or a deposit address), it keeps polling that payment at a slower rate for
+   * `graceHours` (default 72; 0 turns it off), every `pollMinutes` (default 10). When the payment
+   * arrives, the session completes, and the server sends `session.late_payment` and `session.completed`.
+   * Only adapters with `status()` can be polled; a provider webhook completes an expired session too.
+   */
+  latePayments?: { graceHours?: number; pollMinutes?: number }
 }
 
 export type AdminConfig = {
@@ -173,6 +181,9 @@ export const PAY_LINK_GRACE_MS = 30 * 60_000
 export const IDEMPOTENCY_TTL_SEC = 60 * 60 * 24
 export const REF_INDEX_TTL_SEC = 60 * 60 * 24 * 30
 export const STATUS_CHECK_MIN_INTERVAL_MS = 2000
+/** Defaults of `latePayments` */
+export const DEFAULT_LATE_GRACE_HOURS = 72
+export const DEFAULT_LATE_POLL_MINUTES = 10
 /** Default `policy.outputToleranceBps`: 1% */
 export const DEFAULT_OUTPUT_TOLERANCE_BPS = 100
 /** Largest JSON body the browser routes accept */

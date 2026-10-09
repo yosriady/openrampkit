@@ -44,6 +44,7 @@ const openramp = createOpenRamp({
 | `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. See [Custody](../guide/withdraw.md#custody-app). |
 | `payPage` | `false \| { scriptUrl?, title? }` | on, script from esm.sh | The hosted pay page `GET /pay/:credential`. `false` turns it off. See [The pay link](../guide/agents.md#the-pay-link). |
 | `admin` | `{ token?, stuckAfterMinutes?, indexDays?, page? }` | none | Admin tools. With `admin`, the server keeps a time index of new sessions. With `token` (at least 32 characters), the routes `/admin/*` and the dashboard `GET /admin` are on. See [Admin and observability](../guide/admin.md). |
+| `latePayments` | `{ graceHours?, pollMinutes? }` | `{ graceHours: 72, pollMinutes: 10 }` | After the sweep expires a session whose payment still waits, it keeps polling that payment for `graceHours`, every `pollMinutes`. A late payment completes the session and sends `session.late_payment`. `graceHours: 0` turns it off. See [Background sweep](#background-sweep). |
 | `telemetry` | `{ onMetric(name, value, tags) }` | none | A plain metrics callback: quote latency, start errors, webhook failures, outbox depth, sweep lag. See [Metrics](../guide/admin.md#metrics). |
 
 The default geo lookup reads `cf-ipcountry` or `x-vercel-ip-country` (ignoring `XX`), and `x-vercel-ip-country-region` for the region (as `{country}-{region}`).
@@ -98,16 +99,17 @@ Users close tabs, and webhook deliveries fail. `openramp.sweep()` does the backg
 - from a scheduler that runs your code (a [Cloudflare Cron Trigger](../deploy/cloudflare-workers.md#cron-trigger), a [Vercel Cron Job](../deploy/nextjs.md#background-sweep), or any cron), or
 - over HTTP with `POST {baseUrl}/tasks/sweep` and `Authorization: Bearer {tasksToken}` (see [HTTP routes](./http.md#post-tasks-sweep)).
 
-Each run does three things:
+Each run does four things:
 
 1. **Retries failed webhooks.** Each event is saved in its session record (the outbox), and the session id goes on the outbox queue. A delivery that fails (no 2xx answer, or a timeout) stays there. The sweep sends it again when it is due. The wait starts at 30 seconds and doubles after each failed attempt, up to 2 hours. After `webhooks.retryHours` (default 24), or `webhooks.maxAttempts` attempts when you set it, the event becomes a dead letter in the session record. The server logs `webhook moved to dead letter after retries` as an error. `openramp.webhooks.replay(sessionId)` sends the dead letters again.
 2. **Refreshes open payments.** For each open session with an active payment, it asks the active leg's adapter for status, like `sessions.refresh(id)`. This settles legs without provider webhooks (Relay) after the user leaves. It also asks for the status of earlier attempts that the user left with `restart` and that still wait. When one of them was paid, the session completes with it.
 3. **Expires idle sessions.** A session past its expiry moves to `EXPIRED` when no payment started, or when the active leg still waits for the user (`awaiting_user`). The server sends `session.expired`. A leg that the provider is processing is not expired: the sweep refreshes it instead.
+4. **Polls late payments.** A bank transfer or a deposit to an address can arrive after the session expired. When the expired session's active leg has a provider ref and the adapter has `status()`, the session goes on the grace list. The sweep polls it every `latePayments.pollMinutes` (default 10) for `latePayments.graceHours` (default 72). When the payment arrives, the session moves on from `EXPIRED`: it completes (or the next leg starts), and the server sends `session.late_payment` (with `reason: 'after_expiry'`) and then `session.completed`. Set `graceHours: 0` to turn it off. A provider webhook for an expired session has the same effect, with or without the grace list.
 
 ```ts
 type SweepResult = {
   webhooks: { retried: number; delivered: number; dropped: number; pending: number }
-  sessions: { checked: number; changed: number; expired: number; open: number }
+  sessions: { checked: number; changed: number; expired: number; open: number; grace: number } // grace: expired sessions polled for a late payment
 }
 ```
 

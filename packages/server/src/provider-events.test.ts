@@ -466,3 +466,73 @@ describe('P1-4: replay protection for provider webhooks with a replayKey', () =>
     expect(await again.json()).not.toHaveProperty('duplicate')
   })
 })
+
+describe('P1-5: grace polling for late payments', () => {
+  const MIN = 60_000
+
+  it('keeps polling an expired session at a slower rate; a late payment completes it and sends session.late_payment once', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const t = make()
+    const s = await t.toPayment({ ttlMinutes: 1 })
+    vi.setSystemTime(Date.now() + 2 * MIN)
+    const r1 = await t.ramp.sweep()
+    expect(r1.sessions.expired).toBe(1)
+    expect((await t.record(s.id)).step.state).toBe('EXPIRED')
+    expect(t.app.of('session.expired')).toHaveLength(1)
+
+    // Before the poll interval (10 min): not polled.
+    vi.setSystemTime(Date.now() + 5 * MIN)
+    expect((await t.ramp.sweep()).sessions.grace).toBe(0)
+    // Still not paid: polled, still EXPIRED.
+    vi.setSystemTime(Date.now() + 6 * MIN)
+    expect((await t.ramp.sweep()).sessions.grace).toBe(1)
+    expect((await t.record(s.id)).step.state).toBe('EXPIRED')
+
+    // The bank transfer arrives two hours late.
+    t.statusOf[s.ref] = { status: 'succeeded' }
+    vi.setSystemTime(Date.now() + 2 * 60 * MIN)
+    const r = await t.ramp.sweep()
+    expect(r.sessions).toMatchObject({ grace: 1, changed: 1 })
+    const rec = await t.record(s.id)
+    expect(rec).toMatchObject({ status: 'completed', step: { state: 'COMPLETED' } })
+    const late = t.app.of('session.late_payment')
+    expect(late).toHaveLength(1)
+    expect(late[0]!.data.object).toMatchObject({ reason: 'after_expiry', index: 0, adapterId: 'hooked', legId: 'hook' })
+    expect(t.app.of('session.completed')).toHaveLength(1)
+
+    // Off the grace list now.
+    vi.setSystemTime(Date.now() + 20 * MIN)
+    expect((await t.ramp.sweep()).sessions.grace).toBe(0)
+  })
+
+  it('stops polling after latePayments.graceHours', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const t = make({ latePayments: { graceHours: 1, pollMinutes: 5 } })
+    const s = await t.toPayment({ ttlMinutes: 1 })
+    vi.setSystemTime(Date.now() + 2 * MIN)
+    await t.ramp.sweep()
+    vi.setSystemTime(Date.now() + 6 * MIN)
+    expect((await t.ramp.sweep()).sessions.grace).toBe(1)
+    t.statusOf[s.ref] = { status: 'succeeded' }
+    vi.setSystemTime(Date.now() + 2 * 60 * MIN)
+    expect((await t.ramp.sweep()).sessions.grace).toBe(0)
+    expect((await t.record(s.id)).step.state).toBe('EXPIRED')
+  })
+
+  it('graceHours 0 turns it off; a provider webhook still completes an expired session with session.late_payment', async () => {
+    vi.useFakeTimers({ now: Date.now() })
+    const t = make({ latePayments: { graceHours: 0 } })
+    const s = await t.toPayment({ ttlMinutes: 1 })
+    vi.setSystemTime(Date.now() + 2 * MIN)
+    await t.ramp.sweep()
+    t.statusOf[s.ref] = { status: 'succeeded' }
+    vi.setSystemTime(Date.now() + 15 * MIN)
+    expect((await t.ramp.sweep()).sessions.grace).toBe(0)
+    expect((await t.record(s.id)).step.state).toBe('EXPIRED')
+
+    await t.hook([{ ref: s.ref, status: 'succeeded' }])
+    expect((await t.record(s.id)).step.state).toBe('COMPLETED')
+    expect(t.app.of('session.late_payment')).toHaveLength(1)
+    expect(t.app.of('session.late_payment')[0]!.data.object).toMatchObject({ reason: 'after_expiry' })
+  })
+})

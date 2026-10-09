@@ -19,7 +19,8 @@ export const TRANSITION_TABLE: Record<StateName, TableEntry> = {
   // A provider can refund or reverse a payment after it completed (a chargeback).
   COMPLETED: { next: ['REVERSED'], terminal: true },
   FAILED: { next: ['SELECT_METHOD'], terminal: true },
-  EXPIRED: { next: [], terminal: true },
+  // A payment that arrives after the session expired (webhook, or the sweep's grace poll) moves it on.
+  EXPIRED: { next: ['PROCESSING', 'COMPLETED'], terminal: true },
   REFUNDED: { next: [], terminal: true },
   REVERSED: { next: [], terminal: true },
   BLOCKED: { next: ['SELECT_METHOD'], terminal: true },

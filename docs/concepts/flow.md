@@ -94,13 +94,15 @@ stateDiagram-v2
   FAILED --> SELECT_METHOD: restart
   BLOCKED --> SELECT_METHOD: restart
   COMPLETED --> REVERSED: refund or chargeback
+  EXPIRED --> PROCESSING: late payment
+  EXPIRED --> COMPLETED: late payment
   COMPLETED --> [*]
   EXPIRED --> [*]
   REFUNDED --> [*]
   REVERSED --> [*]
 ```
 
-`FAILED` and `BLOCKED` are terminal, but the table lets them go back to `SELECT_METHOD`. The `restart` transition does this. In the table, `EXPIRED`, `REFUNDED` and `REVERSED` have no way out. `COMPLETED` can go to `REVERSED` only: the provider refunded or took back the payment after it completed (see [Refunds and chargebacks after success](./events.md#refunds-and-chargebacks-after-success)). The server's `restart` route is wider than the table: it accepts a restart after any final state other than `COMPLETED`, until the session deadline.
+`FAILED` and `BLOCKED` are terminal, but the table lets them go back to `SELECT_METHOD`. The `restart` transition does this. In the table, `REFUNDED` and `REVERSED` have no way out. `EXPIRED` can go to `PROCESSING` or `COMPLETED` only when a payment arrives after the expiry (a webhook, or the sweep's [grace poll](../api/server.md#background-sweep)). `COMPLETED` can go to `REVERSED` only: the provider refunded or took back the payment after it completed (see [Refunds and chargebacks after success](./events.md#refunds-and-chargebacks-after-success)). The server's `restart` route is wider than the table: it accepts a restart after any final state other than `COMPLETED`, until the session deadline.
 
 Who uses the table:
 

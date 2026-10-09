@@ -133,8 +133,9 @@ The server:
 
 After a resolve:
 
-- A later provider event still updates the legs (you see it in the drawer), but it does not change the session state, start a next leg or send from the treasury.
+- A later provider event still updates the legs (you see it in the drawer), but it does not change the session state, start a next leg or send from the treasury. One exception: a refund or a chargeback after success makes the session `REVERSED` and sends `session.reversed`.
 - A payment on an earlier attempt that succeeds sends `session.late_payment`.
+- The sweep does not poll the session for a late payment.
 - Browser requests that change the session answer `409`.
 - A resolve to the state that the session already has answers `409`.
 
