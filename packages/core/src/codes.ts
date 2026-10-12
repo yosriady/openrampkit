@@ -60,6 +60,7 @@ export const METHODS: Record<string, MethodInfo> = {
   shopeepay: { id: 'shopeepay', name: 'ShopeePay', kind: 'ewallet' },
   touchngo: { id: 'touchngo', name: "Touch 'n Go", kind: 'ewallet' },
   grabpay: { id: 'grabpay', name: 'GrabPay', kind: 'ewallet' },
+  boost: { id: 'boost', name: 'Boost', kind: 'ewallet' },
   revolut_pay: { id: 'revolut_pay', name: 'Revolut Pay', kind: 'wallet_pay' },
   venmo: { id: 'venmo', name: 'Venmo', kind: 'wallet_pay' },
   interac: { id: 'interac', name: 'Interac', kind: 'bank' },

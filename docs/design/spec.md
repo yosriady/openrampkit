@@ -92,7 +92,7 @@ type Destination =
 - `countries.ts`: ISO 3166-1 list with default currency.
 - `currencies.ts`: ISO 4217 with minor units.
 - `methods.ts`: the method vocabulary. It is open (a string union plus `string & {}`) so adapters can add methods. Built-in values:
-  `card, apple_pay, google_pay, bank_transfer, sepa, sepa_instant, ach, wire, pix, upi, interac, qris, promptpay, qrph, duitnow, vietqr, paynow, fpx, instapay, gcash, maya, momo, zalopay, gopay, dana, ovo, shopeepay, touchngo, grabpay, boost, cash_app, venmo, revolut_pay, exchange, wallet, transfer`.
+  `card, apple_pay, google_pay, bank_transfer, sepa, sepa_instant, ach, pix, upi, interac, qris, promptpay, qrph, duitnow, vietqr, paynow, fpx, instapay, gcash, maya, momo, zalopay, gopay, dana, ovo, shopeepay, touchngo, grabpay, boost, cash_app, venmo, revolut_pay, exchange, wallet, transfer`.
 - Each method has display metadata (name, icon key, typical ETA) and a default country priority table (for example `ID: qris, gopay, dana, ovo`; `VN: vietqr, momo, bank_transfer`; `TH: promptpay`; `MY: duitnow, touchngo`; `PH: qrph, gcash, maya`; `SG: paynow`).
 
 ### 3.5 Region policy
