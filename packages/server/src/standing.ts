@@ -239,7 +239,8 @@ export function depositAddressMethod(rt: Runtime, rec: SessionRecord): MethodOpt
 /** `POST /sessions/:id/deposit-address`: the session user's standing address for an origin and the session destination */
 export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, body: { chain?: unknown; token?: unknown }): Promise<DepositAddressView> {
   if (!rt.config.depositAddresses?.widget) throw new OpenRampException(openRampError('NOT_FOUND'), 404)
-  const a = widgetStandingAdapter(rt, rec)
+  // The same gates as the plan: the session fits, and `allowedMethods` and `policy.disabledMethods` allow the method.
+  const a = depositAddressMethod(rt, rec) ? widgetStandingAdapter(rt, rec) : undefined
   if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session cannot use a standing deposit address.' }), 409)
   if (typeof body?.chain !== 'string' || typeof body.token !== 'string') throw bad('`chain` and `token` are required.')
   const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: rec.destination!, adapterId: a.id })

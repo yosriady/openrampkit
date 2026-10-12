@@ -463,5 +463,9 @@ describe('widget: "Your deposit address"', () => {
     const limited = await session(t, { allowedMethods: ['transfer'] })
     const plan = await (await limited.call('/plan')).json()
     expect(plan.methods.map((m: { method: string }) => m.method)).not.toContain('deposit_address')
+    // The route has the same gates as the plan
+    expect((await limited.call('/deposit-address', ORIGIN)).status).toBe(409)
+    const disabled = make({ depositAddresses: { widget: true }, policy: { disabledMethods: ['deposit_address'] } })
+    expect((await (await session(disabled)).call('/deposit-address', ORIGIN)).status).toBe(409)
   })
 })
