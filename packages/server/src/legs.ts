@@ -13,7 +13,7 @@ import { addTimeline } from './timeline.js'
 import type { Runtime } from './runtime.js'
 import type { ActiveLeg, ActivePayment, SessionRecord, StoredQuote } from './store.js'
 import { withdrawSender } from './withdraw.js'
-import { isProviderFailure, recordHealth } from './health.js'
+import { isProviderFailure, recordHealth, recordLegOutcome } from './health.js'
 
 /** The AWAIT transition of a step with no action: the client checks the status on this schedule */
 const pollTransitions = (ls: LegStep) => [{ name: 'poll', kind: 'AWAIT' as const, poll: ls.poll ?? DEFAULT_POLL }]
@@ -511,8 +511,10 @@ export async function setLegStep(rt: Runtime, rec: SessionRecord, i: number, ls:
   const before = leg.step?.status
   const wasExpired = rec.step.state === 'EXPIRED'
   if (before !== wrapped.status) {
-    // Provider health counts each leg's final outcome once (a retried save after a conflict can count it twice).
-    if (wrapped.status === 'succeeded' || wrapped.status === 'failed') await recordHealth(rt, leg.adapterId, wrapped.status === 'succeeded' ? { legSucceeded: 1 } : { legFailed: 1 })
+    // Provider health counts each leg's final outcome once, and not a failure that the user caused.
+    if (wrapped.status === 'succeeded' || wrapped.status === 'failed') {
+      await recordLegOutcome(rt, { sessionId: rec.id, attempt: act.n ?? 0, index: i, adapterId: leg.adapterId }, wrapped.status, wrapped.error)
+    }
     addTimeline(rec, `leg.${wrapped.status}`, {
       index: i,
       adapterId: leg.adapterId,

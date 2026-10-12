@@ -8,7 +8,7 @@ import type { LegSpec, LegStep } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
 import type { OpenRampConfig, SessionStore } from './index.js'
 import { createRuntime } from './runtime.js'
-import { canFailOver, isProviderFailure, recordHealth } from './health.js'
+import { canFailOver, isProviderFailure, recordHealth, recordLegOutcome } from './health.js'
 import type { HealthCounts } from './health.js'
 
 const BASE = 'https://app.test/api/openramp'
@@ -133,6 +133,39 @@ describe('provider health counts', () => {
     expect((await t.health('a')).counts).toMatchObject({ quoteOk: 4, startOk: 1 })
     await t.call('/webhooks/a', { method: 'POST', body: JSON.stringify([{ ref: 'a-1', status: 'succeeded', eventId: 'e1' }]) })
     expect((await t.health('a')).counts.legSucceeded).toBe(1)
+  })
+
+  it('a leg that fails because of the user is not a provider failure; a provider failure counts once', async () => {
+    const a = cardAdapter('a', { output: '9' })
+    const t = make([a])
+    const pay = async () => {
+      const s = await t.session()
+      const r = await t.quote(s)
+      await t.post(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: r.quotes[0]!.id })
+      return s
+    }
+    await pay() // a-1
+    await t.call('/webhooks/a', { method: 'POST', body: JSON.stringify([{ ref: 'a-1', status: 'failed', error: openRampError('PAYMENT_FAILED'), eventId: 'u1' }]) })
+    expect((await t.health('a')).counts.legFailed).toBe(0)
+    await pay() // a-2
+    await t.call('/webhooks/a', { method: 'POST', body: JSON.stringify([{ ref: 'a-2', status: 'failed', error: openRampError('KYC_REJECTED'), eventId: 'u2' }]) })
+    expect((await t.health('a')).counts.legFailed).toBe(0)
+    await pay() // a-3
+    const fail = { ref: 'a-3', status: 'failed', error: openRampError('DELIVERY_FAILED') }
+    await t.call('/webhooks/a', { method: 'POST', body: JSON.stringify([{ ...fail, eventId: 'p1' }]) })
+    // The same outcome again (another event id) does not count twice
+    await t.call('/webhooks/a', { method: 'POST', body: JSON.stringify([{ ...fail, eventId: 'p2' }]) })
+    expect((await t.health('a')).counts.legFailed).toBe(1)
+  })
+
+  it('recordLegOutcome counts one leg once, as a retried save would call it again', async () => {
+    const t = make([cardAdapter('a')])
+    const ids = { sessionId: 'ors_x', attempt: 0, index: 0, adapterId: 'a' }
+    await recordLegOutcome(t.rt, ids, 'succeeded')
+    await recordLegOutcome(t.rt, ids, 'succeeded')
+    await recordLegOutcome(t.rt, { ...ids, attempt: 1 }, 'failed')
+    await recordLegOutcome(t.rt, { ...ids, attempt: 2 }, 'failed', openRampError('PAYMENT_FAILED'))
+    expect((await t.health('a')).counts).toMatchObject({ legSucceeded: 1, legFailed: 1 })
   })
 
   it('parallel quote requests of one session count one failure per adapter', async () => {

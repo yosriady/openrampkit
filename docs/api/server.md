@@ -143,7 +143,7 @@ The server tracks only the sessions it creates. A session goes back on the open-
 
 ## Provider health
 
-The server counts, per adapter and hour, quotes that worked or failed, starts that worked or failed, and legs that succeeded or failed. The counts live in the store's KV space (one key per adapter, `health:{adapterId}`), for `routing.healthWindowHours` (default 24). A write is one read and one write with no lock: two writes at the same time can lose one update, and a store error only skips the update. A request never fails because of these counts.
+The server counts, per adapter and hour, quotes that worked or failed, starts that worked or failed, and legs that succeeded or failed. A leg counts once per session, attempt and leg, also when a save is retried. A leg that failed because of the user (for example `PAYMENT_FAILED`, `KYC_REJECTED`, `PROVIDER_DECLINED` or `QUOTE_EXPIRED`) is not a provider failure. The counts live in the store's KV space (one key per adapter, `health:{adapterId}`), for `routing.healthWindowHours` (default 24). A write is one read and one write with no lock: two writes at the same time can lose one update, and a store error only skips the update. A request never fails because of these counts.
 
 An error that is an answer from a working provider is not a failure: `REGION_UNSUPPORTED`, `AMOUNT_TOO_LOW`, `AMOUNT_TOO_HIGH`, `NO_QUOTES`, `QUOTE_EXPIRED`, `PROVIDER_DECLINED`, `KYC_REJECTED`, `BAD_REQUEST`, `ADDRESS_REJECTED`, `DESTINATION_NOT_ALLOWED`, `DESTINATION_LOCKED`, `CLIENT_UPGRADE_REQUIRED`, `SESSION_EXPIRED`, `CANCELED` and `CONFLICT`. Any other error, and a quote timeout, is a failure.
 

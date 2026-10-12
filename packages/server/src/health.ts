@@ -54,6 +54,41 @@ export const NOT_PROVIDER_FAILURE: ReadonlySet<OpenRampErrorCode> = new Set<Open
   'CONFLICT',
 ])
 
+/**
+ * Leg failure codes that are about the user, not the provider: the codes above, and a payment that the
+ * user's bank or card refused (`PAYMENT_FAILED`). A failed leg with one of them does not count as a
+ * provider failure. A failed leg with no error counts.
+ */
+export const LEG_NOT_PROVIDER_FAILURE: ReadonlySet<OpenRampErrorCode> = new Set<OpenRampErrorCode>([...NOT_PROVIDER_FAILURE, 'PAYMENT_FAILED'])
+
+/**
+ * Count a leg's final outcome once. A save that is retried after a conflict runs `setLegStep` again, so
+ * an atomic mark per session, attempt and leg keeps the count at one. A failure counts only when its
+ * error points to the provider (see LEG_NOT_PROVIDER_FAILURE). Never throws.
+ */
+export async function recordLegOutcome(
+  rt: Runtime,
+  ids: { sessionId: string; attempt: number; index: number; adapterId: string },
+  status: 'succeeded' | 'failed',
+  error?: OpenRampError,
+): Promise<void> {
+  if (status === 'failed' && error && LEG_NOT_PROVIDER_FAILURE.has(error.code)) return
+  try {
+    const key = `healthleg:${ids.sessionId}:${ids.attempt}:${ids.index}`
+    const ttl = routingOptions(rt).windowHours * 3600
+    const kv = rt.store.kv
+    if (kv.putIfAbsent) {
+      if (!(await kv.putIfAbsent(key, status, ttl))) return
+    } else {
+      if (await kv.get(key)) return
+      await kv.put(key, status, ttl)
+    }
+  } catch {
+    return
+  }
+  await recordHealth(rt, ids.adapterId, status === 'succeeded' ? { legSucceeded: 1 } : { legFailed: 1 })
+}
+
 /** Defaults of `routing` */
 export const DEFAULT_HEALTH_WINDOW_HOURS = 24
 export const DEFAULT_MIN_SAMPLES = 20
