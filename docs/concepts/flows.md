@@ -488,7 +488,7 @@ sequenceDiagram
   S->>St: queue.push(outbox, sessionId, now + 30 s)
   S->>St: put(rec, version): the change and its events in one write
   alt 409 conflict
-    S->>S: nothing is sent; a retry makes the same event ids
+    S->>S: nothing is sent, and a retry makes the same event ids
   else saved
     S->>App: POST webhooks.url with headers webhook-id, webhook-timestamp, webhook-signature
     Note over S,App: webhook-signature = "v1," + base64 HMAC-SHA256(secret, id.timestamp.body), timeout 4 s
