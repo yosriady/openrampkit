@@ -126,7 +126,8 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
 
   // Past the deadline, a session cannot start (or restart) a payment. A payment in progress can still finish.
   const restart = action === 'transitions' && arg === 'restart'
-  if (method === 'POST' && (CHANGES_BEFORE_PAYMENT.has(action ?? '') || restart) && Date.now() > rec.expiresAt) {
+  // `deposit-address` too: a session past its deadline does not hand out the user's standing address.
+  if (method === 'POST' && (CHANGES_BEFORE_PAYMENT.has(action ?? '') || restart || action === 'deposit-address') && Date.now() > rec.expiresAt) {
     return errorResponse(openRampError('SESSION_EXPIRED'), 410)
   }
 

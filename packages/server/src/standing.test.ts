@@ -455,6 +455,14 @@ describe('widget: "Your deposit address"', () => {
     expect((await t.get('u1')).address).toBe(r1.address)
   })
 
+  it('refuses the route after the session deadline', async () => {
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+    const t = make({ depositAddresses: { widget: true } })
+    const { call } = await session(t)
+    vi.setSystemTime(Date.now() + 48 * 60 * 60_000)
+    expect((await call('/deposit-address', ORIGIN)).status).toBe(410)
+  })
+
   it('refuses a bad body, and hides the method when allowedMethods leaves it out', async () => {
     const t = make({ depositAddresses: { widget: true } })
     const { call } = await session(t)
