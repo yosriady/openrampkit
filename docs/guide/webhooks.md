@@ -232,6 +232,26 @@ async function credit(eventId: string, session: Session) {
 }
 ```
 
+```mermaid
+sequenceDiagram
+  autonumber
+  participant O as OpenRampKit server
+  participant H as Your webhook handler
+  participant DB as Your database
+  O->>H: session.succeeded (webhook-id, signature)
+  H->>H: Verify the signature on the raw body
+  H->>O: sessions.retrieve(sessionId), check status
+  H->>DB: INSERT credit (unique on session_id)
+  alt First insert
+    DB-->>H: ok
+    H->>DB: Increment balance by the confirmed amount
+  else Repeat of the same event
+    DB-->>H: Unique violation, nothing credited
+  end
+  H-->>O: 200
+  Note over O: A timeout or non-2xx makes the server retry with the same event id
+```
+
 For a withdrawal, `result.input` is what left, and `result.output` is what the user received (or the estimate). See [Withdrawals](./withdraw.md#events).
 
 ## Refunds and chargebacks after success

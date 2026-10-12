@@ -600,6 +600,86 @@ sequenceDiagram
 
 In-process mode (`connection: { openramp }`) skips HTTP: the MCP server calls `openramp.sessions.create()` and `openramp.handle()` directly. A pay link cannot make another pay link.
 
+## Exchange balance (Binance Pay Onchain)
+
+The user pays from the balance of an exchange account on the exchange page. The exchange then sends the crypto on chain to the destination. The [Binance adapter](../adapters/binance.md) works this way. Compare it with `exchange_transfer`, where the user sends crypto to a deposit address (see [Crypto transfer to a deposit address](#crypto-transfer-to-a-deposit-address)).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant B as Browser
+  participant S as Server
+  participant A as Binance adapter
+  participant BN as Binance API
+  participant Ch as Destination chain
+  U->>B: Pick "Connect exchange" and an amount
+  B->>S: POST /sessions/:id/quotes { method: 'exchange', amount }
+  S->>A: quote()
+  A->>BN: POST /papi/v1/ramp/connect/buy/estimated-quote
+  BN-->>A: totalAmount, feeAmount, networkFee (estimate, 5 minutes)
+  S-->>B: { quotes }
+  U->>B: Confirm
+  B->>S: POST /sessions/:id/select { quoteId }
+  S->>A: start()
+  A->>BN: POST /papi/v1/ramp/connect/buy/pre-order { externalOrderId, address, network, redirectUrl }
+  BN-->>A: link
+  A-->>S: LegStep requires_action, surface REDIRECT { url: link }
+  S-->>B: Step PAYMENT
+  B->>U: Open the Binance page in a popup
+  U->>BN: Log in and approve the order
+  BN->>Ch: Withdraw crypto to the destination address
+  BN->>S: POST /webhooks/binance (connect_order_event, signed)
+  S->>A: webhook.verify(), webhook.parse()
+  S->>S: applyEvent({ ref, status })
+  loop Browser poll
+    B->>S: GET /sessions/:id/step
+    S->>A: status({ ref })
+    A->>BN: POST /papi/v1/ramp/connect/order { externalOrderId }
+  end
+  S-->>B: Step COMPLETED
+```
+
+The webhook and the poll both find the result. A repeated webhook is safe.
+
+## Aggregator quotes (Onramper)
+
+One adapter, many onramps. The adapter asks Onramper for a quote from each onramp and keeps the best payout. The signed checkout is bound to the IP of the user, so the browser never gets a secret.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  actor U as User
+  participant B as Browser
+  participant S as Server
+  participant A as Onramper adapter
+  participant O as Onramper API
+  participant P as Chosen onramp
+  U->>B: Pick "Card" and an amount
+  B->>S: POST /sessions/:id/quotes { method: 'card', amount }
+  S->>A: quote()
+  A->>O: GET /quotes/{fiat}/{crypto}
+  O-->>A: One item per onramp
+  A-->>S: LegQuote for the best payout (all items in quote.data.providers)
+  S-->>B: { quotes }
+  U->>B: Confirm
+  B->>S: POST /sessions/:id/select { quoteId }
+  S->>A: start() with ctx.session.ip
+  A->>O: POST /checkout/v2/intent (Ed25519 signature, nonce, timestamp)
+  O-->>A: Single-use checkout URL (10 minutes, bound to the IP)
+  A-->>S: LegStep requires_action, surface REDIRECT
+  S-->>B: Step PAYMENT
+  B->>P: Popup opens the checkout
+  U->>P: KYC and payment
+  P->>U: Crypto to the destination address
+  O->>S: POST /webhooks/onramper (HMAC)
+  S->>A: webhook.verify(), webhook.parse(): transactionId and status
+  S->>S: applyEvent({ ref, status })
+  S-->>B: Step COMPLETED (on the next poll)
+```
+
+The final price is set by the chosen onramp, so the quote has the `estimate` guarantee. The adapter learns the Onramper `transactionId` from the first webhook. Until then, status reports "still paying".
+
 ## Iframe message protocol
 
 A provider page inside an `IFRAME` surface can post messages to the modal. The modal treats them as hints. The server status decides the outcome.

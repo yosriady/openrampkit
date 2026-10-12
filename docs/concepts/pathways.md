@@ -169,6 +169,8 @@ The planner groups pathways by method and gives each method one group:
 
 Methods are sorted by group, then by the country's priority list, then by name.
 
+Each available row shows the providers ("via Swapped"), the maximum limit ("$3,000 limit") and the time at the end of the row ("Instant" or "~5 min"). The time comes from the summed `eta` of the legs. An unavailable row shows its reason in place of these and cannot be selected.
+
 The default priority per country (`DEFAULT_METHOD_PRIORITY`):
 
 | Country | Order |
@@ -256,6 +258,33 @@ When the user enters an amount, the server quotes up to 5 available pathways for
 - The combined `guarantee` is the weakest of the legs (`estimate` is weaker than `min_output`, which is weaker than `firm`). `minOutput` and `slippageBps` come from the last leg. See [Fee and Quote](../api/core.md#fee-and-quote).
 
 `rankQuotes` sorts by the most delivered first, then by the fastest. It marks the first quote `best_price`, and the fastest one `fastest` when there is more than one quote.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser
+  participant S as Server
+  participant P as Planner
+  participant A1 as Adapter (leg 1)
+  participant A2 as Adapter (leg 2)
+  B->>S: POST /sessions/:id/quotes { method, amount }
+  S->>P: planPathways(session, method)
+  P-->>S: Up to 5 candidate pathways
+  par Each pathway, 9 s timeout
+    S->>A1: quote(leg 1, amount)
+    A1-->>S: LegQuote (output, fee, eta, expiresAt)
+    S->>A2: quote(leg 2, output of leg 1)
+    A2-->>S: LegQuote
+  and Another pathway
+    S->>A1: quote(...)
+    A1-->>S: LegQuote or error
+  end
+  S->>S: Drop quotes outside amountBounds
+  S->>S: Sum fees and ETAs, take the earliest expiry and the weakest guarantee
+  S->>S: rankQuotes(): best_price, fastest
+  S-->>B: { quotes, errors }
+  Note over B: Re-quotes 10 seconds before the earliest expiry
+```
 
 ![Quotes for VietQR](../screenshots/03-vn-quote.png)
 
