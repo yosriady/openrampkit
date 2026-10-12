@@ -59,6 +59,7 @@ export const METHODS: Record<string, MethodInfo> = {
   ovo: { id: 'ovo', name: 'OVO', kind: 'ewallet' },
   shopeepay: { id: 'shopeepay', name: 'ShopeePay', kind: 'ewallet' },
   touchngo: { id: 'touchngo', name: "Touch 'n Go", kind: 'ewallet' },
+  boost: { id: 'boost', name: 'Boost', kind: 'ewallet' },
   grabpay: { id: 'grabpay', name: 'GrabPay', kind: 'ewallet' },
   revolut_pay: { id: 'revolut_pay', name: 'Revolut Pay', kind: 'wallet_pay' },
   venmo: { id: 'venmo', name: 'Venmo', kind: 'wallet_pay' },

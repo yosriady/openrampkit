@@ -72,6 +72,10 @@ describe('global and regional methods', () => {
     for (const list of Object.values(DEFAULT_METHOD_PRIORITY)) for (const m of list) expect(METHODS[m], m).toBeDefined()
   })
 
+  it('every method in the country table exists in METHODS', () => {
+    for (const m of Object.keys(METHOD_COUNTRIES)) expect(METHODS[m], m).toBeDefined()
+  })
+
   it('planner: the local method is recommended and other countries methods are dropped', () => {
     const cases: Array<[string, string, string[]]> = [
       ['NL', 'ideal', ['sepa_instant', 'open_banking', 'sepa']],

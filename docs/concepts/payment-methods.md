@@ -88,6 +88,7 @@ Xendit pays into your own merchant account (a [merchant fiat destination](../gui
 | DuitNow QR | `duitnow` | MY | Mock only today | |
 | Touch 'n Go | `touchngo` | MY | Swapped, Xendit | |
 | FPX | `fpx` | MY | None yet | |
+| Boost | `boost` | MY | None yet | |
 | PayNow | `paynow` | SG | Xendit | |
 
 The [mock adapter](../adapters/mock.md) also has VietQR, QRIS, GoPay, DANA, QR Ph, GCash, PromptPay, DuitNow, Touch 'n Go, PayNow and MoMo, so you can try these flows without an account.
