@@ -34,6 +34,8 @@ mockAdapter({ cardCheckout: 'form' })                  // card fields in the wid
 | `countries` | `string[]` | the regions of each leg | Serve only these countries on the fiat legs (`card`, `local`, `payin`, `offramp`) |
 | `cardCheckout` | `'redirect' \| 'form'` | `'redirect'` | `redirect`: a hosted checkout page in a new tab. `form`: test card fields in the widget (surface `FORM`). Use `form` on a static site that cannot serve the hosted page. |
 | `exchange` | `boolean` | `false` | With `crypto`: the `transfer` leg also offers the method `exchange_transfer` ("From an exchange") |
+| `exchangeConnect` | `boolean` | `false` | The card leg also offers `coinbase_account`. With `exchange`, the widget shows the exchange picker. |
+| `standing` | `boolean` | `false` | With `crypto`: give standing deposit addresses (a fake address per user and route, no deposits). Use it with the server option `depositAddresses.widget`. |
 | `localChain` | `{ chain, rpcUrl, token, symbol?, decimals? }` | none | Test only. Add an `onchain` leg that pays with a real ERC-20 transfer on a local chain (for example Anvil). See [Local chain leg](#local-chain-leg). |
 | `solanaLocalChain` | `{ chain, rpcUrl, mint, symbol?, decimals? }` | none | Test only. Add a `solana-onchain` leg that pays with a real SPL (or SOL) transfer on a Solana cluster, for example devnet. See [Solana local chain leg](#solana-local-chain-leg). |
 

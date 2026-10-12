@@ -12,6 +12,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `GET` | `/sessions/:id` | Bearer client secret | Read the session |
 | `GET` | `/sessions/:id/step` | Bearer | Read the session after a status check |
 | `GET` | `/sessions/:id/sources?method=` | Bearer | Deposit: chains and tokens for the source picker |
+| `POST` | `/sessions/:id/deposit-address` | Bearer, `Idempotency-Key` | Deposit: the user's standing deposit address (option `depositAddresses.widget`) |
 | `POST` | `/sessions/:id/plan` | Bearer | Plan pathways and methods |
 | `POST` | `/sessions/:id/target` | Bearer | Withdraw: set the target the user picked, and plan |
 | `POST` | `/sessions/:id/quotes` | Bearer | Quote a method |
@@ -112,6 +113,16 @@ See [`Payment`](./core.md#payment) and [`SessionResult`](./core.md#sessionresult
 ## GET /sessions/:id/step
 
 Same response as `GET /sessions/:id`. Before answering, the server asks the active leg's adapter for status (`status()`), at most once every 2 seconds per leg. This is the route the client polls.
+
+## POST /sessions/:id/deposit-address
+
+Body: `{ "chain": "eip155:42161", "token": "0xaf88..." }`, the asset the user sends. Only with the server option `depositAddresses.widget`, else `404`. A withdrawal, or a destination with `settlement` or `calls`, gets `409`. It counts against the per-session request limit.
+
+Response `200`: the session user's standing address for that origin and the session destination. It is the same on each call.
+
+```json
+{ "id": "sda_...", "address": "0x...", "origin": { "chain": "eip155:42161", "token": "0xaf88..." }, "destination": { "chain": "eip155:8453", "token": "0x8335..." } }
+```
 
 ## GET /sessions/:id/sources
 

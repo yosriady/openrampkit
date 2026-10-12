@@ -3,6 +3,14 @@
 import { openRampError } from '@openrampkit/core'
 import type { OpenRampError, PlanResult, PublicQuote, PublicSession, SourceChain } from '@openrampkit/core'
 
+/** The user's standing deposit address, as the server shows it to the browser */
+export type DepositAddressView = {
+  id: string
+  address: string
+  origin: { chain: string; token: string; symbol?: string; decimals?: number }
+  destination: { chain: string; token: string; symbol?: string }
+}
+
 export type ClientOptions = {
   /** Base URL of the OpenRampKit server handler, e.g. `/api/openramp` or `https://ramp.example.workers.dev` */
   baseUrl: string
@@ -89,6 +97,9 @@ export function createOpenRampClient(opts: ClientOptions) {
     transition: (secret: string, name: string, inputs?: Record<string, unknown>) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/transitions/${encodeURIComponent(name)}`, { inputs: inputs ?? {} }, idemKey()),
     step: (secret: string) => call<PublicSession>(secret, 'GET', `/sessions/${sessionId(secret)}/step`),
+    /** Deposit: the user's standing deposit address for an origin (`POST /sessions/:id/deposit-address`) */
+    depositAddress: (secret: string, body: { chain: string; token: string }) =>
+      call<DepositAddressView>(secret, 'POST', `/sessions/${sessionId(secret)}/deposit-address`, body, idemKey()),
     /** Deposit: chains and tokens for the source picker of a method (`transfer`, `exchange_transfer` or `wallet`) */
     sources: (secret: string, method: string) =>
       call<{ chains: SourceChain[] }>(secret, 'GET', `/sessions/${sessionId(secret)}/sources?method=${encodeURIComponent(method)}`),

@@ -5,6 +5,7 @@ import { randomHex } from './crypto.js'
 import { adapterContext, destinationOf, withTimeout } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { scopedKV } from './store.js'
+import { depositAddressMethod } from './standing.js'
 import type { SessionRecord, StoredQuote } from './store.js'
 import { withdrawSender } from './withdraw.js'
 import { breakerError, breakerGate, breakerProbeResult, isProviderFailure, recordHealth, routingOptions, successRates } from './health.js'
@@ -61,6 +62,9 @@ export async function plan(rt: Runtime, rec: SessionRecord, body: PlanBody): Pro
     result.methods = result.methods.filter((m) => allowed.has(m.method))
     result.pathways = result.pathways.filter((p) => allowed.has(p.method))
   }
+  // "Your deposit address" (option `depositAddresses.widget`): a method with no pathway; the widget shows the address.
+  const standing = depositAddressMethod(rt, rec)
+  if (standing) result.methods.push(standing)
   rec.plan = result
   rec.walletConnected = !!body.walletConnected
   return result

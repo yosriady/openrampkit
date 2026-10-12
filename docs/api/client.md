@@ -28,6 +28,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
+| `depositAddress(secret, { chain, token })` | `POST /sessions/:id/deposit-address` | `DepositAddressView`. The controller loads it on the `deposit_address` screen, into `snapshot.depositAddress`. |
 | `sources(secret, method)` | `GET /sessions/:id/sources?method=` | `{ chains: SourceChain[] }`. The controller loads it when the user picks an address transfer, into `snapshot.sources`. |
 | `cancel(secret)` | `POST /sessions/:id/cancel` (with a random `idempotency-key`) | `PublicSession`. Cancels the session while no payment is under way. |
 | `baseUrl` | | The base URL without a trailing slash |

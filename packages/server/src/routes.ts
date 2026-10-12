@@ -17,6 +17,7 @@ import { adapterContext, publicSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { cancelSession, createSession, loadAuthed } from './sessions.js'
 import { sourcesRoute } from './sources.js'
+import { sessionDepositAddress } from './standing.js'
 import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
 import { adminRoute } from './admin.js'
@@ -157,7 +158,7 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
   }
 
   // These call provider APIs (quote, start, transition), so they count against the per-session limit.
-  if (method === 'POST' && (action === 'plan' || action === 'quotes' || action === 'target' || action === 'select' || action === 'transitions')) await checkRate(rt, rec.id)
+  if (method === 'POST' && (action === 'plan' || action === 'quotes' || action === 'target' || action === 'select' || action === 'transitions' || action === 'deposit-address')) await checkRate(rt, rec.id)
 
   if (action === 'plan' && method === 'POST') {
     const body = await readJson<{ walletConnected?: boolean; walletAddress?: string; surfaces?: SurfaceKind[] }>(req, {})
@@ -169,6 +170,8 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
   }
 
   if (action === 'target' && method === 'POST') return targetRoute(rt, req, rec)
+
+  if (action === 'deposit-address' && method === 'POST' && !arg) return json(await sessionDepositAddress(rt, rec, await readJson<{ chain?: unknown; token?: unknown }>(req, {})))
 
   if (action === 'pay-link' && method === 'POST') {
     // A pay link cannot mint or revoke pay links: only the client secret can.

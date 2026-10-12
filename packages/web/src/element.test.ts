@@ -59,8 +59,8 @@ function helpers(el: OpenRampModal) {
   return { root, $, $$, text, button, title, click, key, until, cashTab }
 }
 
-async function mount(opts: { country?: string; destination?: Destination; wallet?: WalletAdapter; embedded?: boolean; start?: boolean; mock?: MockOptions } = {}) {
-  const server = setupServer(opts.mock)
+async function mount(opts: { country?: string; destination?: Destination; wallet?: WalletAdapter; embedded?: boolean; start?: boolean; mock?: MockOptions; config?: Parameters<typeof setupServer>[1] } = {}) {
+  const server = setupServer(opts.mock, opts.config)
   const s = await server.ramp.sessions.create({ userId: 'u', country: opts.country ?? 'US', destination: opts.destination ?? BASE_DEST })
   const events: string[] = []
   const c = createDepositController({
@@ -485,6 +485,32 @@ describe('payment steps (real server)', () => {
     await h.click(h.button('Send from Coinbase to an address instead'))
     await h.until(() => h.c.getSnapshot().screen === 'quotes' && !h.c.getSnapshot().quotesLoading)
     expect(h.c.getSnapshot()).toMatchObject({ exchange: 'coinbase', method: { method: 'exchange_transfer' } })
+  })
+
+  it('"Your deposit address": the method opens the screen, a token change loads its address, back and Done', async () => {
+    const h = await mount({ country: 'US', mock: { settleMs: 0, crypto: true, bridge: true, standing: true }, config: { depositAddresses: { widget: true } } })
+    h.c.setTab('crypto')
+    await settle(h.el)
+    await h.click(h.$('[data-method="deposit_address"]')!)
+    await h.until(() => !!h.c.getSnapshot().depositAddress)
+    await settle(h.el)
+    expect(h.text()).toContain('Your deposit address')
+    const first = h.c.getSnapshot().depositAddress!
+    expect(h.$$('.kv-value')[0]!.textContent).toBe(first.address)
+    expect(h.$('.qr svg')).not.toBeNull()
+    expect(h.$('.notice.warning')!.textContent).toContain('Each deposit reaches your account in a few minutes.')
+    // Another token: another address
+    h.c.setSource({ chain: 'eip155:10', token: 'native', symbol: 'ETH', decimals: 18 })
+    await h.until(() => !!h.c.getSnapshot().depositAddress && h.c.getSnapshot().depositAddress!.origin.chain === 'eip155:10')
+    expect(h.c.getSnapshot().depositAddress!.address).not.toBe(first.address)
+    h.c.back()
+    expect(h.c.getSnapshot().screen).toBe('methods')
+    await settle(h.el)
+    await h.click(h.$('[data-method="deposit_address"]')!)
+    await h.until(() => !!h.c.getSnapshot().depositAddress)
+    await settle(h.el)
+    await h.click(h.button('Done'))
+    expect(h.el.open).toBe(false)
   })
 
   it('autoClose: closes on completion with no success screen', async () => {

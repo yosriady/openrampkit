@@ -16,7 +16,7 @@
 
 import type { Adapter, StandingDeposit } from '@openrampkit/adapter'
 import { OpenRampException, isDecimal, normalizeToken, openRampError } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Destination, LegQuote, LegSpec, Pathway, StandingAddress } from '@openrampkit/core'
+import type { Amount, CryptoAsset, Destination, LegQuote, LegSpec, MethodOption, Pathway, StandingAddress } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { sha256Hex } from './crypto.js'
 import { indexSession } from './admin.js'
@@ -27,6 +27,7 @@ import { STANDING_QUEUE, queueOf, trackOpenSession } from './queue.js'
 import type { Runtime } from './runtime.js'
 import { checkInput, draftSession } from './sessions.js'
 import { scopedKV } from './store.js'
+import type { SessionRecord } from './store.js'
 import { addTimeline } from './timeline.js'
 import { CAIP2, isValidAddress, isValidToken } from './withdraw.js'
 
@@ -206,6 +207,44 @@ export async function getStandingAddress(rt: Runtime, input: DepositAddressInput
   // The user index: pushed on every call, so an index entry lost in a crash comes back.
   await q.push(await userIndex(rec.userId), id, Date.parse(rec.createdAt))
   return publicView(rec)
+}
+
+/** The id of the widget method for a standing deposit address */
+export const DEPOSIT_ADDRESS_METHOD = 'deposit_address'
+
+/** What the browser sees of a standing address: no user id and no adapter id */
+export type DepositAddressView = Pick<StandingAddress, 'id' | 'address' | 'origin'> & { destination: { chain: string; token: string; symbol?: string } }
+
+/**
+ * The adapter for the widget method, or undefined when the method does not fit the session: the option
+ * `depositAddresses.widget` is off, the session is a withdrawal, the destination is not a plain crypto
+ * address, or no adapter gives standing addresses.
+ */
+export function widgetStandingAdapter(rt: Runtime, rec: SessionRecord): Adapter | undefined {
+  if (!rt.config.depositAddresses?.widget || rec.direction === 'withdraw') return undefined
+  const d = rec.destination
+  if (!d || d.type !== 'crypto' || d.settlement || d.calls?.length) return undefined
+  return [...rt.adapters.values()].find(supportsStanding)
+}
+
+/** The widget method for the plan, or undefined (see `widgetStandingAdapter`) */
+export function depositAddressMethod(rt: Runtime, rec: SessionRecord): MethodOption | undefined {
+  const a = widgetStandingAdapter(rt, rec)
+  if (!a) return undefined
+  if (rec.allowedMethods && !rec.allowedMethods.includes(DEPOSIT_ADDRESS_METHOD)) return undefined
+  if (rt.config.policy?.disabledMethods?.includes(DEPOSIT_ADDRESS_METHOD)) return undefined
+  return { method: DEPOSIT_ADDRESS_METHOD, name: 'Your deposit address', kind: 'crypto', group: 'more', providers: [a.name], pathwayIds: [], eta: transferLeg(a)?.eta ?? { min: 60, max: 600 } }
+}
+
+/** `POST /sessions/:id/deposit-address`: the session user's standing address for an origin and the session destination */
+export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, body: { chain?: unknown; token?: unknown }): Promise<DepositAddressView> {
+  if (!rt.config.depositAddresses?.widget) throw new OpenRampException(openRampError('NOT_FOUND'), 404)
+  const a = widgetStandingAdapter(rt, rec)
+  if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session cannot use a standing deposit address.' }), 409)
+  if (typeof body?.chain !== 'string' || typeof body.token !== 'string') throw bad('`chain` and `token` are required.')
+  const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: rec.destination!, adapterId: a.id })
+  const d = sa.destination
+  return { id: sa.id, address: sa.address, origin: sa.origin, destination: { chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}) } }
 }
 
 /** The standing addresses of a user, newest first (at most 200) */

@@ -47,6 +47,16 @@ The server checks the input like a session create:
 
 With no such adapter, `get` throws `400` (`No configured adapter gives standing deposit addresses`). An unknown `adapterId` throws `404`.
 
+## Show it in the widget
+
+Set `depositAddresses: { widget: true }` in the server config. The plan of a deposit session then has the method `deposit_address` ("Your deposit address") on the crypto tab, when:
+
+- the destination is a crypto address with no `settlement` and no `calls`,
+- an adapter gives standing addresses, and
+- the session's `allowedMethods` and `policy.disabledMethods` allow `deposit_address`.
+
+The user picks the network and the token they send. The widget calls `POST /sessions/:id/deposit-address` and shows the address for the session's user and destination, with a QR code, a copy button and a warning. A new token loads its own address. This session takes no payment: each deposit to the address becomes its own session, as above. The browser never sees the user id or the adapter id.
+
 ## Webhooks
 
 Each deposit gives these events on its new session, in this order:

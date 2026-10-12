@@ -49,6 +49,11 @@ export type MockOptions = {
    */
   exchangeConnect?: boolean
   /**
+   * With `crypto`: give standing deposit addresses (`standingAddress`), a fake address per user and route.
+   * No deposit ever arrives at it: use it to show the widget's "Your deposit address" screen.
+   */
+  standing?: boolean
+  /**
    * Test only: add an `onchain` leg (method `wallet`, surface WALLET_TX) on a local dev chain such as
    * Anvil. It asks the wallet to send `token` to the destination address with a real ERC-20 transfer,
    * and completes only when the receipt, read over JSON-RPC from `rpcUrl`, shows that transfer.
@@ -541,6 +546,17 @@ export function mockAdapter(opts: MockOptions = {}) {
     id,
     name,
     legs,
+    ...(opts.standing && opts.crypto
+      ? {
+          async standingAddress(input: { userId: string; origin: { chain: string; token: string }; destination: { chain: string; token: string; address: string } }) {
+            const address = fakeAddressFor(input.origin.chain, `standing:${input.userId}:${input.origin.chain}:${input.origin.token}:${input.destination.chain}:${input.destination.address}`)
+            return { address, ref: address }
+          },
+          async standingDeposits() {
+            return []
+          },
+        }
+      : {}),
 
     async quote({ leg, amountIn, amountOut }, ctx): Promise<LegQuote> {
       refuseLive(ctx)

@@ -54,6 +54,8 @@ export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: A
       return s.method?.name ?? base
     case 'exchanges':
       return m.exchangePickerTitle
+    case 'deposit_address':
+      return m.depositAddressTitle
     case 'quotes':
       return s.method?.method === 'exchange_transfer' ? m.exchangeTitle : s.method?.method === 'transfer' ? m.transferTitle : m.quotesTitle
     case 'step': {

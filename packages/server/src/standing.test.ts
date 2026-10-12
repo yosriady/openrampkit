@@ -420,3 +420,48 @@ describe('sweep: poll backoff and the 90-day stop', () => {
     expect((await t.ramp.sweep()).standing).toEqual({ checked: 1, deposits: 1 })
   })
 })
+
+describe('widget: "Your deposit address"', () => {
+  async function session(t: ReturnType<typeof make>, input: Record<string, unknown> = {}) {
+    const s = await t.ramp.sessions.create({ userId: 'u1', country: 'SG', destination: DEST, ...input } as never)
+    const call = (path: string, body: unknown = {}) =>
+      t.ramp.handle(new Request(`${BASE}/sessions/${s.id}${path}`, { method: 'POST', headers: { authorization: `Bearer ${s.clientSecret}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    return { s, call }
+  }
+
+  it('the plan offers the method only with depositAddresses.widget', async () => {
+    const off = make()
+    const a = await session(off)
+    const planOff = await (await a.call('/plan')).json()
+    expect(planOff.methods.map((m: { method: string }) => m.method)).not.toContain('deposit_address')
+    expect((await a.call('/deposit-address', ORIGIN)).status).toBe(404)
+
+    const on = make({ depositAddresses: { widget: true } })
+    const b = await session(on)
+    const plan = await (await b.call('/plan')).json()
+    expect(plan.methods.find((m: { method: string }) => m.method === 'deposit_address')).toMatchObject({ name: 'Your deposit address', kind: 'crypto', group: 'more' })
+  })
+
+  it('the route returns the session user\'s address, the same on each call, without the user id', async () => {
+    const t = make({ depositAddresses: { widget: true } })
+    const { call } = await session(t)
+    const r1 = await (await call('/deposit-address', ORIGIN)).json()
+    const r2 = await (await call('/deposit-address', ORIGIN)).json()
+    expect(r1).toEqual(r2)
+    expect(r1).toMatchObject({ id: expect.stringMatching(/^sda_/), address: expect.stringMatching(/^0x/), origin: ORIGIN, destination: { chain: DEST.chain, token: DEST.token } })
+    expect(r1.userId).toBeUndefined()
+    expect(r1.adapterId).toBeUndefined()
+    // The backend API sees the same address for this user
+    expect((await t.get('u1')).address).toBe(r1.address)
+  })
+
+  it('refuses a bad body, and hides the method when allowedMethods leaves it out', async () => {
+    const t = make({ depositAddresses: { widget: true } })
+    const { call } = await session(t)
+    expect((await call('/deposit-address', { chain: 'eip155:42161' })).status).toBe(400)
+    expect((await call('/deposit-address', { chain: 'nope', token: ORIGIN.token })).status).toBe(400)
+    const limited = await session(t, { allowedMethods: ['transfer'] })
+    const plan = await (await limited.call('/plan')).json()
+    expect(plan.methods.map((m: { method: string }) => m.method)).not.toContain('deposit_address')
+  })
+})

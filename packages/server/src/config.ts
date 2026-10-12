@@ -142,6 +142,15 @@ export type OpenRampConfig = {
   latePayments?: { graceHours?: number; pollMinutes?: number }
   /** Provider health, ranking and the circuit breaker. See `RoutingConfig`. */
   routing?: RoutingConfig
+  /** Standing deposit addresses (see `openramp.depositAddresses`) */
+  depositAddresses?: {
+    /**
+     * Offer "Your deposit address" in the widget (method `deposit_address`), with
+     * `POST /sessions/:id/deposit-address`. The browser gets the address of the session's user for the
+     * session's destination. Default `false`.
+     */
+    widget?: boolean
+  }
 }
 
 /**

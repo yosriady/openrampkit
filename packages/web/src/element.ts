@@ -469,7 +469,7 @@ export class OpenRampModal extends LitElement {
 
   private _renderHeader(m: Messages) {
     const screen = this._screen
-    const canBack = (screen === 'amount' || screen === 'quotes' || screen === 'exchanges') && this.controller?.canGoBack() !== false
+    const canBack = (screen === 'amount' || screen === 'quotes' || screen === 'exchanges' || screen === 'deposit_address') && this.controller?.canGoBack() !== false
     const a = this.appearance
     const showLogo = !!a?.logoUrl && (screen === 'methods' || screen === 'loading')
     return html`
@@ -502,6 +502,8 @@ export class OpenRampModal extends LitElement {
         return s.direction === 'withdraw' ? this._renderWithdrawMethods(m, s) : this._renderMethods(m, s)
       case 'exchanges':
         return this._renderExchanges(m, s)
+      case 'deposit_address':
+        return this._renderStandingAddress(m, s)
       case 'amount':
         return this._renderAmount(m, s)
       case 'quotes':
@@ -623,6 +625,34 @@ export class OpenRampModal extends LitElement {
         )}
       </ul>
       ${this._renderErrorNotice(s.error)}
+    `
+  }
+
+  /** "Your deposit address": the token picker, then the user's standing address for that token */
+  private _renderStandingAddress(m: Messages, s: Snapshot) {
+    const view = s.depositAddress
+    const src = s.source
+    const chain = src ? displayChain(src.chain) : ''
+    const symbol = src ? (transferTokens(src.chain, s.sources).find((o) => sameTokenId(src.chain, o.token, src.token))?.symbol ?? src.symbol ?? '') : ''
+    return html`
+      ${this._renderTransferSource(m, s)}
+      ${s.depositAddressLoading && !view
+        ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.loading}</div>`
+        : view
+          ? html`
+              ${this._qr(view.address, m.address)}
+              <div class="kv">
+                ${this._copyRow(m, 'sda', m.address, view.address, { mono: true })}
+                <div class="select-row" style="margin:0">
+                  ${this._copyRow(m, 'sda-net', m.network, chain, { copy: false })} ${this._copyRow(m, 'sda-tok', m.token, symbol, { copy: false })}
+                </div>
+              </div>
+              <div class="notice warning">${icons.alert}<span>${m.depositAddressNote(symbol, chain)}</span></div>
+              <div class="hint">${m.depositAddressReuse}</div>
+            `
+          : nothing}
+      ${this._renderErrorNotice(s.error)}
+      <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>
     `
   }
 

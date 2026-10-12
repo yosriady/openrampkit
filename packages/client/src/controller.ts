@@ -21,7 +21,7 @@ import type {
   WalletBalance,
 } from '@openrampkit/core'
 import { toOpenRampError } from './client.js'
-import type { OpenRampClient } from './client.js'
+import type { DepositAddressView, OpenRampClient } from './client.js'
 
 /** The longest delay that `setTimeout` takes (2^31 - 1 ms); a longer one fires at once */
 const MAX_TIMER_MS = 2_147_483_647
@@ -32,7 +32,7 @@ export type Tab = 'crypto' | 'cash'
 export type SurfaceSignal = 'completed' | 'failed' | 'closed'
 
 /** `target` is the withdraw "To wallet" form (network, token, address). */
-export type ScreenName = 'loading' | 'target' | 'methods' | 'exchanges' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+export type ScreenName = 'loading' | 'target' | 'methods' | 'exchanges' | 'deposit_address' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
 
 /** Withdraw "To wallet" form state */
 export type TargetDraft = { chain: string; token: string; symbol: string; decimals: number; address: string }
@@ -67,6 +67,10 @@ export type Snapshot = {
   exchange?: string
   /** Amount chips per currency code, from `FlowOptions.presets` */
   presets?: Record<string, string[]>
+  /** Deposit, method `deposit_address`: the user's standing address for the current `source` */
+  depositAddress?: DepositAddressView
+  /** True while the standing address for the current `source` loads */
+  depositAddressLoading?: boolean
   /** The provider page (IFRAME surface) said the user closed it. Cleared by `reopenSurface()` or a new step. */
   surfaceClosed: boolean
   /** Withdraw: the "To wallet" form */
@@ -144,6 +148,9 @@ function upperKeys(presets: Record<string, string[]>): Record<string, string[]> 
 }
 
 const CRYPTO_KINDS = new Set(['crypto', 'exchange'])
+
+/** The method that shows the user's standing deposit address (server option `depositAddresses.widget`) */
+export const DEPOSIT_ADDRESS_METHOD = 'deposit_address'
 
 export class RampController {
   private snap: Snapshot
@@ -549,6 +556,12 @@ export class RampController {
     if (!m || m.group === 'unavailable') return
     this.emit('method.selected', { method })
     this.set({ method: m, exchange: opts.exchange, quotes: [], quoteErrors: [], error: undefined, selectedQuoteId: undefined })
+    if (method === DEPOSIT_ADDRESS_METHOD) {
+      // No payment in this session: the widget shows the user's standing address for the chosen token.
+      this.set({ screen: 'deposit_address', depositAddress: undefined })
+      void this.loadSources('transfer')
+      return this.loadDepositAddress()
+    }
     if (isAddressTransfer(method)) {
       // No amount needed: the user sends any amount to a deposit address.
       this.set({ amount: '', screen: 'quotes' })
@@ -587,8 +600,29 @@ export class RampController {
     }
   }
 
+  private depositAddressSeq = 0
+
+  /** Method `deposit_address`: load the standing address for the current `source`. A newer call wins. */
+  async loadDepositAddress() {
+    const src = this.snap.source
+    if (!src) return
+    const seq = ++this.depositAddressSeq
+    this.set({ depositAddressLoading: true, error: undefined })
+    try {
+      const view = await this.opts.client.depositAddress(this.opts.clientSecret, { chain: src.chain, token: src.token })
+      if (seq === this.depositAddressSeq && !this.destroyed) this.set({ depositAddress: view, depositAddressLoading: false })
+    } catch (e) {
+      if (seq === this.depositAddressSeq) this.set({ depositAddress: undefined, depositAddressLoading: false, error: toOpenRampError(e) })
+    }
+  }
+
   setSource(source: NonNullable<Snapshot['source']>) {
     this.set({ source })
+    if (this.snap.screen === 'deposit_address') {
+      this.set({ depositAddress: undefined })
+      void this.loadDepositAddress()
+      return
+    }
     if (isAddressTransfer(this.snap.method?.method) && this.snap.screen === 'quotes') void this.refreshQuotes()
   }
 
@@ -749,7 +783,7 @@ export class RampController {
     const screen = this.snap.screen
     clearTimeout(this.quoteTimer)
     const list = this.snap.exchange ? 'exchanges' : 'methods'
-    if (screen === 'exchanges') this.set({ screen: 'methods', error: undefined })
+    if (screen === 'exchanges' || screen === 'deposit_address') this.set({ screen: 'methods', error: undefined })
     else if (screen === 'quotes') this.set({ screen: isAddressTransfer(this.snap.method?.method) ? list : 'amount', error: undefined })
     else if (screen === 'amount') {
       const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto' && !this.lockedTarget()

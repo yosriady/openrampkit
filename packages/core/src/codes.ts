@@ -30,6 +30,8 @@ export type MethodInfo = { id: string; name: string; kind: 'card' | 'wallet_pay'
 export const METHODS: Record<string, MethodInfo> = {
   wallet: { id: 'wallet', name: 'Pay with wallet', kind: 'crypto' },
   transfer: { id: 'transfer', name: 'Transfer crypto', kind: 'crypto' },
+  /** The user's standing deposit address (see `depositAddresses.widget` in the server) */
+  deposit_address: { id: 'deposit_address', name: 'Your deposit address', kind: 'crypto' },
   exchange: { id: 'exchange', name: 'Connect exchange', kind: 'exchange' },
   exchange_transfer: { id: 'exchange_transfer', name: 'From an exchange', kind: 'exchange' },
   /** Pay from the balance of a Coinbase account (fiat or crypto), in the Coinbase hosted flow */
