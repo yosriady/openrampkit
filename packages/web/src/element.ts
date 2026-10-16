@@ -20,6 +20,7 @@ import {
   groupLabel,
   iframeOrigin,
   groupMethods,
+  historyRow,
   liveText,
   mainTx,
   methodSubtitle,
@@ -469,7 +470,7 @@ export class OpenRampModal extends LitElement {
 
   private _renderHeader(m: Messages) {
     const screen = this._screen
-    const canBack = (screen === 'amount' || screen === 'quotes' || screen === 'exchanges' || screen === 'deposit_address') && this.controller?.canGoBack() !== false
+    const canBack = (screen === 'amount' || screen === 'quotes' || screen === 'exchanges' || screen === 'deposit_address' || screen === 'history') && this.controller?.canGoBack() !== false
     const a = this.appearance
     const showLogo = !!a?.logoUrl && (screen === 'methods' || screen === 'loading')
     return html`
@@ -504,6 +505,8 @@ export class OpenRampModal extends LitElement {
         return this._renderExchanges(m, s)
       case 'deposit_address':
         return this._renderStandingAddress(m, s)
+      case 'history':
+        return this._renderHistory(m, s)
       case 'amount':
         return this._renderAmount(m, s)
       case 'quotes':
@@ -582,7 +585,48 @@ export class OpenRampModal extends LitElement {
           </section>`
         })}
       </div>
-      ${this._renderErrorNotice(s.error)}
+      ${this._renderErrorNotice(s.error)} ${this._renderHistoryLink(m, s)}
+    `
+  }
+
+  /** The History link: only when the user's history loaded (server option `history`) */
+  private _renderHistoryLink(m: Messages, s: Snapshot) {
+    if (!s.history) return nothing
+    return html`<div class="stack history-link">
+      <button class="btn ghost" type="button" data-history @click=${() => void this.controller?.openHistory()}>${icons.clock}${m.historyTitle}</button>
+    </div>`
+  }
+
+  /** The user's past sessions: status, amount, date and an explorer link */
+  private _renderHistory(m: Messages, s: Snapshot) {
+    const items = s.history ?? []
+    if (s.historyLoading && !items.length) return this._renderLoading(m)
+    const now = Date.now()
+    return html`
+      ${this._renderErrorNotice(s.historyError)}
+      ${items.length === 0 && !s.historyError
+        ? html`<div class="center history-empty"><span class="result-icon" aria-hidden="true">${icons.clock}</span><p class="secondary-text">${m.historyEmpty}</p></div>`
+        : html`<ul class="rows history" aria-label=${m.historyTitle}>
+            ${items.map((it) => {
+              const r = historyRow(it, m, now)
+              return html`<li class="history-item" data-session=${r.id}>
+                <span class="row-main">
+                  <span class="row-title">${r.title}</span>
+                  <span class="row-sub">${[r.to, r.when].filter(Boolean).join(' · ')}</span>
+                  ${r.explorerUrl
+                    ? html`<a class="tx-link" href=${r.explorerUrl} target="_blank" rel="noopener noreferrer"
+                        >${m.viewTransaction}<span class="sr-only"> (${m.opensInNewTab})</span></a
+                      >`
+                    : nothing}
+                </span>
+                <span class="row-end">
+                  ${r.amount ? html`<strong>${r.amount}</strong>` : nothing}
+                  <span class="badge ${r.tone}">${r.status}</span>
+                </span>
+              </li>`
+            })}
+          </ul>`}
+      <div class="stack"><button class="btn secondary" type="button" @click=${() => this.controller?.back()}>${m.back}</button></div>
     `
   }
 
@@ -738,6 +782,7 @@ export class OpenRampModal extends LitElement {
           ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>` : nothing}${m.continue}
         </button>
       </div>
+      ${this._renderHistoryLink(m, s)}
     `
   }
 
@@ -779,7 +824,7 @@ export class OpenRampModal extends LitElement {
           </section>`
         })}
       </div>
-      ${this._renderErrorNotice(s.error)}
+      ${this._renderErrorNotice(s.error)} ${this._renderHistoryLink(m, s)}
     `
   }
 

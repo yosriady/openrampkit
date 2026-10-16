@@ -8,6 +8,7 @@ import {
   formatFees,
   formatFiat,
   formatLimit,
+  formatRelativeTime,
   formatToken,
   isFiatCurrency,
   presetAmounts,
@@ -193,5 +194,17 @@ describe('qrPath', () => {
   it('is deterministic and grows with the data', () => {
     expect(qrPath('abc')).toEqual(qrPath('abc'))
     expect(qrPath('x'.repeat(200)).size).toBeGreaterThan(21)
+  })
+})
+
+describe('formatRelativeTime', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+  it('says how long ago, then the date after 30 days', () => {
+    expect(formatRelativeTime('2026-10-16T11:59:30Z', now, 'en')).toBe('30 seconds ago')
+    expect(formatRelativeTime('2026-10-16T11:55:00Z', now, 'en')).toBe('5 minutes ago')
+    expect(formatRelativeTime('2026-10-16T09:00:00Z', now, 'en')).toBe('3 hours ago')
+    expect(formatRelativeTime('2026-10-15T12:00:00Z', now, 'en')).toBe('yesterday')
+    expect(formatRelativeTime('2026-08-01T12:00:00Z', now, 'en')).toBe('Aug 1, 2026')
+    expect(formatRelativeTime('not a date', now, 'en')).toBe('')
   })
 })

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { OpenRampException, openRampError } from '@openrampkit/core'
-import { OpenRampClientError, createOpenRampClient, toOpenRampError } from './index.js'
-import { BASE_DEST, setupServer } from './testctx.js'
+import { DepositController, OpenRampClientError, createOpenRampClient, toOpenRampError } from './index.js'
+import { BASE_DEST, fakeClient, setupServer } from './testctx.js'
 
 type Call = { url: string; init: RequestInit }
 
@@ -119,6 +119,72 @@ describe('createOpenRampClient request shapes', () => {
     expect(pub.step.state).toBe('SELECT_METHOD')
     expect(requests[0]!.headers.get('authorization')).toBe(`Bearer ${s.clientSecret}`)
     await expect(client.getSession(`${s.id}.wrong`)).rejects.toMatchObject({ status: 401 })
+  })
+})
+
+describe('history', () => {
+  const item = { id: 'ors_old', kind: 'session', direction: 'deposit', status: 'succeeded', createdAt: '2026-10-10T00:00:00.000Z' } as const
+
+  it('GETs /history with the bearer secret and returns the items', async () => {
+    const { f, calls } = recorder(() => Response.json({ items: [item] }))
+    expect(await createOpenRampClient({ baseUrl: '/b', fetch: f }).history('ors_abc.sig')).toEqual([item])
+    expect(calls[0]!.url).toBe('/b/sessions/ors_abc/history')
+    expect(calls[0]!.init.method).toBe('GET')
+    expect(headers(calls[0]!)).toEqual({ authorization: 'Bearer ors_abc.sig' })
+  })
+
+  it('real server: 404 when the option is off; the list when it is on', async () => {
+    const off = setupServer()
+    const a = await off.ramp.sessions.create({ userId: 'u', country: 'US', destination: BASE_DEST })
+    await expect(off.client.history(a.clientSecret)).rejects.toMatchObject({ status: 404, error: { code: 'NOT_FOUND' } })
+    const on = setupServer(undefined, { history: true })
+    const b = await on.ramp.sessions.create({ userId: 'u', country: 'US', destination: BASE_DEST })
+    expect(await on.client.history(b.clientSecret)).toEqual([])
+  })
+})
+
+describe('controller history', () => {
+  const items = [{ id: 'ors_old', kind: 'session', direction: 'deposit', status: 'succeeded', createdAt: '2026-10-10T00:00:00.000Z' }] as const
+
+  it('stays hidden when the server answers 404', async () => {
+    const client = fakeClient()
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    await c.start()
+    await vi.waitFor(() => expect(client.history).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(c.getSnapshot().historyLoading).toBe(false))
+    expect(c.getSnapshot().history).toBeUndefined()
+    expect(c.getSnapshot().error).toBeUndefined()
+  })
+
+  it('loads at start; openHistory shows the screen and loads again; back returns to the methods', async () => {
+    const client = fakeClient({ history: vi.fn(async () => [...items]) })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    await c.start()
+    await vi.waitFor(() => expect(c.getSnapshot().history).toEqual(items))
+    await c.openHistory()
+    expect(c.getSnapshot().screen).toBe('history')
+    expect(client.history).toHaveBeenCalledTimes(2)
+    expect(c.canGoBack()).toBe(true)
+    c.back()
+    expect(c.getSnapshot().screen).toBe('methods')
+  })
+
+  it('a failed reload on the history screen shows historyError and keeps the list', async () => {
+    let fail = false
+    const client = fakeClient({
+      history: vi.fn(async () => {
+        if (fail) throw new OpenRampClientError(openRampError('PROVIDER_UNAVAILABLE'), 503)
+        return [...items]
+      }),
+    })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    await c.start()
+    await vi.waitFor(() => expect(c.getSnapshot().history).toEqual(items))
+    fail = true
+    await c.openHistory()
+    expect(c.getSnapshot()).toMatchObject({ screen: 'history', history: items, historyError: { code: 'PROVIDER_UNAVAILABLE' } })
+    c.back()
+    expect(c.getSnapshot().historyError).toBeUndefined()
   })
 })
 

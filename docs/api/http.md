@@ -12,6 +12,7 @@ You rarely call these yourself: `@openrampkit/client` does. They are listed here
 | `GET` | `/sessions/:id` | Bearer client secret | Read the session |
 | `GET` | `/sessions/:id/step` | Bearer | Read the session after a status check |
 | `GET` | `/sessions/:id/sources?method=` | Bearer | Deposit: chains and tokens for the source picker |
+| `GET` | `/sessions/:id/history` | Bearer client secret | The past sessions of the session's user (option `history`) |
 | `POST` | `/sessions/:id/deposit-address` | Bearer, `Idempotency-Key` | Deposit: the user's standing deposit address (option `depositAddresses.widget`) |
 | `POST` | `/sessions/:id/plan` | Bearer | Plan pathways and methods |
 | `POST` | `/sessions/:id/target` | Bearer | Withdraw: set the target the user picked, and plan |
@@ -123,6 +124,31 @@ Response `200`: the session user's standing address for that origin and the sess
 ```json
 { "id": "sda_...", "address": "0x...", "origin": { "chain": "eip155:42161", "token": "0xaf88..." }, "destination": { "chain": "eip155:8453", "token": "0x8335..." } }
 ```
+
+## GET /sessions/:id/history
+
+Only with the server option `history`, else `404`. Only with the client secret: a pay link gets `403`, because a pay link can go to another person. A store queue with no `range` gets `501`.
+
+Response `200`: the sessions of the session's user, newest first, at most 50. A session where no payment started is left out. A deposit to the user's [standing deposit address](../guide/deposit-addresses.md) has `kind: "standing"`. See [`HistoryItem`](./core.md#historyitem).
+
+```json
+{
+  "items": [
+    {
+      "id": "ors_...",
+      "kind": "session",
+      "direction": "deposit",
+      "status": "succeeded",
+      "createdAt": "2026-10-16T09:12:00.000Z",
+      "amount": { "value": "25", "asset": { "kind": "fiat", "currency": "USD" } },
+      "destination": { "type": "crypto", "chain": "eip155:8453", "token": "0x8335..." },
+      "tx": { "chain": "eip155:8453", "hash": "0x...", "explorerUrl": "https://basescan.org/tx/0x..." }
+    }
+  ]
+}
+```
+
+An item never has the client secret, the user id, the IP, provider ids or an address.
 
 ## GET /sessions/:id/sources
 

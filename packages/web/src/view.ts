@@ -1,9 +1,9 @@
 // Pure view logic for <openramp-modal>. No Lit and no DOM here, so it is easy to test.
 
 import type { Snapshot } from '@openrampkit/client'
-import { CHAINS, USDC, defaultSourceChains, defaultSourceTokens, isStepDetailCode, mulRatio } from '@openrampkit/core'
-import type { IframeMessages, MethodOption, OpenRampError, PathwayGroup, PaymentLeg, PublicQuote, SourceChain, SourceToken, Step, Surface, WalletBalance } from '@openrampkit/core'
-import { currencySymbol, formatAmount, formatFees, formatFiat, formatLimit, hasUnstatedFee, presetAmounts, shortAddress, titleCase } from './format.js'
+import { CHAINS, USDC, defaultSourceChains, defaultSourceTokens, isStepDetailCode, isWebUrl, mulRatio } from '@openrampkit/core'
+import type { HistoryItem, IframeMessages, MethodOption, OpenRampError, PathwayGroup, PaymentLeg, PublicQuote, SourceChain, SourceToken, Step, Surface, WalletBalance } from '@openrampkit/core'
+import { currencySymbol, displayChain, formatAmount, formatFees, formatRelativeTime, formatFiat, formatLimit, hasUnstatedFee, presetAmounts, shortAddress, titleCase } from './format.js'
 import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
 
@@ -56,6 +56,8 @@ export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: A
       return m.exchangePickerTitle
     case 'deposit_address':
       return m.depositAddressTitle
+    case 'history':
+      return m.historyTitle
     case 'quotes':
       return s.method?.method === 'exchange_transfer' ? m.exchangeTitle : s.method?.method === 'transfer' ? m.transferTitle : m.quotesTitle
     case 'step': {
@@ -230,6 +232,56 @@ export function sourceForChain(chain: string, wasNative: boolean, sources?: Sour
   const opts = transferTokens(chain, sources)
   const next = (wasNative ? opts.find((o) => o.token === 'native') : opts[0]) ?? opts[0]!
   return { chain, token: next.token, symbol: next.symbol, decimals: next.decimals }
+}
+
+// ---------- history ----------
+
+/** The color of a status badge: done, still open, or ended with no delivery */
+export type HistoryTone = 'success' | 'pending' | 'failure'
+
+export function historyTone(status: HistoryItem['status']): HistoryTone {
+  if (status === 'succeeded') return 'success'
+  if (status === 'processing' || status === 'requires_action' || status === 'requires_payment_method') return 'pending'
+  return 'failure'
+}
+
+export type HistoryRow = {
+  id: string
+  title: string
+  /** The amount, or '' when the session has none */
+  amount: string
+  /** The asset that arrives, for example "USDC on Base", or '' */
+  to: string
+  /** "5 minutes ago", or the date */
+  when: string
+  status: string
+  tone: HistoryTone
+  /** An https block explorer link of the transaction, when the server sent one */
+  explorerUrl?: string
+}
+
+/** Everything one history row shows. `now` is the time to count from (ms). */
+export function historyRow(item: HistoryItem, m: Messages, now: number): HistoryRow {
+  const title = item.kind === 'standing' ? m.historyStanding : item.direction === 'withdraw' ? m.historyWithdraw : m.historyDeposit
+  const d = item.destination
+  let to = ''
+  if (d?.type === 'fiat') to = d.currency.toUpperCase()
+  else if (d) {
+    const symbol = d.symbol ?? (d.token === 'native' ? CHAINS[d.chain]?.nativeSymbol : USDC[d.chain]?.toLowerCase() === d.token.toLowerCase() ? 'USDC' : undefined)
+    to = symbol ? m.assetOn(symbol, displayChain(d.chain)) : displayChain(d.chain)
+  }
+  // The server builds the link from its chain table. Check it again: an href must be https.
+  const url = item.tx?.explorerUrl
+  return {
+    id: item.id,
+    title,
+    amount: item.amount ? formatAmount(item.amount, m.locale) : '',
+    to,
+    when: formatRelativeTime(item.createdAt, now, m.locale),
+    status: m.historyStatus[item.status] ?? item.status,
+    tone: historyTone(item.status),
+    ...(url && isWebUrl(url) ? { explorerUrl: url } : {}),
+  }
 }
 
 // ---------- provider iframe messages ----------

@@ -142,6 +142,14 @@ export type OpenRampConfig = {
   latePayments?: { graceHours?: number; pollMinutes?: number }
   /** Provider health, ranking and the circuit breaker. See `RoutingConfig`. */
   routing?: RoutingConfig
+  /**
+   * The user's history in the widget: `GET /sessions/:id/history` lists the past sessions of the
+   * session's user (newest first, at most 50), with status, amount and an explorer link. Each item is a
+   * small view with no secret, user id or address. The server keeps one index per user from the time
+   * you turn this on, so older sessions do not show. Needs a store queue with `range` (all built-in
+   * stores have it). Default `false`: the route answers `404`, and the widget hides its History link.
+   */
+  history?: boolean
   /** Standing deposit addresses (see `openramp.depositAddresses`) */
   depositAddresses?: {
     /**

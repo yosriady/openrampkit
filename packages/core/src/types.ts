@@ -819,6 +819,29 @@ export type StandingAddress = {
   createdAt: string
 }
 
+// ---------- History ----------
+
+/**
+ * One past session of a user, as the browser sees it (`GET /sessions/:id/history`, server option
+ * `history`). It holds no client secret, user id, IP, provider id or address.
+ */
+export type HistoryItem = {
+  /** The session id */
+  id: string
+  /** `standing`: a deposit to the user's standing deposit address. `session`: any other session. */
+  kind: 'session' | 'standing'
+  direction: Direction
+  status: SessionStatus
+  /** ISO 8601 */
+  createdAt: string
+  /** What the user paid in (the first leg's input), else what arrived. Absent before a quote. */
+  amount?: Amount
+  /** The asset that arrives: a chain and a token, or a currency. Never the address. */
+  destination?: { type: 'crypto'; chain: string; token: string; symbol?: string; decimals?: number } | { type: 'fiat'; currency: string }
+  /** The delivery transaction (`settlement` or `destination`), else the one that paid in, when known */
+  tx?: { chain: string; hash: string; explorerUrl?: string }
+}
+
 /** The leg of a payment that an event is about */
 export type EventLeg = {
   /** The payment attempt: 0 for the first payment, then 1, 2 ... after `restart` */

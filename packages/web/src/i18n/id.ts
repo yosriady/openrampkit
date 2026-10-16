@@ -168,6 +168,26 @@ export const id: Messages = {
   errorTitle: 'Terjadi kesalahan',
   errorBody: 'Kami tidak dapat memuat isi saldo ini.',
 
+  // history
+  historyTitle: 'Riwayat',
+  historyEmpty: 'Belum ada isi saldo atau penarikan.',
+  historyDeposit: 'Isi saldo',
+  historyWithdraw: 'Penarikan',
+  historyStanding: 'Deposit ke alamat Anda',
+  assetOn: (symbol: string, chain: string) => `${symbol} di ${chain}`,
+  viewTransaction: 'Lihat transaksi',
+  historyStatus: {
+    requires_payment_method: 'Belum dibayar',
+    requires_action: 'Menunggu',
+    processing: 'Sedang diproses',
+    succeeded: 'Selesai',
+    failed: 'Gagal',
+    canceled: 'Dibatalkan',
+    expired: 'Kedaluwarsa',
+    refunded: 'Dana dikembalikan',
+    reversed: 'Ditarik kembali',
+  },
+
   // withdraw
   withdrawTitle: 'Tarik dana',
   withdrawTabsLabel: 'Tarik ke',

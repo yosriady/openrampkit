@@ -477,3 +477,37 @@ describe('widget: "Your deposit address"', () => {
     expect((await (await session(disabled)).call('/deposit-address', ORIGIN)).status).toBe(409)
   })
 })
+
+describe('history (option history)', () => {
+  it("lists the deposits to the user's standing address as kind standing, and not another user's", async () => {
+    const t = make({ history: true })
+    await t.get()
+    t.fake.deposits.push(deposit('d1'))
+    await t.ramp.sweep()
+    const [sid] = t.depositSessions()
+    t.fake.statusOf['sreq:d1'] = 'succeeded'
+    await t.ramp.sweep()
+    // A deposit to another user's address
+    await t.get('u2')
+    t.fake.deposits.push(deposit('d2'))
+    await t.ramp.sweep()
+    expect(t.depositSessions()).toHaveLength(2)
+
+    const s = await t.ramp.sessions.create({ userId: 'u1', destination: DEST })
+    const res = await t.ramp.handle(new Request(`${BASE}/sessions/${s.id}/history`, { headers: { authorization: `Bearer ${s.clientSecret}` } }))
+    expect(res.status).toBe(200)
+    expect((await res.json()).items).toEqual([
+      {
+        id: sid,
+        kind: 'standing',
+        direction: 'deposit',
+        status: 'succeeded',
+        createdAt: expect.any(String),
+        amount: { value: '10', asset: { kind: 'crypto', chain: ORIGIN.chain, token: ORIGIN.token } },
+        destination: { type: 'crypto', chain: DEST.chain, token: DEST.token },
+        // Not a real hash, so no explorer link
+        tx: { chain: DEST.chain, hash: '0xout' },
+      },
+    ])
+  })
+})

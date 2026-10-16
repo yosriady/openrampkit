@@ -4,11 +4,11 @@
 import { vi } from 'vitest'
 import { mockAdapter } from '@openrampkit/adapter-mock'
 import type { MockOptions } from '@openrampkit/adapter-mock'
-import { USDC } from '@openrampkit/core'
+import { USDC, openRampError } from '@openrampkit/core'
 import type { Destination, MethodOption, OpenRampError, Payment, PaymentLeg, PlanResult, PublicSession, Quote, Step, Transaction } from '@openrampkit/core'
 import { createOpenRamp } from '@openrampkit/server'
 import type { OpenRampConfig } from '@openrampkit/server'
-import { createOpenRampClient } from './client.js'
+import { OpenRampClientError, createOpenRampClient } from './client.js'
 import type { OpenRampClient } from './client.js'
 
 export const BASE = 'http://localhost/api/openramp'
@@ -142,6 +142,10 @@ export function fakeClient(over: Partial<{ [K in keyof OpenRampClient]: OpenRamp
     select: vi.fn(async () => session(step({ state: 'PAYMENT', surface: { kind: 'REDIRECT', url: 'https://pay.example/x', popup: true } }))),
     transition: vi.fn(async () => session(step({ state: 'PROCESSING' }))),
     step: vi.fn(async () => session(step({ state: 'PROCESSING' }))),
+    // The server option `history` is off by default.
+    history: vi.fn(async () => {
+      throw new OpenRampClientError(openRampError('NOT_FOUND'), 404)
+    }),
     ...over,
   }
   return c as unknown as OpenRampClient & { [K in Exclude<keyof OpenRampClient, 'baseUrl'>]: ReturnType<typeof vi.fn> }

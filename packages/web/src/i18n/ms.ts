@@ -168,6 +168,26 @@ export const ms: Messages = {
   errorTitle: 'Berlaku ralat',
   errorBody: 'Kami tidak dapat memuatkan tambah nilai ini.',
 
+  // history
+  historyTitle: 'Sejarah',
+  historyEmpty: 'Belum ada tambah nilai atau pengeluaran.',
+  historyDeposit: 'Tambah nilai',
+  historyWithdraw: 'Pengeluaran',
+  historyStanding: 'Deposit ke alamat anda',
+  assetOn: (symbol: string, chain: string) => `${symbol} di ${chain}`,
+  viewTransaction: 'Lihat transaksi',
+  historyStatus: {
+    requires_payment_method: 'Belum dibayar',
+    requires_action: 'Menunggu',
+    processing: 'Sedang diproses',
+    succeeded: 'Selesai',
+    failed: 'Gagal',
+    canceled: 'Dibatalkan',
+    expired: 'Tamat tempoh',
+    refunded: 'Dibayar balik',
+    reversed: 'Ditarik balik',
+  },
+
   // withdraw
   withdrawTitle: 'Keluarkan wang',
   withdrawTabsLabel: 'Keluarkan ke',

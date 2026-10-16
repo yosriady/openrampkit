@@ -76,6 +76,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 - Wrappers for React, Vue 3 (and Nuxt), Svelte 5 and 4 (and SvelteKit), and Solid (and SolidStart). All are SSR-safe.
 - Modal, embedded and headless modes. Light, dark and auto themes, CSS variables and parts.
 - Deposit and withdraw buttons: `DepositButton`, `WithdrawButton`, `openDeposit()`, `openWithdraw()`.
+- A History screen: the user's past deposits and withdrawals, with status and block explorer links (server option `history`).
 
 **Pathways and planner**
 - A pathway has one or two legs. Example: VietQR at an onramp to USDC on Base, then a Relay bridge to a token on another chain.

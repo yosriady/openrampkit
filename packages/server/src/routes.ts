@@ -18,6 +18,7 @@ import type { Runtime } from './runtime.js'
 import { cancelSession, createSession, loadAuthed } from './sessions.js'
 import { sourcesRoute } from './sources.js'
 import { sessionDepositAddress } from './standing.js'
+import { userHistory } from './history.js'
 import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
 import { adminRoute } from './admin.js'
@@ -152,6 +153,14 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
   }
 
   if (action === 'sources' && method === 'GET') return sourcesRoute(rt, req, rec)
+
+  // The user's past sessions (option `history`). Only with the client secret: a pay link can go to
+  // another person, so it does not show the user's other sessions.
+  if (action === 'history' && method === 'GET' && !arg) {
+    if (!rt.config.history) return errorResponse(openRampError('NOT_FOUND'), 404)
+    if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(openRampError('UNAUTHORIZED'), 403)
+    return json({ items: await userHistory(rt, rec) })
+  }
 
   if (action === 'step' && method === 'GET') {
     if (await refreshActive(rt, rec)) await saveSession(rt, rec)

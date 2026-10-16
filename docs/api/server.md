@@ -53,6 +53,7 @@ const openramp = createOpenRamp({
 | `routing.breakerFailureRate` | `number` | `0.8` | The circuit breaker skips an adapter when more than this share of its quotes and starts in the last one to two hours failed. `1` turns the breaker off. |
 | `routing.breakerCooldownMinutes` | `number` | `10` | How long an open breaker skips the adapter before it lets one probe quote through |
 | `routing.breaker` | `boolean` | `true` | `false` turns the circuit breaker off. Ranking and failover still work. |
+| `history` | `boolean` | `false` | The user's history: `GET /sessions/:id/history` and the History link in the widget. The server keeps one index of sessions per user from the time you turn it on. Off: the route answers `404` and the widget hides the link. See [History](../guide/history.md). |
 | `depositAddresses.widget` | `boolean` | `false` | Offer "Your deposit address" in the widget (method `deposit_address`) and `POST /sessions/:id/deposit-address`. See [Standing deposit addresses](../guide/deposit-addresses.md#show-it-in-the-widget). |
 
 The default geo lookup reads `cf-ipcountry` or `x-vercel-ip-country` (ignoring `XX`), and `x-vercel-ip-country-region` for the region (as `{country}-{region}`).

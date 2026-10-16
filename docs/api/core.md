@@ -75,6 +75,23 @@ type StandingAddress = {
 }
 ```
 
+### HistoryItem
+
+One past session of a user, as `GET /sessions/:id/history` shows it to the browser. See [History](../guide/history.md).
+
+```ts
+type HistoryItem = {
+  id: string
+  kind: 'session' | 'standing' // standing: a deposit to the user's standing deposit address
+  direction: 'deposit' | 'withdraw'
+  status: SessionStatus
+  createdAt: string            // ISO 8601
+  amount?: Amount              // what the user paid in, else what arrived
+  destination?: { type: 'crypto'; chain: string; token: string; symbol?: string; decimals?: number } | { type: 'fiat'; currency: string }
+  tx?: { chain: string; hash: string; explorerUrl?: string } // the delivery, else the payment in
+}
+```
+
 ### Session status
 
 | `status` | Meaning |

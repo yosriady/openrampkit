@@ -1,0 +1,81 @@
+// The user's past sessions (`GET /sessions/:id/history`, option `history`). With the option on, each new
+// session id goes on one index queue per user (`sessions-user:{hash of the user id}`) with its creation
+// time as the due time. Nothing claims these queues; `StoreQueue.range` reads them, latest first.
+//
+// Privacy: the route answers only for the user of the session that the client secret opens, and each
+// item is a small view: no client secret, user id, IP, provider id, or address.
+
+import { OpenRampException, openRampError } from '@openrampkit/core'
+import type { Destination, HistoryItem } from '@openrampkit/core'
+import { paymentAmount } from './admin.js'
+import { sha256Hex } from './crypto.js'
+import { legTransactions } from './legs.js'
+import { queueOf } from './queue.js'
+import type { Runtime } from './runtime.js'
+import type { SessionRecord } from './store.js'
+
+/** Most items that one call returns */
+export const HISTORY_LIMIT = 50
+/** Most index entries that one call reads. Sessions with no payment are left out, so it reads more than it returns. */
+const HISTORY_SCAN = 200
+/** Sessions loaded from the store at the same time */
+const LOAD_BATCH = 25
+
+/** The index queue of one user's sessions */
+const userSessions = async (userId: string) => `sessions-user:${(await sha256Hex(userId)).slice(0, 32)}`
+
+/** Add a new session to its user's index. Only when `config.history` is on. */
+export async function indexUserSession(rt: Runtime, rec: SessionRecord): Promise<void> {
+  if (!rt.config.history) return
+  await queueOf(rt.store).push(await userSessions(rec.userId), rec.id, rec.createdAt)
+}
+
+/** The asset that arrives, with no address. A merchant destination shows only its currency. */
+function destinationView(d: Destination | undefined): HistoryItem['destination'] {
+  if (!d) return undefined
+  if (d.type === 'crypto') return { type: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
+  return { type: 'fiat', currency: d.currency }
+}
+
+/** The browser view of one past session */
+export function historyItem(rec: SessionRecord): HistoryItem {
+  // The payment in progress, else the last attempt (a session that expired after a restart).
+  const p = rec.active ?? rec.attempts?.[rec.attempts.length - 1]
+  const amount = paymentAmount(p)
+  const txs = p ? p.legs.flatMap((_, i) => legTransactions(p, i)) : []
+  // The delivery is what the user looks for. Else the transaction that paid in.
+  const tx = txs.find((t) => t.role === 'settlement') ?? txs.find((t) => t.role === 'destination') ?? txs.find((t) => t.role === 'source')
+  const destination = destinationView(p?.destination ?? rec.destination)
+  return {
+    id: rec.id,
+    kind: rec.standingAddressId ? 'standing' : 'session',
+    direction: rec.direction,
+    status: rec.status,
+    createdAt: new Date(rec.createdAt).toISOString(),
+    ...(amount ? { amount } : {}),
+    ...(destination ? { destination } : {}),
+    ...(tx ? { tx: { chain: tx.chain, hash: tx.hash, ...(tx.explorerUrl ? { explorerUrl: tx.explorerUrl } : {}) } } : {}),
+  }
+}
+
+/** A session that shows in the history: a payment started, or a deposit came to a standing address */
+const hasPayment = (rec: SessionRecord) => !!rec.active || !!rec.attempts?.length || !!rec.standingAddressId
+
+/**
+ * The sessions of `rec`'s user, newest first, at most `HISTORY_LIMIT`. Sessions where no payment
+ * started are left out. A session whose record is gone (the store TTL) is skipped.
+ */
+export async function userHistory(rt: Runtime, rec: SessionRecord): Promise<HistoryItem[]> {
+  const q = queueOf(rt.store)
+  if (!q.range) {
+    throw new OpenRampException(openRampError('INTERNAL', { message: 'The store queue has no `range`. The history needs it (see Session stores).' }), 501)
+  }
+  const entries = await q.range(await userSessions(rec.userId), { max: Number.MAX_SAFE_INTEGER, limit: HISTORY_SCAN })
+  const out: HistoryItem[] = []
+  for (let i = 0; i < entries.length && out.length < HISTORY_LIMIT; i += LOAD_BATCH) {
+    const batch = await Promise.all(entries.slice(i, i + LOAD_BATCH).map((e) => (e.id === rec.id ? rec : rt.store.get(e.id))))
+    // The same user only (the index name is a hash, so check the record too), and the same mode.
+    for (const r of batch) if (r && r.userId === rec.userId && r.livemode === rec.livemode && hasPayment(r) && out.length < HISTORY_LIMIT) out.push(historyItem(r))
+  }
+  return out
+}

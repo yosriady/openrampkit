@@ -168,6 +168,26 @@ export const vi: Messages = {
   errorTitle: 'Đã xảy ra lỗi',
   errorBody: 'Không thể tải khoản nạp này.',
 
+  // history
+  historyTitle: 'Lịch sử',
+  historyEmpty: 'Chưa có khoản nạp hoặc rút nào.',
+  historyDeposit: 'Nạp tiền',
+  historyWithdraw: 'Rút tiền',
+  historyStanding: 'Nạp vào địa chỉ của bạn',
+  assetOn: (symbol: string, chain: string) => `${symbol} trên ${chain}`,
+  viewTransaction: 'Xem giao dịch',
+  historyStatus: {
+    requires_payment_method: 'Chưa thanh toán',
+    requires_action: 'Đang chờ',
+    processing: 'Đang xử lý',
+    succeeded: 'Hoàn tất',
+    failed: 'Thất bại',
+    canceled: 'Đã hủy',
+    expired: 'Đã hết hạn',
+    refunded: 'Đã hoàn tiền',
+    reversed: 'Đã thu hồi',
+  },
+
   // withdraw
   withdrawTitle: 'Rút tiền',
   withdrawTabsLabel: 'Rút về',

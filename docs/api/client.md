@@ -29,6 +29,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
 | `depositAddress(secret, { chain, token })` | `POST /sessions/:id/deposit-address` | `DepositAddressView`. The controller loads it on the `deposit_address` screen, into `snapshot.depositAddress`. |
+| `history(secret)` | `GET /sessions/:id/history` | `HistoryItem[]`, newest first. Throws `NOT_FOUND` (404) when the server option `history` is off. The controller loads it at start, into `snapshot.history`. |
 | `sources(secret, method)` | `GET /sessions/:id/sources?method=` | `{ chains: SourceChain[] }`. The controller loads it when the user picks an address transfer, into `snapshot.sources`. |
 | `cancel(secret)` | `POST /sessions/:id/cancel` (with a random `idempotency-key`) | `PublicSession`. Cancels the session while no payment is under way. |
 | `baseUrl` | | The base URL without a trailing slash |
@@ -83,6 +84,8 @@ It works like an external store: `getSnapshot()` returns an immutable `Snapshot`
 | `notifySurface(kind, detail?)` | For a UI that reads provider iframe messages: `'completed'`, `'failed'` or `'closed'`. Polls at once. `closed` sets `surfaceClosed`. Never sets the outcome. |
 | `reopenSurface()` | Clears `surfaceClosed` |
 | `restart()` | Fires the server `restart` transition (back to the methods) |
+| `loadHistory()` | Loads the user's history into `snapshot.history`. `start()` calls it. An error leaves `history` as it was (undefined when the server answers `404`). |
+| `openHistory()` | Shows the `history` screen and loads the list again. `back()` returns to the screen before. |
 | `back()` | Quotes to amount (or methods for transfer), amount to methods (to the target form for a withdrawal to a wallet), and `PAYMENT` step to `restart()` |
 | `close()` | Emits `modal.closed`, rejects `done` unless completed, and destroys the controller |
 | `destroy()` | Stops timers and removes listeners |
@@ -118,7 +121,7 @@ When the step has an `AWAIT` transition, the controller polls `GET /sessions/:id
 
 ```ts
 type Snapshot = {
-  screen: 'loading' | 'target' | 'methods' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+  screen: 'loading' | 'target' | 'methods' | 'exchanges' | 'deposit_address' | 'history' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
   direction?: 'deposit' | 'withdraw' // from the session once loaded
   tab: 'crypto' | 'cash'
   session?: PublicSession
@@ -139,6 +142,9 @@ type Snapshot = {
   surfaceClosed: boolean     // the provider iframe said the user closed it
   target?: { chain: string; token: string; symbol: string; decimals: number; address: string } // withdraw: the "To wallet" form
   cashCurrency?: string      // withdraw: the payout currency of the "To cash" tab
+  history?: HistoryItem[]    // the user's history (server option `history`); undefined when not offered
+  historyLoading?: boolean
+  historyError?: OpenRampError // a reload on the history screen failed
 }
 ```
 
@@ -149,6 +155,7 @@ type Snapshot = {
 | `methods` | The plan is ready. The tab is `cash` for merchant sessions or when no crypto method is available. |
 | `amount` | A method was picked |
 | `quotes` | Quotes are loading or shown |
+| `history` | The user's past sessions (`openHistory()`) |
 | `step` | A payment is in progress (a non-terminal step) |
 | `result` | A terminal step: `COMPLETED`, `FAILED`, `EXPIRED`, `REFUNDED` or `BLOCKED` |
 | `error` | The session could not load |
@@ -172,4 +179,4 @@ The returned object also has `sent: Array<{ chain, txs, hash }>`.
 
 ## Re-exported types
 
-`MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.
+`HistoryItem`, `MethodOption`, `PlanResult`, `PublicLegQuote`, `PublicQuote`, `PublicSession`, `Step`, `WalletAdapter`, `WalletBalance` from `@openrampkit/core`; `ClientOptions`, `OpenRampClient`, `ControllerOptions`, `ScreenName`, `Snapshot`, `SurfaceSignal`, `Tab`, `TargetDraft`.

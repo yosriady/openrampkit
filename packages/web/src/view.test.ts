@@ -2,11 +2,13 @@ import { describe, expect, it } from 'vitest'
 import type { Snapshot } from '@openrampkit/client'
 import { SOLANA_MAINNET, USDC, openRampError } from '@openrampkit/core'
 import { METHODS, method, payment, plan, quote, session, step } from '../../client/src/testctx.js'
-import { en } from './messages.js'
+import { en, vi as viMessages } from './messages.js'
 import {
   amountModel,
   groupLabel,
   groupMethods,
+  historyRow,
+  historyTone,
   liveText,
   methodSubtitle,
   methodTabs,
@@ -238,5 +240,40 @@ describe('transfer source picker', () => {
     expect(sourceForChain('eip155:10', false)).toEqual({ chain: 'eip155:10', token: USDC['eip155:10'], symbol: 'USDC', decimals: 6 })
     expect(sourceForChain('eip155:10', true)).toEqual({ chain: 'eip155:10', token: 'native', symbol: 'ETH', decimals: 18 })
     expect(sourceForChain('eip155:143', false)).toEqual({ chain: 'eip155:143', token: 'native', symbol: 'MON', decimals: 18 })
+  })
+})
+
+describe('history', () => {
+  const now = Date.parse('2026-10-16T12:00:00Z')
+
+  it('screenTitle and historyTone', () => {
+    expect(screenTitle(snap({ screen: 'history' }), en)).toBe('History')
+    expect(historyTone('succeeded')).toBe('success')
+    for (const s of ['processing', 'requires_action', 'requires_payment_method'] as const) expect(historyTone(s)).toBe('pending')
+    for (const s of ['failed', 'canceled', 'expired', 'refunded', 'reversed'] as const) expect(historyTone(s)).toBe('failure')
+  })
+
+  it('historyRow: title, amount, asset, relative date, status and a safe link', () => {
+    const base = { id: 'ors_a', kind: 'session' as const, direction: 'deposit' as const, status: 'succeeded' as const, createdAt: '2026-10-16T11:00:00Z' }
+    expect(
+      historyRow(
+        {
+          ...base,
+          amount: { value: '25', asset: { kind: 'fiat', currency: 'USD' } },
+          destination: { type: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']! },
+          tx: { chain: 'eip155:8453', hash: '0x1', explorerUrl: 'https://basescan.org/tx/0x1' },
+        },
+        en,
+        now,
+      ),
+    ).toEqual({ id: 'ors_a', title: 'Deposit', amount: '$25.00', to: 'USDC on Base', when: '1 hour ago', status: 'Complete', tone: 'success', explorerUrl: 'https://basescan.org/tx/0x1' })
+    // A link that is not https is dropped. A native token gets the symbol of the chain. A fiat payout shows its currency.
+    expect(historyRow({ ...base, tx: { chain: 'x', hash: 'h', explorerUrl: 'http://evil.test/tx' } }, en, now).explorerUrl).toBeUndefined()
+    expect(historyRow({ ...base, destination: { type: 'crypto', chain: 'eip155:10', token: 'native' } }, en, now).to).toBe('ETH on Optimism')
+    expect(historyRow({ ...base, direction: 'withdraw', status: 'failed', destination: { type: 'fiat', currency: 'php' } }, en, now)).toMatchObject({ title: 'Withdrawal', to: 'PHP', amount: '', tone: 'failure', status: 'Failed' })
+    expect(historyRow({ ...base, kind: 'standing' }, en, now).title).toBe('Deposit to your address')
+    // Another locale: the catalog and the date format follow it.
+    const row = historyRow({ ...base, destination: { type: 'crypto', chain: 'eip155:8453', token: USDC['eip155:8453']! } }, { ...viMessages, locale: 'vi' }, now)
+    expect(row).toMatchObject({ title: 'Nạp tiền', to: 'USDC trên Base', status: 'Hoàn tất', when: '1 giờ trước' })
   })
 })

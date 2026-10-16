@@ -48,6 +48,7 @@ export default withMermaid(
               { text: 'Webhooks to your backend', link: '/guide/webhooks' },
               { text: 'Withdrawals', link: '/guide/withdraw' },
               { text: 'Standing deposit addresses', link: '/guide/deposit-addresses' },
+              { text: 'History', link: '/guide/history' },
               { text: 'Merchant fiat destination', link: '/guide/merchant-destination' },
               { text: 'Solana', link: '/guide/solana' },
               { text: 'Theming', link: '/guide/theming' },

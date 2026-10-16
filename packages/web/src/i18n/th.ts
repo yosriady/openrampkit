@@ -169,6 +169,26 @@ export const th: Messages = {
   errorTitle: 'เกิดข้อผิดพลาด',
   errorBody: 'ไม่สามารถโหลดรายการฝากเงินนี้ได้',
 
+  // history
+  historyTitle: 'ประวัติ',
+  historyEmpty: 'ยังไม่มีรายการฝากหรือถอนเงิน',
+  historyDeposit: 'ฝากเงิน',
+  historyWithdraw: 'ถอนเงิน',
+  historyStanding: 'ฝากเข้าที่อยู่ของคุณ',
+  assetOn: (symbol: string, chain: string) => `${symbol} บน ${chain}`,
+  viewTransaction: 'ดูธุรกรรม',
+  historyStatus: {
+    requires_payment_method: 'ยังไม่ชำระ',
+    requires_action: 'รอดำเนินการ',
+    processing: 'กำลังดำเนินการ',
+    succeeded: 'เสร็จสิ้น',
+    failed: 'ไม่สำเร็จ',
+    canceled: 'ยกเลิกแล้ว',
+    expired: 'หมดอายุ',
+    refunded: 'คืนเงินแล้ว',
+    reversed: 'ถูกเรียกคืน',
+  },
+
   // withdraw
   withdrawTitle: 'ถอนเงิน',
   withdrawTabsLabel: 'ถอนไปที่',

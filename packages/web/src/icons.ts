@@ -19,6 +19,7 @@ export const icons = {
   transfer: icon(svg`<path d="M7 7h11l-3-3M17 17H6l3 3"/>`),
   exchange: icon(svg`<path d="M4 20V10l8-6 8 6v10"/><path d="M9 20v-6h6v6"/>`),
   external: icon(svg`<path d="M14 4h6v6M20 4l-9 9M18 14v5a1 1 0 01-1 1H5a1 1 0 01-1-1V7a1 1 0 011-1h5"/>`),
+  clock: icon(svg`<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>`),
   pay: icon(svg`<path d="M12 3v18M16.5 7H10a3 3 0 000 6h4a3 3 0 010 6H7"/>`),
   /** Instant bank payment: a bank with a lightning bolt (generic glyph, no brand mark) */
   bankInstant: icon(svg`<path d="M3 9.5L12 4l9 5.5M5 10v5M9.5 10v5M14.5 10v1.5M3.5 18h8"/><path d="M18 12l-2.5 4h3L16 21"/>`),

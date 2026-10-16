@@ -158,3 +158,29 @@ const PRESETS: Record<string, number[]> = {
 export function presetAmounts(currency: string): number[] {
   return PRESETS[currency.toUpperCase()] ?? [25, 50, 100, 250]
 }
+
+/** Steps for `formatRelativeTime`: the unit and its length in seconds, up to 30 days */
+const RELATIVE_UNITS: Array<[Intl.RelativeTimeFormatUnit, number]> = [
+  ['day', 86_400],
+  ['hour', 3600],
+  ['minute', 60],
+]
+
+/**
+ * A past time for people: "5 minutes ago", "yesterday". Older than 30 days, or with no
+ * `Intl.RelativeTimeFormat`: the date ("Oct 3, 2026"). Empty for a time that is not valid.
+ */
+export function formatRelativeTime(iso: string, now: number, locale?: string): string {
+  const at = Date.parse(iso)
+  if (!Number.isFinite(at)) return ''
+  const sec = Math.round((at - now) / 1000)
+  const abs = Math.abs(sec)
+  const date = () => new Intl.DateTimeFormat(locale, { dateStyle: 'medium' }).format(at)
+  if (abs >= 30 * 86_400 || typeof Intl.RelativeTimeFormat !== 'function') return date()
+  const [unit, size] = RELATIVE_UNITS.find(([, n]) => abs >= n) ?? ['second', 1]
+  try {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(Math.round(sec / size), unit)
+  } catch {
+    return date()
+  }
+}

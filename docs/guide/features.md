@@ -65,6 +65,7 @@ See the [withdraw flow](../concepts/flows.md#withdraw).
 | Headless controller | Drive `DepositController` with your own UI | [@openrampkit/client](../api/client.md), [Custom UIs](../concepts/surfaces.md#custom-uis) |
 | Themes | Light, dark and auto themes, appearance options, CSS variables and parts | [Theming](./theming.md) |
 | Languages | English, Vietnamese, Indonesian, Thai, Malay and Filipino. English unless the app sets a locale. | [Languages](./theming.md#languages) |
+| History | The user's past deposits and withdrawals in the widget, with status and explorer links (server option `history`) | [History](./history.md) |
 | Browser events | `modal.opened`, `method.selected`, `quote.selected`, `step.changed` and more, for analytics | [Browser events](../concepts/events.md#browser-events) |
 
 ## Wallets and chains

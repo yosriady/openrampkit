@@ -248,7 +248,12 @@ const isPositive = (v: string) => /^\d*\.?\d+$/.test(v) && /[1-9]/.test(v)
  * that arrived is used: the last leg's confirmed output, else its quoted output.
  */
 export function amountOf(rec: SessionRecord): Amount | undefined {
-  const legs = rec.active?.legs ?? []
+  return paymentAmount(rec.active)
+}
+
+/** The amount to show for one payment (see `amountOf`) */
+export function paymentAmount(p: ActivePayment | PaymentAttempt | undefined): Amount | undefined {
+  const legs = p?.legs ?? []
   const input = legs[0]?.quote.input
   if (input && isPositive(input.value)) return input
   const last = legs[legs.length - 1]

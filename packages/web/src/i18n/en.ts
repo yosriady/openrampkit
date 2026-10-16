@@ -1,7 +1,7 @@
 // English catalog: the source of truth for every key of `Messages`.
 // Keep copy short and plain. Do not use em dashes or en dashes.
 
-import type { StepDetailCode } from '@openrampkit/core'
+import type { SessionStatus, StepDetailCode } from '@openrampkit/core'
 
 export const en = {
   /** BCP 47 tag used for number and currency formatting */
@@ -182,6 +182,26 @@ export const en = {
   // error
   errorTitle: 'Something went wrong',
   errorBody: 'We could not load this deposit.',
+
+  // history
+  historyTitle: 'History',
+  historyEmpty: 'No deposits or withdrawals yet.',
+  historyDeposit: 'Deposit',
+  historyWithdraw: 'Withdrawal',
+  historyStanding: 'Deposit to your address',
+  assetOn: (symbol: string, chain: string) => `${symbol} on ${chain}`,
+  viewTransaction: 'View transaction',
+  historyStatus: {
+    requires_payment_method: 'Not paid',
+    requires_action: 'Waiting',
+    processing: 'In progress',
+    succeeded: 'Complete',
+    failed: 'Failed',
+    canceled: 'Canceled',
+    expired: 'Expired',
+    refunded: 'Refunded',
+    reversed: 'Reversed',
+  } satisfies Record<SessionStatus, string>,
 
   // withdraw
   withdrawTitle: 'Withdraw',

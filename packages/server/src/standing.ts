@@ -20,6 +20,7 @@ import type { Amount, CryptoAsset, Destination, LegQuote, LegSpec, MethodOption,
 import type { CreateSessionInput } from './config.js'
 import { sha256Hex } from './crypto.js'
 import { indexSession } from './admin.js'
+import { indexUserSession } from './history.js'
 import { setLegStep } from './legs.js'
 import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
@@ -376,6 +377,7 @@ async function createDepositSession(rt: Runtime, addr: StandingRecord, a: Adapte
   // On the open list before the write: the sweep polls the leg until it ends.
   await trackOpenSession(rt, sid)
   await indexSession(rt, sid, rec.createdAt)
+  await indexUserSession(rt, rec)
   await notify(rt, rec, 'session.created')
   await notify(rt, rec, 'deposit_address.deposit', { depositAddressId: addr.id, sessionId: sid, depositId: dep.id, ...(dep.input ? { input: dep.input } : {}) })
   addTimeline(rec, 'payment.started', { attempt: 0, method: 'transfer', provider: a.name })

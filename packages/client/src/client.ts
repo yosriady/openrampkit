@@ -1,7 +1,7 @@
 // HTTP client for the app's OpenRampKit server handler.
 
 import { openRampError } from '@openrampkit/core'
-import type { OpenRampError, PlanResult, PublicQuote, PublicSession, SourceChain } from '@openrampkit/core'
+import type { HistoryItem, OpenRampError, PlanResult, PublicQuote, PublicSession, SourceChain } from '@openrampkit/core'
 
 /** The user's standing deposit address, as the server shows it to the browser */
 export type DepositAddressView = {
@@ -103,6 +103,11 @@ export function createOpenRampClient(opts: ClientOptions) {
     /** Deposit: chains and tokens for the source picker of a method (`transfer`, `exchange_transfer` or `wallet`) */
     sources: (secret: string, method: string) =>
       call<{ chains: SourceChain[] }>(secret, 'GET', `/sessions/${sessionId(secret)}/sources?method=${encodeURIComponent(method)}`),
+    /**
+     * The past sessions of the session's user, newest first (`GET /sessions/:id/history`). Needs the
+     * server option `history`: else it throws `NOT_FOUND` (404). A pay link gets `UNAUTHORIZED` (403).
+     */
+    history: async (secret: string) => (await call<{ items: HistoryItem[] }>(secret, 'GET', `/sessions/${sessionId(secret)}/history`)).items,
     /** Cancel the session while no payment is under way (`POST /sessions/:id/cancel`) */
     cancel: (secret: string) => call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/cancel`, {}, idemKey()),
   }

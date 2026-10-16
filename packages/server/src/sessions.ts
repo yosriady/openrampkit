@@ -12,6 +12,7 @@ import { GRACE_QUEUE, queueOf, trackOpenSession } from './queue.js'
 import { lateGraceMs, moneyMayHaveMoved } from './legs.js'
 import { canArriveLate } from './tasks.js'
 import { indexSession } from './admin.js'
+import { indexUserSession } from './history.js'
 import { adapterContext, normalizeDestination } from './runtime.js'
 import { addTimeline } from './timeline.js'
 import type { Runtime } from './runtime.js'
@@ -182,6 +183,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
   // On the open list before the write: a session is never stored without it.
   await trackOpenSession(rt, rec.id)
   await indexSession(rt, rec.id, now)
+  await indexUserSession(rt, rec)
   await notify(rt, rec, 'session.created')
   await saveSession(rt, rec, { create: true })
   return { id, clientSecret: `${id}.${secret}`, expiresAt: new Date(expiresAt).toISOString() }

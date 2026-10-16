@@ -1214,3 +1214,73 @@ describe('locale', () => {
     expect(h.title()).toBe('Mag-deposit')
   })
 })
+
+describe('history', () => {
+  it('hides the History link when the server answers 404 (option off)', async () => {
+    const h = await mount()
+    await settle(h.el)
+    expect(h.$('[data-history]')).toBeNull()
+  })
+
+  it('real server with history on: the link opens the empty state, and Back returns to the methods', async () => {
+    const h = await mount({ config: { history: true } })
+    await h.until(() => !!h.c.getSnapshot().history)
+    await h.click(h.$('[data-history]')!)
+    expect(h.title()).toBe('History')
+    expect(h.text()).toContain('No deposits or withdrawals yet.')
+    await h.click(h.button('Back'))
+    expect(h.c.getSnapshot().screen).toBe('methods')
+    expect(h.$('[data-method]')).not.toBeNull()
+  })
+
+  it('lists items with status badges, amounts, relative dates and safe explorer links', async () => {
+    const now = Date.now()
+    const ago = (ms: number) => new Date(now - ms).toISOString()
+    const client = fakeClient({
+      history: vi.fn(async () => [
+        {
+          id: 'ors_a',
+          kind: 'session' as const,
+          direction: 'deposit' as const,
+          status: 'succeeded' as const,
+          createdAt: ago(5 * 60_000),
+          amount: { value: '25', asset: { kind: 'fiat' as const, currency: 'USD' } },
+          destination: { type: 'crypto' as const, chain: 'eip155:8453', token: USDC['eip155:8453']! },
+          tx: { chain: 'eip155:8453', hash: `0x${'a'.repeat(64)}`, explorerUrl: `https://basescan.org/tx/0x${'a'.repeat(64)}` },
+        },
+        { id: 'ors_b', kind: 'standing' as const, direction: 'deposit' as const, status: 'processing' as const, createdAt: ago(2 * 86_400_000), tx: { chain: 'eip155:8453', hash: '0x1', explorerUrl: 'javascript:alert(1)' } },
+        { id: 'ors_c', kind: 'session' as const, direction: 'withdraw' as const, status: 'failed' as const, createdAt: ago(3 * 3600_000) },
+      ]),
+    })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    const el = document.createElement(TAG_NAME) as OpenRampModal
+    mounted.push(el)
+    el.open = true
+    el.controller = c
+    document.body.appendChild(el)
+    await c.start()
+    const h = helpers(el)
+    await h.until(() => !!c.getSnapshot().history)
+    await h.click(h.$('[data-history]')!)
+    const rows = h.$$('.history-item')
+    expect(rows.map((r) => r.dataset.session)).toEqual(['ors_a', 'ors_b', 'ors_c'])
+    expect(rows[0]!.textContent).toContain('Deposit')
+    expect(rows[0]!.textContent).toContain('$25.00')
+    expect(rows[0]!.textContent).toContain('USDC on Base')
+    expect(rows[0]!.textContent).toContain('5 minutes ago')
+    expect(rows[0]!.querySelector('.badge.success')!.textContent).toBe('Complete')
+    const link = rows[0]!.querySelector<HTMLAnchorElement>('a.tx-link')!
+    expect(link.getAttribute('href')).toBe(`https://basescan.org/tx/0x${'a'.repeat(64)}`)
+    expect(link.getAttribute('rel')).toBe('noopener noreferrer')
+    expect(rows[1]!.textContent).toContain('Deposit to your address')
+    expect(rows[1]!.textContent).toContain('2 days ago')
+    expect(rows[1]!.querySelector('.badge.pending')!.textContent).toBe('In progress')
+    // A link that is not https is never rendered.
+    expect(rows[1]!.querySelector('a')).toBeNull()
+    expect(rows[2]!.textContent).toContain('Withdrawal')
+    expect(rows[2]!.querySelector('.badge.failure')!.textContent).toBe('Failed')
+    // The header back button returns too.
+    await h.click(h.$('.header .icon-btn[aria-label="Back"]')!)
+    expect(c.getSnapshot().screen).toBe('methods')
+  })
+})

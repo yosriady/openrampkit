@@ -375,6 +375,41 @@ export const styles = css`
     background: var(--ork-color-success-soft);
     color: var(--ork-color-success);
   }
+  .badge.failure {
+    background: var(--ork-color-danger-soft);
+    color: var(--ork-color-danger);
+  }
+
+  /* history */
+  .history-link .btn svg {
+    width: 16px;
+    height: 16px;
+    margin-right: 6px;
+  }
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+    border-radius: var(--ork-radius-row);
+    background: var(--ork-color-surface);
+  }
+  .history-item .row-end {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+  }
+  .tx-link {
+    display: inline-block;
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--ork-color-accent);
+  }
+  .history-empty .result-icon {
+    background: var(--ork-color-accent-soft);
+    color: var(--ork-color-text-secondary);
+  }
 
   /* amount */
   .amount-box {

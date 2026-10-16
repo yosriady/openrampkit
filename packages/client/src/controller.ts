@@ -5,6 +5,7 @@
 import { CHAINS, USDC, accountFor, defaultSourceTokens, exchangeOptions, nativeDecimals, sourceTokenKey, chainNamespace, cmp, createClientEvent, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError } from '@openrampkit/core'
 import type {
   Direction,
+  HistoryItem,
   MethodOption,
   OpenRampError,
   ClientEvent,
@@ -32,7 +33,7 @@ export type Tab = 'crypto' | 'cash'
 export type SurfaceSignal = 'completed' | 'failed' | 'closed'
 
 /** `target` is the withdraw "To wallet" form (network, token, address). */
-export type ScreenName = 'loading' | 'target' | 'methods' | 'exchanges' | 'deposit_address' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
+export type ScreenName = 'loading' | 'target' | 'methods' | 'exchanges' | 'deposit_address' | 'history' | 'amount' | 'quotes' | 'step' | 'result' | 'error'
 
 /** Withdraw "To wallet" form state */
 export type TargetDraft = { chain: string; token: string; symbol: string; decimals: number; address: string }
@@ -71,6 +72,15 @@ export type Snapshot = {
   depositAddress?: DepositAddressView
   /** True while the standing address for the current `source` loads */
   depositAddressLoading?: boolean
+  /**
+   * The user's past sessions (`client.history()`, server option `history`), newest first. Undefined
+   * until it loads, and when the server does not offer it: a UI then hides its History link.
+   */
+  history?: HistoryItem[]
+  /** True while the history loads */
+  historyLoading?: boolean
+  /** The history could not load again on the history screen */
+  historyError?: OpenRampError
   /** The provider page (IFRAME surface) said the user closed it. Cleared by `reopenSurface()` or a new step. */
   surfaceClosed: boolean
   /** Withdraw: the "To wallet" form */
@@ -233,6 +243,8 @@ export class RampController {
       }
       this.set({ session, direction: session.direction, walletConnected: !!walletAddress, ...(walletAddress ? { walletAddress } : {}) })
       if (session.step.state !== 'SELECT_METHOD') return this.applySession(session)
+      // In the background: the History link shows only when the server offers the history.
+      void this.loadHistory()
       if (walletAddress && this.opts.wallet?.getBalances) {
         const balances = await this.opts.wallet.getBalances(accounts).catch(() => [] as WalletBalance[])
         this.set({ balances: balances.filter((b) => cmp(b.amount, '0') > 0) })
@@ -269,8 +281,37 @@ export class RampController {
     await this.selectMethod(want)
   }
 
+  /** The screen to go back to from the history */
+  private historyFrom: ScreenName = 'methods'
+  private historySeq = 0
+
+  /**
+   * Load the user's past sessions into `snapshot.history`. Quiet: an error (for example `404` when the
+   * server option `history` is off) leaves `history` undefined, or keeps the list that loaded before.
+   * On the history screen, the error shows as `historyError`.
+   */
+  async loadHistory() {
+    const seq = ++this.historySeq
+    this.set({ historyLoading: true, historyError: undefined })
+    try {
+      const history = await this.opts.client.history(this.opts.clientSecret)
+      if (seq === this.historySeq && !this.destroyed) this.set({ history, historyLoading: false })
+    } catch (e) {
+      if (seq !== this.historySeq || this.destroyed) return
+      this.set({ historyLoading: false, ...(this.snap.screen === 'history' ? { historyError: toOpenRampError(e) } : {}) })
+    }
+  }
+
+  /** Show the history screen and load the list again. `back()` returns to the screen before. */
+  openHistory() {
+    if (this.snap.screen !== 'history') this.historyFrom = this.snap.screen
+    this.set({ screen: 'history', error: undefined })
+    return this.loadHistory()
+  }
+
   /** False when `lockMethod` keeps the user on the app's `initialMethod` */
   canGoBack(): boolean {
+    if (this.snap.screen === 'history') return true
     const f = this.opts.flow
     if (!f?.lockMethod || !f.initialMethod) return true
     const screen = this.snap.screen
@@ -783,7 +824,8 @@ export class RampController {
     const screen = this.snap.screen
     clearTimeout(this.quoteTimer)
     const list = this.snap.exchange ? 'exchanges' : 'methods'
-    if (screen === 'exchanges' || screen === 'deposit_address') this.set({ screen: 'methods', error: undefined })
+    if (screen === 'history') this.set({ screen: this.historyFrom, historyError: undefined })
+    else if (screen === 'exchanges' || screen === 'deposit_address') this.set({ screen: 'methods', error: undefined })
     else if (screen === 'quotes') this.set({ screen: isAddressTransfer(this.snap.method?.method) ? list : 'amount', error: undefined })
     else if (screen === 'amount') {
       const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto' && !this.lockedTarget()

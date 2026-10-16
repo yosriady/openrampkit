@@ -169,6 +169,26 @@ export const fil: Messages = {
   errorTitle: 'May nangyaring mali',
   errorBody: 'Hindi namin ma-load ang deposit na ito.',
 
+  // history
+  historyTitle: 'History',
+  historyEmpty: 'Wala pang deposit o withdrawal.',
+  historyDeposit: 'Deposit',
+  historyWithdraw: 'Withdrawal',
+  historyStanding: 'Deposit sa iyong address',
+  assetOn: (symbol: string, chain: string) => `${symbol} sa ${chain}`,
+  viewTransaction: 'Tingnan ang transaksyon',
+  historyStatus: {
+    requires_payment_method: 'Hindi pa bayad',
+    requires_action: 'Naghihintay',
+    processing: 'Pinoproseso',
+    succeeded: 'Tapos na',
+    failed: 'Hindi natuloy',
+    canceled: 'Kinansela',
+    expired: 'Nag-expire',
+    refunded: 'Na-refund',
+    reversed: 'Binawi',
+  },
+
   // withdraw
   withdrawTitle: 'Mag-withdraw',
   withdrawTabsLabel: 'I-withdraw sa',
