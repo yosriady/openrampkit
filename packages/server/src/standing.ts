@@ -9,6 +9,11 @@
 // is the destination itself, and an adapter such as chain-watch reports the transfers it sees on chain).
 //
 // Money safety:
+// - A same-chain address is the destination itself, and every transfer to it counts for its user. So
+//   only the app's backend can ask for one (`depositAddresses.get` with `dedicatedDestination: true`,
+//   never the widget), one user owns a destination (`sdwatch:` key, others get 409), and nothing else
+//   may deliver to a watched destination: a converting standing address to it and a deposit session to
+//   it are refused (409), because their deliveries would count twice.
 // - One deposit, one session. The session id comes from the address id and the deposit id, an
 //   atomic claim (`standingdep:...`) picks the sweep that makes it, and a leg ref that already
 //   belongs to a session is never a new deposit.
@@ -30,7 +35,7 @@ import { notify } from './notify.js'
 import { saveSession } from './outbox.js'
 import { STANDING_QUEUE, queueOf, trackOpenSession } from './queue.js'
 import type { Runtime } from './runtime.js'
-import { checkInput, draftSession } from './sessions.js'
+import { checkInput, destinationWatchKey, draftSession } from './sessions.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord } from './store.js'
 import { addTimeline } from './timeline.js'
@@ -48,6 +53,14 @@ export type DepositAddressInput = {
    * serves the route (see `Adapter.standingRoutes`).
    */
   adapterId?: string
+  /**
+   * Required (`true`) for a route with the same token on the same chain. Such an address is the
+   * destination itself: the server watches the chain and credits every transfer to the address to this
+   * user, whoever sends it. Set it only for an address that your backend made for this one user, that
+   * the user cannot choose, and that nothing else pays to (no onramp, no session, no other user). Never
+   * pass a wallet address that the user typed or connected.
+   */
+  dedicatedDestination?: boolean
 }
 
 /** The address record that the server keeps (no TTL) */
@@ -138,11 +151,57 @@ function checkRoute(input: DepositAddressInput): { userId: string; origin: Stand
   if (o.symbol !== undefined && (typeof o.symbol !== 'string' || o.symbol.length > 20)) throw bad('`origin.symbol` must be a string of at most 20 characters.')
   if (o.decimals !== undefined && (!Number.isInteger(o.decimals) || o.decimals < 0 || o.decimals > 36)) throw bad('`origin.decimals` must be an integer from 0 to 36.')
   if (input.adapterId !== undefined && typeof input.adapterId !== 'string') throw bad('`adapterId` must be a string.')
+  if (input.dedicatedDestination !== undefined && typeof input.dedicatedDestination !== 'boolean') throw bad('`dedicatedDestination` must be a boolean.')
   const origin = { chain: o.chain, token: normalizeToken(o.chain, o.token), ...(o.symbol ? { symbol: o.symbol } : {}), ...(o.decimals !== undefined ? { decimals: o.decimals } : {}) }
   const destination = { ...d, token: normalizeToken(d.chain, d.token) }
   // The same token on the same chain needs no conversion: an adapter that watches the chain serves it.
   const kind: StandingRoute = origin.chain === destination.chain && keyOf(origin.token) === keyOf(destination.token) ? 'same' : 'convert'
   return { userId: input.userId, origin, destination, kind }
+}
+
+const conflict = (message: string) => new OpenRampException(openRampError('CONFLICT', { message }), 409)
+
+const NOT_DEDICATED =
+  'A same-chain standing address is the destination address itself: the server credits every transfer to it to this user. ' +
+  'Pass `dedicatedDestination: true` only for an address that your backend made for this one user and that nothing else pays to. Never use a wallet address that the user typed or connected.'
+
+/** The marker of a destination that a converting standing address delivers to */
+async function convertKey(d: StandingAddress['destination']): Promise<string> {
+  return `sdconv:${(await sha256Hex(JSON.stringify([d.chain, keyOf(d.token), keyOf(d.address)]))).slice(0, 40)}`
+}
+
+/**
+ * A same-chain route: bind the destination to this user, once. Another user gets 409 (no squatting:
+ * only the app's backend reaches this). A destination that a converting standing address delivers to
+ * is refused, because each converted delivery would also count as a direct deposit.
+ */
+async function claimWatchedDestination(rt: Runtime, route: ReturnType<typeof checkRoute>): Promise<void> {
+  const kv = rt.store.kv
+  const d = route.destination
+  const busy = 'This destination already gets converted deposits (a standing address of another route delivers to it). Watching it would count each of them twice. Use another destination address.'
+  if ((await kv.get(await convertKey(d))) != null) throw conflict(busy)
+  const key = await destinationWatchKey(d.chain, d.token, d.address)
+  const owner = { userId: route.userId }
+  let won: boolean
+  if (kv.putIfAbsent) won = await kv.putIfAbsent(key, owner, 0)
+  else won = (await kv.get(key)) == null && (await kv.put(key, owner), true)
+  if (!won) {
+    const cur = await kv.get<{ userId?: string }>(key)
+    if (cur?.userId !== route.userId) throw conflict('This destination address already has a same-chain standing address for another user.')
+  }
+  // A converting address made at the same time: both sides check after their own write.
+  if ((await kv.get(await convertKey(d))) != null) throw conflict(busy)
+}
+
+/** A converting route: refuse a watched destination, and mark the destination as one it delivers to */
+async function markConvertedDestination(rt: Runtime, route: ReturnType<typeof checkRoute>): Promise<void> {
+  const kv = rt.store.kv
+  const d = route.destination
+  const watched = 'This destination is watched on chain (a same-chain standing address), so a converted deposit to it would count twice. Use another destination address.'
+  const watchKey = await destinationWatchKey(d.chain, d.token, d.address)
+  if ((await kv.get(watchKey)) != null) throw conflict(watched)
+  await kv.put(await convertKey(d), 1)
+  if ((await kv.get(watchKey)) != null) throw conflict(watched)
 }
 
 const SAME_ROUTE_HINT = 'The origin and the destination are the same token on the same chain. Add chainWatch() from @openrampkit/adapter-chain-watch to watch such a route, or give the user the destination address itself.'
@@ -183,19 +242,23 @@ function publicView(r: StandingRecord): StandingAddress {
 export async function getStandingAddress(rt: Runtime, input: DepositAddressInput): Promise<StandingAddress> {
   const route = checkRoute(input)
   const a = pickAdapter(rt, route.kind, input.adapterId)
+  if (route.kind === 'same' && input.dedicatedDestination !== true) throw bad(NOT_DEDICATED)
   const id = await standingId(a.id, route)
   const key = `sda:${id}`
   const kv = rt.store.kv
   const q = queueOf(rt.store)
   let rec = await kv.get<StandingRecord>(key)
   if (!rec) {
-    const got = await a.standingAddress!({ userId: route.userId, origin: { chain: route.origin.chain, token: route.origin.token }, destination: route.destination }, adapterCtx(rt, a))
+    const got =await a.standingAddress!({ userId: route.userId, origin: { chain: route.origin.chain, token: route.origin.token }, destination: route.destination }, adapterCtx(rt, a))
     // A same-chain route has no conversion: its address must be the destination itself.
     const sameButOther = route.kind === 'same' && typeof got?.address === 'string' && keyOf(got.address) !== keyOf(route.destination.address)
     if (!got || typeof got.address !== 'string' || !isValidAddress(route.origin.chain, got.address) || typeof got.ref !== 'string' || !got.ref || got.ref.length > 500 || sameButOther) {
       rt.log.error('adapter returned a standing address that is not valid', { adapter: a.id })
       throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The provider did not return a valid deposit address.' }), 502)
     }
+    // After the adapter call, so an adapter error leaves no mark on the destination.
+    if (route.kind === 'same') await claimWatchedDestination(rt, route)
+    else await markConvertedDestination(rt, route)
     const fresh: StandingRecord = {
       id,
       userId: route.userId,
@@ -241,8 +304,14 @@ export function widgetStandingAdapter(rt: Runtime, rec: SessionRecord): Adapter 
   if (!rt.config.depositAddresses?.widget || rec.direction === 'withdraw') return undefined
   const d = rec.destination
   if (!d || d.type !== 'crypto' || d.settlement || d.calls?.length) return undefined
-  return [...rt.adapters.values()].find(supportsStanding)
+  // Converting routes only: a same-chain address would be the session destination itself (see below).
+  return [...rt.adapters.values()].find((x) => supportsStanding(x) && servesRoute(x, 'convert'))
 }
+
+const WIDGET_SAME =
+  'The widget gives no deposit address for the destination token on the destination chain: that address would be the session destination itself, and the payments of this session would count twice. ' +
+  'The user can send to the destination directly, or your backend can give a dedicated address with depositAddresses.get({ dedicatedDestination: true }).'
+
 
 /** The widget method for the plan, or undefined (see `widgetStandingAdapter`) */
 export function depositAddressMethod(rt: Runtime, rec: SessionRecord): MethodOption | undefined {
@@ -260,8 +329,11 @@ export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, bod
   const a = depositAddressMethod(rt, rec) ? widgetStandingAdapter(rt, rec) : undefined
   if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session cannot use a standing deposit address.' }), 409)
   if (typeof body?.chain !== 'string' || typeof body.token !== 'string') throw bad('`chain` and `token` are required.')
-  // The adapter follows the route: a provider that converts, or a chain watcher for the destination token itself.
-  const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: rec.destination! })
+  // The browser never gets a same-chain (watched) address: the user could make the server credit every
+  // transfer to the session destination to them, and the session's own payments would count twice.
+  const dest = rec.destination as Extract<Destination, { type: 'crypto' }>
+  if (body.chain === dest.chain && keyOf(normalizeToken(body.chain, body.token)) === keyOf(normalizeToken(dest.chain, dest.token))) throw bad(WIDGET_SAME)
+  const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: dest, adapterId: a.id })
   const d = sa.destination
   return { id: sa.id, address: sa.address, origin: sa.origin, destination: { chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}) } }
 }

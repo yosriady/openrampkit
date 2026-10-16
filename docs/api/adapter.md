@@ -310,7 +310,7 @@ Types: `SolanaParsedTx`, `SolanaParsedInstruction`, `SolanaTokenBalance`, `Solan
 | `solanaTokenAccounts(ctx, chain, owner, mint)` | The token accounts of `mint` that `owner` owns |
 | `solanaTx(ctx, chain, signature, commitment?)` | `getTransaction` with `jsonParsed`, or `null` |
 
-Also exported: `txUsedKey(chain, hash)` (the `claimOnce` key of a used transaction; add `:{logIndex}` for one log), `PUBLIC_RPC_URLS`, `DEFAULT_LOG_BLOCK_RANGE`, `MAX_LOG_BLOCK_RANGE`, `DEFAULT_LOG_PAGES`, `MAX_LOG_PAGES`, `DEFAULT_CONFIRMATIONS`.
+Also exported: `txUsedKey(chain, hash)` (the `claimOnce` key of a used transaction; add `:{logIndex}` for one log; the server keeps every `txused:` key in one namespace for all adapters, so a transfer that one adapter claimed cannot complete a payment of another), `PUBLIC_RPC_URLS`, `DEFAULT_LOG_BLOCK_RANGE`, `MAX_LOG_BLOCK_RANGE`, `DEFAULT_LOG_PAGES`, `MAX_LOG_PAGES`, `DEFAULT_CONFIRMATIONS`.
 
 ## Settlement helpers
 

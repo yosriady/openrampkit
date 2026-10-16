@@ -44,6 +44,7 @@ The server checks the input like a session create:
 | `destination` | A crypto destination with a valid chain, token and address. No `settlement` and no `calls`. |
 | Route | Any route. The same token on the same chain needs an adapter that watches the chain (see [Same chain and token](#same-chain-and-token)). |
 | `adapterId` | Optional. Default: the first adapter with `standingAddress` and a `transfer` leg that serves the route. |
+| `dedicatedDestination` | Required (`true`) for the same token on the same chain, else `400`. It says that `destination.address` is an address that your backend made for this one user and that nothing else pays to. See [Same chain and token](#same-chain-and-token). |
 
 With no such adapter, `get` throws `400` (`No configured adapter gives standing deposit addresses`, or for the same token on the same chain a message that names `chainWatch()`). An unknown `adapterId` throws `404`, and an adapter that does not serve the route throws `400`.
 
@@ -56,6 +57,8 @@ Set `depositAddresses: { widget: true }` in the server config. The plan of a dep
 - the session's `allowedMethods` and `policy.disabledMethods` allow `deposit_address`.
 
 The user picks the network and the token they send. The widget calls `POST /sessions/:id/deposit-address` and shows the address for the session's user and destination, with a QR code, a copy button and a warning. A new token loads its own address. This session takes no payment: each deposit to the address becomes its own session, as above. The browser never sees the user id or the adapter id.
+
+The widget gives only addresses that convert (another token or chain). For the destination token on the destination chain, it answers `400`: that address would be the session destination itself, so the payments of the session would count twice, and the browser could make the server credit transfers to an address it chose. Use `depositAddresses.get` with `dedicatedDestination: true` from your backend instead.
 
 ## Webhooks
 
@@ -97,14 +100,24 @@ createOpenRamp({
 })
 ```
 
-`get` with the same chain and token as origin and destination then returns the destination address, with `adapterId: 'chain-watch'`. A route that converts still goes to Relay. The adapter watches ERC-20 `Transfer` logs on EVM chains, and SOL and SPL transfers on Solana (native ETH transfers have no log, so they are refused). Each transfer in becomes one deposit session, as above:
+`get` with the same chain and token as origin and destination, and `dedicatedDestination: true`, then returns the destination address, with `adapterId: 'chain-watch'`. A route that converts still goes to Relay. The adapter watches ERC-20 `Transfer` logs on EVM chains, and SOL and SPL transfers on Solana (native ETH transfers have no log, so they are refused). Each transfer in becomes one deposit session, as above:
 
 - A transfer counts only after its confirmations (`confirmations`, default 12 blocks on EVM; `finalized` on Solana).
 - Each log or signature makes one session, never two.
 - Before the session succeeds, the adapter reads the transaction again. A transfer that a re-org removed, or with another amount, fails the session.
 - Transfers below `minDeposit` are ignored.
 
-Every transfer of the token into the address counts, whoever sent it. Use a destination that receives only these deposits. See [Read this first](../adapters/chain-watch.md#read-this-first).
+### Security of same-chain addresses
+
+Every transfer of the token into the address counts as a deposit of its user, whoever sent it. So:
+
+- **Use a dedicated deposit address per user**, made by your backend. Do not use the user's main wallet or an address that the user typed or connected: a user could give another person's wallet and get credit for every transfer to it. Do not use a shared address such as your treasury: the first user would get credit for the deposits of all users.
+- **Only the backend can ask** (`dedicatedDestination: true`). The widget refuses this route.
+- **One user per address.** Another user gets `409 CONFLICT`.
+- **Nothing else may deliver to it.** A new deposit session or a converting standing address to a watched address throws `409`, because its delivery would count twice. Sessions made before the watch are not checked: do not watch an address with open deposit sessions.
+- **One claim per transfer.** The server keeps the transaction claims (`txused:` keys) of all adapters in one namespace, so one transfer completes one payment only.
+
+See [Security](../adapters/chain-watch.md#security) for the details.
 
 ## Relay notes
 

@@ -1,5 +1,5 @@
 import { isEvmAddress, settlementCallsFrom } from '@openrampkit/adapter'
-import { OpenRampException, isFinalStatus, isLegTerminal, openRampError } from '@openrampkit/core'
+import { OpenRampException, isFinalStatus, isLegTerminal, normalizeToken, openRampError } from '@openrampkit/core'
 import type { CancelReason } from '@openrampkit/core'
 import type { Destination } from '@openrampkit/core'
 import { EXTERNAL_ID_TTL_SEC } from './config.js'
@@ -19,6 +19,33 @@ import type { Runtime } from './runtime.js'
 import { SESSION_SCHEMA } from './store.js'
 import type { SessionRecord } from './store.js'
 import { CAIP2, checkAllowed, isValidAddress, isValidToken, normalizeSource, parseTarget, screenTarget, targetDestination } from './withdraw.js'
+
+/** An EVM address or token in lower case. Other chains keep the case. */
+const addrKeyOf = (s: string) => (s.startsWith('0x') ? s.toLowerCase() : s)
+
+/**
+ * The store key that marks a destination (chain, token, address) as watched on chain by a same-chain
+ * standing address (standing.ts). Its value is the user id that owns the deposits to it.
+ */
+export async function destinationWatchKey(chain: string, token: string, address: string): Promise<string> {
+  return `sdwatch:${(await sha256Hex(JSON.stringify([chain, addrKeyOf(normalizeToken(chain, token)), addrKeyOf(address)]))).slice(0, 40)}`
+}
+
+/**
+ * A deposit session cannot deliver to a destination that a same-chain standing address watches: the
+ * watcher sees every transfer to the address, so the delivery of the session would count twice (once
+ * for the session, once as a standing deposit).
+ */
+async function refuseWatchedDestination(rt: Runtime, d: Destination | undefined): Promise<void> {
+  if (!d || d.type !== 'crypto' || typeof d.chain !== 'string' || typeof d.token !== 'string' || typeof d.address !== 'string') return
+  if ((await rt.store.kv.get(await destinationWatchKey(d.chain, d.token, d.address))) == null) return
+  throw new OpenRampException(
+    openRampError('CONFLICT', {
+      message: 'This destination is a dedicated deposit address that the server watches on chain (a same-chain standing address). A session that delivers to it would count twice. Use another destination address.',
+    }),
+    409,
+  )
+}
 
 /** A new session. Give `clientSecret` to the browser. */
 export type CreatedSession = { id: string; clientSecret: string; expiresAt: string; existing?: undefined }
@@ -144,6 +171,7 @@ export async function createSession(rt: Runtime, input: CreateSessionInput): Pro
     const found = await existingFor(rt, input, extHash!)
     if (found) return found
   }
+  if ((input.direction ?? 'deposit') === 'deposit') await refuseWatchedDestination(rt, input.destination)
   const { rec, secret } = await draftSession(rt, input, `ors_${randomHex(12)}`, input.externalId ? { externalId: input.externalId, externalHash: extHash! } : {})
   const { id, expiresAt, createdAt: now } = rec
   const direction = rec.direction

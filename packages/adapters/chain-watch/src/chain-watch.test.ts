@@ -141,6 +141,53 @@ describe('chain-watch: EVM deposits', () => {
     expect(ids.join()).not.toContain(dust.transactionHash)
   })
 
+  it('a log that a wallet payment or another adapter counted is not a deposit; a counted log marks its transaction', async () => {
+    const t = setup()
+    const { ref } = await t.address()
+    const paid = t.evm.send(units(4))
+    const other = t.evm.send(units(6))
+    const ok = t.evm.send(units(8))
+    // A same-chain wallet payment (Relay) claimed the whole transaction; a Relay transfer leg claimed one log.
+    await t.shared.put(`txused:${BASE}:${paid.transactionHash}`, 'relay-wallet-ref')
+    await t.shared.put(`txused:${BASE}:${other.transactionHash}:0`, 'relay-transfer-ref')
+    t.evm.mine(3)
+    expect((await t.list(ref)).map((d) => d.id)).toEqual([`${BASE}:${ok.transactionHash}:0`])
+    // A wallet payment checks this marker, so it cannot use the transaction later.
+    expect(await t.shared.get(`txused:${BASE}:${ok.transactionHash}:log`)).toMatch(/^standing:/)
+  })
+
+  it('does not trust the RPC filter: another token, another recipient, or a block out of range is skipped', async () => {
+    const t = setup()
+    const { ref } = await t.address()
+    const wrongToken = t.evm.send(units(1))
+    wrongToken.address = '0x00000000000000000000000000000000000000aa'
+    const wrongTo = t.evm.send(units(2))
+    wrongTo.topics[2] = topicAddress('0x0000000000000000000000000000000000000bad')
+    const notTransfer = t.evm.send(units(3))
+    notTransfer.topics[0] = `0x${'12'.repeat(32)}`
+    const ok = t.evm.send(units(4))
+    t.evm.mine(3)
+    // A node that ignores the range: it returns a log from before the address, too.
+    const old = { ...ok, transactionHash: `0x${'cd'.repeat(32)}`, blockNumber: hex(10) }
+    const reply = t.evm.route.reply
+    t.evm.route.reply = (c: FakeCall) => {
+      const r = reply(c)
+      return (c.body as { method: string }).method === 'eth_getLogs' ? { result: [...(r.result as Log[]), old] } : r
+    }
+    expect((await t.list(ref)).map((d) => d.id)).toEqual([`${BASE}:${ok.transactionHash}:0`])
+  })
+
+  it('status: the amount uses the real token decimals, not the session destination.decimals', async () => {
+    const t = setup()
+    const { ref } = await t.address()
+    t.evm.send(units(12.5))
+    t.evm.mine(3)
+    const [d] = await t.list(ref)
+    // A destination with wrong decimals (the app or the browser gave it) does not change the amount.
+    const step = await t.a.status!({ leg, ref: d!.legRef }, makeCtx({ fetch: t.ctx.fetch, shared: t.shared, destination: { ...DESTINATION, decimals: 0 } }))
+    expect(step).toMatchObject({ status: 'succeeded', output: { value: '12.5', asset: { decimals: 6 } } })
+  })
+
   it('reads at most maxLogPages pages of logBlockRange blocks per poll, and goes on next time', async () => {
     const t = setup({ logBlockRange: 10, maxLogPages: 2, confirmations: 0 })
     const { ref } = await t.address()
@@ -205,7 +252,7 @@ describe('chain-watch: EVM deposits', () => {
     const dest = { ...DESTINATION, token: TOK }
     const { ref } = await a.standingAddress!({ userId: 'u1', origin: { chain: BASE, token: TOK }, destination: dest }, ctx)
     evm.state.head += 1n
-    evm.state.logs.push({ address: TOK, topics: [], data: hex(10n ** 18n), transactionHash: `0x${'ab'.repeat(32)}`, blockNumber: hex(evm.state.head), logIndex: '0x1' })
+    evm.state.logs.push({ address: TOK, topics: [ERC20_TRANSFER_TOPIC, topicAddress('0x1111111111111111111111111111111111111111'), topicAddress(DEST)], data: hex(10n ** 18n), transactionHash: `0x${'ab'.repeat(32)}`, blockNumber: hex(evm.state.head), logIndex: '0x1' })
     const [d] = await a.standingDeposits!({ ref, address: DEST, origin: { chain: BASE, token: TOK }, since: 0 }, ctx)
     expect(d!.input).toMatchObject({ value: '1', asset: { decimals: 18 } })
     await a.standingDeposits!({ ref, address: DEST, origin: { chain: BASE, token: TOK }, since: 0 }, ctx)

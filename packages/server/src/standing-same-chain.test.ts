@@ -1,17 +1,20 @@
 // Standing addresses for the same token on the same chain, with no bridge provider: the chain-watch
 // adapter gives the destination address itself, and each confirmed Transfer log becomes one session.
 import { describe, expect, it } from 'vitest'
-import { ERC20_TRANSFER_TOPIC, createAdapter, topicAddress } from '@openrampkit/adapter'
+import { ERC20_TRANSFER_TOPIC, claimOnce, createAdapter, topicAddress, txUsedKey } from '@openrampkit/adapter'
 import { chainWatch } from '@openrampkit/adapter-chain-watch'
 import { USDC } from '@openrampkit/core'
 import type { LegSpec } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
+import { scopedKV } from './store.js'
 
 const BASE_URL = 'https://app.test/api/openramp'
 const quiet = { debug() {}, info() {}, warn() {}, error() {} }
 const CHAIN = 'eip155:8453'
 const TOKEN = USDC[CHAIN]!
 const DEST = { type: 'crypto' as const, chain: CHAIN, token: TOKEN, address: '0x000000000000000000000000000000000000beef' }
+/** Another destination of the same user, for converted deposits */
+const DEST2 = { ...DEST, address: '0x000000000000000000000000000000000000cafe' }
 const SAME = { chain: CHAIN, token: TOKEN }
 const OTHER = { chain: 'eip155:42161', token: USDC['eip155:42161']! }
 const HOOKS = { url: 'https://app.test/hooks', secret: 'w'.repeat(32) }
@@ -88,7 +91,8 @@ function make(adapters = [converter(), chainWatch({ rpcUrls: { [CHAIN]: 'https:/
   const w = world()
   const store = memoryStore()
   const ramp = createOpenRamp({ secret: 's'.repeat(40), baseUrl: BASE_URL, adapters, logger: quiet, webhooks: HOOKS, fetch: w.fetchFn, store })
-  const get = (origin = SAME, adapterId?: string) => ramp.depositAddresses.get({ userId: 'u1', origin, destination: DEST, ...(adapterId ? { adapterId } : {}) })
+  const get = (origin = SAME, adapterId?: string, destination = DEST, userId = 'u1') =>
+    ramp.depositAddresses.get({ userId, origin, destination, ...(adapterId ? { adapterId } : {}), ...(origin === SAME ? { dedicatedDestination: true } : {}) })
   const depositSessions = () => w.sent.filter((s) => s.type === 'deposit_address.deposit').map((s) => s.sessionId)
   return { ramp, w, store, get, depositSessions }
 }
@@ -98,11 +102,11 @@ describe('standing addresses: same chain and same token, with no bridge provider
     const t = make()
     const same = await t.get()
     expect(same).toMatchObject({ adapterId: 'chain-watch', address: DEST.address, origin: SAME, destination: DEST })
-    const other = await t.get(OTHER)
+    const other = await t.get(OTHER, undefined, DEST2)
     expect(other).toMatchObject({ adapterId: 'conv', address: '0x00000000000000000000000000000000000000c1' })
     // An explicit adapter that does not serve the route is refused.
     await expect(t.get(SAME, 'conv')).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/does not watch the same token/) } })
-    await expect(t.get(OTHER, 'chain-watch')).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/only for the same token on the same chain/) } })
+    await expect(t.get(OTHER, 'chain-watch', DEST2)).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/only for the same token on the same chain/) } })
   })
 
   it('without chain-watch, a same-chain route names the adapter to add', async () => {
@@ -115,7 +119,7 @@ describe('standing addresses: same chain and same token, with no bridge provider
     await expect(t.get()).rejects.toMatchObject({ status: 502, error: { code: 'PROVIDER_UNAVAILABLE' } })
   })
 
-  it('widget: the same token gives the destination address; the chain-watch leg is never a plan method', async () => {
+  it('widget: never a same-chain address (refused, nothing claimed); the chain-watch leg is never a plan method', async () => {
     const w = world()
     const ramp = createOpenRamp({
       secret: 's'.repeat(40),
@@ -135,8 +139,93 @@ describe('standing addresses: same chain and same token, with no bridge provider
     expect(plan.methods.find((m: { method: string }) => m.method === 'transfer').providers).toEqual(['Converter'])
     expect(plan.pathways.length).toBeGreaterThan(0)
     expect(plan.pathways.every((p: { legs: Array<{ adapterId: string }> }) => p.legs.every((l) => l.adapterId !== 'chain-watch'))).toBe(true)
-    expect(await (await call('/deposit-address', SAME)).json()).toMatchObject({ address: DEST.address, origin: SAME })
-    expect(await (await call('/deposit-address', OTHER)).json()).toMatchObject({ address: '0x00000000000000000000000000000000000000c1', origin: OTHER })
+    // The same token: the browser could make the server credit every transfer to the destination to
+    // this user, and the session's own payments would count twice. Refused.
+    const same = await call('/deposit-address', SAME)
+    expect(same.status).toBe(400)
+    expect(await same.json()).toMatchObject({ error: { message: expect.stringMatching(/dedicatedDestination/) } })
+    // Nothing was claimed: another user's backend route to the same address is not blocked by it.
+    expect(await ramp.depositAddresses.list('u1')).toEqual([])
+    expect(await ramp.depositAddresses.get({ userId: 'u2', origin: SAME, destination: DEST, dedicatedDestination: true })).toMatchObject({ adapterId: 'chain-watch' })
+    // Another token is converted as before.
+    const s2 = await ramp.sessions.create({ userId: 'u1', country: 'SG', destination: DEST2 })
+    const r = await ramp.handle(
+      new Request(`${BASE_URL}/sessions/${s2.id}/deposit-address`, { method: 'POST', headers: { authorization: `Bearer ${s2.clientSecret}`, 'content-type': 'application/json' }, body: JSON.stringify(OTHER) }),
+    )
+    expect(await r.json()).toMatchObject({ address: '0x00000000000000000000000000000000000000c1', origin: OTHER })
+  })
+
+  it('a same-chain route needs dedicatedDestination: true from the backend', async () => {
+    const t = make()
+    await expect(t.ramp.depositAddresses.get({ userId: 'u1', origin: SAME, destination: DEST })).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/dedicatedDestination/) } })
+    await expect(t.ramp.depositAddresses.get({ userId: 'u1', origin: SAME, destination: DEST, dedicatedDestination: false })).rejects.toMatchObject({ status: 400 })
+    await expect(t.ramp.depositAddresses.get({ userId: 'u1', origin: SAME, destination: DEST, dedicatedDestination: 'yes' as unknown as boolean })).rejects.toMatchObject({ status: 400 })
+    expect(await t.ramp.depositAddresses.list('u1')).toEqual([])
+  })
+
+  it('user A cannot register user B address: the first owner keeps it, another user gets 409 (also with an adapter that has no check)', async () => {
+    const t = make()
+    await t.get(SAME, undefined, DEST, 'victim')
+    await expect(t.get(SAME, undefined, DEST, 'attacker')).rejects.toMatchObject({ status: 409, error: { code: 'CONFLICT' } })
+    expect(await t.ramp.depositAddresses.list('attacker')).toEqual([])
+
+    // An adapter that serves same-chain routes but does no owner check of its own: the server refuses.
+    const naive = createAdapter({
+      id: 'naive',
+      name: 'Naive',
+      legs: [transferSpec],
+      standingRoutes: ['same'],
+      async quote() {
+        throw new Error('no')
+      },
+      async start() {
+        throw new Error('no')
+      },
+      async standingAddress(input) {
+        return { address: input.destination.address, ref: 'n1' }
+      },
+      async standingDeposits() {
+        return []
+      },
+      async status({ ref }) {
+        return { status: 'processing', ref }
+      },
+    })
+    const n = make([naive])
+    await n.get(SAME, undefined, DEST, 'victim')
+    await expect(n.get(SAME, undefined, DEST, 'attacker')).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/another user/) } })
+    expect(await n.ramp.depositAddresses.list('attacker')).toEqual([])
+  })
+
+  it('nothing else may deliver to a watched destination: converted standing addresses and deposit sessions are refused', async () => {
+    const t = make()
+    // A converting address first: watching its destination would count each converted delivery twice.
+    await t.get(OTHER, undefined, DEST2)
+    await expect(t.get(SAME, undefined, DEST2)).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/converted deposits/) } })
+    // A watched destination first: no converting address and no deposit session may deliver to it.
+    await t.get()
+    await expect(t.get(OTHER)).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/watched on chain/) } })
+    await expect(t.ramp.sessions.create({ userId: 'u1', destination: DEST })).rejects.toMatchObject({ status: 409, error: { code: 'CONFLICT' } })
+    await expect(t.ramp.sessions.create({ userId: 'u1', destination: { ...DEST, address: DEST.address.toUpperCase().replace('0X', '0x') } })).rejects.toMatchObject({ status: 409 })
+    // Another token to the same address, and other addresses, are fine.
+    expect(await t.ramp.sessions.create({ userId: 'u1', destination: { ...DEST, token: 'native' } })).toMatchObject({ id: expect.any(String) })
+    expect(await t.ramp.sessions.create({ userId: 'u1', destination: DEST2 })).toMatchObject({ id: expect.any(String) })
+  })
+
+  it('a transfer that another adapter already counted is not a standing deposit (one claim namespace for all adapters)', async () => {
+    const t = make()
+    await t.get()
+    const counted = t.w.send(5_000_000n)
+    const fresh = t.w.send(7_000_000n)
+    t.w.chain.head += 2n
+    // A Relay same-chain leg took the first log, in its own adapter scope of the same store.
+    expect(await claimOnce(scopedKV(t.store, 'a:relay'), `${txUsedKey(CHAIN, counted.transactionHash)}:0`, 'relay-ref', 60)).toBe(true)
+    await t.get()
+    expect((await t.ramp.sweep()).standing.deposits).toBe(1)
+    const s = await t.ramp.sessions.retrieve(t.depositSessions()[0]!)
+    expect(s?.metadata).toMatchObject({ depositId: `${CHAIN}:${fresh.transactionHash}:0` })
+    // And the other way round: Relay cannot take a log that chain-watch counted.
+    expect(await claimOnce(scopedKV(t.store, 'a:relay'), `${txUsedKey(CHAIN, fresh.transactionHash)}:0`, 'relay-ref-2', 60)).toBe(false)
   })
 
   it('each confirmed transfer makes one session, never two, and the session completes on chain', async () => {

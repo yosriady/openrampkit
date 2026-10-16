@@ -59,7 +59,7 @@ export type ChainWatchOptions = {
 }
 
 /** One ERC-20 Transfer log, as `eth_getLogs` returns it (the fields the checks read) */
-export type TransferLog = { data: string; transactionHash: string; blockNumber?: string; logIndex?: string; removed?: boolean; topics?: string[] }
+export type TransferLog = { address?: string; data: string; transactionHash: string; blockNumber?: string; logIndex?: string; removed?: boolean; topics?: string[] }
 
 /** One page of Transfer logs: the block range, and the logs in it oldest first (removed logs left out) */
 export type TransferLogPage = { from: bigint; to: bigint; logs: TransferLog[] }
@@ -76,7 +76,9 @@ const cmpBig = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0)
 
 /**
  * Key that marks a transaction as used (`claimOnce`). EVM hashes are lowercased; Solana signatures
- * are case-sensitive. A log of a transaction adds `:{logIndex}`.
+ * are case-sensitive. A log of a transaction adds `:{logIndex}`. The server keeps every key that starts
+ * with `txused:` in one namespace for all adapters (not per adapter), so one transfer counts for one
+ * payment only, whichever adapter sees it first. Make the owner value unique to your adapter.
  */
 export function txUsedKey(chain: string, hash: string): string {
   return `txused:${chain}:${isSolanaChain(chain) ? hash : hash.toLowerCase()}`

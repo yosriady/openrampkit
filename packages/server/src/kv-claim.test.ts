@@ -24,8 +24,31 @@ describe('kv.putIfAbsent and claimOnce on the built-in stores', () => {
     const store = memoryStore()
     const shared = scopedKV(store, 'a:relay')
     expect(shared.putIfAbsent).toBeTypeOf('function')
-    expect(await claimOnce(shared, 'txused:base:0xabc', 'sess_1:ref', 60)).toBe(true)
-    expect(await store.kv.get('a:relay:txused:base:0xabc')).toBe('sess_1:ref')
+    expect(await claimOnce(shared, 'dep:1', 'sess_1:ref', 60)).toBe(true)
+    expect(await store.kv.get('a:relay:dep:1')).toBe('sess_1:ref')
+  })
+
+  it('scopedKV: transaction claims (txused:) are one namespace for all adapters', async () => {
+    const store = memoryStore()
+    const relay = scopedKV(store, 'a:relay')
+    const watch = scopedKV(store, 'a:chain-watch')
+    expect(await claimOnce(relay, 'txused:base:0xabc:0', 'relay-ref', 60)).toBe(true)
+    expect(await store.kv.get('g:txused:base:0xabc:0')).toBe('relay-ref')
+    // Another adapter cannot count the same log, and sees who has it.
+    expect(await claimOnce(watch, 'txused:base:0xabc:0', 'standing:x', 60)).toBe(false)
+    expect(await watch.get('txused:base:0xabc:0')).toBe('relay-ref')
+    // A plain put goes to the shared namespace too.
+    await watch.put('txused:base:0xdef:log', 'standing:x', 60)
+    expect(await relay.get('txused:base:0xdef:log')).toBe('standing:x')
+  })
+
+  it('scopedKV: a claim that an older version wrote under the adapter prefix still counts', async () => {
+    const store = memoryStore()
+    await store.kv.put('a:relay:txused:base:0xold', 'old-ref', 60)
+    const relay = scopedKV(store, 'a:relay')
+    expect(await relay.get('txused:base:0xold')).toBe('old-ref')
+    expect(await claimOnce(relay, 'txused:base:0xold', 'new-ref', 60)).toBe(false)
+    expect(await claimOnce(relay, 'txused:base:0xold', 'old-ref', 60)).toBe(true)
   })
 
   it('memory store: two claims that race, exactly one wins', async () => {

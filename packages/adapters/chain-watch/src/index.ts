@@ -12,16 +12,25 @@
 //   `status()` reads the receipt again before the leg succeeds: a log that a re-org took away fails
 //   the leg, and a log that moved to a new block waits for its confirmations again.
 // - No double counting: each log (chain, tx hash, log index) or Solana signature is claimed once
-//   (`claimOnce`), and the deposit id is the same on every poll, so the server makes one session.
+//   (`claimOnce` on `txUsedKey`), and the deposit id is the same on every poll, so the server makes one
+//   session. The server keeps `txused:` keys in one namespace for all adapters, so a transfer that
+//   another adapter counted (for example a Relay same-chain payment) is not a deposit here, and the
+//   other way round. An EVM log also skips a transaction that a wallet payment claimed, and marks its
+//   transaction (`:log`) so a wallet payment cannot use it later.
 // - One owner per address: a destination address (with its chain and token) belongs to the first user
-//   that gets a standing address for it. Another user gets a 409.
+//   that gets a standing address for it. Another user gets a 409. The server only asks for such an
+//   address from the app's backend, for a destination that the app says is dedicated to the user.
 // - Amounts: a transfer below `minDeposit` (default: any amount above 0) is not a deposit, and
-//   `status()` checks that the chain still shows the same amount.
+//   `status()` checks that the chain still shows the same amount. The amount uses the token's real
+//   decimals (known tokens, ERC-20 `decimals()`, or the Solana mint), never the session's
+//   `destination.decimals`, which the app or the browser gave.
+// - RPC replies: a log must be a Transfer of the watched token to the address, in the block range that
+//   was asked. Other logs are skipped.
 //
 // Server-side only. Web-standard APIs only (fetch), so it runs on Cloudflare Workers.
 
 import { claimOnce, createAdapter, createChainWatch, ERC20_TRANSFER_TOPIC, solanaMintDecimals, solanaNetReceived, topicAddress, txUsedKey } from '@openrampkit/adapter'
-import type { AdapterContext, ChainWatchOptions, ScopedKV, SolanaBalanceTx, StandingAddressInput, StandingDeposit, StandingDepositsInput } from '@openrampkit/adapter'
+import type { AdapterContext, ChainWatchOptions, ScopedKV, SolanaBalanceTx, StandingAddressInput, StandingDeposit, StandingDepositsInput, TransferLog } from '@openrampkit/adapter'
 import { OpenRampException, fromBaseUnits, isEvmChain, isSolanaChain, isUsdc, nativeDecimals, normalizeToken, openRampError, toBaseUnits } from '@openrampkit/core'
 import type { CryptoAsset, LegSpec, LegStep } from '@openrampkit/core'
 
@@ -93,6 +102,17 @@ function parseDepositRef(ref: string): DepositRef | undefined {
 }
 
 type Ctx = Pick<AdapterContext, 'fetch' | 'log' | 'shared'>
+
+/** True when `l` is an ERC-20 Transfer log of `token` to the topic `to`, in blocks `from` to `last` */
+function isTransferTo(l: TransferLog, token: string, to: string, from: bigint, last: bigint): boolean {
+  if (typeof l.address !== 'string' || l.address.toLowerCase() !== token) return false
+  if (l.topics?.[0]?.toLowerCase() !== ERC20_TRANSFER_TOPIC || l.topics[2]?.toLowerCase() !== to) return false
+  if (typeof l.data !== 'string' || !/^0x[0-9a-fA-F]{1,64}$/.test(l.data)) return false
+  if (typeof l.transactionHash !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(l.transactionHash)) return false
+  if (!l.blockNumber) return false
+  const block = BigInt(l.blockNumber)
+  return block >= from && block <= last
+}
 type EvmLogReceipt = { status?: string; blockNumber?: string; logs?: Array<{ address: string; topics: string[]; data: string; logIndex?: string; removed?: boolean }> }
 
 export function chainWatch(opts: ChainWatchAdapterOptions = {}) {
@@ -173,14 +193,31 @@ export function chainWatch(opts: ChainWatchAdapterOptions = {}) {
     const decimals = await decimalsOf(ctx, r.chain, r.token)
     const min = minBase(r.chain, r.token, decimals)
     const owner = ownerOf(r)
+    const to = topicAddress(r.address)
     const out: StandingDeposit[] = []
     for await (const page of watch.transferLogPages(ctx, { chain: r.chain, token: r.token, to: r.address, from, latest: safe })) {
       for (const l of page.logs) {
+        // Do not trust the RPC filter: the log must be a Transfer of this token to this address, in range.
+        if (!isTransferTo(l, r.token, to, page.from, page.to)) {
+          ctx.log.warn('chain-watch: the RPC returned a log that is not a Transfer to the address; skipped', { address: r.address, tx: l.transactionHash })
+          continue
+        }
         const amount = BigInt(l.data)
         if (amount < min) continue // dust, or below `minDeposit`
         const logIndex = l.logIndex ? BigInt(l.logIndex) : 0n
-        // One log, one deposit: a log that another owner took is not ours.
-        if (!(await claimOnce(ctx.shared, `${txUsedKey(r.chain, l.transactionHash)}:${logIndex}`, owner, USED_TTL_SEC))) continue
+        const txKey = txUsedKey(r.chain, l.transactionHash)
+        const logKey = `${txKey}:${logIndex}`
+        const logOwner = await ctx.shared.get<string>(logKey)
+        if (logOwner && logOwner !== owner) continue // another session or adapter counted this log
+        if (!logOwner) {
+          // A wallet payment (of any adapter) already used this transaction.
+          const txOwner = await ctx.shared.get<string>(txKey)
+          if (txOwner && txOwner !== owner) continue
+          // One log, one deposit: a log that another owner took is not ours.
+          if (!(await claimOnce(ctx.shared, logKey, owner, USED_TTL_SEC))) continue
+          // A wallet payment must not use this transaction later.
+          await ctx.shared.put(`${txKey}:log`, owner, USED_TTL_SEC)
+        }
         const now = Date.now()
         out.push({
           id: `${r.chain}:${l.transactionHash.toLowerCase()}:${logIndex}`,
@@ -320,7 +357,8 @@ export function chainWatch(opts: ChainWatchAdapterOptions = {}) {
     if (!same) return failed(ref, d, 'The transfer on chain does not match the deposit.')
     const latest = await watch.latestBlock(ctx, d.chain)
     if (latest - BigInt(receipt.blockNumber) < BigInt(watch.confirmationsFor(d.chain))) return confirming(ref, d)
-    return done(ctx, ref, d, await decimalsOf(ctx, d.chain, d.token, { ...(ctx.destination.type === 'crypto' && ctx.destination.decimals !== undefined ? { decimals: ctx.destination.decimals } : {}) }))
+    // The token's real decimals: the session's `destination.decimals` comes from the app or the browser.
+    return done(ctx, ref, d, await decimalsOf(ctx, d.chain, d.token))
   }
 
   const noLegs = () => new OpenRampException(openRampError('NOT_FOUND', { message: 'chain-watch has no session legs: it only watches standing deposit addresses.' }), 404)

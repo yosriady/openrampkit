@@ -543,11 +543,42 @@ export function cloudflareKvStore(ns: KVNamespaceLike, opts: { sessionTtlSec?: n
   }
 }
 
+/**
+ * Keys that every adapter shares: the claims of on-chain transactions (`txUsedKey` in
+ * `@openrampkit/adapter`, `txused:{chain}:{hash}`, with `:{logIndex}` or `:log`). One transfer can count
+ * for one payment only, so a claim of one adapter must stop every other adapter (for example a Relay
+ * same-chain payment and a chain-watch standing deposit of the same transfer).
+ */
+const GLOBAL_KEY_PREFIXES = ['txused:']
+/** The store namespace of the shared keys */
+const GLOBAL_NAMESPACE = 'g'
+
+export const isGlobalAdapterKey = (key: string) => GLOBAL_KEY_PREFIXES.some((p) => key.startsWith(p))
+
+/**
+ * An adapter's view of the store: its keys get `prefix`. The transaction claims (`txused:...`) go to one
+ * namespace for all adapters. A claim that an older version wrote under the adapter prefix still counts:
+ * reads fall back to it, and a claim fails while it is there.
+ */
 export function scopedKV(store: SessionStore, prefix: string): ScopedKV {
   const kv = store.kv
+  const local = (key: string) => `${prefix}:${key}`
+  const global = (key: string) => `${GLOBAL_NAMESPACE}:${key}`
   return {
-    get: (key) => kv.get(`${prefix}:${key}`),
-    put: (key, value, ttl) => kv.put(`${prefix}:${key}`, value, ttl),
-    ...(kv.putIfAbsent ? { putIfAbsent: (key: string, value: unknown, ttl: number) => kv.putIfAbsent!(`${prefix}:${key}`, value, ttl) } : {}),
+    async get<T>(key: string) {
+      if (!isGlobalAdapterKey(key)) return kv.get<T>(local(key))
+      const v = await kv.get<T>(global(key))
+      return v ?? (await kv.get<T>(local(key)))
+    },
+    put: (key, value, ttl) => kv.put(isGlobalAdapterKey(key) ? global(key) : local(key), value, ttl),
+    ...(kv.putIfAbsent
+      ? {
+          async putIfAbsent(key: string, value: unknown, ttl: number) {
+            if (!isGlobalAdapterKey(key)) return kv.putIfAbsent!(local(key), value, ttl)
+            if ((await kv.get(local(key))) != null) return false
+            return kv.putIfAbsent!(global(key), value, ttl)
+          },
+        }
+      : {}),
   }
 }

@@ -77,7 +77,7 @@ await openramp.sessions.revokePayLink(id, linkId)    // Promise<boolean>: make o
 
 await openramp.sweep({ limit? })       // Promise<SweepResult>: retry webhooks, poll standing addresses, refresh open payments, expire sessions
 
-await openramp.depositAddresses.get({ userId, origin, destination, adapterId? }) // Promise<StandingAddress>: the permanent address of a user and route
+await openramp.depositAddresses.get({ userId, origin, destination, adapterId?, dedicatedDestination? }) // Promise<StandingAddress>: the permanent address of a user and route
 await openramp.depositAddresses.list(userId)                                      // Promise<StandingAddress[]>: newest first
 
 await openramp.webhooks.verify(req, rawBody) // Promise<boolean>: verify a webhook this server sent
