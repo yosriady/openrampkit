@@ -8,5 +8,5 @@
   "baseBranch": "main",
   "updateInternalDependencies": "patch",
   "privatePackages": { "version": false, "tag": false },
-  "ignore": ["next-demo", "cloudflare-worker-example", "agent-example", "playground", "openrampkit-docs"]
+  "ignore": ["next-demo", "cloudflare-worker-example", "agent-example", "playground", "openrampkit-docs", "nuxt-demo"]
 }

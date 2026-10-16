@@ -67,6 +67,22 @@ Flows to try:
 |---|---|---|---|
 | ![](../screenshots/30-card-redirect.png) | ![](../screenshots/31-card-checkout.png) | ![](../screenshots/05-vn-processing.png) | ![](../screenshots/10-crypto-methods.png) |
 
+## Nuxt (Vue)
+
+[`examples/nuxt-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/nuxt-demo) is a minimal Nuxt 4 app with [`@openrampkit/vue`](../api/vue.md). It has the server, a session route and a deposit button, with mock providers only.
+
+```bash
+pnpm install && pnpm build   # from the repository root, once
+pnpm --filter nuxt-demo dev  # http://localhost:3000
+```
+
+| File | Shows |
+|---|---|
+| `server/utils/openramp.ts` | `createOpenRamp` with the mock adapter |
+| `server/api/openramp/[...path].ts` | Mounting the handler with `openramp.handle(toWebRequest(event))` |
+| `server/api/deposit-session.post.ts` | Creating a session in your backend |
+| `app/app.vue` | `OpenRampProvider` and `DepositButton` |
+
 ## Cloudflare Worker
 
 [`examples/cloudflare-worker`](https://github.com/yosriady/openrampkit/tree/main/examples/cloudflare-worker) runs the server as a standalone Worker with a Durable Object session store (`durableObjectStore`). Your app backend creates sessions over HTTP with a shared API key, through the `authorize` hook. See [Deploy on Cloudflare Workers](../deploy/cloudflare-workers.md).

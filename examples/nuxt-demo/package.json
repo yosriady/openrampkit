@@ -1,0 +1,19 @@
+{
+  "name": "nuxt-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev --port 3000",
+    "build": "nuxt build",
+    "start": "node .output/server/index.mjs"
+  },
+  "dependencies": {
+    "@openrampkit/adapter-mock": "workspace:*",
+    "@openrampkit/client": "workspace:*",
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/server": "workspace:*",
+    "@openrampkit/vue": "workspace:*",
+    "nuxt": "^4.6.0",
+    "vue": "^3.5.43"
+  }
+}
