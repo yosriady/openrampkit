@@ -32,6 +32,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
 | `amountToleranceBps` | `number` | `50` | How far below the expected amount a deposit can be and still complete a `transfer` leg, in basis points. A `bridge` leg uses at least 500. See [One deposit, one session](#one-deposit-one-session). |
 | `logBlockRange` | `number` | `2000` | The most blocks in one `eth_getLogs` call, for same-chain `transfer` checks. Set it to the limit of your RPC. At most `10000`. |
 | `rpcRequestsPerSecond` | `number` | no limit | The most JSON-RPC requests per second to one RPC URL, from this adapter instance. Calls wait for their turn. Set it when you use the public RPCs. |
+| `gasless` | `boolean` | `true` | Gas abstraction for the `wallet` leg: when the client asks for it, a permit route signs instead of sending. Set `false` to always send `WALLET_TX`. See [Gas abstraction](#gas-abstraction). |
 
 ::: warning No API key
 Set an API key. Two facts apply:
@@ -46,7 +47,7 @@ When there is no key, the adapter logs a warning once, on its first call.
 
 | Leg | Method | From | To | Surface | Notes |
 |---|---|---|---|---|---|
-| `wallet` | `wallet` | Any crypto in the user's wallet | Any crypto at an address | `WALLET_TX` | Requires a connected wallet (deposits). EVM and Solana source chains. Also the "To wallet" leg of withdrawals. |
+| `wallet` | `wallet` | Any crypto in the user's wallet | Any crypto at an address | `WALLET_TX`, `WALLET_SIGN` | Requires a connected wallet (deposits). EVM and Solana source chains. Also the "To wallet" leg of withdrawals. |
 | `transfer` | `transfer` | Any crypto in the user's wallet | Any crypto at an address | `DEPOSIT_ADDRESS` | Any amount. The user sends from any wallet or exchange. |
 | `bridge` | (hop) | USDC on Base, Arbitrum, Optimism, Polygon or Ethereum, at an address | Any crypto at an address | none shown | The second leg of a two-leg pathway |
 
@@ -57,10 +58,43 @@ All legs allow every region.
 - The quote calls Relay `POST /quote/v2` with the user's source token and the destination. `EXACT_INPUT` by default; `EXACT_OUTPUT` when the amount is on the destination side.
 - Same chain and same token: no Relay. The adapter builds a plain transfer (native value or ERC-20 `transfer`), with no fees. It checks the transfer on chain (see [Same-chain moves](#same-chain-moves)).
 - On start, the adapter reuses the quote's transaction steps when they are less than 20 seconds old and built for the same user. Otherwise it quotes again with the user's address.
-- Only `transaction` steps are supported. A route that needs a `signature` step fails with `PROVIDER_DECLINED` and suggests another token or "Transfer crypto".
+- The wallet sends Relay's `transaction` steps. A route that needs another `signature` step fails with `PROVIDER_DECLINED` and suggests another token or "Transfer crypto". The one exception is the permit step of [Gas abstraction](#gas-abstraction).
 - After the wallet sends, the client fires `submit_tx` with `{ txHash }`. The adapter then checks `GET /intents/status/v3?requestId=...`.
 - Transactions: the leg reports a `source` transaction and a `destination` transaction (see `Transaction.role`). The `source` is the origin chain transaction that the wallet sent (`submit_tx`), else the first of Relay's `inTxHashes`. The `destination` is the fill on the destination chain (the first of Relay's `txHashes`) once Relay reports it. When Relay refunds the request, that transaction has the role `refund`. The session shows them in `result.transactions`. For `transfer` and `bridge` legs, the `source` is the transfer into the deposit address (`depositAddress.depositTxHash`, else the first of `data.inTxs`). A same-chain move has one hash with two roles: `source`, and `destination` (or `settlement`) once it is confirmed.
 - `providerRef` is the Relay request id, when the leg has one. A same-chain move has no Relay request, so it has no `providerRef`.
+
+#### Gas abstraction
+
+A user with USDC and no native gas (for example no ETH on Base) can pay with the `wallet` method. The wallet signs a message, not a transaction. Relay's solver sends the origin transaction and takes its gas from the input token. This uses Relay's [permit-based gasless flow](https://docs.relay.link/features/gasless-swaps#permit-based-gasless). It needs no relayer of your own, no fee sponsorship and no extra keys.
+
+**When it applies.** All of these must be true:
+
+1. The client asks for it. `select` sends `gasless: true`. The controller does this by `FlowOptions.gasless`:
+   - `'auto'` (default): the wallet reports a zero native balance on the chain it pays from.
+   - `'always'`: also when the wallet has gas.
+   - `'never'`: never.
+   The controller also needs a wallet with `signTypedData` (`wagmiWallet`, `privyWallet`), and a UI that renders `WALLET_SIGN`.
+2. The adapter option `gasless` is not `false`.
+3. The source is an ERC-20 on an EVM chain, and the route goes to another chain. A native token never uses it. A same-chain, same-token payment is a plain transfer without Relay, so the wallet pays gas there.
+4. Relay returns a permit route. The adapter quotes again with `usePermit: true` and `useMulticallAuthorization: true`. It uses the result only when every step is an EIP-712 signature for `POST /execute/permits`. USDC (EIP-3009) gives this route. For other tokens Relay returns transactions, and the wallet sends them as usual.
+
+If one of these is false, the leg shows `WALLET_TX` as before. A user who has gas sees no change.
+
+**Steps.**
+
+1. `start()` returns a `WALLET_SIGN` surface `{ chain, address, signatures }` and the transition `submit_signatures` (SURFACE_RESULT, `expects: 'signatures'`). The `signatures` are the EIP-712 messages, in order: from Relay's approval proxy 3.2, a `MulticallAuthorization`, then the EIP-3009 authorization.
+2. Before it shows the messages, the adapter checks them. Each message must be for the origin chain. A `from` field must be the paying wallet. An EIP-3009 authorization must be for the origin token and move at most the quoted input plus 1%. So must each `funding` entry of a `MulticallAuthorization`. If a check fails, the adapter logs a warning and falls back to `WALLET_TX`.
+3. The wallet signs each message (`signTypedData`). The client fires `submit_signatures` with `{ signatures: string[] }`.
+4. The server recovers the signer of each signature from the stored message (EIP-712 and secp256k1, in `@openrampkit/adapter`). A signature from another account fails with `BAD_REQUEST`, and nothing goes to Relay. Then it posts each signature to `POST /execute/permits?signature=...` with Relay's body, in order. It counts the posted items, so a retry after an error posts only the rest.
+5. The leg is `processing`. Status follows `GET /intents/status/v3`, as for a transaction payment. Only Relay's fill completes the leg, and the delivered amount is checked against the quote. The `source` transaction is the one that Relay's solver sent (`inTxHashes`).
+
+**Fees.** Relay takes the origin gas from the input token, as part of its fee. The `wallet` quote that the user sees comes from the normal route, so the delivered amount can be a little lower (about 0.005 USDC on Base). It stays inside `minOutput`.
+
+**Limits.**
+
+- Same-chain swaps through a permit (Relay's `authorize2`, Permit2) need fee sponsorship, so the adapter does not use them.
+- The permit is valid for 10 minutes (Relay's `permitExpiry` default). After that, `submit_signatures` fails and the user chooses again.
+- An embedded wallet that you control can also use Relay's EIP-7702 or ERC-4337 flows. These need an app balance at Relay (fee sponsorship), so they are not built in.
 
 #### Solana and Tempo
 

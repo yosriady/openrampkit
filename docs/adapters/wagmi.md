@@ -1,6 +1,6 @@
 # Wallets (wagmi)
 
-Provider adapters run on the server. **Wallet adapters** run in the browser. They let the modal read the user's balances and sign `WALLET_TX` surfaces ("Pay with wallet").
+Provider adapters run on the server. **Wallet adapters** run in the browser. They let the modal read the user's balances and sign `WALLET_TX` and `WALLET_SIGN` surfaces ("Pay with wallet").
 
 ## The WalletAdapter interface
 
@@ -13,6 +13,8 @@ interface WalletAdapter {
   /** Sends the transactions in order and returns the hash of the last one */
   sendTransactions(chain: string, txs: TxRequest[]): Promise<{ hash: string }>
   switchChain?(chain: string): Promise<void>
+  /** Signs EIP-712 typed data (eth_signTypedData_v4). For gas abstraction (WALLET_SIGN). Optional. */
+  signTypedData?(chain: string, data: TypedDataRequest): Promise<string>
   /** CAIP-2 namespaces this wallet sends on, e.g. ['eip155'] or ['solana']. Absent: any. */
   namespaces?: string[]
 }
@@ -30,6 +32,7 @@ How the controller uses it:
 - On start, it calls `getAccounts()`. The first account's address counts as "connected". It is sent to the server with the plan and the quotes, so the `wallet` method shows as "Connected" and Relay can quote for that address.
 - It calls `getBalances()` and keeps balances above zero. The largest one (by `usd`, else by amount) is the default "Pay with" token.
 - On **Confirm in wallet**, it calls `sendTransactions(surface.chain, surface.txs)` and reports the hash.
+- For a `WALLET_SIGN` surface ([gas abstraction](./relay.md#gas-abstraction)), **Confirm in wallet** calls `signTypedData(surface.chain, message)` for each message, in order, and reports the signatures. `wagmiWallet` switches to the chain first, because wallets refuse typed data for another chain.
 
 The controller reads the wallet once, when it starts. If the user connects a wallet later, open the modal again (or remount `OpenRampEmbedded`).
 

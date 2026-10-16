@@ -243,7 +243,7 @@ async function targetRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
 }
 
 async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promise<Response> {
-  const body = await readJson<{ quoteId: string; walletAddress?: string }>(req)
+  const body = await readJson<{ quoteId: string; walletAddress?: string; gasless?: boolean }>(req)
   // Own keys only: a quote id such as `__proto__` must not find an inherited value.
   const stored = typeof body?.quoteId === 'string' && Object.hasOwn(rec.quotes, body.quoteId) ? rec.quotes[body.quoteId] : undefined
   if (!stored) return errorResponse(openRampError('QUOTE_EXPIRED'), 410)
@@ -255,6 +255,9 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (bounds) return errorResponse(bounds, 422)
   const walletAddress = walletAddressOf(body.walletAddress)
   if (walletAddress) rec.walletAddress = walletAddress
+  // Gas abstraction is asked for each payment: a later select without it pays gas again.
+  if (body.gasless === true && rec.direction !== 'withdraw') rec.gasless = true
+  else delete rec.gasless
   if (rec.direction === 'withdraw') {
     // `withdraw.checkBalance`: read the balance again before the first leg starts (it can change after the quote).
     const low = balanceError(await readSourceBalance(rt, rec), stored.quote.input)

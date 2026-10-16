@@ -3,7 +3,7 @@
 // version and it also works for other embedded wallets that expose one.
 
 import { CHAINS, USDC, evmChainId, fromBaseUnits, isEvmChain, isSolanaTx } from '@openrampkit/core'
-import type { TxRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
+import type { TxRequest, TypedDataRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
 
 /** The EIP-1193 `request` method. `getEthereumProvider()` on a Privy wallet returns this shape. */
 export type Eip1193Provider = {
@@ -184,6 +184,28 @@ export function privyWallet(opts: PrivyWalletOptions = {}): WalletAdapter {
 
     async switchChain(chain) {
       await ensureChain(await providerOf(), chainIdOf(chain))
+    },
+
+    async signTypedData(chain: string, data: TypedDataRequest) {
+      const wallet = ethereumWallet()
+      if (!wallet) throw new Error('Privy wallet: no EVM wallet is connected')
+      const provider = await wallet.getEthereumProvider()
+      // Wallets refuse typed data whose domain chain is not the active chain: switch first.
+      await ensureChain(provider, chainIdOf(chain))
+      // eth_signTypedData_v4 takes the JSON with EIP712Domain in `types`.
+      const domainFields = (
+        [
+          ['name', 'string'],
+          ['version', 'string'],
+          ['chainId', 'uint256'],
+          ['verifyingContract', 'address'],
+          ['salt', 'bytes32'],
+        ] as const
+      )
+        .filter(([name]) => data.domain[name] !== undefined)
+        .map(([name, type]) => ({ name, type }))
+      const typed = { domain: data.domain, types: { EIP712Domain: domainFields, ...data.types }, primaryType: data.primaryType, message: data.message }
+      return String(await provider.request({ method: 'eth_signTypedData_v4', params: [wallet.address, JSON.stringify(typed)] }))
     },
 
     async sendTransactions(chain: string, txs: TxRequest[]) {

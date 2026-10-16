@@ -8,7 +8,7 @@ import type { Messages } from './messages.js'
 import type { Appearance, Theme } from './theme.js'
 
 /** Surfaces this UI can draw. The planner hides pathways that need anything else. */
-export const SUPPORTED_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'OTP', 'FORM']
+export const SUPPORTED_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'WALLET_SIGN', 'OTP', 'FORM']
 
 /** Error code used when the user closes the modal before the deposit or withdrawal completes. */
 export const CLOSED_CODE = 'CLOSED' as const

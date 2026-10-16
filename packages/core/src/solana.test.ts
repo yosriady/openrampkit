@@ -162,4 +162,16 @@ describe('combineWallets', () => {
     expect(await w.sendTransactions('cosmos:hub', [])).toEqual({ hash: 'any-hash' })
     expect(await w.getBalances!([{ chain: SOLANA_MAINNET, address: 'x' }])).toHaveLength(1)
   })
+
+  it('signTypedData goes to the wallet of the chain; absent when no wallet signs', async () => {
+    const signed: string[] = []
+    const evm: WalletAdapter = { id: 'evm', namespaces: ['eip155'], getAccounts: async () => [], sendTransactions: async () => ({ hash: '0x' }), signTypedData: async (chain) => (signed.push(chain), '0xsig') }
+    const sol: WalletAdapter = { id: 'sol', namespaces: ['solana'], getAccounts: async () => [], sendTransactions: async () => ({ hash: 's' }) }
+    const data = { domain: { chainId: 8453 }, types: { M: [] }, primaryType: 'M', message: {} }
+    const both = combineWallets(evm, sol)
+    expect(await both.signTypedData!('eip155:8453', data)).toBe('0xsig')
+    expect(signed).toEqual(['eip155:8453'])
+    await expect(both.signTypedData!(SOLANA_MAINNET, data)).rejects.toThrow('cannot sign typed data')
+    expect(combineWallets(sol).signTypedData).toBeUndefined()
+  })
 })

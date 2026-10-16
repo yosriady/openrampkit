@@ -1074,7 +1074,7 @@ export class OpenRampModal extends LitElement {
     const formSurface = surface?.kind === 'FORM' || surface?.kind === 'OTP'
     // FORM and OTP surfaces use the first SUBMIT transition as their submit button.
     const extra = formSurface ? submits.slice(1) : submits
-    const hasPrimary = !!surface && ['REDIRECT', 'DEEPLINK', 'WALLET_TX', 'FORM', 'OTP'].includes(surface.kind)
+    const hasPrimary = !!surface && ['REDIRECT', 'DEEPLINK', 'WALLET_TX', 'WALLET_SIGN', 'FORM', 'OTP'].includes(surface.kind)
     const payment = s.session!.payment
     const showProgress = !!payment && (payment.legs.length > 1 || step.state === 'PROCESSING')
     const errors = [step.error, s.error && s.error.message !== step.error?.message ? s.error : undefined].filter((e): e is OpenRampError => !!e)
@@ -1271,6 +1271,16 @@ export class OpenRampModal extends LitElement {
           </div>
           <div class="stack">
             <button class="btn" type="button" ?disabled=${s.busy} @click=${() => void c.sendWalletTransactions()}>
+              ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>${m.checkWallet}` : m.confirmInWallet}
+            </button>
+          </div>`
+      case 'WALLET_SIGN':
+        return html`<div class="center">
+            <span class="row-icon" aria-hidden="true">${icons.wallet}</span>
+            <p class="secondary-text">${m.walletSignHint(displayChain(surface.chain))}</p>
+          </div>
+          <div class="stack">
+            <button class="btn" type="button" ?disabled=${s.busy} @click=${() => void c.signWalletMessages()}>
               ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>${m.checkWallet}` : m.confirmInWallet}
             </button>
           </div>`

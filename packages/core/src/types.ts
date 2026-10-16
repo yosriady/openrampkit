@@ -108,6 +108,7 @@ export type SurfaceKind =
   | 'BANK_FIELDS'
   | 'DEPOSIT_ADDRESS'
   | 'WALLET_TX'
+  | 'WALLET_SIGN'
   | 'OTP'
   | 'FORM'
 
@@ -360,6 +361,17 @@ export function isEvmTx(tx: TxRequest): tx is EvmTxRequest {
   return tx.kind !== 'solana'
 }
 
+/**
+ * EIP-712 typed data for the wallet to sign (`eth_signTypedData_v4`). `types` leaves out
+ * `EIP712Domain`; the wallet derives it from `domain`. Numbers may be decimal strings.
+ */
+export type TypedDataRequest = {
+  domain: { name?: string; version?: string; chainId?: number; verifyingContract?: string; salt?: string }
+  types: Record<string, Array<{ name: string; type: string }>>
+  primaryType: string
+  message: Record<string, unknown>
+}
+
 export type FieldSpec = {
   id: string
   label: string
@@ -416,6 +428,11 @@ export type Surface =
       warning?: string
     }
   | { kind: 'WALLET_TX'; chain: string; txs: TxRequest[] }
+  /**
+   * Gas abstraction: the wallet signs these EIP-712 messages in order (no transaction, no gas) and the
+   * client reports the signatures with the `signatures` transition. `address` is the account that signs.
+   */
+  | { kind: 'WALLET_SIGN'; chain: string; address: string; signatures: TypedDataRequest[] }
   | { kind: 'OTP'; channel: 'email' | 'sms'; to: string }
   | { kind: 'FORM'; fields: FieldSpec[] }
 
@@ -424,7 +441,7 @@ export type PollSpec = { intervalMs: number; backoff: number; maxIntervalMs: num
 export type Transition =
   | { name: string; kind: 'SUBMIT'; label: string; inputs?: FieldSpec[] }
   | { name: string; kind: 'AWAIT'; poll: PollSpec }
-  | { name: string; kind: 'SURFACE_RESULT'; expects: 'completed' | 'closed' | 'tx_hash' }
+  | { name: string; kind: 'SURFACE_RESULT'; expects: 'completed' | 'closed' | 'tx_hash' | 'signatures' }
 
 export type LegStatus =
   | 'pending'

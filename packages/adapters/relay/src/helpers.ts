@@ -181,6 +181,8 @@ export function toOpenRamp(e: unknown, log?: Pick<Logger, 'warn'> & Partial<Pick
 
 export const POLL_TRANSITION = awaitPoll(RELAY_POLL)
 export const SUBMIT_TX = { name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' } as const
+/** Gas abstraction: the client reports the wallet's EIP-712 signatures, in the order of the surface */
+export const SUBMIT_SIGNATURES = { name: 'submit_signatures', kind: 'SURFACE_RESULT', expects: 'signatures' } as const
 
 /** The wallet has not sent its transaction yet: the user still pays (no surface: the UI keeps the WALLET_TX surface) */
 export function awaitingTx(ref: string): LegStep {

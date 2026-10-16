@@ -114,6 +114,16 @@ export type FlowOptions = {
    * example `custody: 'app'`). It turns on the MAX chip and the check against the balance.
    */
   balance?: string
+  /**
+   * Deposit with a wallet: gas abstraction. The wallet signs EIP-712 messages (`WALLET_SIGN`) instead of
+   * sending transactions, and the provider takes the gas from the token, so the user needs no native gas.
+   * It applies to an ERC-20 on an EVM chain, with a wallet that has `signTypedData`, when the provider
+   * route supports it (Relay: USDC to another chain); else the wallet sends transactions as usual.
+   * - `auto` (default): only when the wallet reports a zero native balance on the chain it pays from.
+   * - `always`: whenever it applies, also when the wallet has gas.
+   * - `never`: the wallet always sends transactions.
+   */
+  gasless?: 'auto' | 'always' | 'never'
 }
 
 export type ControllerOptions = {
@@ -224,6 +234,8 @@ export class RampController {
   private started = false
   /** Wallet accounts read at start */
   private accounts: Array<{ chain: string; address: string }> = []
+  /** Native balances the wallet reported, by chain (zero included), for gas abstraction */
+  private nativeBalances = new Map<string, string>()
   /** Increments on every quote request, to drop stale responses */
   private quoteSeq = 0
   /** Increments on every applied session, to drop poll responses that raced with an action */
@@ -248,6 +260,7 @@ export class RampController {
       void this.loadHistory()
       if (walletAddress && this.opts.wallet?.getBalances) {
         const balances = await this.opts.wallet.getBalances(accounts).catch(() => [] as WalletBalance[])
+        for (const b of balances) if (b.token === 'native') this.nativeBalances.set(b.chain, b.amount)
         this.set({ balances: balances.filter((b) => cmp(b.amount, '0') > 0) })
       }
       const hostBalance = this.hostBalance(session)
@@ -741,12 +754,30 @@ export class RampController {
       const session = await this.opts.client.select(this.opts.clientSecret, {
         quoteId,
         ...(walletAddress ? { walletAddress } : {}),
+        ...(this.wantsGasless() ? { gasless: true } : {}),
       })
       this.set({ busy: false })
       this.applySession(session)
     } catch (e) {
       this.fail(e)
     }
+  }
+
+  /**
+   * Gas abstraction for a wallet deposit (see `FlowOptions.gasless`): an ERC-20 on an EVM chain, a wallet
+   * that signs typed data, a UI that renders WALLET_SIGN, and (`auto`) a reported zero native balance.
+   * A native balance the wallet did not report counts as gas present: the usual path stays the default.
+   */
+  private wantsGasless(): boolean {
+    const mode = this.opts.flow?.gasless ?? 'auto'
+    const src = this.snap.source
+    if (mode === 'never' || this.snap.direction === 'withdraw' || this.snap.method?.method !== 'wallet' || !src) return false
+    if (!this.opts.wallet?.signTypedData || (this.opts.surfaces && !this.opts.surfaces.includes('WALLET_SIGN'))) return false
+    if (chainNamespace(src.chain) !== 'eip155' || CHAINS[src.chain]?.stablecoinFees) return false
+    if (src.token === 'native' || /^0x0{40}$/i.test(src.token)) return false
+    if (mode === 'always') return true
+    const native = this.nativeBalances.get(src.chain)
+    return native !== undefined && cmp(native, '0') <= 0
   }
 
   /** Fire a SUBMIT or SURFACE_RESULT transition from the current step. */
@@ -775,6 +806,29 @@ export class RampController {
       const { hash } = await this.opts.wallet.sendTransactions(step.surface.chain, step.surface.txs)
       this.set({ busy: false })
       if (t) await this.fire(t.name, { txHash: hash })
+    } catch (e) {
+      this.fail(e)
+    }
+  }
+
+  /** For WALLET_SIGN surfaces (gas abstraction): sign each message with the wallet, then report the signatures. */
+  async signWalletMessages() {
+    const step = this.snap.session?.step
+    if (step?.surface?.kind !== 'WALLET_SIGN') return
+    const wallet = this.opts.wallet
+    if (!wallet?.signTypedData) {
+      this.set({ error: openRampError('BAD_REQUEST', { message: wallet ? 'This wallet cannot sign messages.' : 'No wallet is connected.' }) })
+      return
+    }
+    const { chain, signatures: messages } = step.surface
+    const t = step.transitions.find((x) => x.kind === 'SURFACE_RESULT' && x.expects === 'signatures')
+    this.set({ busy: true, error: undefined })
+    try {
+      // In order: the provider can need the first signature before the next one.
+      const signatures: string[] = []
+      for (const m of messages) signatures.push(await wallet.signTypedData(chain, m))
+      this.set({ busy: false })
+      if (t) await this.fire(t.name, { signatures })
     } catch (e) {
       this.fail(e)
     }

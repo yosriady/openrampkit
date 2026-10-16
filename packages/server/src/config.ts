@@ -276,7 +276,7 @@ export const consoleLogger: Logger = {
   error: (m, d) => console.error(`[openramp] ${m}`, d ?? ''),
 }
 
-export const ALL_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'OTP', 'FORM']
+export const ALL_SURFACES: SurfaceKind[] = ['REDIRECT', 'IFRAME', 'QR', 'DEEPLINK', 'BANK_FIELDS', 'DEPOSIT_ADDRESS', 'WALLET_TX', 'WALLET_SIGN', 'OTP', 'FORM']
 
 /** Default poll spec for steps that wait on a provider or a chain */
 export const DEFAULT_POLL: PollSpec = { intervalMs: 2500, backoff: 1.2, maxIntervalMs: 10_000, giveUpAfterMs: 30 * 60_000 }

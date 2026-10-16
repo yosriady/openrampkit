@@ -127,6 +127,8 @@ export type SessionRecord = {
   expiresAt: number
   walletConnected?: boolean
   walletAddress?: string
+  /** Deposit with a wallet: the client asked to pay without native gas at the last `select` (see `StartInput.gasless`) */
+  gasless?: boolean
   plan?: PlanResult
   quotes: Record<string, StoredQuote>
   active?: ActivePayment

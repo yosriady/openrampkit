@@ -66,6 +66,14 @@ export type RelayOptions = {
    * turn). Default: no limit. Set it when you use public RPCs.
    */
   rpcRequestsPerSecond?: number
+  /**
+   * Gas abstraction for the `wallet` leg. Default true. When the client asks for it (`select` with
+   * `gasless: true`, see `FlowOptions.gasless`), a cross-chain payment from an ERC-20 that Relay can
+   * move by permit (USDC with EIP-3009) asks the wallet for EIP-712 signatures instead of transactions.
+   * Relay's solver sends the origin transaction and takes its gas from the input token, so the wallet
+   * needs no native gas. Set false to always send `WALLET_TX`.
+   */
+  gasless?: boolean
 }
 
 /** Public RPCs for on-chain verification (`PUBLIC_RPC_URLS` of `@openrampkit/adapter`). Rate-limited: use your own in production. */

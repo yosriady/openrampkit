@@ -275,7 +275,7 @@ export function mockAdapter(opts: MockOptions = {}) {
         to: { asset: { kind: 'crypto', chains: '*' }, location: ['address'] },
         regions: { allow: ['*'], deny: [] },
         eta: { min: 5, max: 30 },
-        surfaces: ['WALLET_TX'],
+        surfaces: ['WALLET_TX', 'WALLET_SIGN'],
         requires: ['wallet'],
       },
       {
@@ -675,7 +675,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       return { address: fakeAddress(`${ctx.session.id}:${leg.legId}:deposit`) }
     },
 
-    async start({ leg, quote, deliverTo }, ctx): Promise<LegStep> {
+    async start({ leg, quote, deliverTo, gasless, source }, ctx): Promise<LegStep> {
       refuseLive(ctx)
       const ref = `mock_${ctx.session.id.slice(4, 14)}_${leg.legId}_${Date.now().toString(36)}`
       const order: MockOrder = { status: 'awaiting', output: quote.output, kind: leg.legId }
@@ -724,6 +724,19 @@ export function mockAdapter(opts: MockOptions = {}) {
                 decimals: src.decimals ?? nativeDecimals(src.chain),
               }
             : { to: deliverTo?.address ?? fakeAddress(ref), data: '0x', value: '0', chainId: evmChainId(src.chain) ?? 8453 }
+          // Gas abstraction: an EVM token asks for a signature (a test message) instead of a transaction.
+          if (gasless && source?.address && evmChainId(src.chain) !== undefined && src.token !== 'native') {
+            const message = { from: source.address, to: deliverTo?.address ?? fakeAddress(ref), value: toBaseUnits(quote.input.value, src.decimals ?? 6), ref }
+            const types = { MockPermit: [{ name: 'from', type: 'address' }, { name: 'to', type: 'address' }, { name: 'value', type: 'uint256' }, { name: 'ref', type: 'string' }] }
+            return {
+              status: 'requires_action', ...ids(ref),
+              action: {
+                kind: 'payment',
+                surface: { kind: 'WALLET_SIGN', chain: src.chain, address: source.address, signatures: [{ domain: { name: 'OpenRampKit Mock', version: '1', chainId: evmChainId(src.chain)! }, types, primaryType: 'MockPermit', message }] },
+                transitions: [{ name: 'submit_signatures', kind: 'SURFACE_RESULT', expects: 'signatures' }],
+              },
+            }
+          }
           return {
             status: 'requires_action', ...ids(ref),
             action: { kind: 'payment', surface: { kind: 'WALLET_TX', chain: src.chain, txs: [tx] }, transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }] },
@@ -832,6 +845,15 @@ export function mockAdapter(opts: MockOptions = {}) {
       }
       if (o.kind === 'offramp' && t === 'submit_tx' && !o.account) {
         throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Enter the payout account first.' }), 409)
+      }
+      if (t === 'submit_signatures') {
+        // Test mode: any 65-byte signatures count (a real adapter checks the signer).
+        const sigs = inputs?.signatures
+        if (o.kind !== 'wallet' || !Array.isArray(sigs) || !sigs.length || !sigs.every((x) => typeof x === 'string' && /^0x[0-9a-fA-F]{130}$/.test(x))) {
+          throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Send the wallet signatures.' }), 400)
+        }
+        await ctx.shared.put(orderKey(ref), { ...o, status: 'paid', paidAt: Date.now() }, ORDER_TTL_SEC)
+        return { status: 'processing', detail: { code: 'settling' }, poll: POLL, ...ids(ref) }
       }
       if (t === 'simulate_payment' || t === 'simulate_deposit' || t === 'submit_tx') {
         // A transfer with no amount up front (any amount): the simulated deposit sends a test amount,

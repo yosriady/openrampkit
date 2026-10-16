@@ -342,6 +342,37 @@ sequenceDiagram
 
 The server does not trust the hash from the browser. A direct payment counts only after the on-chain checks pass. See [Security](../guide/security.md#same-chain-payments-relay).
 
+### Without native gas (gas abstraction)
+
+When the wallet has USDC and no native gas, the controller sends `gasless: true` with `select`. On a route that supports it, the Relay adapter returns a `WALLET_SIGN` surface: the wallet signs Relay's permit, and Relay's solver sends the origin transaction. See [Relay: Gas abstraction](../adapters/relay.md#gas-abstraction).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant B as Browser (DepositController)
+  participant W as WalletAdapter
+  participant S as Server
+  participant R as Relay adapter
+  participant RA as Relay API
+  B->>W: getBalances(): native balance 0 on the source chain
+  B->>S: POST /sessions/:id/select { quoteId, walletAddress, gasless: true }
+  S->>R: start({ source, gasless: true })
+  R->>RA: POST /quote/v2 { usePermit: true, useMulticallAuthorization: true }
+  R->>R: check chain, account, token and amount of each message
+  R-->>S: LegStep requires_action, surface WALLET_SIGN { chain, address, signatures } and transition submit_signatures
+  B->>W: signTypedData(chain, message), for each message
+  B->>S: POST /sessions/:id/transitions/submit_signatures { inputs: { signatures } }
+  S->>R: transition({ name: 'submit_signatures', inputs })
+  R->>R: recover the signer of each signature, must be the paying wallet
+  R->>RA: POST /execute/permits?signature=... (in order)
+  R-->>S: LegStep processing
+  loop AWAIT poll
+    S->>R: status({ ref })
+    R->>RA: GET /intents/status/v3?requestId=ref
+  end
+  S-->>B: Step COMPLETED
+```
+
 ## On-chain settlement
 
 The destination has `settlement: { contract }`, and maybe `calls`. The Relay `wallet` leg pays through `OpenRampSettlement` on the destination chain. See [On-chain settlement](./settlement.md).

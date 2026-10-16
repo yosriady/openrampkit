@@ -87,6 +87,12 @@ export type StartInput = {
   quote: LegQuote
   deliverTo?: { address: string }
   source?: { chain: string; token: string; address?: string }
+  /**
+   * Gas abstraction: the client asks to pay without native gas (the wallet has none on the source
+   * chain, or the app opted in), and its wallet can sign EIP-712 typed data. An adapter that supports
+   * it may return a `WALLET_SIGN` step instead of `WALLET_TX`; any other adapter ignores it.
+   */
+  gasless?: boolean
 }
 
 export type TransitionInput = {
@@ -331,3 +337,4 @@ export * from './solana.js'
 export * from './chain-watch.js'
 export * from './testkit.js'
 export * from './settlement.js'
+export * from './eip712.js'

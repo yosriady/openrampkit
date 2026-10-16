@@ -64,6 +64,7 @@ When the modal closes before completion, `done` rejects with the step's error if
 | `defaultSource` | `{ chain, token? }` | Deposit: the token the user pays with first, for wallet and transfer. Without `token`: USDC on the chain, else the native token. |
 | `defaultTarget` | `{ chain, token? }` | Withdraw: the chain and token to receive first on the "To wallet" tab |
 | `balance` | `string` | Withdraw: the amount the user can withdraw, in the source token, when no wallet reports it (for example `custody: 'app'`). It turns on the MAX chip and the check against the balance. |
+| `gasless` | `'auto' \| 'always' \| 'never'` | Deposit with a wallet: gas abstraction. The wallet signs a message instead of a transaction, so it needs no native gas. `'auto'` (default): only when the wallet reports a zero native balance on the chain it pays from. `'always'`: also when it has gas. `'never'`: off. It needs a wallet with `signTypedData` and a route that supports it. See [Relay: Gas abstraction](../adapters/relay.md#gas-abstraction). |
 
 ```ts
 openDeposit({
@@ -198,7 +199,7 @@ Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 
 | Export | Description |
 |---|---|
-| `SUPPORTED_SURFACES` | `REDIRECT`, `IFRAME`, `QR`, `DEEPLINK`, `BANK_FIELDS`, `DEPOSIT_ADDRESS`, `WALLET_TX`, `OTP`, `FORM` |
+| `SUPPORTED_SURFACES` | `REDIRECT`, `IFRAME`, `QR`, `DEEPLINK`, `BANK_FIELDS`, `DEPOSIT_ADDRESS`, `WALLET_TX`, `WALLET_SIGN`, `OTP`, `FORM` |
 | `CLOSED_CODE` | `'CLOSED'` |
 | `TAG_NAME` | `'openramp-modal'` |
 | `OpenRampModal` | The element class |

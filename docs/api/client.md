@@ -25,7 +25,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `plan(secret, { walletConnected, walletAddress?, surfaces? })` | `POST /sessions/:id/plan` | `PlanResult` |
 | `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. |
 | `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: PublicQuote[]; errors: OpenRampError[] }` |
-| `select(secret, { quoteId, walletAddress? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
+| `select(secret, { quoteId, walletAddress?, gasless? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
 | `depositAddress(secret, { chain, token })` | `POST /sessions/:id/deposit-address` | `DepositAddressView`. The controller loads it on the `deposit_address` screen, into `snapshot.depositAddress`. |
@@ -80,6 +80,7 @@ It works like an external store: `getSnapshot()` returns an immutable `Snapshot`
 | `confirm()` | Selects the quote on the server and starts the first leg |
 | `fire(name, inputs?)` | Fires a SUBMIT or SURFACE_RESULT transition |
 | `sendWalletTransactions()` | For a `WALLET_TX` surface: sends the transactions with the wallet, then fires the step's SURFACE_RESULT transition that `expects: 'tx_hash'` (for example `submit_tx`) with `{ txHash }`. With no such transition, it only sends. |
+| `signWalletMessages()` | For a `WALLET_SIGN` surface (gas abstraction): signs each message in order with `wallet.signTypedData`, then fires the transition that `expects: 'signatures'` (for example `submit_signatures`) with `{ signatures }`. A wallet without `signTypedData` gives a `BAD_REQUEST` error. |
 | `openSurface()` | For `REDIRECT` and `DEEPLINK`: opens the URL in a new window. Call it inside a click handler. A blocked `DEEPLINK` falls back to navigating the page. |
 | `notifySurface(kind, detail?)` | For a UI that reads provider iframe messages: `'completed'`, `'failed'` or `'closed'`. Polls at once. `closed` sets `surfaceClosed`. Never sets the outcome. |
 | `reopenSurface()` | Clears `surfaceClosed` |
@@ -174,8 +175,9 @@ A fake `WalletAdapter` for development and tests. See [Testing with mocks](../gu
 | `balances` | 250 USDC on Arbitrum, 40 USDC on Base | `WalletBalance[]` |
 | `delayMs` | `600` | Delay before `sendTransactions` resolves |
 | `onSend` | none | `(chain, txs) => void` |
+| `canSign` | `false` | Add `signTypedData`, which returns a random signature (for the mock adapter; a real server refuses it) |
 
-The returned object also has `sent: Array<{ chain, txs, hash }>`.
+The returned object also has `sent: Array<{ chain, txs, hash }>` and `signed: Array<{ chain, data, signature }>`.
 
 ## Re-exported types
 

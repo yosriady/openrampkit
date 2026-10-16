@@ -109,6 +109,7 @@ export const id: Messages = {
   depositWarning: (symbol, chain) =>
     `Kirim hanya ${symbol} di jaringan ${chain}. Jika Anda mengirim token lain atau memakai jaringan lain, dana Anda bisa hilang.`,
   walletTxHint: (count, chain) => `Setujui ${count} transaksi di ${chain}.`,
+  walletSignHint: (chain) => `Tanda tangani pesan untuk membayar di ${chain}. Tanpa biaya gas.`,
   confirmInWallet: 'Konfirmasi di dompet',
   checkWallet: 'Periksa dompet Anda',
   copy: 'Salin',

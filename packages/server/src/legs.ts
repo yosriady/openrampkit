@@ -618,6 +618,7 @@ export async function startLeg(rt: Runtime, rec: SessionRecord, i: number): Prom
         quote: leg.quote,
         ...(leg.deliverTo ? { deliverTo: leg.deliverTo } : {}),
         ...(source ? { source } : {}),
+        ...(i === 0 && source && rec.direction !== 'withdraw' && rec.gasless ? { gasless: true } : {}),
       },
       adapterContext(rt, rec, a, act.pathway, i),
     )

@@ -1,6 +1,6 @@
 # Wallets (Privy)
 
-Provider adapters run on the server. **Wallet adapters** run in the browser. They let the modal read the user's balances and sign `WALLET_TX` surfaces ("Pay with wallet").
+Provider adapters run on the server. **Wallet adapters** run in the browser. They let the modal read the user's balances and sign `WALLET_TX` and `WALLET_SIGN` surfaces ("Pay with wallet").
 
 For Solana wallets, use `@openrampkit/solana`. To use a Privy wallet and a Solana wallet together, join them with `combineWallets(privyWallet(...), solanaWallet())` from `@openrampkit/core`.
 
@@ -56,6 +56,7 @@ export function Deposit() {
 | `getBalances()` | Native balance plus USDC (and your `tokens`) per configured chain. One failing RPC does not hide the other balances. USDC also fills `usd`. |
 | `switchChain(chain)` | Calls `wallet_switchEthereumChain` when the wallet is on another chain. |
 | `sendTransactions(chain, txs)` | For each tx: switch to `tx.chainId`, send, and wait for the receipt between txs. A reverted receipt stops the batch with an error, and no later tx is sent. Returns the last hash. |
+| `signTypedData(chain, data)` | Gas abstraction (`WALLET_SIGN`): switch to the chain, then `eth_signTypedData_v4` with `EIP712Domain` built from the domain. Returns the signature. |
 
 Only EVM chains are supported. `privyWallet` refuses Solana transactions, and it reports no accounts for a Solana embedded wallet (`chainType: 'solana'`). Use `@openrampkit/solana` for those.
 

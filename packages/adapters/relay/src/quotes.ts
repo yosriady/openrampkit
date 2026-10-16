@@ -24,7 +24,8 @@ export function relayLegs(opts: Pick<RelayOptions, 'exchangeTransfer'> = {}): Le
       to: { asset: { kind: 'crypto', chains: '*' }, location: ['address'] },
       regions: { allow: ['*'], deny: [] },
       eta: { min: 5, max: 60 },
-      surfaces: ['WALLET_TX'],
+      // WALLET_SIGN: gas abstraction (Relay permits), only when the client asks for it
+      surfaces: ['WALLET_TX', 'WALLET_SIGN'],
       requires: ['wallet'],
       // `settlement`: same chain and token only (approve + settle on the destination chain)
       capabilities: ['settlement'],

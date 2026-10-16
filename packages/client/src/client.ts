@@ -92,7 +92,7 @@ export function createOpenRampClient(opts: ClientOptions) {
     ) => call<PlanResult>(secret, 'POST', `/sessions/${sessionId(secret)}/target`, body),
     quotes: (secret: string, body: { method: string; amount: string; amountSide: 'source' | 'destination'; source?: { chain: string; token: string } }) =>
       call<{ quotes: PublicQuote[]; errors: OpenRampError[] }>(secret, 'POST', `/sessions/${sessionId(secret)}/quotes`, body),
-    select: (secret: string, body: { quoteId: string; walletAddress?: string }) =>
+    select: (secret: string, body: { quoteId: string; walletAddress?: string; /** Pay without native gas (see `FlowOptions.gasless`) */ gasless?: boolean }) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/select`, body, idemKey()),
     transition: (secret: string, name: string, inputs?: Record<string, unknown>) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/transitions/${encodeURIComponent(name)}`, { inputs: inputs ?? {} }, idemKey()),

@@ -1,7 +1,8 @@
 // Relay adapter: crypto bridge and swap legs (https://docs.relay.link).
 //
 // Legs:
-// - `wallet`   The user's connected wallet signs Relay's transaction steps (WALLET_TX).
+// - `wallet`   The user's connected wallet signs Relay's transaction steps (WALLET_TX), or, with gas
+//              abstraction, Relay's permit messages (WALLET_SIGN) so it needs no native gas.
 // - `transfer` The user sends any amount to a Relay open deposit address (DEPOSIT_ADDRESS).
 // - `bridge`   Hop leg after an onramp: the onramp delivers USDC into a Relay open deposit
 //              address, and Relay moves it to the destination chain and token.
@@ -47,7 +48,7 @@ export function relay(opts: RelayOptions = {}) {
   const direct = directTransfer(rt)
   const deposits = depositAddresses(rt, direct)
   const { quoteWallet, quoteDeposit } = quotes(rt, deposits, legs)
-  const { startWallet, verifyDirectWallet, verifySettlementWallet } = walletLeg(rt)
+  const { startWallet, submitSignatures, signStep, verifyDirectWallet, verifySettlementWallet } = walletLeg(rt)
   const { findDirectDeposit } = direct
   const { openDepositAddress, depositRef, startDeposit, findRelayDeposit } = deposits
   const { sourceTokens } = relaySources(rt)
@@ -126,6 +127,7 @@ export function relay(opts: RelayOptions = {}) {
     },
 
     async transition(input, ctx) {
+      if (input.leg.legId === 'wallet' && input.name === 'submit_signatures') return submitSignatures(ctx, input.ref, input.inputs)
       if (input.leg.legId !== 'wallet' || input.name !== 'submit_tx') {
         throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
       }
@@ -153,6 +155,8 @@ export function relay(opts: RelayOptions = {}) {
           if (!rec.txHash) return awaitingTx(input.ref)
           return verifyDirectWallet(ctx, input.ref, rec)
         }
+        // Gas abstraction: until the signatures are posted, the user still signs (the UI keeps WALLET_SIGN).
+        if (rec?.permit && rec.permit.posted < rec.permit.items.length) return signStep(input.ref)
         const s = await api<RelayIntentStatus>(ctx, `/intents/status/v3?requestId=${encodeURIComponent(input.ref)}`).catch((e) => {
           throw toOpenRamp(e, ctx.log)
         })
@@ -170,7 +174,8 @@ export function relay(opts: RelayOptions = {}) {
         const step = relayStep(s.status, extra, ctx.log)
         if (step && step.status !== 'processing') return step
         // The wallet has not sent the transaction yet: the user is still paying.
-        if (!source) return awaitingTx(input.ref)
+        // A permit payment has no wallet transaction: Relay's solver sends the origin transaction.
+        if (!source && !rec?.permit) return awaitingTx(input.ref)
         // A running status, or a status that Relay added after this adapter (logged once by
         // `RELAY_STATUS`): the source transaction is sent, so the last known status is `processing`.
         return step ?? { status: 'processing', ...extra }

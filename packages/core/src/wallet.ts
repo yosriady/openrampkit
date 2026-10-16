@@ -1,4 +1,4 @@
-import type { TxRequest } from './types.js'
+import type { TxRequest, TypedDataRequest } from './types.js'
 
 export type WalletBalance = { chain: string; token: string; symbol: string; decimals: number; amount: string; usd?: string }
 
@@ -13,6 +13,11 @@ export interface WalletAdapter {
   /** Sends the transactions in order and returns the hash (Solana: the signature) of the last one */
   sendTransactions(chain: string, txs: TxRequest[]): Promise<{ hash: string }>
   switchChain?(chain: string): Promise<void>
+  /**
+   * Signs EIP-712 typed data (`eth_signTypedData_v4`) with the account on `chain` and returns the
+   * 65-byte signature as hex. Used by gas abstraction (`WALLET_SIGN`): a wallet without it always pays gas.
+   */
+  signTypedData?(chain: string, data: TypedDataRequest): Promise<string>
   /** CAIP-2 namespaces this wallet can send on, e.g. `['eip155']` or `['solana']`. Absent: any. */
   namespaces?: string[]
 }
@@ -66,5 +71,14 @@ export function combineWallets(...wallets: WalletAdapter[]): WalletAdapter {
     async switchChain(chain) {
       await pick(chain).switchChain?.(chain)
     },
+    ...(wallets.some((w) => w.signTypedData)
+      ? {
+          async signTypedData(chain: string, data: TypedDataRequest) {
+            const w = pick(chain)
+            if (!w.signTypedData) throw new Error(`The wallet for ${chain} cannot sign typed data`)
+            return w.signTypedData(chain, data)
+          },
+        }
+      : {}),
   }
 }

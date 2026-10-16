@@ -11,7 +11,7 @@
       "name": "@openrampkit/client",
       "package": "packages/client",
       "entry": "dist/index.js",
-      "limitKb": 11
+      "limitKb": 13
     },
     {
       "name": "@openrampkit/web",

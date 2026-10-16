@@ -257,7 +257,7 @@ Each `PublicQuote` has `guarantee` (`firm`, `min_output` or `estimate`), `minOut
 
 Headers: `Idempotency-Key: <random>` (recommended).
 
-Body: `{ "quoteId": "q_...", "walletAddress": "0x..." }` (`walletAddress` optional).
+Body: `{ "quoteId": "q_...", "walletAddress": "0x...", "gasless": true }` (`walletAddress` and `gasless` optional). `gasless: true` asks for gas abstraction on a wallet deposit: the adapter may return a `WALLET_SIGN` surface instead of `WALLET_TX`. Send it only when your UI renders `WALLET_SIGN`. A withdrawal ignores it. See [Relay: Gas abstraction](../adapters/relay.md#gas-abstraction).
 
 The server checks `amountBounds` again, starts the first leg and returns the `PublicSession` with the new step. A `REDIRECT` surface URL is replaced by a start URL. A surface URL that is not safe fails the leg (see [Surface URLs](../guide/security.md#surface-urls)). Errors: `410 QUOTE_EXPIRED` when the quote is unknown or expired; `409` while a payment is in progress; `422 AMOUNT_TOO_LOW` or `AMOUNT_TOO_HIGH` outside the bounds. If the first leg fails to start, the active pathway is rolled back.
 

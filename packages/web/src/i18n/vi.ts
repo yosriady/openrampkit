@@ -109,6 +109,7 @@ export const vi: Messages = {
   depositWarning: (symbol, chain) =>
     `Chỉ gửi ${symbol} trên mạng ${chain}. Nếu bạn gửi token khác hoặc dùng mạng khác, bạn có thể mất số tiền đó.`,
   walletTxHint: (count, chain) => `Duyệt ${count} giao dịch trên ${chain}.`,
+  walletSignHint: (chain) => `Ký một tin nhắn để thanh toán trên ${chain}. Không cần phí gas.`,
   confirmInWallet: 'Xác nhận trong ví',
   checkWallet: 'Kiểm tra ví của bạn',
   copy: 'Sao chép',

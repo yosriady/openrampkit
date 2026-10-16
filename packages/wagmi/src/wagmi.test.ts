@@ -25,6 +25,10 @@ vi.mock('@wagmi/core', () => ({
     log.push(`send:${p.chainId}:${p.to}:${p.value ?? ''}`)
     return `0x${String(log.length).padStart(64, '0')}`
   }),
+  signTypedData: vi.fn(async (_c: unknown, p: { account: string; primaryType: string; domain: { chainId: number } }) => {
+    log.push(`sign:${state.chainId}:${p.primaryType}:${p.account}`)
+    return `0x${'11'.repeat(65)}`
+  }),
   waitForTransactionReceipt: vi.fn(async (_c: unknown, p: { hash: string }) => {
     log.push(`wait:${p.hash.slice(-2)}`)
     return { status: 'success' }
@@ -183,5 +187,15 @@ describe('wagmiWallet: more', () => {
     await w.switchChain!('eip155:137')
     await w.switchChain!('eip155:137')
     expect(log).toEqual(['switch:137'])
+  })
+
+  it('signTypedData switches to the chain, then signs with the connected account', async () => {
+    const w = wagmiWallet(config)
+    const data = { domain: { name: 'USD Coin', version: '2', chainId: 8453 }, types: { M: [{ name: 'n', type: 'uint256' }] }, primaryType: 'M', message: { n: '1' } }
+    expect(await w.signTypedData!('eip155:8453', data)).toBe(`0x${'11'.repeat(65)}`)
+    expect(log).toEqual(['switch:8453', 'sign:8453:M:0x03508bB71268BBA25ECaCC8F620e01866650532c'])
+    expect(core.signTypedData).toHaveBeenLastCalledWith(config, { account: state.address, ...data })
+    state.address = undefined
+    await expect(w.signTypedData!('eip155:8453', data)).rejects.toThrow('No wallet is connected')
   })
 })

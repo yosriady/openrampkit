@@ -1,10 +1,10 @@
 // @openrampkit/wagmi: a WalletAdapter backed by the app's existing wagmi config.
 // Browser-side. @wagmi/core and viem are peer dependencies.
 
-import { getAccount, getBalance, readContract, sendTransaction, switchChain, waitForTransactionReceipt } from '@wagmi/core'
+import { getAccount, getBalance, readContract, sendTransaction, signTypedData, switchChain, waitForTransactionReceipt } from '@wagmi/core'
 import type { Config } from '@wagmi/core'
 import { CHAINS, USDC, evmChainId, fromBaseUnits, isSolanaTx } from '@openrampkit/core'
-import type { TxRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
+import type { TxRequest, TypedDataRequest, WalletAdapter, WalletBalance } from '@openrampkit/core'
 
 export type WagmiWalletOptions = {
   /** Wait for each receipt before sending the next tx (so an approve lands before the deposit). Default true. */
@@ -98,6 +98,14 @@ export function wagmiWallet(config: Config, opts: WagmiWalletOptions = {}): Wall
 
     async switchChain(chain) {
       await ensureChain(chainIdOf(chain))
+    },
+
+    async signTypedData(chain: string, data: TypedDataRequest) {
+      // Wallets refuse typed data whose domain chain is not the active chain: switch first.
+      await ensureChain(chainIdOf(chain))
+      const account = getAccount(config)
+      if (!account.address) throw new Error('No wallet is connected')
+      return signTypedData(config, { account: account.address, domain: data.domain, types: data.types, primaryType: data.primaryType, message: data.message } as Parameters<typeof signTypedData>[1])
     },
 
     async sendTransactions(chain: string, txs: TxRequest[]) {

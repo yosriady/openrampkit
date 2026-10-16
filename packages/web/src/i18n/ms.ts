@@ -109,6 +109,7 @@ export const ms: Messages = {
   depositWarning: (symbol, chain) =>
     `Hantar ${symbol} di rangkaian ${chain} sahaja. Jika anda menghantar token lain atau menggunakan rangkaian lain, dana anda boleh hilang.`,
   walletTxHint: (count, chain) => `Luluskan ${count} transaksi di ${chain}.`,
+  walletSignHint: (chain) => `Tandatangani mesej untuk membayar di ${chain}. Tiada gas diperlukan.`,
   confirmInWallet: 'Sahkan dalam dompet',
   checkWallet: 'Semak dompet anda',
   copy: 'Salin',

@@ -44,6 +44,12 @@ function fakeProvider(): Eip1193Provider {
           log.push(`send:${state.chainId}:${tx.to}:${tx.value ?? ''}`)
           return `0x${String(log.length).padStart(64, '0')}`
         }
+        case 'eth_signTypedData_v4': {
+          const [from, json] = params as unknown as [string, string]
+          const typed = JSON.parse(json) as { primaryType: string; types: Record<string, unknown> }
+          log.push(`sign:${state.chainId}:${from}:${typed.primaryType}:${Object.keys(typed.types).join(',')}`)
+          return `0x${'22'.repeat(65)}`
+        }
         case 'eth_getTransactionReceipt':
           log.push('receipt')
           return state.receipt ? { status: state.reverted ? '0x0' : '0x1' } : null
@@ -183,6 +189,15 @@ describe('privyWallet', () => {
     const w = privyWallet({ wallet: fakeWallet, chains: ['eip155:8453'], waitForLast: true })
     await w.sendTransactions('eip155:8453', [{ to: '0xdddd', chainId: 8453 }])
     expect(log).toEqual(['switch:8453', 'send:8453:0xdddd:', 'receipt'])
+  })
+
+  it('signTypedData switches chain and sends eth_signTypedData_v4 with EIP712Domain from the domain', async () => {
+    const w = privyWallet({ wallet: () => fakeWallet() })
+    const data = { domain: { name: 'USD Coin', version: '2', chainId: 8453, verifyingContract: USDC['eip155:8453']! }, types: { M: [{ name: 'n', type: 'uint256' }] }, primaryType: 'M', message: { n: '1' } }
+    expect(await w.signTypedData!('eip155:8453', data)).toBe(`0x${'22'.repeat(65)}`)
+    expect(log).toEqual(['switch:8453', `sign:8453:${ADDRESS}:M:EIP712Domain,M`])
+    vi.unstubAllGlobals()
+    await expect(w.signTypedData!('eip155:8453', data)).rejects.toThrow(/no EVM wallet is connected/)
   })
 
   it('rejects a Solana transaction and an empty list', async () => {

@@ -589,6 +589,31 @@ describe('payment steps (real server)', () => {
     expect(h.text()).toContain('Deposit complete')
   })
 
+  it('WALLET_SIGN step (gas abstraction): a wallet with no gas signs a message instead of sending', async () => {
+    const wallet = createMockWallet({
+      delayMs: 5,
+      canSign: true,
+      balances: [
+        { chain: 'eip155:8453', token: 'native', symbol: 'ETH', decimals: 18, amount: '0' },
+        { chain: 'eip155:8453', token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', symbol: 'USDC', decimals: 6, amount: '40', usd: '40' },
+      ],
+    })
+    const h = await mount({ country: 'US', wallet })
+    await h.click(h.$('[data-method="wallet"]')!)
+    expect(h.c.getSnapshot().source?.chain).toBe('eip155:8453')
+    await h.click(h.$$('.chip')[0]!)
+    await h.click(h.button('Continue'))
+    await h.until(() => !h.c.getSnapshot().quotesLoading)
+    await h.click(h.button('Confirm'))
+    await h.until(() => h.c.getSnapshot().screen === 'step')
+    expect(h.text()).toContain('Sign a message to pay on Base. No gas needed.')
+    await h.click(h.button('Confirm in wallet'))
+    await h.until(() => wallet.signed.length === 1)
+    expect(wallet.sent).toHaveLength(0)
+    await h.until(() => h.c.getSnapshot().screen === 'result')
+    expect(h.text()).toContain('Deposit complete')
+  })
+
   it('REDIRECT step: opens the provider in a new tab and waits', async () => {
     const open = vi.fn(() => ({ opener: {} }))
     vi.spyOn(window, 'open').mockImplementation(open as never)

@@ -110,6 +110,7 @@ export const th: Messages = {
   depositWarning: (symbol, chain) =>
     `ส่งเฉพาะ ${symbol} บนเครือข่าย ${chain} เท่านั้น หากส่งโทเคนอื่นหรือใช้เครือข่ายอื่น เงินของคุณอาจสูญหาย`,
   walletTxHint: (count, chain) => `อนุมัติ ${count} ธุรกรรมบน ${chain}`,
+  walletSignHint: (chain) => `ลงนามข้อความเพื่อชำระเงินบน ${chain} ไม่ต้องใช้ค่าแก๊ส`,
   confirmInWallet: 'ยืนยันในวอลเล็ต',
   checkWallet: 'ตรวจสอบวอลเล็ตของคุณ',
   copy: 'คัดลอก',

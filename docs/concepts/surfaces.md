@@ -4,7 +4,7 @@ A **surface** is what the user must see or do in a step. Adapters return a surfa
 
 ```ts
 type SurfaceKind = 'REDIRECT' | 'IFRAME' | 'PROVIDER_SDK' | 'QR' | 'DEEPLINK' | 'BANK_FIELDS'
-                 | 'DEPOSIT_ADDRESS' | 'WALLET_TX' | 'OTP' | 'FORM'
+                 | 'DEPOSIT_ADDRESS' | 'WALLET_TX' | 'WALLET_SIGN' | 'OTP' | 'FORM'
 ```
 
 Each leg spec lists the surfaces it may use (`LegSpec.surfaces`). The client tells the server which surfaces it can draw (`POST /plan` with `surfaces`). The planner marks legs that need other surfaces as unavailable with `CLIENT_UPGRADE_REQUIRED`. The web modal draws every kind in `SUPPORTED_SURFACES`. It adds `PROVIDER_SDK` only when the app passes `providerRenderers` (see below).
@@ -132,6 +132,20 @@ type EvmTxRequest = { kind?: 'evm'; to: string; data?: string; value?: string; c
 See [Solana transactions in WALLET_TX](../guide/solana.md#solana-transactions-in-wallet-tx) for the Solana forms.
 
 Transactions for the user's connected wallet to sign, in order (for example an approval, then a deposit).
+
+## WALLET_SIGN
+
+```ts
+{ kind: 'WALLET_SIGN'; chain: string; address: string; signatures: TypedDataRequest[] }
+type TypedDataRequest = {
+  domain: { name?: string; version?: string; chainId?: number; verifyingContract?: string; salt?: string }
+  types: Record<string, Array<{ name: string; type: string }>> // without EIP712Domain
+  primaryType: string
+  message: Record<string, unknown>
+}
+```
+
+Gas abstraction: EIP-712 messages for the connected wallet to sign, in order (`eth_signTypedData_v4`). The wallet sends no transaction, so it needs no native gas. `address` is the account that must sign. The UI calls `signWalletMessages()`. It signs with `WalletAdapter.signTypedData(chain, data)`, then fires the transition that `expects: 'signatures'` with `{ signatures: string[] }`. The server checks each signer before it uses a signature. See [Relay: Gas abstraction](../adapters/relay.md#gas-abstraction).
 
 - The modal shows "Approve N transactions on {chain}." and a **Confirm in wallet** button. While the wallet is open, the button says "Check your wallet".
 - On click, `DepositController.sendWalletTransactions()` calls `wallet.sendTransactions(chain, txs)` and fires the step's `SURFACE_RESULT` (`expects: 'tx_hash'`) transition with `{ txHash }`. See the [wallet payment flow](./flows.md#crypto-payment-from-a-connected-wallet).

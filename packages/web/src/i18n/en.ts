@@ -121,6 +121,7 @@ export const en = {
     `Send only ${symbol} on ${chain}. If you send another token or use another network, you can lose the funds.`,
   walletTxHint: (count: number, chain: string) =>
     count === 1 ? `Approve 1 transaction on ${chain}.` : `Approve ${count} transactions on ${chain}.`,
+  walletSignHint: (chain: string) => `Sign a message to pay on ${chain}. No gas needed.`,
   confirmInWallet: 'Confirm in wallet',
   checkWallet: 'Check your wallet',
   copy: 'Copy',

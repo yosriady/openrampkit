@@ -1,6 +1,6 @@
 // Relay API response shapes (only the fields the adapter reads) and the records the adapter stores.
 
-import type { Amount, SolanaInstruction } from '@openrampkit/core'
+import type { Amount, SolanaInstruction, TypedDataRequest } from '@openrampkit/core'
 
 // ---------------- Relay API types (only the fields we read) ----------------
 
@@ -18,6 +18,10 @@ type RelayStepItem = {
     gas?: string
     instructions?: SolanaInstruction[]
     addressLookupTableAddresses?: string[]
+    /** Signature steps: what to sign (EIP-712 has `domain`, `types`, `primaryType`, `value`) */
+    sign?: { signatureKind?: string; domain?: Record<string, unknown>; types?: Record<string, Array<{ name: string; type: string }>>; primaryType?: string; value?: Record<string, unknown>; message?: unknown }
+    /** Signature steps: where to post the signature (`signature` goes in the query) */
+    post?: { endpoint?: string; method?: string; body?: Record<string, unknown> }
   }
 }
 export type RelayStep = { id: string; kind: 'transaction' | 'signature' | string; items?: RelayStepItem[]; requestId?: string; depositAddress?: string }
@@ -60,6 +64,11 @@ export type WalletRecord = {
   since?: number
   /** Direct payment through an OpenRampSettlement contract: its address, the calls hash and the start block */
   settlement?: { contract: string; callsHash: string; fromBlock: string }
+  /**
+   * Gas abstraction (Relay permit flow): the EIP-712 messages the wallet signs, the account that must
+   * sign them, the `/execute/permits` bodies to post them with, and how many are posted already.
+   */
+  permit?: { signer: string; items: Array<{ typedData: TypedDataRequest; body: Record<string, unknown> }>; posted: number }
 }
 export type DepositRecord = {
   address: string

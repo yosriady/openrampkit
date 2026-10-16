@@ -35,7 +35,7 @@ export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
     if (caps.includes('settlement') && (leg.to.asset.kind !== 'crypto' || !leg.to.location.includes('address'))) {
       out.push({ where: `leg ${leg.id}`, problem: 'capability settlement needs a crypto `to` asset delivered to an address' })
     }
-    const needsTransition = leg.surfaces.filter((k) => k === 'FORM' || k === 'OTP' || k === 'WALLET_TX')
+    const needsTransition = leg.surfaces.filter((k) => k === 'FORM' || k === 'OTP' || k === 'WALLET_TX' || k === 'WALLET_SIGN')
     if (needsTransition.length && !adapter.transition) {
       out.push({ where: `leg ${leg.id}`, problem: `surface ${needsTransition.join(', ')} needs transition() (the UI submits the form, the code or the tx hash)` })
     }

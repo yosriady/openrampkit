@@ -105,6 +105,8 @@ type StartInput = {
   quote: LegQuote
   deliverTo?: { address: string }
   source?: { chain: string; token: string; address?: string }
+  /** The client asks to pay without native gas (gas abstraction). An adapter may return WALLET_SIGN; others ignore it. */
+  gasless?: boolean
 }
 
 type TransitionInput = { leg: PathwayLeg; ref: string; name: string; inputs?: Record<string, unknown> }
@@ -272,6 +274,9 @@ Plain JSON-RPC over `fetch`. No viem.
 | `erc20PaidTo(receipt, token, recipient)` | The sum of ERC-20 `Transfer` logs of `token` to `recipient` in a receipt, in base units (`bigint`) |
 | `ERC20_TRANSFER_TOPIC`, `topicAddress(address)` | The `Transfer` event topic, and an address as a 32-byte topic, for `eth_getLogs` filters |
 | `EvmReceipt` | The receipt fields the helpers read (`status`, `blockNumber`, `logs`) |
+| `hashTypedData(data)` | The EIP-712 digest of a `TypedDataRequest` (nested structs, arrays, `bytes`, `string`, integers and fixed bytes) |
+| `recoverAddress(digest, signature)` | The lower-case address that signed a 32-byte digest, from a 65-byte `r \|\| s \|\| v` signature (`v` 27/28 or 0/1). `undefined` when the signature is not valid. |
+| `recoverTypedDataSigner(data, signature)` | The signer of EIP-712 typed data, or `undefined`. Use it to check a `WALLET_SIGN` signature before you send it to a provider. |
 
 ## Solana helpers
 

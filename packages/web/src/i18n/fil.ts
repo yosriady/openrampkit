@@ -110,6 +110,7 @@ export const fil: Messages = {
   depositWarning: (symbol, chain) =>
     `${symbol} sa ${chain} lang ang ipadala. Kapag nagpadala ka ng ibang token o gumamit ng ibang network, puwedeng mawala ang pondo mo.`,
   walletTxHint: (count, chain) => `Aprubahan ang ${count} transaksyon sa ${chain}.`,
+  walletSignHint: (chain) => `Pirmahan ang mensahe para magbayad sa ${chain}. Hindi kailangan ng gas.`,
   confirmInWallet: 'Kumpirmahin sa wallet',
   checkWallet: 'Tingnan ang iyong wallet',
   copy: 'Kopyahin',
