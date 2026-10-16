@@ -50,7 +50,9 @@ const EIP3009_SIG =
   '0x6278f304295ac5da322775502c6f9420758aa383c5a1bd480bdd41bb5213f39c4016e568a84c09e4b37dfe9689f6e9f83059dde59375be19ba50bf8525368b3e1c'
 
 /** The approval proxy 3.2 pair: a MulticallAuthorization, then the EIP-3009 permit that funds it */
-const TRANSFER_TO_ROUTER = `0xa9059cbb${ROUTER_V32.slice(2).padStart(64, '0')}${(5_000_000).toString(16).padStart(64, '0')}`
+/** ERC-20 transfer(to, amount) calldata: exact length, clean address word */
+const transferData = (to: string, amount: bigint) => `0xa9059cbb${to.slice(2).padStart(64, '0')}${amount.toString(16).padStart(64, '0')}`
+const TRANSFER_TO_SOLVER = transferData(SOLVER, 5_000_000n)
 const multicallSign = {
   signatureKind: 'eip712',
   domain: { name: 'RelayApprovalProxy', version: '3.1', chainId: 8453, verifyingContract: PROXY_V32 },
@@ -90,14 +92,13 @@ const multicallSign = {
     metadata: '0x',
     fundingIndex: 0,
     calls: [
-      { target: BASE_USDC.token, allowFailure: false, value: '0', callData: TRANSFER_TO_ROUTER },
-      { target: ROUTER_V32, allowFailure: false, value: '0', callData: '0x12345678' },
+      { target: BASE_USDC.token, allowFailure: false, value: '0', callData: TRANSFER_TO_SOLVER },
     ],
     funding: [{ token: BASE_USDC.token, from: SIGNER, value: '5000000', validAfter: 0, validBefore: VALID_BEFORE }],
   },
 }
 const MULTICALL_SIG =
-  '0xe6ca2a975438bb3837c871276398898f00ea90f4e4d82f36fc34ae20a7a30df3446c89ce55b6f6693c41ac649dab032f21a6f4241a5b58d8bf4f536f2ce9b9761b'
+  '0xeeec20fd50d428e70c82864ff623d2bdf90ebc1c61c2189e1ce375c3a17b6ec940f2a0b197d86e791d58617b63d680dfe14d28e2fabbce34765eeb282ffb7e821c'
 const pairedSign = {
   ...eip3009Sign,
   value: { from: SIGNER, to: PROXY_V32, value: '5000000', validAfter: 0, validBefore: VALID_BEFORE, nonce: '0x9a3c5d1b6e8f0a2c4e6a8c0e2a4c6e8a0c2e4a6c8e0a2c4e6a8c0e2a4c6e8a0c' },
@@ -217,7 +218,8 @@ describe('relay wallet: gas abstraction (permit)', () => {
     expect(surface.signatures[1]).toEqual({ domain: pairedSign.domain, types: pairedSign.types, primaryType: 'ReceiveWithAuthorization', message: pairedSign.value })
     // The permit quote: the same body with the user, usePermit and the two-signature EIP-3009 flow.
     const permitBody = h.calls.filter((c) => c.url.includes('/quote/v2'))[1]!.body as Record<string, unknown>
-    expect(permitBody).toMatchObject({ user: SIGNER, usePermit: true, useMulticallAuthorization: true, originChainId: 8453, destinationChainId: 42161, amount: '5000000' })
+    expect(permitBody.useMulticallAuthorization).toBeUndefined()
+    expect(permitBody).toMatchObject({ user: SIGNER, usePermit: true, originChainId: 8453, destinationChainId: 42161, amount: '5000000' })
 
     // Not signed yet: the user still pays (no surface, so the UI keeps WALLET_SIGN). Relay is not asked.
     const before = await h.a.status!({ leg: walletLeg, ref: REQ }, h.ctx)
@@ -427,42 +429,77 @@ describe('permitProblem (fails closed)', () => {
     expect(permitProblem(withMessage({ validBefore: undefined }), P)).toBe('the permit has no valid time window')
   })
 
-  it('MulticallAuthorization: proxy, account, refunds, relayer, native value and metadata', () => {
-    expect(permitProblem(items(permitQuote([item({ ...multicallSign, domain: { ...multicallSign.domain, verifyingContract: OTHER } }, 'multicall-authorization'), item(pairedSign)])), P)).toBe(
-      'the authorization is for a contract that is not Relay',
-    )
+  it('MulticallAuthorization: v3.2 proxy, account, refunds, solver as relayer, native value and metadata', () => {
+    const domain = (verifyingContract: string) => items(permitQuote([item({ ...multicallSign, domain: { ...multicallSign.domain, verifyingContract } }, 'multicall-authorization'), item(pairedSign)]))
+    expect(permitProblem(domain(OTHER), P)).toBe('the authorization is for a contract that is not Relay')
+    // A v3 proxy has no MulticallAuthorization.
+    expect(permitProblem(domain(PROXY_V3), P)).toBe('the authorization is for a contract that is not Relay')
     expect(permitProblem(pairWith({ from: OTHER }), P)).toBe('the permit is for another account')
     expect(permitProblem(pairWith({ refundTo: OTHER }), P)).toBe('the authorization refunds to another account')
     expect(permitProblem(pairWith({ nftRecipient: OTHER }), P)).toBe('the authorization refunds to another account')
     expect(permitProblem(pairWith({ relayer: OTHER }), P)).toBe('the authorization names a relayer that is not Relay')
+    // Only the solver relays: a Relay router as relayer is refused. A checksum-cased solver is the solver.
+    expect(permitProblem(pairWith({ relayer: ROUTER_V32 }), P)).toBe('the authorization names a relayer that is not Relay')
+    expect(permitProblem(pairWith({ relayer: `0x${SOLVER.slice(2).toUpperCase()}` }), P)).toBeUndefined()
+    expect(permitProblem(pairWith({ relayer: `${SOLVER}00` }), P)).toBe('the authorization names a relayer that is not Relay')
     expect(permitProblem(pairWith({ msgValue: '1' }), P)).toBe('the authorization sends native value')
-    expect(permitProblem(pairWith({ metadata: 'nope' }), P)).toBe('the authorization has invalid metadata')
+    // Metadata whose effect is not fixed by the docs is refused.
+    expect(permitProblem(pairWith({ metadata: '0xabcdef' }), P)).toBe('the authorization has metadata that cannot be checked')
+    expect(permitProblem(pairWith({ metadata: 'nope' }), P)).toBe('the authorization has metadata that cannot be checked')
   })
 
-  it('MulticallAuthorization: every funding entry, the funding index and the total', () => {
-    expect(permitProblem(pairWith({ funding: [] }), P)).toBe('the authorization has no funding')
+  it('MulticallAuthorization: exactly one funding entry at index 0, inside the bound', () => {
+    const f = multicallSign.value.funding[0]!
+    expect(permitProblem(pairWith({ funding: [] }), P)).toBe('the authorization must have exactly one funding entry')
+    expect(permitProblem(pairWith({ funding: [f, f] }), P)).toBe('the authorization must have exactly one funding entry')
     expect(permitProblem(pairWith({ fundingIndex: 1 }), P)).toBe('the authorization has an invalid funding index')
     expect(permitProblem(pairWith(fund({ token: ARB_USDC.token })), P)).toBe('the permit funds from another token or account')
     expect(permitProblem(pairWith(fund({ from: OTHER })), P)).toBe('the permit funds from another token or account')
     expect(permitProblem(pairWith(fund({ value: '0' })), P)).toBe('the permit moves more than the quoted amount')
+    expect(permitProblem(pairWith(fund({ value: '5050001' })), P)).toBe('the permit moves more than the quoted amount')
     expect(permitProblem(pairWith(fund({ validBefore: NOW_SEC - 1 })), P)).toBe('the permit has expired')
-    // Two entries, each under the bound, over it together.
-    const f = multicallSign.value.funding[0]
-    expect(permitProblem(pairWith({ funding: [f, { ...f, value: '100000' }] }), P)).toBe('the permit moves more than the quoted amount')
   })
 
-  it('MulticallAuthorization: calls only to Relay contracts, or a token transfer or approval to one', () => {
-    const call = (c: Record<string, unknown>) => ({ calls: [{ target: ROUTER_V32, allowFailure: false, value: '0', callData: '0x', ...c }] })
+  it('MulticallAuthorization calls: only fully decoded token transfers to the solver or RelayReceiver', () => {
+    const call = (c: Record<string, unknown>) => ({ calls: [{ target: BASE_USDC.token, allowFailure: false, value: '0', callData: TRANSFER_TO_SOLVER, ...c }] })
     expect(permitProblem(pairWith({ calls: [] }), P)).toBe('the authorization has no calls')
-    expect(permitProblem(pairWith(call({ target: OTHER })), P)).toBe('the authorization calls a contract that is not Relay')
+    // A call to an allowed Relay contract with calldata we cannot decode (router multicall, nested calls) is refused.
+    expect(permitProblem(pairWith(call({ target: ROUTER_V32, callData: '0x12345678' })), P)).toBe('the authorization makes a call that cannot be checked')
+    expect(permitProblem(pairWith(call({ target: PROXY_V32 })), P)).toBe('the authorization makes a call that cannot be checked')
+    expect(permitProblem(pairWith(call({ target: OTHER })), P)).toBe('the authorization makes a call that cannot be checked')
+    // Any approval is refused, also a bounded one to a Relay contract.
+    const approve = (to: string, amount: string) => `0x095ea7b3${to.slice(2).padStart(64, '0')}${amount.padStart(64, '0')}`
+    expect(permitProblem(pairWith(call({ callData: approve(ROUTER_V32, 'f'.repeat(64)) })), P)).toBe('the authorization makes a call that cannot be checked')
+    expect(permitProblem(pairWith(call({ callData: approve(SOLVER, (5_000_000).toString(16)) })), P)).toBe('the authorization makes a call that cannot be checked')
+    // transferFrom on the token is refused.
+    expect(permitProblem(pairWith(call({ callData: `0x23b872dd${'0'.repeat(192)}` })), P)).toBe('the authorization makes a call that cannot be checked')
+    // Calldata of the wrong length: trailing bytes, or too short.
+    expect(permitProblem(pairWith(call({ callData: `${TRANSFER_TO_SOLVER}00` })), P)).toBe('the authorization makes a call that cannot be checked')
+    expect(permitProblem(pairWith(call({ callData: TRANSFER_TO_SOLVER.slice(0, -2) })), P)).toBe('the authorization makes a call that cannot be checked')
+    // Dirty high bits in the address word, or a recipient that is a Relay router (tokens left there can be taken).
+    const dirty = `0xa9059cbb${'1'.repeat(24)}${SOLVER.slice(2)}${(5_000_000).toString(16).padStart(64, '0')}`
+    expect(permitProblem(pairWith(call({ callData: dirty })), P)).toBe('the authorization moves the token to an address that is not Relay')
+    expect(permitProblem(pairWith(call({ callData: transferData(ROUTER_V32, 5_000_000n) })), P)).toBe('the authorization moves the token to an address that is not Relay')
+    expect(permitProblem(pairWith(call({ callData: transferData(OTHER, 5_000_000n) })), P)).toBe('the authorization moves the token to an address that is not Relay')
+    // Upper-case hex is the same calldata.
+    expect(permitProblem(pairWith(call({ callData: `0x${TRANSFER_TO_SOLVER.slice(2).toUpperCase()}` })), P)).toBeUndefined()
     expect(permitProblem(pairWith(call({ value: '1' })), P)).toBe('the authorization sends native value')
+    expect(permitProblem(pairWith(call({ allowFailure: true })), P)).toBe('the authorization has an invalid call')
     expect(permitProblem(pairWith(call({ allowFailure: 'no' })), P)).toBe('the authorization has an invalid call')
-    const toOther = `0xa9059cbb${OTHER.slice(2).padStart(64, '0')}${'0'.repeat(64)}`
-    expect(permitProblem(pairWith(call({ target: BASE_USDC.token, callData: toOther })), P)).toBe('the authorization moves the token to an address that is not Relay')
-    const approveOther = `0x095ea7b3${OTHER.slice(2).padStart(64, '0')}${'f'.repeat(64)}`
-    expect(permitProblem(pairWith(call({ target: BASE_USDC.token, callData: approveOther })), P)).toBe('the authorization moves the token to an address that is not Relay')
-    // transferFrom (or any other call) on the token is refused.
-    expect(permitProblem(pairWith(call({ target: BASE_USDC.token, callData: `0x23b872dd${'0'.repeat(192)}` })), P)).toBe('the authorization calls a contract that is not Relay')
+    expect(permitProblem(pairWith(call({ callData: transferData(SOLVER, 0n) })), P)).toBe('the authorization has an invalid call')
+    // The transfers move exactly the funded amount: no more (double counting), no less (left in the proxy).
+    const half = { target: BASE_USDC.token, allowFailure: false, value: '0', callData: transferData(SOLVER, 2_500_000n) }
+    expect(permitProblem(pairWith({ calls: [half, half] }), P)).toBeUndefined()
+    expect(permitProblem(pairWith({ calls: [half, half, half] }), P)).toBe('the authorization calls do not move exactly the funded amount')
+    expect(permitProblem(pairWith({ calls: [half] }), P)).toBe('the authorization calls do not move exactly the funded amount')
+    expect(permitProblem(pairWith(call({ callData: transferData(SOLVER, 2n ** 255n) })), P)).toBe('the authorization calls do not move exactly the funded amount')
+  })
+
+  it('messages with fields beyond their types are refused (also inside structs)', () => {
+    expect(permitProblem(withMessage({ extra: '1' }), P)).toBe('the permit message has unexpected fields')
+    expect(permitProblem(pairWith({ funding: [{ ...multicallSign.value.funding[0], extra: 1 }] }), P)).toBe('the permit message has unexpected fields')
+    expect(permitProblem(pairWith({ calls: [{ ...multicallSign.value.calls[0], extra: 1 }] }), P)).toBe('the permit message has unexpected fields')
+    expect(permitProblem(pairWith({ calls: 'x' }), P)).toBe('the permit message has unexpected fields')
   })
 
   it('the pair: one token authorization, after the MulticallAuthorization, funding it exactly', () => {
@@ -474,6 +511,9 @@ describe('permitProblem (fails closed)', () => {
     // The token authorization pays the v3 proxy, but the calls run on the v3.2 proxy.
     expect(permitProblem(pairWith({}, { to: PROXY_V3 }), P)).toBe('the token authorization pays another contract than the authorized calls')
     expect(permitProblem(pairWith({}, { value: '4000000' }), P)).toBe('the token authorization does not match the funding')
+    expect(permitProblem(pairWith({}, { validBefore: VALID_BEFORE - 1 }), P)).toBe('the token authorization does not match the funding')
+    // A single permit (no MulticallAuthorization) must pay a v3 proxy: a v3.2 proxy needs the authorized calls.
+    expect(permitProblem(items(permitQuote([item(pairedSign)])), P)).toBe('the permit pays an address that is not Relay')
   })
 })
 

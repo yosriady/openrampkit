@@ -247,7 +247,10 @@ export function walletLeg(rt: RelayRuntime) {
   async function startPermit(input: StartInput, ctx: AdapterContext, data: Record<string, unknown>, origin: CryptoAsset, user: string): Promise<LegStep | undefined> {
     const chainId = evmChainId(origin.chain)
     if (!data.body || chainId === undefined) return undefined
-    const body = { ...(data.body as Record<string, unknown>), user, usePermit: true, useMulticallAuthorization: true }
+    // No `useMulticallAuthorization`: Relay then keeps the single EIP-3009 permit on its v3 approval proxy
+    // during the 3.2 transition. A MulticallAuthorization with router calls cannot be bounded by
+    // `permitProblem`, so it would be refused anyway.
+    const body = { ...(data.body as Record<string, unknown>), user, usePermit: true }
     let q: RelayQuoteResponse
     try {
       q = await api<RelayQuoteResponse>(ctx, '/quote/v2', body)

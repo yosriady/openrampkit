@@ -357,7 +357,7 @@ sequenceDiagram
   B->>W: getBalances(): native balance 0 on the source chain
   B->>S: POST /sessions/:id/select { quoteId, walletAddress, gasless: true }
   S->>R: start({ source, gasless: true })
-  R->>RA: POST /quote/v2 { usePermit: true, useMulticallAuthorization: true }
+  R->>RA: POST /quote/v2 { usePermit: true }
   R->>R: check chain, account, token and amount of each message
   R-->>S: LegStep requires_action, surface WALLET_SIGN { chain, address, signatures } and transition submit_signatures
   B->>W: signTypedData(chain, message), for each message
