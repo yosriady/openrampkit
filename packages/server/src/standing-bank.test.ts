@@ -1,7 +1,7 @@
 // Standing bank accounts (a fiat origin, the `bank` route): the address record has the bank details,
 // each bank deposit makes one deposit session with a fiat input, the input currency is checked, and the
 // destination is bound like a converting route.
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createAdapter } from '@openrampkit/adapter'
 import type { StandingDeposit } from '@openrampkit/adapter'
 import { USDC } from '@openrampkit/core'
@@ -234,5 +234,104 @@ describe('widget: standing bank accounts', () => {
     const off = make(bankAdapter({ currencies: ['USD'] }))
     expect((await (await session(off)).call('/deposit-address', { currency: 'USD' })).status).toBe(404)
     expect(t.fake.calls.account + disabled.fake.calls.account + off.fake.calls.account).toBe(0)
+  })
+})
+
+describe('widget: standing bank accounts go only to the session user', () => {
+  const ACCOUNT = '900123456789'
+  const widget = (config: Partial<Parameters<typeof createOpenRamp>[0]> = {}) => make(bankAdapter({ currencies: ['USD'] }), { config: { depositAddresses: { widget: true }, ...config } })
+  async function session(t: ReturnType<typeof make>, userId = 'u1') {
+    const s = await t.ramp.sessions.create({ userId, country: 'US', destination: DEST })
+    const call = (path: string, body?: unknown, auth = s.clientSecret, key?: string) =>
+      t.ramp.handle(
+        new Request(`${BASE}/sessions/${s.id}${path}`, {
+          method: body === undefined ? 'GET' : 'POST',
+          headers: { authorization: `Bearer ${auth}`, 'content-type': 'application/json', ...(key ? { 'idempotency-key': key } : {}) },
+          ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+        }),
+      )
+    return { s, call }
+  }
+  const payCredential = async (call: Awaited<ReturnType<typeof session>>['call']) => {
+    const link = (await (await call('/pay-link', {})).json()) as { url: string }
+    return link.url.slice(link.url.indexOf('/pay/') + 5)
+  }
+
+  it('a pay link gets 403 for a bank account and an address, cannot replay the user\'s answer, and its plan has no deposit_address', async () => {
+    const t = widget()
+    const { call } = await session(t)
+    // The user asks first, with an Idempotency-Key
+    expect((await call('/deposit-address', { currency: 'USD' }, undefined, 'k1')).status).toBe(200)
+    const cred = await payCredential(call)
+    const calls = t.fake.calls.account
+    for (const body of [{ currency: 'USD' }, { chain: 'eip155:42161', token: USDC['eip155:42161'] }]) {
+      const res = await call('/deposit-address', body, cred)
+      expect(res.status).toBe(403)
+      expect(await res.text()).not.toContain(ACCOUNT)
+    }
+    // The same key and body as the user's request: refused before the idempotency cache
+    const replay = await call('/deposit-address', { currency: 'USD' }, cred, 'k1')
+    expect(replay.status).toBe(403)
+    expect(await replay.text()).not.toContain(ACCOUNT)
+    expect(t.fake.calls.account).toBe(calls)
+    const plan = await (await call('/plan', {}, cred)).json()
+    expect(plan.methods.map((m: { method: string }) => m.method)).not.toContain('deposit_address')
+    // The client secret still sees the method
+    const own = await (await call('/plan', {})).json()
+    expect(own.methods.map((m: { method: string }) => m.method)).toContain('deposit_address')
+  })
+
+  it("each session gets only its own user's account", async () => {
+    const t = widget()
+    const a = await (await (await session(t, 'u1')).call('/deposit-address', { currency: 'USD' })).json()
+    const b = await (await (await session(t, 'u2')).call('/deposit-address', { currency: 'USD' })).json()
+    expect(a.id).not.toBe(b.id)
+    expect((await t.ramp.depositAddresses.list('u1')).map((x) => x.id)).toEqual([a.id])
+    expect((await t.ramp.depositAddresses.list('u2')).map((x) => x.id)).toEqual([b.id])
+    expect(t.fake.calls.account).toBe(2)
+  })
+
+  it('refuses a final session (409) and a session past its deadline (410)', async () => {
+    const t = widget()
+    const canceled = await session(t)
+    expect((await canceled.call('/cancel', {})).status).toBe(200)
+    expect((await canceled.call('/deposit-address', { currency: 'USD' })).status).toBe(409)
+    const late = await session(t)
+    vi.useFakeTimers({ now: Date.now(), toFake: ['Date'] })
+    try {
+      vi.setSystemTime(Date.now() + 48 * 60 * 60_000)
+      expect((await late.call('/deposit-address', { currency: 'USD' })).status).toBe(410)
+    } finally {
+      vi.useRealTimers()
+    }
+    expect(t.fake.calls.account).toBe(0)
+  })
+
+  it('refuses a session of another mode: a test session never gets an account from a live server (409)', async () => {
+    const t = widget()
+    const { s } = await session(t)
+    const live = createOpenRamp({ secret: 's'.repeat(40), baseUrl: BASE, adapters: [t.fake.adapter], logger: quiet, webhooks: HOOKS, store: t.store, livemode: true, depositAddresses: { widget: true } })
+    const res = await live.handle(
+      new Request(`${BASE}/sessions/${s.id}/deposit-address`, { method: 'POST', headers: { authorization: `Bearer ${s.clientSecret}`, 'content-type': 'application/json' }, body: JSON.stringify({ currency: 'USD' }) }),
+    )
+    expect(res.status).toBe(409)
+    expect(t.fake.calls.account).toBe(0)
+  })
+
+  it('counts against the rate limit, and the bank details show nowhere else: session view, history, logs', async () => {
+    const lines: string[] = []
+    const log = (msg: string, data?: unknown) => void lines.push(`${msg} ${JSON.stringify(data ?? {})}`)
+    const t = widget({ limits: { providerCallsPerMinute: 3 }, history: true, logger: { debug: log, info: log, warn: log, error: log } })
+    const { call } = await session(t)
+    const view = await (await call('/deposit-address', { currency: 'USD' })).json()
+    // Only what the widget shows: no user id, adapter id or provider ref
+    expect(Object.keys(view).sort()).toEqual(['address', 'bank', 'destination', 'id', 'origin'])
+    expect(JSON.stringify(view)).not.toContain('acct:')
+    expect(await (await call('')).text()).not.toContain(ACCOUNT)
+    expect(await (await call('/history')).text()).not.toContain(ACCOUNT)
+    expect(lines.join('\n')).not.toContain(ACCOUNT)
+    // The limit is 3: the first call, the history call (it counts too), then one more
+    expect((await call('/deposit-address', { currency: 'USD' })).status).toBe(200)
+    expect((await call('/deposit-address', { currency: 'USD' })).status).toBe(429)
   })
 })

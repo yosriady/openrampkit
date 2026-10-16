@@ -17,7 +17,7 @@ import { adapterContext, publicSession } from './runtime.js'
 import type { Runtime } from './runtime.js'
 import { cancelSession, createSession, loadAuthed } from './sessions.js'
 import { sourcesRoute } from './sources.js'
-import { sessionDepositAddress } from './standing.js'
+import { DEPOSIT_ADDRESS_METHOD, sessionDepositAddress } from './standing.js'
 import { userHistory } from './history.js'
 import { createPayLink, isPayCredential, payRoute, revokeOn } from './pay.js'
 import { sweep } from './tasks.js'
@@ -112,10 +112,16 @@ async function createSessionRoute(rt: Runtime, req: Request): Promise<Response> 
   })
 }
 
+/** True when the request uses a pay link credential, not the client secret */
+const byPayLink = (req: Request) => isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')
+
 async function sessionRoute(rt: Runtime, req: Request, method: string, id: string, action?: string, arg?: string): Promise<Response> {
   const rec = await loadAuthed(rt, req, id)
   const ip = clientIp(req)
   if (ip) rec.ip = ip
+  // A pay link can go to another person: it never gets the user's standing deposit address or bank
+  // account. Checked before the idempotency cache, so it cannot replay the user's earlier answer either.
+  if (action === 'deposit-address' && byPayLink(req)) return errorResponse(openRampError('UNAUTHORIZED'), 403)
   // `Idempotency-Key` on every POST, scoped to the session and the route
   if (method === 'POST') return withIdempotency(rt, rec.id, [action ?? '', arg ?? ''].filter(Boolean).join('/'), req, () => sessionAction(rt, req, rec, method, action, arg))
   return sessionAction(rt, req, rec, method, action, arg)
@@ -178,6 +184,8 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
     if (walletAddress) rec.walletAddress = walletAddress
     const result = await plan(rt, rec, body)
     await saveSession(rt, rec)
+    // A pay link gets no "Your deposit address" (the route refuses it, see above)
+    if (byPayLink(req)) return json({ ...result, methods: result.methods.filter((x) => x.method !== DEPOSIT_ADDRESS_METHOD) })
     return json(result)
   }
 
