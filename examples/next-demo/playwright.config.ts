@@ -17,6 +17,8 @@ export default defineConfig({
     // Phones: Android Chrome and iPhone Safari (WebKit). Screenshot capture runs on desktop only.
     { name: 'mobile-android', use: { ...devices['Pixel 7'] }, testIgnore: /screens\.spec/ },
     { name: 'mobile-iphone', use: { ...devices['iPhone 14'] }, testIgnore: /screens\.spec/ },
+    // Firefox: the token and exchange pickers only. The specs set a phone-width viewport themselves.
+    { name: 'desktop-firefox', use: { ...devices['Desktop Firefox'] }, testMatch: /pickers\.spec/ },
   ],
   webServer: {
     command: CI ? `pnpm build && pnpm exec next start -p ${PORT}` : `pnpm exec next dev -p ${PORT}`,

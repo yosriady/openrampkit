@@ -1,10 +1,11 @@
 // Mock provider adapter for local development, demos and tests.
-// It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx.
+// It moves no money. It exercises every surface: hosted redirect checkout, QR, deposit address and wallet tx
+// (and bank fields, with the `bankFields` option).
 
 import { POLL as POLLS, awaitPoll, awaitingPayment, buildSettlementTxs, claimOnce, createAdapter, erc20PaidTo, erc20TransferData, evmRpc, hashSettlementCalls, quoteExpiresAt, settlementCallsFrom, solanaPaidTo, statusMap, verifySettlement } from '@openrampkit/adapter'
 import type { AdapterContext, EvmReceipt, LegEvent, SolanaParsedTx, SolanaSignatureStatus } from '@openrampkit/adapter'
 import { CHAINS, OpenRampException, USDC, add, bps, chainName, evmChainId, fromScaled, isEvmChain, isSolanaChain, isSolanaSignature, isUsdc, sameToken, minorUnits, mulRatio, nativeDecimals, normalizeToken, openRampError, roundTo, sub, toBaseUnits, toScaled } from '@openrampkit/core'
-import type { Amount, CryptoAsset, FieldSpec, LegQuote, LegSpec, LegStatus, LegStep, LegTransaction, PollSpec, TxRequest } from '@openrampkit/core'
+import type { Amount, CryptoAsset, FieldSpec, Surface, LegQuote, LegSpec, LegStatus, LegStep, LegTransaction, PollSpec, TxRequest } from '@openrampkit/core'
 
 export type MockOptions = {
   /** How long a mock payment or bridge takes to settle (ms). Default 3000. */
@@ -41,6 +42,11 @@ export type MockOptions = {
    * `form`: test card fields in the widget (a FORM surface), for static demos that cannot serve the hosted page.
    */
   cardCheckout?: 'redirect' | 'form'
+  /**
+   * Show `bank_transfer` on the `local` leg as bank details with copy buttons (a BANK_FIELDS surface)
+   * instead of a QR code. Default false: every method of the `local` leg shows a QR code.
+   */
+  bankFields?: boolean
   /** With `crypto`: also offer the `exchange_transfer` method ("From an exchange") on the transfer leg. */
   exchange?: boolean
   /**
@@ -202,6 +208,17 @@ const CARD_FIELDS: FieldSpec[] = [
 /** The test card number that the `form` card checkout declines */
 export const MOCK_DECLINED_CARD = '4000000000000002'
 
+/** Test bank details of the `bankFields` option. The reference ties the transfer to the order. */
+function bankFieldsFor(currency: string, amount: string, reference: string) {
+  return [
+    { label: 'Bank', value: 'Test Bank', copy: false },
+    { label: 'Account holder', value: 'Test provider (test mode)', copy: false },
+    { label: 'Account number', value: '000123456789', copy: true },
+    { label: 'Amount', value: `${amount} ${currency}`, copy: true },
+    { label: 'Reference', value: reference, copy: true },
+  ]
+}
+
 const mask = (v: string) => (v.length <= 4 ? v : `${'*'.repeat(Math.min(6, v.length - 4))}${v.slice(-4)}`)
 
 export function mockAdapter(opts: MockOptions = {}) {
@@ -234,7 +251,7 @@ export function mockAdapter(opts: MockOptions = {}) {
       regions: { allow: ['VN', 'ID', 'PH', 'TH', 'MY', 'SG'], deny: [] },
       limits: { min: '5', max: '3000', currency: 'USD' },
       eta: opts.eta?.local ?? { min: 10, max: 120 },
-      surfaces: ['QR'],
+      surfaces: opts.bankFields ? ['QR', 'BANK_FIELDS'] : ['QR'],
       requires: ['provider_kyc'],
     },
     {
@@ -678,11 +695,15 @@ export function mockAdapter(opts: MockOptions = {}) {
         case 'local':
         case 'payin': {
           const cur = quote.input.asset.kind === 'fiat' ? quote.input.asset.currency : 'USD'
+          const reference = ref.slice(-10).toUpperCase()
+          const surface: Surface = opts.bankFields && leg.legId === 'local' && leg.method === 'bank_transfer'
+            ? { kind: 'BANK_FIELDS', fields: bankFieldsFor(cur, quote.input.value, reference) }
+            : { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.value}|${cur}`, amount: quote.input.value, currency: cur, reference, expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() }
           return {
             status: 'requires_action', ...ids(ref),
             action: {
               kind: 'payment',
-              surface: { kind: 'QR', payload: `MOCKQR|${ref}|${quote.input.value}|${cur}`, amount: quote.input.value, currency: cur, reference: ref.slice(-10).toUpperCase(), expiresAt: new Date(Date.now() + 15 * 60_000).toISOString() },
+              surface,
               transitions: [
                 { name: 'simulate_payment', kind: 'SUBMIT', label: 'Simulate payment (test mode)' },
                 awaitPoll(POLL),

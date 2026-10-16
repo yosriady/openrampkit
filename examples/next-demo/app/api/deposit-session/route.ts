@@ -1,4 +1,4 @@
-import { openramp } from '@/lib/openramp'
+import { defaultMethods, openramp } from '@/lib/openramp'
 import type { Destination } from '@openrampkit/core'
 
 export const dynamic = 'force-dynamic'
@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic'
  * In a real app, read the user from your auth and use their deposit address from your database.
  */
 export async function POST(req: Request) {
-  const body = (await req.json().catch(() => ({}))) as { country?: string; destination?: Destination; userId?: string }
+  const body = (await req.json().catch(() => ({}))) as { country?: string; destination?: Destination; userId?: string; extras?: boolean }
   const destination: Destination = body.destination ?? {
     type: 'crypto',
     chain: 'eip155:8453',
@@ -22,6 +22,8 @@ export async function POST(req: Request) {
     userId: body.userId ?? 'demo-user',
     destination,
     ...(body.country ? { country: body.country } : {}),
+    // Mock mode: the exchange picker only with `?extras=1` on the playground page
+    ...(defaultMethods && !body.extras ? { allowedMethods: defaultMethods } : {}),
     metadata: { source: 'next-demo' },
   })
   return Response.json(session)

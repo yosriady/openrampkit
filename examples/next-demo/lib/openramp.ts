@@ -11,22 +11,36 @@ const BURN = '0x000000000000000000000000000000000000dead'
 // One instance per server process. The default memory store is fine for local development.
 const g = globalThis as unknown as { __openramp?: ReturnType<typeof createOpenRamp> }
 
+/**
+ * Mock mode: methods that a deposit offers only with `?extras=1` on the playground page. They add the
+ * "From an exchange" picker, so the default method lists stay the same.
+ */
+const EXTRA_METHODS = ['exchange_transfer', 'coinbase_account']
+
+const adapters = [
+  // `offramp: true` adds a mock withdraw-to-cash leg (bank transfer, GCash, MoMo, PromptPay payouts).
+  // `bankFields: true` shows bank transfer deposits as bank details with copy buttons.
+  ...(MOCK
+    ? [mockAdapter({ crypto: true, bridge: true, offramp: true, bankFields: true, exchange: true, exchangeConnect: true, settleMs: 4000 })]
+    : [relay({ ...(process.env.RELAY_API_KEY ? { apiKey: process.env.RELAY_API_KEY } : {}) }), mockAdapter({ offramp: true, settleMs: 4000 })]),
+  // LI.FI: a second wallet router next to Relay, in real mode when a LI.FI API key is set.
+  ...(!MOCK && process.env.LIFI_API_KEY ? [lifi({ apiKey: process.env.LIFI_API_KEY, integrator: 'openrampkit-demo' })] : []),
+  // Real merchant pay-in (QRIS, QR Ph, PromptPay, e-wallets) when Xendit test keys are set.
+  ...(process.env.XENDIT_SECRET_KEY && process.env.XENDIT_WEBHOOK_TOKEN
+    ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]
+    : []),
+]
+
+/** Mock mode: the `allowedMethods` of a deposit without `?extras=1` (every method but the extras) */
+export const defaultMethods = MOCK ? [...new Set(adapters.flatMap((a) => a.legs.flatMap((l) => l.methods ?? [])))].filter((m) => !EXTRA_METHODS.includes(m)) : undefined
+
 export const openramp =
   g.__openramp ??
   (g.__openramp = createOpenRamp({
     secret: process.env.OPENRAMP_SECRET ?? 'dev-secret-change-me-dev-secret-change-me',
     baseUrl: `${PUBLIC_URL}/api/openramp`,
     // Mock mode: every pathway is simulated. Real mode: Relay moves real crypto; fiat is still mocked.
-    adapters: [
-      // `offramp: true` adds a mock withdraw-to-cash leg (bank transfer, GCash, MoMo, PromptPay payouts).
-      ...(MOCK ? [mockAdapter({ crypto: true, bridge: true, offramp: true, settleMs: 4000 })] : [relay({ ...(process.env.RELAY_API_KEY ? { apiKey: process.env.RELAY_API_KEY } : {}) }), mockAdapter({ offramp: true, settleMs: 4000 })]),
-      // LI.FI: a second wallet router next to Relay, in real mode when a LI.FI API key is set.
-      ...(!MOCK && process.env.LIFI_API_KEY ? [lifi({ apiKey: process.env.LIFI_API_KEY, integrator: 'openrampkit-demo' })] : []),
-      // Real merchant pay-in (QRIS, QR Ph, PromptPay, e-wallets) when Xendit test keys are set.
-      ...(process.env.XENDIT_SECRET_KEY && process.env.XENDIT_WEBHOOK_TOKEN
-        ? [xendit({ secretKey: process.env.XENDIT_SECRET_KEY, webhookToken: process.env.XENDIT_WEBHOOK_TOKEN })]
-        : []),
-    ],
+    adapters,
     webhooks: { url: `${PUBLIC_URL}/api/hooks`, secret: process.env.OPENRAMP_WEBHOOK_SECRET ?? 'whsec_ZGV2LW9ubHktd2ViaG9vay1zZWNyZXQtbm90LWZvci1wcm9kdWN0aW9u' },
     // Admin tools and the ops dashboard at /api/openramp/admin, only when OPENRAMP_ADMIN_TOKEN is set
     // (at least 32 random characters). Put /admin behind your own auth or a VPN in production.

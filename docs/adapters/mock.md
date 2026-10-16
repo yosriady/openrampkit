@@ -15,6 +15,7 @@ mockAdapter({ settleMs: 0, name: 'Sandbox provider' }) // instant, custom name
 mockAdapter({ crypto: true, offramp: true })           // also withdraw to a wallet and to cash
 mockAdapter({ crypto: true, exchange: true })          // also "From an exchange"
 mockAdapter({ cardCheckout: 'form' })                  // card fields in the widget, no hosted page
+mockAdapter({ bankFields: true })                      // bank transfer shows bank details, not a QR code
 ```
 
 ## Options
@@ -33,6 +34,7 @@ mockAdapter({ cardCheckout: 'form' })                  // card fields in the wid
 | `methods` | `string[]` | all | Offer only these methods. A leg that keeps no method is removed. |
 | `countries` | `string[]` | the regions of each leg | Serve only these countries on the fiat legs (`card`, `local`, `payin`, `offramp`) |
 | `cardCheckout` | `'redirect' \| 'form'` | `'redirect'` | `redirect`: a hosted checkout page in a new tab. `form`: test card fields in the widget (surface `FORM`). Use `form` on a static site that cannot serve the hosted page. |
+| `bankFields` | `boolean` | `false` | `bank_transfer` on the `local` leg shows bank details with copy buttons (surface `BANK_FIELDS`) instead of a QR code. The other methods keep the QR code. |
 | `exchange` | `boolean` | `false` | With `crypto`: the `transfer` leg also offers the method `exchange_transfer` ("From an exchange") |
 | `exchangeConnect` | `boolean` | `false` | The card leg also offers `coinbase_account`. With `exchange`, the widget shows the exchange picker. |
 | `standing` | `boolean` | `false` | With `crypto`: give standing deposit addresses (a fake address per user and route, no deposits). Use it with the server option `depositAddresses.widget`. |
@@ -46,7 +48,7 @@ Do not turn on `crypto` or `bridge` next to the real Relay adapter: both would o
 | Leg | Kind | Methods | From | To | Regions | Surface |
 |---|---|---|---|---|---|---|
 | `card` | `fiat_onramp` | card, apple_pay, google_pay | any fiat | USDC on Base | all | `REDIRECT` (`FORM` with `cardCheckout: 'form'`) |
-| `local` | `fiat_onramp` | vietqr, momo, qris, gopay, dana, gcash, qrph, promptpay, duitnow, touchngo, paynow, bank_transfer | VND, IDR, PHP, THB, MYR, SGD | USDC on Base | VN, ID, PH, TH, MY, SG | `QR` |
+| `local` | `fiat_onramp` | vietqr, momo, qris, gopay, dana, gcash, qrph, promptpay, duitnow, touchngo, paynow, bank_transfer | VND, IDR, PHP, THB, MYR, SGD | USDC on Base | VN, ID, PH, TH, MY, SG | `QR` (`BANK_FIELDS` for bank_transfer with `bankFields: true`) |
 | `payin` | `fiat_payin` | qris, promptpay, vietqr, qrph, duitnow, paynow, card | any fiat | merchant account (same currency) | all | `QR` |
 | `wallet` | `bridge_swap` | wallet | any crypto in a wallet | any crypto | all | `WALLET_TX` |
 | `transfer` | `bridge_swap` | transfer (and exchange_transfer with `exchange: true`) | any crypto in a wallet | any crypto | all | `DEPOSIT_ADDRESS` |
@@ -147,7 +149,7 @@ The check reads the instructions, not the balance change. Thus a transfer from t
 | `card` | A new tab opens the mock checkout at `{baseUrl}/adapters/{id}/checkout`. **Pay** marks the order paid; **Decline payment** fails it. |
 | `card` with `cardCheckout: 'form'` | Fill in the test card fields in the widget, then press **Pay (test mode)** (transition `pay_card`). Any card number with 12 to 19 digits pays, for example `4242 4242 4242 4242`. The card `4000 0000 0000 0002` is declined. The expiry is `MM/YY` and the CVC has 3 or 4 digits. |
 | `transfer` with `exchange_transfer` | The same deposit address. The warning tells the user to withdraw from the exchange on the correct network. Press **Simulate deposit (test mode)**. |
-| `local`, `payin` | Press **Simulate payment (test mode)** (transition `simulate_payment`) |
+| `local`, `payin` | Press **Simulate payment (test mode)** (transition `simulate_payment`). With `bankFields: true`, bank_transfer shows a test bank account, the amount and a reference, with the same button. |
 | `transfer` | Press **Simulate deposit (test mode)** (transition `simulate_deposit`) |
 | `wallet` | Send with a wallet adapter; the client fires `submit_tx` with the hash |
 | `bridge` | Nothing: it is paid when it starts and settles after `settleMs` |

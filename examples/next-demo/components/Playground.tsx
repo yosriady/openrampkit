@@ -48,6 +48,8 @@ export function Playground({ mock }: { mock: boolean }) {
   const [events, setEvents] = useState<ClientEvent[]>([])
   const [hooks, setHooks] = useState<Array<{ type: string; sessionId?: string; at: string }>>([])
   const { isConnected } = useAccount()
+  // `?extras=1`: mock mode also offers the exchange methods (the "From an exchange" picker)
+  const [extras] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('extras') === '1')
 
   const theme = useMemo(() => (mode === 'dark' ? darkTheme({ accent }) : mode === 'auto' ? autoTheme({ accent }) : lightTheme({ accent })), [mode, accent])
 
@@ -71,7 +73,7 @@ export function Playground({ mock }: { mock: boolean }) {
     const r =
       direction === 'withdraw'
         ? await fetch('/api/withdraw-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, custody }) })
-        : await fetch('/api/deposit-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, destination }) })
+        : await fetch('/api/deposit-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, destination, ...(extras ? { extras } : {}) }) })
     const j = (await r.json()) as { clientSecret: string }
     return j.clientSecret
   }

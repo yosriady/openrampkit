@@ -581,6 +581,34 @@ describe('mock adapter: several instances (demo options)', () => {
     await expect(r.transition!({ leg: cardLeg, ref: s3.ref!, name: 'pay_card', inputs: {} }, ctx)).rejects.toMatchObject({ status: 409 })
   })
 
+  it('bankFields: bank_transfer on the local leg shows bank details; the default stays a QR code', async () => {
+    const ctx = makeCtx({ fetch: fakeFetch([]).fetch })
+    const sgd = leg('local', { asset: { kind: 'fiat', currency: 'SGD' }, location: { kind: 'user_account' } })
+    const bank = { ...sgd, method: 'bank_transfer' }
+    // Default: unchanged
+    const plain = mockAdapter()
+    expect(plain.legs.find((l) => l.id === 'local')!.surfaces).toEqual(['QR'])
+    const s0 = await plain.start({ leg: bank, quote: await plain.quote({ leg: bank, amountIn: fiat('SGD', '50') }, ctx) }, ctx)
+    expect(s0.action?.surface?.kind).toBe('QR')
+    // Opt in
+    const a = mockAdapter({ bankFields: true, settleMs: 0 })
+    expect(a.legs.find((l) => l.id === 'local')!.surfaces).toEqual(['QR', 'BANK_FIELDS'])
+    const step = await a.start({ leg: bank, quote: await a.quote({ leg: bank, amountIn: fiat('SGD', '50') }, ctx) }, ctx)
+    checkLegStep(step)
+    const surface = step.action?.surface
+    expect(surface).toMatchObject({ kind: 'BANK_FIELDS' })
+    if (surface?.kind !== 'BANK_FIELDS') throw new Error('not bank fields')
+    expect(surface.fields.find((f) => f.label === 'Amount')).toEqual({ label: 'Amount', value: '50 SGD', copy: true })
+    expect(surface.fields.find((f) => f.label === 'Reference')!.value).toBe(step.ref!.slice(-10).toUpperCase())
+    expect(surface.fields.some((f) => !f.copy)).toBe(true)
+    // Other methods of the local leg keep the QR code
+    const qr = await a.start({ leg: { ...sgd, method: 'paynow' }, quote: await a.quote({ leg: sgd, amountIn: fiat('SGD', '50') }, ctx) }, ctx)
+    expect(qr.action?.surface?.kind).toBe('QR')
+    // The test payment settles the same way
+    expect(await a.transition!({ leg: bank, ref: step.ref!, name: 'simulate_payment' }, ctx)).toMatchObject({ status: 'processing' })
+    expect(await a.status!({ leg: bank, ref: step.ref! }, ctx)).toMatchObject({ status: 'succeeded' })
+  })
+
   it('exchange: the transfer leg also offers exchange_transfer, with exchange copy on the deposit address', async () => {
     const a = mockAdapter({ crypto: true, exchange: true })
     expect(a.legs.find((l) => l.id === 'transfer')!.methods).toEqual(['transfer', 'exchange_transfer'])
