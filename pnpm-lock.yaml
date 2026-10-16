@@ -368,6 +368,15 @@ importers:
         specifier: workspace:*
         version: link:../../core
 
+  packages/adapters/flashnet:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/adapters/lifi:
     dependencies:
       '@openrampkit/adapter':

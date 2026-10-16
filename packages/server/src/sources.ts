@@ -24,7 +24,8 @@ export async function sourcesRoute(rt: Runtime, req: Request, rec: SessionRecord
 
 /**
  * Source chains and tokens for a method: the default tokens of each chain (USDC and native), then the
- * tokens of each adapter that offers the method and has `sourceTokens`. Cached for an hour when every
+ * tokens of each adapter that offers the method and has `sourceTokens`. A known chain (in `CHAINS`)
+ * with no USDC joins the list only when an adapter lists a token on it. Cached for an hour when every
  * adapter answered.
  */
 export async function sourceChains(rt: Runtime, method: string): Promise<SourceChain[]> {
@@ -51,7 +52,10 @@ export async function sourceChains(rt: Runtime, method: string): Promise<SourceC
       if (fresh.complete) await kv.put(key, lists, SOURCES_TTL_SEC)
     }
   }
-  return chains.map((chain) => ({
+  // A chain outside the default list (for example Bitcoin or Tron) is added when an adapter lists a
+  // token on it and the chain is in the trusted chain table, after the default chains.
+  const extra = [...new Set(lists.flat().map((t) => t?.chain))].filter((c): c is string => typeof c === 'string' && !!CHAINS[c] && !chains.includes(c))
+  return [...chains, ...extra].map((chain) => ({
     chain,
     name: CHAINS[chain]?.name ?? chain,
     tokens: lists.length ? mergeSourceTokens(chain, ...lists) : defaultSourceTokens(chain),

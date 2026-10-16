@@ -576,6 +576,23 @@ describe('address format', () => {
     expect(isValidAddress('bip122:000000000019d6689c085ae165831e93', 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')).toBe(true)
     expect(isValidAddress('bip122:000000000019d6689c085ae165831e93', 'short')).toBe(false)
   })
+
+  it('checks Bitcoin and Tron address formats', () => {
+    const btc = 'bip122:000000000019d6689c085ae165831e93'
+    expect(isValidAddress(btc, '1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa')).toBe(true)
+    expect(isValidAddress(btc, '3J98t1WpEZ73CNmQviecrnyiWrnqRhWNLy')).toBe(true)
+    expect(isValidAddress(btc, 'bc1p5d7rjq7g6rdk2yhzks9smlaqtedr4dekq08ge8ztwac72sfr9rusxg3297')).toBe(true)
+    expect(isValidAddress(btc, 'BC1QAR0SRRR7XFKVY5L643LYDNW9RE59GTZZWF5MDQ')).toBe(true)
+    // Mixed case bech32, an EVM address, a testnet address
+    expect(isValidAddress(btc, 'bc1qAr0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq')).toBe(false)
+    expect(isValidAddress(btc, ARB_ADDR)).toBe(false)
+    expect(isValidAddress(btc, 'tb1qw508d6qejxtdg4y5r3zarvary0c5xw7kxpjzsx')).toBe(false)
+    const tron = 'tron:728126428'
+    expect(isValidAddress(tron, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t')).toBe(true)
+    expect(isValidAddress(tron, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6')).toBe(false)
+    expect(isValidAddress(tron, ARB_ADDR)).toBe(false)
+    expect(isValidAddress(tron, 'T0OIlqjeKQxGTCi8q8ZY4pL8otSzgjLj6t')).toBe(false)
+  })
 })
 
 describe('withdraw sessions: locked target', () => {

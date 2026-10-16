@@ -31,6 +31,7 @@ The times are estimates for the first sandbox key. Production access can take lo
 | [Swapped](#swapped) | Application (business onboarding) | Public key, secret key | Days |
 | [Banxa](#banxa) | Partner onboarding (sandbox first; production after Banxa approves the integration) | Partner reference, v2 API key, HMAC key pair | Days |
 | [PayTrie](#paytrie) | Email support@paytrie.com for a developer API key; no documented sandbox | API key, webhook signing secret, optional token key | Days (estimate; PayTrie answers email within 24 hours) |
+| [Flashnet](#flashnet) | Self-serve dashboard; Flashnet reviews the account before the API works; no sandbox | Server key (`fn_`), webhook secret | Days (account review) |
 | [Meld](#meld) | Sales (contact form) | API key, webhook secret | Days to weeks |
 | [Bridge](#bridge) | Sales | API key, webhook public key | Days to weeks |
 | [Binance](#binance) | Partner approval; no sandbox | API URL, client id, access token, RSA key pair, Binance public key | Weeks |
@@ -525,6 +526,40 @@ To get a new secret later, call `POST /v2/webhook-configurations/signing-secret/
 - One webhook URL per integration: use one OpenRampKit server per API key.
 - The adapter never stores KYC data. Users sign up and do KYC on PayTrie pages.
 - If you had v1 webhooks, turn them off after v2 works (`PATCH /webhooks` with every flag `false`).
+
+## Flashnet {#flashnet}
+
+**Access type:** self-serve dashboard with an account review. Create the keys in the [Orchestra dashboard](https://orchestra.flashnet.xyz/dashboard). Flashnet reviews new accounts before it enables the API: until then, calls answer `403` (`account_pending_approval`). There is no sandbox.
+
+| Value | Adapter option | Env var |
+|---|---|---|
+| Server key (`fn_...`; not a client key `fnp_...`) | `apiKey` | `FLASHNET_API_KEY` |
+| Webhook signing secret | `webhookSecret` | `FLASHNET_WEBHOOK_SECRET` |
+| Your Tron address for refunds (needed for Tron deposits) | `refundAddresses.tron` | `FLASHNET_TRON_REFUND` |
+
+```ts
+flashnet({
+  apiKey: process.env.FLASHNET_API_KEY!,
+  webhookSecret: process.env.FLASHNET_WEBHOOK_SECRET,
+  refundAddresses: { tron: process.env.FLASHNET_TRON_REFUND },
+})
+```
+
+**Webhooks:** register the URL with the server key. The answer has the signing secret, and Flashnet shows it only once:
+
+```bash
+curl -X POST https://orchestration.flashnet.xyz/v1/webhooks \
+  -H "Authorization: Bearer $FLASHNET_API_KEY" \
+  -H "X-Idempotency-Key: $(uuidgen)" \
+  -H "Content-Type: application/json" \
+  -d '{"url":"https://your.app/api/openramp/webhooks/flashnet"}'
+```
+
+**Gotchas:**
+
+- No sandbox: test with a small real order (the USD minimum is 1.00).
+- `order.recovery_required` events need a separate subscription (`POST /v1/webhooks/recovery`). Without it, the adapter still learns the result from status checks.
+- Orchestra has rate limits (for example 60 requests per minute per IP for routes and limits, and 120 for estimates). Prefer webhooks over polling.
 
 ## Meld {#meld}
 

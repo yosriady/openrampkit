@@ -86,3 +86,32 @@ describe('GET /sessions/:id/sources', () => {
     expect((await get('withdraw')).status).toBe(409)
   })
 })
+
+describe('GET /sessions/:id/sources: chains outside the USDC list', () => {
+  const TRON_USDT: SourceToken = { chain: 'tron:728126428', token: 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t', symbol: 'USDT', decimals: 6 }
+  const BTC: SourceToken = { chain: 'bip122:000000000019d6689c085ae165831e93', token: 'native', symbol: 'BTC', decimals: 8 }
+
+  it('adds Bitcoin and Tron after the default chains when an adapter lists a token there', async () => {
+    const { get } = make(async () => [TRON_USDT, BTC])
+    const chains = (await get()).body.chains
+    const tron = chains.find((c) => c.chain === 'tron:728126428')!
+    expect(tron.name).toBe('Tron')
+    expect(tron.tokens.map((t) => t.symbol)).toEqual(['TRX', 'USDT'])
+    const btc = chains.find((c) => c.chain === 'bip122:000000000019d6689c085ae165831e93')!
+    expect(btc.name).toBe('Bitcoin')
+    expect(btc.tokens).toEqual([{ chain: BTC.chain, token: 'native', symbol: 'BTC', decimals: 8 }])
+    // The default chains come first
+    expect(chains.indexOf(tron)).toBeGreaterThan(chains.findIndex((c) => c.chain === 'eip155:8453'))
+  })
+
+  it('never adds a chain that is not in the chain table', async () => {
+    const { get } = make(async () => [{ chain: 'cosmos:cosmoshub-4', token: 'uatom', symbol: 'ATOM', decimals: 6 }])
+    expect((await get()).body.chains.some((c) => c.chain === 'cosmos:cosmoshub-4')).toBe(false)
+  })
+
+  it('without an adapter list: no Bitcoin or Tron', async () => {
+    const chains = (await make().get()).body.chains.map((c) => c.chain)
+    expect(chains).not.toContain('tron:728126428')
+    expect(chains).not.toContain('bip122:000000000019d6689c085ae165831e93')
+  })
+})

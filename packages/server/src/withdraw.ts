@@ -10,6 +10,10 @@ const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
 const EVM_ZERO = /^0x0{40}$/
 const SOLANA_ADDRESS = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/
 const OTHER_ADDRESS = /^[\x21-\x7e]{8,128}$/
+/** Bitcoin mainnet: base58 P2PKH or P2SH (`1...`, `3...`), or bech32 / bech32m (`bc1...`, one case only). Format only, no checksum. */
+const BITCOIN_ADDRESS = /^(?:[13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[ac-hj-np-z02-9]{11,71}|BC1[AC-HJ-NP-Z02-9]{11,71})$/
+/** Tron: base58, `T` and 33 more characters. Format only, no checksum. */
+const TRON_ADDRESS = /^T[1-9A-HJ-NP-Za-km-z]{33}$/
 export const CAIP2 = /^[-a-z0-9]{3,8}:[-_a-zA-Z0-9]{1,32}$/
 const CURRENCY = /^[A-Z]{3}$/
 const SYMBOL = /^[A-Za-z0-9.$_-]{1,12}$/
@@ -20,6 +24,8 @@ const bad = (message: string) => new OpenRampException(openRampError('BAD_REQUES
 export function isValidAddress(chain: string, address: string): boolean {
   if (chain.startsWith('eip155:')) return EVM_ADDRESS.test(address) && !EVM_ZERO.test(address)
   if (chain.startsWith('solana:')) return SOLANA_ADDRESS.test(address)
+  if (chain.startsWith('bip122:')) return BITCOIN_ADDRESS.test(address)
+  if (chain.startsWith('tron:')) return TRON_ADDRESS.test(address)
   return OTHER_ADDRESS.test(address)
 }
 
@@ -27,6 +33,9 @@ export function isValidToken(chain: string, token: string): boolean {
   if (token === 'native') return true
   if (chain.startsWith('eip155:')) return EVM_ADDRESS.test(token)
   if (chain.startsWith('solana:')) return SOLANA_ADDRESS.test(token)
+  // Bitcoin has no tokens here: only `native` (BTC)
+  if (chain.startsWith('bip122:')) return false
+  if (chain.startsWith('tron:')) return TRON_ADDRESS.test(token)
   return OTHER_ADDRESS.test(token)
 }
 

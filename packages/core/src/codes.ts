@@ -229,6 +229,12 @@ export const SOLANA_DEVNET = 'solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1'
 export const TEMPO_MAINNET = 'eip155:4217'
 /** CAIP-2 id of the Tempo Moderato testnet (chain id 42431) */
 export const TEMPO_TESTNET = 'eip155:42431'
+/** CAIP-2 id of Bitcoin mainnet (BIP122: the first 32 hex digits of the genesis block hash) */
+export const BITCOIN_MAINNET = 'bip122:000000000019d6689c085ae165831e93'
+/** CAIP-2 id of Tron mainnet (chain id 728126428 in decimal, https://namespaces.chainagnostic.org/tron/caip2) */
+export const TRON_MAINNET = 'tron:728126428'
+/** USDT (Tether, TRC-20) on Tron mainnet. 6 decimals. Tron addresses are case-sensitive base58. */
+export const TRON_USDT = 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t'
 
 export const CHAINS: Record<string, ChainInfo> = {
   'eip155:1': { id: 'eip155:1', chainId: 1, name: 'Ethereum', nativeSymbol: 'ETH', nativeDecimals: 18, explorerUrl: 'https://etherscan.io' },
@@ -243,6 +249,9 @@ export const CHAINS: Record<string, ChainInfo> = {
   [TEMPO_TESTNET]: { id: TEMPO_TESTNET, chainId: 42431, name: 'Tempo Testnet', nativeSymbol: 'USD', nativeDecimals: 18, stablecoinFees: true, testnet: true, explorerUrl: 'https://explore.testnet.tempo.xyz' },
   [SOLANA_MAINNET]: { id: SOLANA_MAINNET, name: 'Solana', nativeSymbol: 'SOL', nativeDecimals: 9, explorerUrl: 'https://explorer.solana.com' },
   [SOLANA_DEVNET]: { id: SOLANA_DEVNET, name: 'Solana Devnet', nativeSymbol: 'SOL', nativeDecimals: 9, testnet: true, explorerUrl: 'https://explorer.solana.com/?cluster=devnet' },
+  // Deposit sources only (no USDC): Bitcoin (8 decimals) and Tron (TRX, 6 decimals)
+  [BITCOIN_MAINNET]: { id: BITCOIN_MAINNET, name: 'Bitcoin', nativeSymbol: 'BTC', nativeDecimals: 8 },
+  [TRON_MAINNET]: { id: TRON_MAINNET, name: 'Tron', nativeSymbol: 'TRX', nativeDecimals: 6 },
   // Robinhood Chain (Arbitrum Orbit L2). Source: docs.robinhood.com/chain/connecting
   'eip155:4663': { id: 'eip155:4663', chainId: 4663, name: 'Robinhood Chain', nativeSymbol: 'ETH', nativeDecimals: 18 },
   // Test networks
