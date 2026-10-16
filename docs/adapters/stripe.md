@@ -76,5 +76,5 @@ Add a webhook endpoint in the Stripe dashboard for `crypto.onramp_session.update
 ## Verified vs TO VERIFY
 
 - **TO VERIFY**: the request key for a Base wallet address (`wallet_addresses[base_network]` is assumed).
-- **TO VERIFY**: the method list (card, Apple Pay, Google Pay, ACH) comes from Stripe marketing pages, not the API docs.
+- **TO VERIFY**: the method list (card, Apple Pay, Google Pay, ACH) comes from Stripe marketing pages, not the API docs. Stripe's headless guide confirms the same four for the [Stripe Link](./stripe-link.md) flow, but not for this UI.
 - **TO VERIFY**: the quotes path (the API reference and the embedded guide name different paths).

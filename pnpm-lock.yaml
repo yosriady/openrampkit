@@ -425,6 +425,15 @@ importers:
         specifier: workspace:*
         version: link:../../core
 
+  packages/adapters/stripe-link:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/adapters/swapped:
     dependencies:
       '@openrampkit/adapter':

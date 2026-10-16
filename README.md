@@ -93,7 +93,7 @@ OpenRampKit is the open alternative. It is MIT licensed and self-hosted. You use
 - Signed, expiring pay links (`sessions.payLink()`) to a hosted page.
 
 **Adapters**
-- 13 provider adapters plus a mock adapter. Write your own with `createAdapter()` and test it with the conformance kit.
+- 14 provider adapters plus a mock adapter. Write your own with `createAdapter()` and test it with the conformance kit.
 - Three wallet adapters: `wagmiWallet()` for EVM, `privyWallet()` for Privy embedded wallets and `solanaWallet()` for Solana (Wallet Standard).
 
 **Destinations and chains**
@@ -298,6 +298,7 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE | Working. Some details TO VERIFY |
 | `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Faster Payments, pay by bank (UK), Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
 | `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |
+| `stripe-link` | [`adapter-stripe-link`](packages/adapters/stripe-link) | Stripe Link headless onramp: the user signs in to Link, and the purchase runs in your own screens. Card, Apple Pay, Google Pay, ACH (US, not NY) | Unverified. Needs Stripe private preview onboarding and a client renderer |
 | `xendit` | [`adapter-xendit`](packages/adapters/xendit) | QRIS, QR Ph, PromptPay, PayNow and e-wallets into your own merchant account | Working. Merchant destination only |
 | `meld` | [`adapter-meld`](packages/adapters/meld) | Aggregator: card, UPI, Pix, SEPA, SEPA Instant, ACH, iDEAL, Bancontact, BLIK, PayID, SPEI, PSE, Khipu, M-Pesa, mobile money and more | New. In progress |
 | `onramper` | [`adapter-onramper`](packages/adapters/onramper) | Aggregator: card, SEPA, SEPA Instant, ACH, Pix, UPI, IMPS, iDEAL, Bancontact, Faster Payments, SPEI, Khipu and more | New. In progress |

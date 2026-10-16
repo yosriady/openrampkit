@@ -27,6 +27,7 @@ The times are estimates for the first sandbox key. Production access can take lo
 | [Onramper](#onramper) | Self-serve sandbox after an onboarding form; paid plan and KYB for live | API key, Ed25519 signing key, webhook secret | About 15 minutes |
 | [Coinbase](#coinbase) | Self-serve limited test access; application for full access | CDP Secret API key (id and secret), webhook secret | About 15 minutes |
 | [Stripe](#stripe) | Application and review | Secret key, publishable key, webhook signing secret | Days (Stripe reviews the application) |
+| [Stripe Link](#stripe-link) | Private preview; Stripe onboards the account | Secret key, publishable key, Link OAuth client id, webhook signing secret, optional token key | Days to weeks (Stripe onboarding) |
 | [Swapped](#swapped) | Application (business onboarding) | Public key, secret key | Days |
 | [Meld](#meld) | Sales (contact form) | API key, webhook secret | Days to weeks |
 | [Bridge](#bridge) | Sales | API key, webhook public key | Days to weeks |
@@ -391,6 +392,37 @@ stripe({
 
 - The publishable key goes to the browser for the embedded onramp. That is safe. The secret key must stay on the server.
 - Set `providerRenderers: { stripe: stripeOnrampRenderer() }` on the modal, or `surface: 'redirect'` on the adapter. See [Stripe](../adapters/stripe.md).
+
+## Stripe Link {#stripe-link}
+
+**Access type:** private preview. No call works, also in a sandbox, until Stripe finishes your onboarding.
+
+**Sign up:** submit the [crypto onramp application](https://docs.stripe.com/crypto/onramp#submit-your-application). Then work with your Stripe contact to:
+
+- Turn on the feature gates for the Embedded Components onramp APIs and the Link OAuth APIs.
+- Turn on Link as a payment method in **Settings**, then **Payment methods**.
+- Get the Link OAuth client id. Stripe provisions it.
+
+**Where to find the keys:** the secret key and the publishable key are on the **API keys** page. Stripe gives you the OAuth client id. The adapter does not need the OAuth client secret: it never refreshes a token.
+
+**Env var names:**
+
+```ts
+stripeLink({
+  secretKey: process.env.STRIPE_SECRET_KEY!,
+  publishableKey: process.env.STRIPE_PUBLISHABLE_KEY!,
+  oauthClientId: process.env.STRIPE_LINK_OAUTH_CLIENT_ID!,
+  webhookSecret: process.env.STRIPE_LINK_WEBHOOK_SECRET!,
+  tokenKey: process.env.STRIPE_LINK_TOKEN_KEY, // optional, at least 32 characters
+})
+```
+
+**Webhooks:** add an endpoint with the URL `{baseUrl}/webhooks/stripe-link` and the event `crypto.onramp_session.updated`. Copy its signing secret to `webhookSecret`.
+
+**Gotchas:**
+
+- Test with the sandbox values in Stripe's guide: OTP `000000`, SSN `000000000`, card `4242 4242 4242 4242`, and 100 USD or less.
+- See [Stripe Link](../adapters/stripe-link.md) for the client part.
 
 ## Swapped {#swapped}
 

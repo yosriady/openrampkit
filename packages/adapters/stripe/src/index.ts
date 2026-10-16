@@ -133,6 +133,8 @@ const TOLERANCE_SEC = 5 * 60
 type MethodDef = { id: string; currencies: string[]; countries: string[]; eta: { min: number; max: number } }
 const INSTANT = { min: 60, max: 900 }
 // TO VERIFY: the method list (card, Apple Pay, Google Pay, ACH) comes from Stripe marketing pages, not the API docs.
+// The headless guide (2026-10-16) confirms the same four for the Embedded Components onramp (`card`,
+// `us_bank_account`, Apple Pay and Google Pay in the Payment Element); it says nothing about this UI.
 // The Stripe onramp UI picks the payment method itself; the legs only tell the planner what to show.
 export const STRIPE_METHODS: MethodDef[] = [
   { id: 'card', currencies: ['USD', 'EUR'], countries: ['US', ...EU], eta: INSTANT },

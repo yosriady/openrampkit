@@ -39,6 +39,7 @@ Each adapter needs an account with its provider, except the mock adapter. You ca
 | [Xendit](../adapters/xendit.md) | Secret API key and webhook verification token | [docs.xendit.co](https://docs.xendit.co) |
 | [MoonPay](../adapters/moonpay.md) | Publishable key, secret key, and a webhook API key | [dev.moonpay.com](https://dev.moonpay.com) |
 | [Stripe](../adapters/stripe.md) | Secret key with onramp access, publishable key, and a webhook endpoint secret | [docs.stripe.com/crypto](https://docs.stripe.com/crypto) |
+| [Stripe Link](../adapters/stripe-link.md) | Secret key and publishable key of an account onboarded to the Embedded Components onramp, the Link OAuth client id, and a webhook endpoint secret | [docs.stripe.com/crypto/onramp/embedded-components](https://docs.stripe.com/crypto/onramp/embedded-components) |
 | [Meld](../adapters/meld.md) | API key, and a webhook profile secret | [docs.meld.io](https://docs.meld.io) |
 | [Onramper](../adapters/onramper.md) | API key, an Ed25519 signing key, and a webhook secret | [docs.onramper.com](https://docs.onramper.com) |
 | [Peer](../adapters/peer.md) | Merchant API key and webhook secret (opt-in with `enabled: true`) | See [Peer](../adapters/peer.md) |
