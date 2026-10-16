@@ -208,12 +208,17 @@ const INDEX_TTL_SEC = 30 * 24 * 3600
 /** Wrong codes before the user must ask for a new code, and codes per leg */
 export const PAYTRIE_MAX_WRONG_CODES = 5
 export const PAYTRIE_MAX_CODES = 3
+/** A code older than this is never checked: the user asks for a new one. Shorter than the email lock, so no code outlives it. */
+const CODE_MAX_AGE_MS = 60 * 60_000
+/** How long an email or account lock lives. It must outlive `CODE_MAX_AGE_MS`. */
+const LOCK_TTL_SEC = 24 * 3600
 
 /**
  * Limits across all sessions, kept in the adapter's shared store. A PayTrie code has 4 digits, so the
  * per-leg limits alone do not stop a guesser who opens new sessions. Each try and each send takes one
  * slot (an atomic claim with a TTL), so requests at the same time never pass together. Keys: the
- * SHA-256 of the email (trimmed, lowercase) and of the app user id.
+ * SHA-256 of the canonical email (`canonicalEmail`), of the PayTrie user id (the "per email" limits
+ * apply to both, so spellings that PayTrie maps to one account share them), and of the app user id.
  */
 export const PAYTRIE_LIMITS = {
   /** Code checks per email, in `triesWindowSec`. A correct code gives its slot back. */
@@ -230,7 +235,13 @@ export const PAYTRIE_LIMITS = {
   sendsWindowSec: 60 * 60,
 } as const
 
-const EMAIL = /^[^\s@]{1,200}@[^\s@]{1,200}\.[^\s@]{2,}$/
+/**
+ * A plain ASCII address, already lowercase: dot-atom local part (no quotes, no leading, trailing or
+ * double dots) and a host name with at least two labels and no trailing dot. Anything else (Unicode,
+ * fullwidth or compatibility letters, control or zero-width characters, inner spaces, quoted local
+ * parts, IP literals) is refused, so one PayTrie account has one spelling here.
+ */
+const EMAIL = /^[a-z0-9_'+-]+(?:\.[a-z0-9_'+-]+)*@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:[a-z]{2,63}|xn--[a-z0-9-]{1,59})$/
 const CODE = /^\d{4}$/
 const ID = /^[A-Za-z0-9-]{1,64}$/
 /** A chain transaction hash (EVM hex or a Solana signature). The docs example has `paymentId: "pay_123456789"`, which is not one. */
@@ -292,25 +303,56 @@ async function sha256Hex(s: string): Promise<string> {
   return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('')
 }
 
-/** The limit key of an email: trimmed and lowercase, hashed (no plain email in the shared store) */
-export const emailKey = (email: string) => sha256Hex(`email:${email.trim().toLowerCase()}`)
+/**
+ * The one spelling of an email that the adapter counts, stores and sends to PayTrie: trimmed (outer
+ * whitespace only), ASCII lowercase, and a plain ASCII address (`EMAIL`). Undefined for anything else.
+ * The case is folded only after the ASCII check, so no Unicode case rule (Kelvin sign, dotless i) applies.
+ */
+export function canonicalEmail(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const s = raw.trim()
+  if (s.length > 254 || !/^[\x21-\x7e]+$/.test(s)) return undefined
+  const email = s.toLowerCase()
+  if (!EMAIL.test(email) || email.indexOf('@') > 64) return undefined
+  return email
+}
+
+/** The limit key of an email: its canonical spelling, hashed (no plain email in the shared store). Throws for an email that is not valid. */
+export async function emailKey(email: string): Promise<string> {
+  const c = canonicalEmail(email)
+  if (!c) throw bad('The email is not valid for PayTrie.')
+  return sha256Hex(`email:${c}`)
+}
 const userKey = (userId: string) => sha256Hex(`user:${userId}`)
+/** The limit key of a PayTrie account (its user id): every spelling that PayTrie maps to one account shares it */
+const accountKey = (paytrieUserId: string) => sha256Hex(`account:${paytrieUserId}`)
+
+type Slot = { key: string; owner: string }
 
 /**
  * Take one of `max` slots under `prefix` for `ttlSec` seconds. Each slot is an atomic claim
  * (`claimOnce`), so at most `max` callers hold a slot at once, also when they run at the same time.
- * Returns the slot key, or undefined when all are taken.
+ * Returns the slot, or undefined when all are taken.
  */
-async function takeSlot(shared: ScopedKV, prefix: string, max: number, ttlSec: number): Promise<string | undefined> {
+async function takeSlot(shared: ScopedKV, prefix: string, max: number, ttlSec: number): Promise<Slot | undefined> {
   for (let i = 0; i < max; i++) {
     const key = `${prefix}:${i}`
-    if (await claimOnce(shared, key, randomHex(12), ttlSec)) return key
+    const owner = randomHex(12)
+    if (await claimOnce(shared, key, owner, ttlSec)) return { key, owner }
   }
   return undefined
 }
 
-/** Give a slot back. ScopedKV has no delete: overwrite it with a 1 second TTL. */
-const freeSlot = (shared: ScopedKV, key: string) => shared.put(key, null, 1)
+/** Give a slot back, only while we still hold it. ScopedKV has no delete: overwrite it with a 1 second TTL. */
+async function freeSlot(shared: ScopedKV, slot: Slot | undefined): Promise<void> {
+  if (slot && (await shared.get<string>(slot.key)) === slot.owner) await shared.put(slot.key, null, 1)
+}
+
+/** All `max` slots under `prefix` are held now */
+async function allHeld(shared: ScopedKV, prefix: string, max: number): Promise<boolean> {
+  for (let i = 0; i < max; i++) if (!(await shared.get<string>(`${prefix}:${i}`))) return false
+  return true
+}
 
 const limited = (message: string) => new OpenRampException(openRampError('RATE_LIMITED', { message }), 429)
 
@@ -573,15 +615,47 @@ export function paytrie(opts: PaytrieOptions) {
 
   // ---------- flow ----------
 
+  /**
+   * The leg's email, in its one canonical spelling: what the limits count and what PayTrie gets. A record
+   * whose email is not canonical (for example from an older version) is refused (fail closed).
+   */
+  function legEmail(rec: LegRecord): string {
+    const email = canonicalEmail(rec.email)
+    if (!email || email !== rec.email) throw bad('The email of this purchase is not valid for PayTrie. Start again.')
+    return email
+  }
+
+  /** The PayTrie user id of the leg (set by the account lookup). Without it, no code goes out or is checked. */
+  function legUser(rec: LegRecord): string {
+    if (typeof rec.userId !== 'string' || !ID.test(rec.userId)) throw bad('Ask for a new PayTrie code.', 409, 'CONFLICT')
+    return rec.userId
+  }
+
+  /** Take one slot under each prefix, in order. When one is full, give back the ones taken (no call ran) and throw. */
+  async function takeSlots(ctx: AdapterContext, wants: Array<{ prefix: string; max: number; ttlSec: number; message: string }>, onFull?: () => Promise<void>): Promise<Slot[]> {
+    const taken: Slot[] = []
+    for (const w of wants) {
+      const slot = await takeSlot(ctx.shared, w.prefix, w.max, w.ttlSec)
+      if (!slot) {
+        for (const t of taken) await freeSlot(ctx.shared, t)
+        if (onFull) await onFull()
+        throw limited(w.message)
+      }
+      taken.push(slot)
+    }
+    return taken
+  }
+
   /** GET /v2/users?email=: the user id, or the sign-up step when PayTrie has no account for the email */
   async function findUser(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<LegStep> {
     const L = PAYTRIE_LIMITS
+    const email = legEmail(rec)
     if (!(await takeSlot(ctx.shared, `lk:${await userKey(ctx.session.userId)}`, L.lookupsPerUser, L.sendsWindowSec))) {
       throw limited('Too many PayTrie account checks. Try again in an hour.')
     }
     let list: Array<{ id?: string; accessibleBy?: string[] }> | undefined
     try {
-      list = await call<Array<{ id?: string; accessibleBy?: string[] }>>(ctx, 'GET', `/users?email=${encodeURIComponent(rec.email!)}`)
+      list = await call<Array<{ id?: string; accessibleBy?: string[] }>>(ctx, 'GET', `/users?email=${encodeURIComponent(email)}`)
     } catch (e) {
       throw toOpenRamp(e, 'find your PayTrie account', ctx.log)
     }
@@ -597,22 +671,25 @@ export function paytrie(opts: PaytrieOptions) {
   /** POST /v2/auth/login-codes: email a sign-in code (at most `PAYTRIE_MAX_CODES` per leg) */
   async function sendCode(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<LegStep> {
     if (rec.codesSent >= PAYTRIE_MAX_CODES) throw limited('Too many PayTrie codes for this purchase. Start again later.')
-    // Across all sessions: per email and per app user. A send keeps its slot (an email went out).
+    const email = legEmail(rec)
+    const account = legUser(rec)
+    // Across all sessions: per app user, per email and per PayTrie account. A send keeps its slots (an email went out, or may have).
     const L = PAYTRIE_LIMITS
-    const bySender = await takeSlot(ctx.shared, `su:${await userKey(ctx.session.userId)}`, L.sendsPerUser, L.sendsWindowSec)
-    if (!bySender) throw limited('Too many PayTrie codes. Try again in an hour.')
-    if (!(await takeSlot(ctx.shared, `se:${await emailKey(rec.email!)}`, L.sendsPerEmail, L.sendsWindowSec))) {
-      await freeSlot(ctx.shared, bySender)
-      throw limited('Too many PayTrie codes for this email. Try again in an hour.')
-    }
+    await takeSlots(ctx, [
+      { prefix: `su:${await userKey(ctx.session.userId)}`, max: L.sendsPerUser, ttlSec: L.sendsWindowSec, message: 'Too many PayTrie codes. Try again in an hour.' },
+      { prefix: `se:${await emailKey(email)}`, max: L.sendsPerEmail, ttlSec: L.sendsWindowSec, message: 'Too many PayTrie codes for this email. Try again in an hour.' },
+      { prefix: `sa:${await accountKey(account)}`, max: L.sendsPerEmail, ttlSec: L.sendsWindowSec, message: 'Too many PayTrie codes for this email. Try again in an hour.' },
+    ])
+    // Before the call: PayTrie makes the code when it gets the request, so a lock set while the call runs covers it.
+    const sentAt = Date.now()
     try {
-      // Always 202, also for an unknown email (no account enumeration)
-      await call(ctx, 'POST', '/auth/login-codes', { body: { email: rec.email } })
+      // Always 202, also for an unknown email (no account enumeration). The same string that the limits count.
+      await call(ctx, 'POST', '/auth/login-codes', { body: { email } })
     } catch (e) {
       throw toOpenRamp(e, 'send the sign-in code', ctx.log)
     }
-    // `wrongCodes` is per code on this leg; the limits per email and per user do not reset here.
-    const next: LegRecord = { ...rec, stage: 'code', codesSent: rec.codesSent + 1, wrongCodes: 0, codeSentAt: Date.now() }
+    // `wrongCodes` is per code on this leg; the limits per email, account and user do not reset here.
+    const next: LegRecord = { ...rec, stage: 'code', codesSent: rec.codesSent + 1, wrongCodes: 0, codeSentAt: sentAt }
     await saveRecord(ctx, ref, next)
     return stageStep(ref, next)
   }
@@ -621,43 +698,69 @@ export function paytrie(opts: PaytrieOptions) {
   async function verifyCode(ctx: AdapterContext, ref: string, rec: LegRecord, code: string): Promise<LegStep> {
     if (!CODE.test(code)) throw bad('Enter the 4-digit code from the PayTrie email.')
     if (rec.wrongCodes >= PAYTRIE_MAX_WRONG_CODES) throw limited('Too many wrong codes. Ask for a new code.')
+    const email = legEmail(rec)
+    const account = legUser(rec)
+    const sentAt = rec.codeSentAt
+    if (typeof sentAt !== 'number' || Date.now() - sentAt > CODE_MAX_AGE_MS) throw bad('This code is too old. Ask for a new code.')
     const L = PAYTRIE_LIMITS
-    const ek = await emailKey(rec.email!)
-    // After a lockout of this email, a code sent before it never counts: the user needs a new code.
-    const lockedAt = await ctx.shared.get<number>(`lock:${ek}`)
-    if (typeof lockedAt === 'number' && (rec.codeSentAt ?? 0) <= lockedAt) throw limited('Too many wrong codes for this email. Wait 15 minutes, then ask for a new code.')
-    // One slot per check, per app user and per email, taken before the call: checks at the same time never pass together.
-    const byUser = await takeSlot(ctx.shared, `tu:${await userKey(ctx.session.userId)}`, L.triesPerUser, L.triesWindowSec)
-    if (!byUser) throw limited('Too many code checks. Wait 15 minutes, then try again.')
-    const byEmail = await takeSlot(ctx.shared, `te:${ek}`, L.triesPerEmail, L.triesWindowSec)
-    if (!byEmail) {
-      await freeSlot(ctx.shared, byUser)
-      // The lock outlives the try window: a code sent before it never counts again (leg records live 24 hours).
-      await ctx.shared.put(`lock:${ek}`, Date.now(), RECORD_TTL_SEC)
-      throw limited('Too many wrong codes for this email. Wait 15 minutes, then ask for a new code.')
+    const ek = await emailKey(email)
+    const ak = await accountKey(account)
+    const lockKeys = [`lock:e:${ek}`, `lock:a:${ak}`]
+    const full = 'Too many wrong codes for this email. Wait 15 minutes, then ask for a new code.'
+    // After a lockout of this email or account, a code sent before it never counts: the user needs a new code.
+    for (const k of lockKeys) {
+      const lockedAt = await ctx.shared.get<number>(k)
+      if (typeof lockedAt === 'number' && sentAt <= lockedAt) throw limited(full)
     }
-    let res: { accessToken?: string; expiresIn?: number } | undefined
+    /** A full email or account window locks both (a full app user window says nothing about the email). */
+    const lockIfFull = async () => {
+      if (!(await allHeld(ctx.shared, `te:${ek}`, L.triesPerEmail)) && !(await allHeld(ctx.shared, `ta:${ak}`, L.triesPerEmail))) return
+      const now = Date.now()
+      for (const k of lockKeys) await ctx.shared.put(k, now, LOCK_TTL_SEC)
+    }
+    // One slot per check, per app user, per email and per PayTrie account, taken before the call: checks
+    // at the same time never pass together.
+    const slots = await takeSlots(
+      ctx,
+      [
+        { prefix: `tu:${await userKey(ctx.session.userId)}`, max: L.triesPerUser, ttlSec: L.triesWindowSec, message: 'Too many code checks. Wait 15 minutes, then try again.' },
+        { prefix: `te:${ek}`, max: L.triesPerEmail, ttlSec: L.triesWindowSec, message: full },
+        { prefix: `ta:${ak}`, max: L.triesPerEmail, ttlSec: L.triesWindowSec, message: full },
+      ],
+      lockIfFull,
+    )
+    const wrong = async () => {
+      await saveRecord(ctx, ref, { ...rec, wrongCodes: rec.wrongCodes + 1 })
+      // The last try of the window was wrong: lock now, so this code never gets a new window.
+      await lockIfFull()
+    }
+    let res: { accessToken?: unknown; expiresIn?: number } | undefined
     try {
-      res = await call<{ accessToken?: string; expiresIn?: number }>(ctx, 'POST', '/auth/login-codes/verify', { body: { email: rec.email, code } })
+      res = await call<{ accessToken?: unknown; expiresIn?: number }>(ctx, 'POST', '/auth/login-codes/verify', { body: { email, code } })
     } catch (e) {
       const st = httpStatus(e)
       // TO VERIFY: the status of a wrong code (we read 400, 401, 403, 404 and 422 as a wrong or expired code).
       if (st === 400 || st === 401 || st === 403 || st === 404 || st === 422) {
-        await saveRecord(ctx, ref, { ...rec, wrongCodes: rec.wrongCodes + 1 })
+        await wrong()
         throw bad('The code is not right, or it expired. Try again or ask for a new code.')
       }
       // Other failures keep the slots: PayTrie may have checked the code (fail closed).
       throw toOpenRamp(e, 'check the sign-in code', ctx.log)
     }
-    // A correct code is not a wrong try: give both slots back.
-    await freeSlot(ctx.shared, byEmail)
-    await freeSlot(ctx.shared, byUser)
-    if (!res?.accessToken || typeof res.accessToken !== 'string') throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'PayTrie did not return an access token.' }), 502)
+    // Only an access token proves a correct code. Any other answer (`success: false`, no data, no token)
+    // keeps the slots and counts as a wrong try (fail closed).
+    const token = typeof res?.accessToken === 'string' && res.accessToken.length > 0 ? res.accessToken : undefined
+    if (!token) {
+      await wrong()
+      throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'PayTrie did not return an access token.' }), 502)
+    }
+    // A correct code is not a wrong try: give the slots of this check back.
+    for (const s of slots) await freeSlot(ctx.shared, s)
     // The email is now the one of a signed-in account: lock it.
     const next: LegRecord = { ...rec, emailLocked: true, wrongCodes: 0 }
-    await putToken(ctx, ref, next.email!, res.accessToken, res.expiresIn)
+    await putToken(ctx, ref, email, token, res!.expiresIn)
     await saveRecord(ctx, ref, next)
-    return afterSignIn(ctx, ref, next, res.accessToken)
+    return afterSignIn(ctx, ref, next, token)
   }
 
   /** The user's KYC status, then KYC, review, or the order */
@@ -861,8 +964,10 @@ export function paytrie(opts: PaytrieOptions) {
       const data = (input.quote.data ?? {}) as { quoteId?: unknown; quotedAt?: unknown }
       const ref = `ptr_${randomHex(12)}`
       // The app's email is locked: the client cannot replace it. A malformed app email is an error.
-      const sessionEmail = ctx.session.email?.trim()
-      if (sessionEmail && !EMAIL.test(sessionEmail)) throw bad('The session email is not valid for PayTrie.')
+      // One canonical spelling (see `canonicalEmail`): what the limits count is what PayTrie gets.
+      const rawSessionEmail = typeof ctx.session.email === 'string' ? ctx.session.email.trim() : ''
+      const sessionEmail = rawSessionEmail ? canonicalEmail(rawSessionEmail) : undefined
+      if (rawSessionEmail && !sessionEmail) throw bad('The session email is not valid for PayTrie.')
       if (!sessionEmail && requireSessionEmail) throw bad('PayTrie needs the session email. Create the session with an email, or set requireSessionEmail: false.')
       const rec: LegRecord = {
         owner: ownerOf(ctx),
@@ -897,8 +1002,8 @@ export function paytrie(opts: PaytrieOptions) {
         switch (name) {
           case T.email: {
             if (rec.emailLocked || requireSessionEmail) throw bad('The email of this purchase cannot be changed.', 409, 'CONFLICT')
-            const email = str('email')
-            if (!EMAIL.test(email)) throw bad('Enter a valid email address.')
+            const email = canonicalEmail(str('email'))
+            if (!email) throw bad('Enter a valid email address.')
             return findUser(ctx, ref, { ...rec, email })
           }
           case T.signedUp:

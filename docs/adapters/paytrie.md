@@ -118,14 +118,16 @@ Register `{baseUrl}/webhooks/paytrie` with `PUT /v2/webhook-configurations` and 
 
   | Limit | Value |
   |---|---|
-  | Code checks per email (trimmed, lowercase), wrong or right | 5 per 15 minutes; a right code gives its try back |
+  | Code checks per email, and per PayTrie account, wrong or right | 5 per 15 minutes; a right code gives its try back |
   | Code checks per app user | 10 per 15 minutes |
-  | Code emails per email | 5 per hour |
+  | Code emails per email, and per PayTrie account | 5 per hour |
   | Code emails per app user | 10 per hour |
   | Account lookups per app user | 20 per hour |
-  | Per leg | 5 wrong codes per code, 3 codes |
+  | Per leg | 5 wrong codes per code, 3 codes; a code older than 1 hour is never checked |
 
-  Each check and each email takes one slot, an atomic claim with a TTL, before the PayTrie call, so requests at the same time never pass together. When the email limit is hit, the email is locked: a code sent before the lock never counts again, and the user needs a new code after the window. A new code does not reset the tries of the email. The shared store keeps the SHA-256 of the email, never the email. On a store with no atomic `putIfAbsent` (Workers KV), a claim writes and reads back, which catches most races but not all.
+  Each check and each email takes one slot, an atomic claim with a TTL, before the PayTrie call, so requests at the same time never pass together. A new app user does not get new tries: the email and account limits bind. A slot comes back only when PayTrie returns an access token. A wrong code, a `2xx` answer with no token, a timeout or a `5xx` keeps the slot. When the last try of the email or account window is wrong (or a check finds the window full), the email and the account are locked for 24 hours: a code sent before the lock never counts again, and the user needs a new code after the window. A new code does not reset the tries of the email. The shared store keeps the SHA-256 of the email and of the PayTrie user id, never the email. On a store with no atomic `putIfAbsent` (Workers KV), a claim writes and reads back, which catches most races but not all.
+- One spelling per email. The adapter takes only a plain ASCII address: after the outer whitespace is trimmed, it refuses Unicode (fullwidth letters, dotless i, the Kelvin sign), control and zero-width characters, inner spaces, quoted local parts, IP literals, double dots and a trailing dot. It lowercases the address, then sends PayTrie exactly the string that the limits count (for the account lookup, the code email and the code check). An IDN domain must be in its punycode (`xn--`) form. A session email that is not valid gets `BAD_REQUEST` before any PayTrie call.
+- One counter per account. Spellings that PayTrie may treat as one account (for example plus tags or dots) are different emails here, so the email limits also apply to the PayTrie user id from the account lookup. No code goes out, and no code is checked, without that user id.
 - A code works only on the leg that sent it: the leg record names its session, app user and email, and the token is bound to them.
 - Each change of a leg runs under a lease (`claimOnce`), and the order creation has its own claim, so two requests never create two orders.
 - Each leg record names its session and app user; another session gets `SESSION_EXPIRED`.

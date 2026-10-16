@@ -6,7 +6,7 @@ import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { LegQuote, PathwayLeg } from '@openrampkit/core'
 import { TEST_DESTINATION, fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance } from '@openrampkit/adapter/testing'
 import type { FakeCall, FakeRoute } from '@openrampkit/adapter/testing'
-import { PAYTRIE_LIMITS, PAYTRIE_MAX_CODES, PAYTRIE_MAX_WRONG_CODES, PAYTRIE_TRANSITIONS as T, emailKey, paytrie, paytrieSignature } from './index.js'
+import { PAYTRIE_LIMITS, PAYTRIE_MAX_CODES, PAYTRIE_MAX_WRONG_CODES, PAYTRIE_TRANSITIONS as T, canonicalEmail, emailKey, paytrie, paytrieSignature } from './index.js'
 
 const API_KEY = 'pt_api_key_test'
 const SECRET = 'whsec_paytrie_test_secret'
@@ -433,11 +433,123 @@ describe('paytrie adapter', () => {
     })
 
     it('limits code emails per app user across emails', async () => {
-      const s = setup()
+      // Each email is its own PayTrie account here
+      const perEmailUser: FakeRoute = {
+        method: 'GET',
+        match: '/v2/users?email=',
+        reply: (c) => ok([{ id: `acct-${new URL(c.url).searchParams.get('email')!.split('@')[0]}`, accessibleBy: ['jwt'] }]),
+      }
+      const s = setup({}, { over: [perEmailUser] })
       const sessions = Array.from({ length: L.sendsPerUser + 1 }, (_, i) => otherSession(s, i + 60, { userId: 'one_app_user', email: `user${i}@example.com` }))
       const all = await Promise.allSettled(sessions.map((x) => quoteAndStart(x)))
       expect(all.filter((r) => r.status === 'fulfilled')).toHaveLength(L.sendsPerUser)
       expect(posts(s.calls, '/v2/auth/login-codes')).toHaveLength(L.sendsPerUser)
+    })
+
+    // Issue: the email key was not how PayTrie names an account, so other spellings got new counters.
+    it('takes only plain ASCII emails, and counts and sends one canonical spelling', async () => {
+      const refused = [
+        'ｊane@example.com', // fullwidth
+        'jane@examıple.com', // dotless i
+        'jane@Kexample.com', // Kelvin sign
+        'ja​ne@example.com', // zero-width space
+        'ja­ne@example.com', // soft hyphen
+        'ja ne@example.com',
+        'ja\tne@example.com',
+        'ja\u0000ne@example.com',
+        'jane@example.com.',
+        '"jane"@example.com',
+        '"ja@ne"@example.com',
+        'jane..doe@example.com',
+        '.jane@example.com',
+        'jane@exämple.com',
+        'jane@[127.0.0.1]',
+        'jane@localhost',
+      ]
+      for (const e of refused) expect(canonicalEmail(e), JSON.stringify(e)).toBeUndefined()
+      expect(canonicalEmail('  Jane.Doe+ramp@Example.COM \n')).toBe('jane.doe+ramp@example.com')
+      expect(canonicalEmail('jane@xn--exmple-cua.com')).toBe('jane@xn--exmple-cua.com')
+      await expect(emailKey('ｊane@example.com')).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+
+      // A session email in another spelling is refused before any PayTrie call
+      for (const e of ['ｊane@example.com', 'ja​ne@example.com', 'jane@example.com.']) {
+        const x = setup({}, { session: { email: e } })
+        await expect(quoteAndStart(x)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        expect(x.calls.filter((c) => !c.url.includes('/v2/quotes'))).toHaveLength(0)
+      }
+      // A typed email too
+      const typed = setup({}, { session: { email: undefined }, adapterOpts: { requireSessionEmail: false } })
+      const { step } = await quoteAndStart(typed)
+      await expect(typed.adapter.transition!({ leg, ref: step.ref!, name: T.email, inputs: { email: 'ｊane@example.com' } }, typed.ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+
+      // PayTrie gets exactly the string that the limits count
+      const s = setup({}, { over: [codeRoute] })
+      const mixed = otherSession(s, 70, { email: '  Jane@Example.COM ' })
+      const started = await quoteAndStart(mixed)
+      await expect(guess(mixed, started.step.ref!, '0001')).rejects.toBeTruthy()
+      expect(new URL(s.calls.find((c) => c.url.includes('/v2/users?email='))!.url).searchParams.get('email')).toBe(EMAIL)
+      expect(posts(s.calls, '/v2/auth/login-codes')[0]!.body).toEqual({ email: EMAIL })
+      expect(posts(s.calls, '/verify')[0]!.body).toEqual({ email: EMAIL, code: '0001' })
+    })
+
+    it('counts every spelling of one PayTrie account together (keyed on the PayTrie user id)', async () => {
+      // Plus tags are valid ASCII, but here PayTrie maps them all to USER_ID
+      const s = setup({}, { over: [codeRoute] })
+      const sessions = Array.from({ length: L.sendsPerEmail + 1 }, (_, i) => otherSession(s, i + 80, { email: `jane+${i}@example.com` }))
+      const all = await Promise.allSettled(sessions.map((x) => quoteAndStart(x)))
+      expect(all.filter((r) => r.status === 'fulfilled')).toHaveLength(L.sendsPerEmail)
+      expect(posts(s.calls, '/v2/auth/login-codes')).toHaveLength(L.sendsPerEmail)
+      // Code checks: other spellings share the tries of the account
+      const legs = all.flatMap((r) => (r.status === 'fulfilled' ? [r.value.step.ref!] : []))
+      for (let i = 0; i < L.triesPerEmail; i++) await expect(guess(sessions[i]!, legs[i]!, `000${i}`)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      await expect(guess(sessions[0]!, legs[0]!, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
+    })
+
+    // Issue: rate limit bypasses (a give-back without a token, a lock only after an extra try, old codes)
+    it('gives a try back only for an access token (a 2xx without one keeps the slot)', async () => {
+      const noToken: FakeRoute = { method: 'POST', match: '/v2/auth/login-codes/verify', reply: () => ({ success: false, errors: [{ field: 'code', message: 'Invalid code' }] }) }
+      const s = setup({}, { over: [noToken] })
+      const sessions = Array.from({ length: 2 }, (_, i) => otherSession(s, i + 90))
+      const legs = await startAll(sessions)
+      for (let i = 0; i < L.triesPerEmail; i++) {
+        const { x, ref } = legs[i % 2]!
+        await expect(guess(x, ref, `000${i}`)).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+      }
+      await expect(guess(legs[0]!.x, legs[0]!.ref, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
+    })
+
+    it('locks the email on the last wrong try, so the same code never gets a new window', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const s = setup({}, { over: [codeRoute] })
+        const a = otherSession(s, 101)
+        const b = otherSession(s, 102)
+        const [la, lb] = await startAll([a, b])
+        // Exactly the limit, never one more
+        for (const code of ['0001', '0002', '0003']) await expect(guess(a, la!.ref, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        for (const code of ['0004', '0005']) await expect(guess(b, lb!.ref, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        vi.setSystemTime(Date.now() + (L.triesWindowSec + 60) * 1000)
+        // The window passed, but the codes sent before the lock never count again
+        await expect(guess(b, lb!.ref, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED', message: expect.stringContaining('new code') } })
+        expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('never checks a code that is older than an hour (a lock always outlives a code)', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const s = setup({}, { over: [codeRoute] })
+        const { step } = await quoteAndStart(s)
+        vi.setSystemTime(Date.now() + 61 * 60_000)
+        await expect(guess(s, step.ref!, '1234')).rejects.toMatchObject({ error: { code: 'BAD_REQUEST', message: expect.stringContaining('new code') } })
+        expect(posts(s.calls, '/verify')).toHaveLength(0)
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('keeps no plain email in the shared store', async () => {
