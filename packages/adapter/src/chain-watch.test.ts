@@ -86,11 +86,13 @@ describe('createChainWatch', () => {
     const t0 = Date.now()
     await Promise.all([1, 2, 3, 4].map(() => w.latestBlock(ctx, 'eip155:8453')))
     // Four calls at 50 per second: the last one starts at least 60 ms after the first.
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(55)
+    const limited = Date.now() - t0
+    expect(limited).toBeGreaterThanOrEqual(55)
     const free = createChainWatch({ rpcUrls: { 'eip155:8453': 'https://rpc.test' } })
     const t1 = Date.now()
     await Promise.all([1, 2, 3, 4].map(() => free.latestBlock(ctx, 'eip155:8453')))
-    expect(Date.now() - t1).toBeLessThan(50)
+    // No limit: the calls do not wait. Compare with the limited run, not a fixed time, so a busy machine does not fail it.
+    expect(Date.now() - t1).toBeLessThan(limited)
   })
 
   it('Solana reads use the configured commitment (default finalized)', async () => {
