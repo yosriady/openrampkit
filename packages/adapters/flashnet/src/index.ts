@@ -38,7 +38,10 @@
 import {
   POLL,
   awaitPoll,
+  ERC20_TRANSFER_TOPIC,
   erc20TransferData,
+  evmRpc,
+  topicAddress,
   bytesToHex,
   claimOnce,
   createAdapter,
@@ -115,6 +118,15 @@ export type FlashnetOptions = {
    * for Tron deposits. A refund then goes to this address (yours), not to the user.
    */
   refundAddresses?: { tron?: string; bitcoin?: string; evm?: string }
+  /**
+   * Payouts: JSON-RPC URLs per CAIP-2 chain (for example `{ 'eip155:8453': 'https://mainnet.base.org' }`).
+   * With one, `submit_tx` reads the receipt and binds the funding transaction to the payout only when it
+   * is a confirmed USDC transfer of the quoted amount from the sender to this payout's deposit address.
+   * Without one, a reported hash is never trusted: the payout waits for Orchestra to see the deposit.
+   */
+  rpcUrls?: Record<string, string>
+  /** Payouts: the confirmations a funding transaction needs before it is bound (default 2) */
+  payoutConfirmations?: number
   apiUrl?: string
 }
 
@@ -266,8 +278,11 @@ type LegRecord = {
   sourceChain?: string
   /** Lightning legs: when the invoice expires (ms) */
   invoiceExpiresAt?: number
-  /** Payout legs: what the user must send, and the funding transaction once it is reported */
-  payout?: { fnChain: string; fnAsset: string; token: string; amount: string; depositAddress: string; fundTx?: string }
+  /**
+   * Payout legs: what the sender must send. `fundTx` is set only after the receipt proved that the
+   * transaction paid this deposit address (never from a hash that a client reported).
+   */
+  payout?: { fnChain: string; fnAsset: string; token: string; amount: string; depositAddress: string; sender?: string; fundTx?: string }
 }
 
 type Mapped = { status: LegStatus; detail?: StepDetailCode; special?: 'failed' | 'fallback' | 'expired' }
@@ -925,7 +940,15 @@ export function flashnet(opts: FlashnetOptions) {
       fnChain: LN_OUT.fnChain,
       fnAsset: LN_OUT.fnAsset,
       sourceChain: src.chain,
-      payout: { fnChain: src.fnChain, fnAsset: src.fnAsset, token: src.token, amount, depositAddress: address.toLowerCase(), ...(fundTx ? { fundTx } : {}) },
+      payout: {
+        fnChain: src.fnChain,
+        fnAsset: src.fnAsset,
+        token: src.token,
+        amount,
+        depositAddress: address.toLowerCase(),
+        ...(input.source?.address && EVM_ADDRESS.test(input.source.address) ? { sender: input.source.address.toLowerCase() } : {}),
+        ...(fundTx ? { fundTx } : {}),
+      },
     })
     return {
       status: 'requires_action',
@@ -939,28 +962,81 @@ export function flashnet(opts: FlashnetOptions) {
     }
   }
 
-  /** `submit_tx` of a payout leg: keep the funding transaction (once), and tell Orchestra about it. */
-  async function submitPayoutTx(ref: string, inputs: Record<string, unknown> | undefined, ctx: AdapterContext): Promise<LegStep> {
-    const rec = (await ctx.shared.get<LegRecord>(recKey(ref))) ?? (await ctx.store.get<LegRecord>(recKey(ref)))
-    if (!rec?.payout || !rec.sourceChain) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'Unknown Flashnet payout.' }), 404)
-    const hash = typeof inputs?.txHash === 'string' ? inputs.txHash.toLowerCase() : ''
-    if (!EVM_TX.test(hash)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
-    // One funding transaction per payout, and one payout per transaction (atomic claims).
-    if (!(await claimOnce(ctx.shared, `fund:${ref}`, hash, CLAIM_TTL_SEC))) {
-      throw new OpenRampException(openRampError('CONFLICT', { message: 'This payout already has another transaction.' }), 409)
+  /** Session-scoped note of the hash this session's client reported. Not shared: it can never block another session. */
+  const reportedKey = (ref: string) => `reported:${ref}`
+
+  /**
+   * Check a reported funding transaction on chain: a successful receipt with enough confirmations, and
+   * USDC Transfer logs from the payout's sender to its deposit address that add up to the quoted amount.
+   * 'unchecked' when there is no RPC URL or no known sender; 'pending' before enough confirmations.
+   */
+  async function verifyFunding(ctx: AdapterContext, rec: LegRecord, hash: string): Promise<'ok' | 'pending' | 'bad' | 'unchecked'> {
+    const p = rec.payout!
+    const url = opts.rpcUrls?.[rec.sourceChain!]
+    if (!url || !p.sender) return 'unchecked'
+    const receipt = await evmRpc<{ status?: string; blockNumber?: string; logs?: Array<{ address: string; topics: string[]; data: string }> } | null>(ctx.fetch, url, 'eth_getTransactionReceipt', [hash], { log: ctx.log })
+    if (!receipt) return 'pending'
+    if (receipt.status !== '0x1' || !/^0x[0-9a-fA-F]+$/.test(receipt.blockNumber ?? '')) return 'bad'
+    const from = topicAddress(p.sender)
+    const to = topicAddress(p.depositAddress)
+    let paid = 0n
+    for (const log of receipt.logs ?? []) {
+      if (log.address?.toLowerCase() !== p.token || log.topics?.[0] !== ERC20_TRANSFER_TOPIC) continue
+      if (log.topics[1]?.toLowerCase() !== from || log.topics[2]?.toLowerCase() !== to) continue
+      if (!/^0x[0-9a-fA-F]{1,64}$/.test(log.data)) return 'bad'
+      paid += BigInt(log.data)
     }
+    if (paid !== BigInt(p.amount)) return 'bad'
+    const head = await evmRpc<string>(ctx.fetch, url, 'eth_blockNumber', [], { log: ctx.log })
+    if (typeof head !== 'string' || !/^0x[0-9a-fA-F]+$/.test(head)) return 'pending'
+    const confirmations = BigInt(head) - BigInt(receipt.blockNumber!) + 1n
+    return confirmations >= BigInt(Math.max(1, opts.payoutConfirmations ?? 2)) ? 'ok' : 'pending'
+  }
+
+  /**
+   * Bind a verified funding transaction to the payout: claim the hash for this leg (owner: the leg ref,
+   * so a retry of the same leg passes), save it, and report it to Orchestra. Returns false when another
+   * leg already holds this transaction.
+   */
+  async function bindFunding(ctx: AdapterContext, ref: string, rec: LegRecord, hash: string): Promise<boolean> {
     if (!(await claimOnce(ctx.shared, `src:${hash}`, ref, CLAIM_TTL_SEC))) {
       ctx.log.error('flashnet: this transaction already funded another leg', { quoteId: ref })
-      throw new OpenRampException(openRampError('CONFLICT', { message: 'This transaction already paid another withdrawal.' }), 409)
+      return false
     }
-    if (rec.payout.fundTx !== hash) await saveRecord(ctx, ref, { ...rec, payout: { ...rec.payout, fundTx: hash } })
-    // Orchestra detects EVM deposits by itself; /submit is the documented fallback. A failure here is not fatal.
+    if (rec.payout!.fundTx !== hash) await saveRecord(ctx, ref, { ...rec, payout: { ...rec.payout!, fundTx: hash } })
+    // Orchestra detects EVM deposits by itself; /submit is the documented fallback, sent only for a
+    // transaction that the receipt proved. A failure here is not fatal.
     try {
       await post(ctx, '/v1/orchestration/submit', { quoteId: ref, txHash: hash })
     } catch (e) {
       ctx.log.warn('flashnet: POST /submit failed; Orchestra should still detect the deposit', { quoteId: ref, error: String((e as Error)?.message ?? e).slice(0, 200) })
     }
-    return { status: 'processing', detail: { code: 'confirming' }, poll: POLL.onchain, ref, transactions: [{ role: 'source', chain: rec.sourceChain, hash }] }
+    return true
+  }
+
+  /**
+   * `submit_tx` of a payout leg. The hash comes from the client, so nothing shared is claimed or saved
+   * until the receipt proves that it paid this payout (see `verifyFunding`). Until then the hash is only
+   * a session-scoped note that keeps this leg waiting (it never shows the wallet step again).
+   */
+  async function submitPayoutTx(ref: string, inputs: Record<string, unknown> | undefined, ctx: AdapterContext): Promise<LegStep> {
+    const rec = (await ctx.shared.get<LegRecord>(recKey(ref))) ?? (await ctx.store.get<LegRecord>(recKey(ref)))
+    if (!rec?.payout || !rec.sourceChain) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'Unknown Flashnet payout.' }), 404)
+    const hash = typeof inputs?.txHash === 'string' ? inputs.txHash.toLowerCase() : ''
+    if (!EVM_TX.test(hash)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
+    const waiting: LegStep = { status: 'processing', detail: { code: 'confirming' }, poll: POLL.onchain, ref }
+    if (rec.payout.fundTx) {
+      if (rec.payout.fundTx === hash) return { ...waiting, transactions: [{ role: 'source', chain: rec.sourceChain, hash }] }
+      throw new OpenRampException(openRampError('CONFLICT', { message: 'This payout already has another transaction.' }), 409)
+    }
+    const v = await verifyFunding(ctx, rec, hash)
+    if (v === 'bad') throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This transaction did not pay this withdrawal.' }), 400)
+    if (v === 'ok') {
+      if (!(await bindFunding(ctx, ref, rec, hash))) throw new OpenRampException(openRampError('CONFLICT', { message: 'This transaction already paid another withdrawal.' }), 409)
+      return { ...waiting, transactions: [{ role: 'source', chain: rec.sourceChain, hash }] }
+    }
+    await ctx.store.put(reportedKey(ref), hash, RECORD_TTL_SEC)
+    return waiting
   }
 
   /** `tag` on each order, for support: the session id in the allowed characters */
@@ -1074,10 +1150,22 @@ export function flashnet(opts: FlashnetOptions) {
           return { status: 'expired', ref: input.ref, error: openRampError('QUOTE_EXPIRED', { message: 'The invoice expired. Get a new quote to continue.', recovery: 'requote' }) }
         }
         // A payout whose funding transaction was sent: wait for Orchestra to see it (never back to the wallet step).
+        if (rec?.payout && !rec.payout.fundTx) {
+          const reported = await ctx.store.get<string>(reportedKey(input.ref))
+          if (reported) {
+            // Check the reported hash again: bind it once the receipt proves it (enough confirmations).
+            if ((await verifyFunding(ctx, rec, reported)) === 'ok') await bindFunding(ctx, input.ref, rec, reported)
+            return { status: 'processing', detail: { code: 'confirming' }, poll, ref: input.ref }
+          }
+        }
         if (rec?.payout?.fundTx) return { status: 'processing', detail: { code: 'confirming' }, poll, ref: input.ref }
         return legStepFromEvent(undefined, input.ref, poll)
       }
-      const ev = await eventFrom(fromStatus(res.order), input.ref, rec, ctx.shared, ctx.log)
+      // An expired order after this session reported a funding hash stays processing (money may have
+      // moved). The note is session-scoped and changes only this leg's own view.
+      const reported = rec?.payout && !rec.payout.fundTx ? await ctx.store.get<string>(reportedKey(input.ref)) : undefined
+      const view = reported && rec?.payout ? { ...rec, payout: { ...rec.payout, fundTx: reported } } : rec
+      const ev = await eventFrom(fromStatus(res.order), input.ref, view, ctx.shared, ctx.log)
       return legStepFromEvent(ev, input.ref, poll)
     },
 

@@ -119,8 +119,8 @@ describe('Flashnet payouts through the server', () => {
     expect(sends).toEqual([{ sessionId: s.id, userId: 'u1', chain: 'eip155:8453', txs: [{ to: BASE_USDC, data: erc20TransferData(DEPOSIT, '50000000'), value: '0', chainId: 8453 }], idempotencyKey: expect.any(String) }])
     // The refund goes to the treasury, and the recipient is the server's target
     expect(t.calls.find((c) => c.url.endsWith('/offramp'))!.body).toMatchObject({ recipientAddress: 'bob@example.com', refundAddress: TREASURY })
-    // The treasury's hash went to Orchestra's /submit
-    expect(t.calls.find((c) => c.url.endsWith('/submit'))!.body).toEqual({ quoteId: QID, txHash: TX })
+    // Without an RPC URL the reported hash is not proven, so it is neither claimed nor sent to /submit
+    expect(t.calls.some((c) => c.url.endsWith('/submit'))).toBe(false)
     t.state.funded = true
     // The order names alice@cash.app, not bob@example.com: the payout is held, never completed
     const held = await t.call<PublicSession>(`/sessions/${s.id}/step`, s.clientSecret)

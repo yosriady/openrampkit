@@ -74,6 +74,28 @@ const routes = (over: FakeRoute[] = []): FakeRoute[] => [
   { match: '/v1/orchestration/status', reply: () => ({ order: ORDER('completed') }) },
 ]
 
+// A fake chain RPC: receipts by hash, and the head block
+const RPC = { rpcUrls: { 'eip155:8453': 'https://rpc.test/base' } }
+const topic = (a: string) => `0x${a.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`
+const receipt = (from: string, to: string, amount: string, o: { token?: string; status?: string } = {}) => ({
+  status: o.status ?? '0x1',
+  blockNumber: '0x10',
+  logs: [{ address: o.token ?? USDC['eip155:8453']!, topics: ['0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef', topic(from), topic(to)], data: `0x${BigInt(amount).toString(16).padStart(64, '0')}` }],
+})
+function chain() {
+  const state = { receipts: {} as Record<string, unknown>, head: '0x11', route: undefined as unknown as FakeRoute }
+  state.route = {
+    method: 'POST',
+    match: 'rpc.test',
+    reply: (c) => {
+      const b = c.body as { method: string; params: string[] }
+      const result = b.method === 'eth_blockNumber' ? state.head : (state.receipts[b.params[0]!] ?? null)
+      return { jsonrpc: '2.0', id: 1, result }
+    },
+  }
+  return state
+}
+
 const ctxFor = (fetch: typeof globalThis.fetch, o: { shared?: MemoryKV; destination?: Destination; id?: string; index?: number; log?: ReturnType<typeof recordingLog> } = {}) =>
   makeCtx({
     fetch,
@@ -271,35 +293,112 @@ describe('flashnet payouts: start', () => {
 })
 
 describe('flashnet payouts: funding transaction and status', () => {
-  it('submit_tx keeps the hash once, reports it to Orchestra, and the leg waits for the order', async () => {
-    const { a, start, leg, ctx, calls } = await quoted([{ match: '/v1/orchestration/status', status: 404, reply: () => ({ error: { code: 'not_found' } }) }])
+  it('submit_tx without an RPC URL trusts no hash: no claim, no record, no /submit; the leg waits for Orchestra', async () => {
+    const { a, start, leg, ctx, calls, shared } = await quoted([{ match: '/v1/orchestration/status', status: 404, reply: () => ({ error: { code: 'not_found' } }) }])
     await start()
     await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: 'nope' } }, ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
     await expect(a.transition!({ leg, ref: QID, name: 'simulate_payment' }, ctx)).rejects.toMatchObject({ status: 409 })
     await expect(a.transition!({ leg, ref: 'q_unknown', name: 'submit_tx', inputs: { txHash: TX } }, ctx)).rejects.toMatchObject({ status: 404 })
     const step = await a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
-    expect(step).toMatchObject({ status: 'processing', ref: QID, transactions: [{ role: 'source', chain: 'eip155:8453', hash: TX }] })
-    expect(calls.find((c) => c.url.endsWith('/submit'))!.body).toEqual({ quoteId: QID, txHash: TX })
-    // The same hash again is fine; another hash for the same payout is a conflict
-    await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX.toUpperCase().replace('0X', '0x') } }, ctx)).resolves.toMatchObject({ status: 'processing' })
-    await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX2 } }, ctx)).rejects.toMatchObject({ status: 409 })
+    expect(step).toMatchObject({ status: 'processing', ref: QID })
+    expect(step.transactions).toBeUndefined()
+    expect(await shared.get(`src:${TX}`)).toBeUndefined()
+    expect(await shared.get(`fund:${QID}`)).toBeUndefined()
+    expect(calls.some((c) => c.url.endsWith('/submit'))).toBe(false)
     // No order yet: the leg stays processing (it never shows the wallet step again)
     await expect(a.status!({ leg, ref: QID }, ctx)).resolves.toMatchObject({ status: 'processing', ref: QID })
   })
 
-  it('one transaction funds one payout', async () => {
+  it('with an RPC URL, binds a confirmed transfer of the quoted amount from the sender to this deposit address', async () => {
+    const ch = chain()
+    ch.receipts[TX] = receipt(WALLET, DEPOSIT, '50000000')
+    const { a, start, leg, ctx, calls, shared } = await quoted([ch.route, { match: '/v1/orchestration/status', status: 404, reply: () => ({}) }], { adapterOpts: RPC })
+    await start()
+    const step = await a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, ctx)
+    expect(step).toMatchObject({ status: 'processing', transactions: [{ role: 'source', chain: 'eip155:8453', hash: TX }] })
+    expect(await shared.get(`src:${TX}`)).toBe(QID)
+    expect(calls.find((c) => c.url.endsWith('/submit'))!.body).toEqual({ quoteId: QID, txHash: TX })
+    // The same hash again is fine (the same leg owns it); another hash is a conflict
+    await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, ctx)).resolves.toMatchObject({ status: 'processing' })
+    await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX2 } }, ctx)).rejects.toMatchObject({ status: 409 })
+  })
+
+  it('a transaction that fails verification leaves no claim and no record', async () => {
+    const OTHER_DEPOSIT = '0x' + '8'.repeat(40)
+    const cases: Array<[string, Record<string, unknown>]> = [
+      ['another deposit address', receipt(WALLET, OTHER_DEPOSIT, '50000000')],
+      ['another amount', receipt(WALLET, DEPOSIT, '49999999')],
+      ['another sender', receipt('0x' + '5'.repeat(40), DEPOSIT, '50000000')],
+      ['another token', receipt(WALLET, DEPOSIT, '50000000', { token: USDC['eip155:1']! })],
+      ['a reverted transaction', receipt(WALLET, DEPOSIT, '50000000', { status: '0x0' })],
+    ]
+    for (const [name, r] of cases) {
+      const ch = chain()
+      ch.receipts[TX] = r
+      const { a, start, leg, ctx, shared, calls } = await quoted([ch.route], { adapterOpts: RPC })
+      await start()
+      await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, ctx), name).rejects.toMatchObject({ status: 400 })
+      expect(await shared.get(`src:${TX}`), name).toBeUndefined()
+      expect((await shared.get<{ payout: { fundTx?: string } }>(`rec:${QID}`))!.payout.fundTx, name).toBeUndefined()
+      expect(calls.some((c) => c.url.endsWith('/submit')), name).toBe(false)
+    }
+  })
+
+  it('waits for confirmations before it binds; the status check binds it later', async () => {
+    const ch = chain()
+    ch.receipts[TX] = receipt(WALLET, DEPOSIT, '50000000')
+    ch.head = '0x10' // 1 confirmation, 2 needed
+    const { a, start, leg, ctx, shared } = await quoted([ch.route, { match: '/v1/orchestration/status', status: 404, reply: () => ({}) }], { adapterOpts: RPC })
+    await start()
+    await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, ctx)).resolves.toMatchObject({ status: 'processing' })
+    expect(await shared.get(`src:${TX}`)).toBeUndefined()
+    ch.head = '0x11'
+    await expect(a.status!({ leg, ref: QID }, ctx)).resolves.toMatchObject({ status: 'processing' })
+    expect(await shared.get(`src:${TX}`)).toBe(QID)
+  })
+
+  it("squatting: session B reports session A's funding hash first; B fails, A still completes", async () => {
     const shared = memoryKV()
-    const first = await quoted([], { shared })
-    await first.start()
-    await first.a.transition!({ leg: first.leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, first.ctx)
-    const second = await quoted([{ method: 'POST', match: '/offramp', reply: () => OFFRAMP({ quoteId: 'q_two', depositAddress: '0x' + '8'.repeat(40) }) }], { shared, id: 'sess_2' })
-    await second.start()
-    await expect(second.a.transition!({ leg: second.leg, ref: 'q_two', name: 'submit_tx', inputs: { txHash: TX } }, second.ctx)).rejects.toMatchObject({ status: 409 })
+    const ch = chain()
+    ch.receipts[TX] = receipt(WALLET, DEPOSIT, '50000000') // A's real transfer
+    let funded = false
+    const status: FakeRoute = { match: '/v1/orchestration/status', reply: (c) => (funded && c.url.includes(QID) ? { order: ORDER('completed') } : new Response('{}', { status: 404 })) }
+    const A = await quoted([ch.route, status], { shared, adapterOpts: RPC })
+    await A.start()
+    const B = await quoted([ch.route, status, { method: 'POST', match: '/offramp', reply: () => OFFRAMP({ quoteId: 'q_b', depositAddress: '0x' + '8'.repeat(40) }) }], { shared, id: 'sess_b', adapterOpts: RPC })
+    await B.start()
+    // B (even with the same sender wallet) reports A's hash before A does: the receipt pays A's deposit, not B's
+    await expect(B.a.transition!({ leg: B.leg, ref: 'q_b', name: 'submit_tx', inputs: { txHash: TX } }, B.ctx)).rejects.toMatchObject({ status: 400 })
+    expect(await shared.get(`src:${TX}`)).toBeUndefined()
+    // A reports its own hash and completes
+    await expect(A.a.transition!({ leg: A.leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, A.ctx)).resolves.toMatchObject({ transactions: [{ hash: TX }] })
+    funded = true
+    expect((await A.a.status!({ leg: A.leg, ref: QID }, A.ctx)).status).toBe('succeeded')
+    expect((await B.a.status!({ leg: B.leg, ref: 'q_b' }, B.ctx)).status).not.toBe('succeeded')
+  })
+
+  it("squatting without an RPC URL: B reports A's hash first; nothing is claimed, A still completes", async () => {
+    const shared = memoryKV()
+    let funded = false
+    const status: FakeRoute = { match: '/v1/orchestration/status', reply: (c) => (funded && c.url.includes(QID) ? { order: ORDER('completed') } : new Response('{}', { status: 404 })) }
+    const A = await quoted([status], { shared })
+    await A.start()
+    const B = await quoted([status, { method: 'POST', match: '/offramp', reply: () => OFFRAMP({ quoteId: 'q_b', depositAddress: '0x' + '8'.repeat(40) }) }], { shared, id: 'sess_b' })
+    await B.start()
+    await expect(B.a.transition!({ leg: B.leg, ref: 'q_b', name: 'submit_tx', inputs: { txHash: TX } }, B.ctx)).resolves.toMatchObject({ status: 'processing' })
+    expect(await shared.get(`src:${TX}`)).toBeUndefined()
+    await A.a.transition!({ leg: A.leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, A.ctx)
+    funded = true
+    // Completion claims the hash that Orchestra reports (sourceTxHash), owned by A's leg
+    expect((await A.a.status!({ leg: A.leg, ref: QID }, A.ctx)).status).toBe('succeeded')
+    expect(await shared.get(`src:${TX}`)).toBe(QID)
   })
 
   it('a failed /submit is not fatal: Orchestra detects EVM deposits by itself', async () => {
     const log = recordingLog()
-    const { a, start, leg, fetch, shared } = await quoted([{ method: 'POST', match: '/submit', status: 500, reply: () => ({ error: { code: 'internal' } }) }])
+    const ch = chain()
+    ch.receipts[TX] = receipt(WALLET, DEPOSIT, '50000000')
+    const { a, start, leg, fetch, shared } = await quoted([ch.route, { method: 'POST', match: '/submit', status: 500, reply: () => ({ error: { code: 'internal' } }) }], { adapterOpts: RPC })
     await start()
     const ctx = ctxFor(fetch, { shared, log })
     await expect(a.transition!({ leg, ref: QID, name: 'submit_tx', inputs: { txHash: TX } }, ctx)).resolves.toMatchObject({ status: 'processing' })
