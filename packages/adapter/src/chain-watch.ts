@@ -5,7 +5,8 @@
 
 import { OpenRampException, SOLANA_DEVNET, SOLANA_MAINNET, chainName, isSolanaChain, openRampError } from '@openrampkit/core'
 import { ERC20_TRANSFER_TOPIC, evmRpc, topicAddress } from './evm.js'
-import type { AdapterContext } from './index.js'
+import { claimOnce } from './claim.js'
+import type { AdapterContext, ScopedKV } from './index.js'
 import type { SolanaParsedTx } from './solana.js'
 
 /** Public RPCs per CAIP-2 chain. They are rate limited: set your own in production. */
@@ -82,6 +83,34 @@ const cmpBig = (a: bigint, b: bigint) => (a < b ? -1 : a > b ? 1 : 0)
  */
 export function txUsedKey(chain: string, hash: string): string {
   return `txused:${chain}:${isSolanaChain(chain) ? hash : hash.toLowerCase()}`
+}
+
+/**
+ * The owner value of a transaction claim (`txUsedKey`) that the logs of the transaction hold. Every log
+ * claim writes this same value, so all of them hold the transaction together, and a wallet payment that
+ * claims the whole transaction (with its own ref) loses to them, or the other way round.
+ */
+export const TX_LOGS_OWNER = 'transfer-logs'
+
+/**
+ * Claim one ERC-20 Transfer log for `owner`: one atomic decision per step, so that exactly one party
+ * counts a given transfer.
+ *
+ * 1. The transaction, for logs (`txUsedKey` = `TX_LOGS_OWNER`). It fails when a wallet payment claimed
+ *    the whole transaction. A wallet payment (`claimOnce(txUsedKey, ref)`) then fails in turn, because
+ *    the key has another owner. Before this step, a log claim and a wallet claim used two keys, and
+ *    two parties that ran at the same time could both win.
+ * 2. The log (`txUsedKey:{logIndex}` = `owner`). Exactly one owner gets it.
+ * 3. The older marker (`txUsedKey:log`), for readers that check only it.
+ *
+ * Returns true when `owner` holds the log, also on a repeat. Atomic on stores with `putIfAbsent`.
+ */
+export async function claimTransferLog(shared: ScopedKV, chain: string, hash: string, logIndex: bigint | number | string, owner: string, ttlSec: number): Promise<boolean> {
+  const tx = txUsedKey(chain, hash)
+  if (!(await claimOnce(shared, tx, TX_LOGS_OWNER, ttlSec))) return false
+  if (!(await claimOnce(shared, `${tx}:${BigInt(logIndex).toString()}`, owner, ttlSec))) return false
+  await shared.put(`${tx}:log`, owner, ttlSec)
+  return true
 }
 
 export type ChainWatch = ReturnType<typeof createChainWatch>

@@ -24,8 +24,10 @@ import { CAIP2, checkAllowed, isValidAddress, isValidToken, normalizeSource, par
 const addrKeyOf = (s: string) => (s.startsWith('0x') ? s.toLowerCase() : s)
 
 /**
- * The store key that marks a destination (chain, token, address) as watched on chain by a same-chain
- * standing address (standing.ts). Its value is the user id that owns the deposits to it.
+ * The store key that binds a destination (chain, token, address) to one kind of standing address
+ * (standing.ts), with one atomic claim. `{ userId }`: a same-chain standing address watches it on
+ * chain, and the user owns the deposits to it. `{ convert: true }`: converting standing addresses
+ * deliver to it. The first claim wins, so the two kinds can never both hold one destination.
  */
 export async function destinationWatchKey(chain: string, token: string, address: string): Promise<string> {
   return `sdwatch:${(await sha256Hex(JSON.stringify([chain, addrKeyOf(normalizeToken(chain, token)), addrKeyOf(address)]))).slice(0, 40)}`
@@ -38,7 +40,9 @@ export async function destinationWatchKey(chain: string, token: string, address:
  */
 async function refuseWatchedDestination(rt: Runtime, d: Destination | undefined): Promise<void> {
   if (!d || d.type !== 'crypto' || typeof d.chain !== 'string' || typeof d.token !== 'string' || typeof d.address !== 'string') return
-  if ((await rt.store.kv.get(await destinationWatchKey(d.chain, d.token, d.address))) == null) return
+  // Only a watched destination (`{ userId }`). One that converting addresses deliver to is fine.
+  const bound = await rt.store.kv.get<{ userId?: unknown }>(await destinationWatchKey(d.chain, d.token, d.address))
+  if (typeof bound?.userId !== 'string') return
   throw new OpenRampException(
     openRampError('CONFLICT', {
       message: 'This destination is a dedicated deposit address that the server watches on chain (a same-chain standing address). A session that delivers to it would count twice. Use another destination address.',

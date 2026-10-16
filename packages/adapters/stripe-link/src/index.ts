@@ -34,6 +34,7 @@
 import {
   POLL as POLLS,
   awaitPoll,
+  claimOnce,
   createAdapter,
   fetchJson,
   httpErrorToOpenRamp,
@@ -144,6 +145,8 @@ const POLL: PollSpec = POLLS.checkout
 const TOLERANCE_SEC = 5 * 60
 /** How long we keep the leg record (not the token) */
 const RECORD_TTL_SEC = 24 * 3600
+/** How long a change holds the lease of a leg (longer than its Stripe calls). After a crash, the leg is free again after it. */
+const LEASE_TTL_SEC = 120
 /** The access token lives 1 hour. We drop it a little sooner, so a call never starts with a dead token. */
 const TOKEN_MARGIN_SEC = 60
 /** Webhooks find the leg of an onramp session through this shared key when metadata is missing */
@@ -172,6 +175,12 @@ type LegRecord = {
   customerId?: string
   paymentToken?: string
   onrampSessionId?: string
+  /**
+   * The change counter of the record. A change of the leg (a transition, or a status check that moves
+   * it) first takes the lease `l:{ref}:{v}` (one atomic claim), and adds 1 at its end. So two changes
+   * that read the same record cannot both run: the second gets a 409. Records without it are at 0.
+   */
+  v?: number
 }
 
 type NetworkQuote = {
@@ -380,6 +389,38 @@ export function stripeLink(opts: StripeLinkOptions) {
 
   async function saveRecord(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<void> {
     await ctx.store.put(recKey(ref), rec, RECORD_TTL_SEC)
+  }
+
+  /**
+   * Take the lease of the leg at the version of `rec`: one atomic claim (`claimOnce` on
+   * `l:{ref}:{v}`), so exactly one change runs from a given record. A change that read an older record
+   * loses too, because its version was taken. Returns the release, which adds 1 to the version (the
+   * next change can then run), or undefined when another change holds or held this version.
+   * Atomic on stores with `putIfAbsent` (memory, Redis, Durable Object). On Workers KV it writes, then
+   * reads back, which catches most races but not all.
+   */
+  async function lease(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<(() => Promise<void>) | undefined> {
+    const v = rec.v ?? 0
+    if (!(await claimOnce(ctx.store, `l:${ref}:${v}`, randomHex(12), LEASE_TTL_SEC))) return undefined
+    return async () => {
+      // Only the holder writes while it holds the lease, so this read and write do not race.
+      const cur = await ctx.store.get<LegRecord>(recKey(ref))
+      if (cur && (cur.v ?? 0) === v) await saveRecord(ctx, ref, { ...cur, v: v + 1 })
+    }
+  }
+
+  /** Run one change of the leg under its lease (see `lease`). Another change of the same record gets a 409. */
+  async function exclusive<T>(ctx: AdapterContext, ref: string, rec: LegRecord, fn: () => Promise<T>): Promise<T> {
+    const release = await lease(ctx, ref, rec)
+    if (!release) {
+      ctx.log.warn('stripe-link: another request changes this leg; refused', { ref })
+      throw bad('Another request is changing this purchase. Try again.', 409)
+    }
+    try {
+      return await fn()
+    } finally {
+      await release()
+    }
   }
 
   /**
@@ -644,6 +685,27 @@ export function stripeLink(opts: StripeLinkOptions) {
     return step
   }
 
+  /** `kyc_review` on a status poll: a new sign-in, the next KYC step, or the onramp session (under the lease) */
+  async function reviewCheck(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<LegStep> {
+    const t = await tokenOrSignIn(ctx, ref, rec)
+    if ('step' in t) return t.step
+    if (rec.paymentToken) {
+      let customer: CryptoCustomer
+      try {
+        customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(rec.customerId!)}`, { token: t.token })
+      } catch (e) {
+        throw toOpenRamp(e, 'check your identity status', ctx.log)
+      }
+      const l2 = kycState(customer, 'l2')
+      if (l2 === 'ok') return createSession(ctx, ref, rec, t.token)
+      if (l2 === 'review') return stageStep(ref, rec)
+      const next: LegRecord = { ...rec, stage: 'documents' }
+      await saveRecord(ctx, ref, next)
+      return stageStep(ref, next)
+    }
+    return afterAuth(ctx, ref, rec, t.token)
+  }
+
   return createAdapter({
     id: 'stripe-link',
     ...(env ? { env } : {}),
@@ -738,131 +800,141 @@ export function stripeLink(opts: StripeLinkOptions) {
       // Each transition runs only from its own stage: a client cannot skip the KYC, wallet or payment method step.
       if (!allowed.includes(rec.stage)) throw bad(`Transition ${name} is not allowed now.`, 409)
       const key = str(STRIPE_LINK_CLIENT_KEY)
-      switch (name) {
-        case T.email: {
-          // The app's email (and the email of a finished sign-in) never changes.
-          if (rec.emailLocked || opts.requireSessionEmail) throw bad('The email of this purchase cannot be changed.', 409)
-          const email = str('email')
-          if (!EMAIL.test(email)) throw bad('Enter a valid email address.')
-          return startAuth(ctx, ref, { ...rec, email, stage: 'authenticate' })
-        }
-        case T.registered:
-          if (!rec.email) throw bad('Enter your email first.', 409)
-          return startAuth(ctx, ref, { ...rec, stage: 'authenticate' })
-        case T.authenticated: {
-          if (!rec.authIntentId) throw bad('Sign in to Link first.', 409)
-          const customerId = str('cryptoCustomerId')
-          if (!CUSTOMER_ID.test(customerId)) throw bad('Link did not give a customer id.')
-          if (!CLIENT_KEY.test(key)) throw bad(`Send a random \`${STRIPE_LINK_CLIENT_KEY}\` of 32 to 128 URL-safe characters.`)
-          let tokens: { access_token?: string; expires_in?: number }
-          try {
-            // The exchange works only after the account owner approved this intent in the Link SDK (one-time code and consent).
-            tokens = await fetchJson<{ access_token?: string; expires_in?: number }>(ctx.fetch, `${link}/v1/link_auth_intent/${encodeURIComponent(rec.authIntentId)}/tokens`, {
-              method: 'POST',
-              headers: { authorization: auth },
-            })
-          } catch (e) {
-            // 403: "LinkAuthIntent hasn't been consented by the user" (also a setup problem; the log says which)
-            if (httpStatus(e) === 403) ctx.log.warn('stripe-link: token exchange refused', { message: providerMessage(e) })
-            throw httpErrorToOpenRamp(e, 'Stripe Link', { what: 'finish the Link sign-in', noQuoteStatuses: [400, 404], log: ctx.log })
+      // One change at a time: two transitions that read the same record (two `link_authenticated` calls
+      // with their own keys, two checkouts, a checkout and a new sign-in) cannot both run.
+      return exclusive(ctx, ref, rec, async () => {
+        switch (name) {
+          case T.email: {
+            // The app's email (and the email of a finished sign-in) never changes.
+            if (rec.emailLocked || opts.requireSessionEmail) throw bad('The email of this purchase cannot be changed.', 409)
+            const email = str('email')
+            if (!EMAIL.test(email)) throw bad('Enter a valid email address.')
+            return startAuth(ctx, ref, { ...rec, email, stage: 'authenticate' })
           }
-          if (!tokens.access_token) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Link did not return an access token.' }), 502)
-          // The client gives the crypto customer id. Before we keep the token or use the id, check that
-          // the token of this sign-in can read that customer, and that Stripe answers with the same id.
-          let customer: CryptoCustomer | undefined
-          try {
-            customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(customerId)}`, { token: tokens.access_token })
-          } catch (e) {
-            const st = httpStatus(e)
-            if (st !== 401 && st !== 403 && st !== 404) throw toOpenRamp(e, 'check your identity status', ctx.log)
-          }
-          if (!customer || customer.id !== customerId) {
-            ctx.log.warn('stripe-link: the crypto customer id does not belong to the Link sign-in; signing in again', { ref })
-            // The intent is used up. Start a new sign-in. The token is never stored.
-            return signInAgain(ctx, ref, rec)
-          }
-          // Only the access token: a refresh token in the response is dropped here and never stored.
-          await putToken(ctx, ref, customerId, tokens.access_token, tokens.expires_in)
-          // The intent is used up: forget its id. The email is now the one of a signed-in account: lock it.
-          const next: LegRecord = { ...rec, customerId, stage: 'kyc', emailLocked: true, keyHash: await sha256Hex(key) }
-          delete next.authIntentId
-          await saveRecord(ctx, ref, next)
-          return afterAuth(ctx, ref, next, tokens.access_token, customer)
-        }
-        case T.kyc:
-        case T.documents: {
-          if (!rec.customerId) throw bad('Sign in to Link first.', 409)
-          const t = await clientToken(ctx, ref, rec, key)
-          if ('step' in t) return t.step
-          if (name === T.documents && rec.paymentToken) {
-            // After an identity challenge: retry the session when the documents are verified.
-            let customer: CryptoCustomer
+          case T.registered:
+            if (!rec.email) throw bad('Enter your email first.', 409)
+            return startAuth(ctx, ref, { ...rec, stage: 'authenticate' })
+          case T.authenticated: {
+            if (!rec.authIntentId) throw bad('Sign in to Link first.', 409)
+            const customerId = str('cryptoCustomerId')
+            if (!CUSTOMER_ID.test(customerId)) throw bad('Link did not give a customer id.')
+            if (!CLIENT_KEY.test(key)) throw bad(`Send a random \`${STRIPE_LINK_CLIENT_KEY}\` of 32 to 128 URL-safe characters.`)
+            let tokens: { access_token?: string; expires_in?: number }
             try {
-              customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(rec.customerId)}`, { token: t.token })
+              // The exchange works only after the account owner approved this intent in the Link SDK (one-time code and consent).
+              tokens = await fetchJson<{ access_token?: string; expires_in?: number }>(ctx.fetch, `${link}/v1/link_auth_intent/${encodeURIComponent(rec.authIntentId)}/tokens`, {
+                method: 'POST',
+                headers: { authorization: auth },
+              })
             } catch (e) {
-              throw toOpenRamp(e, 'check your identity status', ctx.log)
+              // 403: "LinkAuthIntent hasn't been consented by the user" (also a setup problem; the log says which)
+              if (httpStatus(e) === 403) ctx.log.warn('stripe-link: token exchange refused', { message: providerMessage(e) })
+              throw httpErrorToOpenRamp(e, 'Stripe Link', { what: 'finish the Link sign-in', noQuoteStatuses: [400, 404], log: ctx.log })
             }
-            const l2 = kycState(customer, 'l2')
-            if (l2 === 'ok') return createSession(ctx, ref, rec, t.token)
-            if (l2 === 'review') {
-              const next: LegRecord = { ...rec, stage: 'kyc_review' }
+            if (!tokens.access_token) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Link did not return an access token.' }), 502)
+            // The client gives the crypto customer id. Before we keep the token or use the id, check that
+            // the token of this sign-in can read that customer, and that Stripe answers with the same id.
+            let customer: CryptoCustomer | undefined
+            try {
+              customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(customerId)}`, { token: tokens.access_token })
+            } catch (e) {
+              const st = httpStatus(e)
+              if (st !== 401 && st !== 403 && st !== 404) throw toOpenRamp(e, 'check your identity status', ctx.log)
+            }
+            if (!customer || customer.id !== customerId) {
+              ctx.log.warn('stripe-link: the crypto customer id does not belong to the Link sign-in; signing in again', { ref })
+              // The intent is used up. Start a new sign-in. The token is never stored.
+              return signInAgain(ctx, ref, rec)
+            }
+            // Only the access token: a refresh token in the response is dropped here and never stored.
+            await putToken(ctx, ref, customerId, tokens.access_token, tokens.expires_in)
+            // The intent is used up: forget its id. The email is now the one of a signed-in account: lock it.
+            const next: LegRecord = { ...rec, customerId, stage: 'kyc', emailLocked: true, keyHash: await sha256Hex(key) }
+            delete next.authIntentId
+            await saveRecord(ctx, ref, next)
+            return afterAuth(ctx, ref, next, tokens.access_token, customer)
+          }
+          case T.kyc:
+          case T.documents: {
+            if (!rec.customerId) throw bad('Sign in to Link first.', 409)
+            const t = await clientToken(ctx, ref, rec, key)
+            if ('step' in t) return t.step
+            if (name === T.documents && rec.paymentToken) {
+              // After an identity challenge: retry the session when the documents are verified.
+              let customer: CryptoCustomer
+              try {
+                customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(rec.customerId)}`, { token: t.token })
+              } catch (e) {
+                throw toOpenRamp(e, 'check your identity status', ctx.log)
+              }
+              const l2 = kycState(customer, 'l2')
+              if (l2 === 'ok') return createSession(ctx, ref, rec, t.token)
+              if (l2 === 'review') {
+                const next: LegRecord = { ...rec, stage: 'kyc_review' }
+                await saveRecord(ctx, ref, next)
+                return stageStep(ref, next)
+              }
+              // Not verified: "call verifyDocuments again"
+              const next: LegRecord = { ...rec, stage: 'documents' }
               await saveRecord(ctx, ref, next)
               return stageStep(ref, next)
             }
-            // Not verified: "call verifyDocuments again"
-            const next: LegRecord = { ...rec, stage: 'documents' }
-            await saveRecord(ctx, ref, next)
-            return stageStep(ref, next)
+            return afterAuth(ctx, ref, rec, t.token)
           }
-          return afterAuth(ctx, ref, rec, t.token)
-        }
-        case T.wallet: {
-          if (!rec.customerId) throw bad('Sign in to Link first.', 409)
-          const t = await clientToken(ctx, ref, rec, key)
-          if ('step' in t) return t.step
-          // The address is always the leg's own (set by the server at start), never an input.
-          const step = await walletCheck(ctx, ref, rec, t.token)
-          if (step.action?.transitions[0]?.name === T.wallet) throw bad('Stripe does not list this wallet for your Link account yet. Try again.', 409)
-          return step
-        }
-        case T.paymentMethod: {
-          if (!rec.customerId) throw bad('Sign in to Link first.', 409)
-          const paymentToken = str('paymentToken')
-          if (!PAYMENT_TOKEN.test(paymentToken)) throw bad('Stripe did not give a payment token.')
-          const t = await clientToken(ctx, ref, rec, key)
-          if ('step' in t) return t.step
-          return createSession(ctx, ref, { ...rec, paymentToken }, t.token)
-        }
-        case T.checkout: {
-          if (!rec.onrampSessionId) throw bad('There is no purchase to pay yet.', 409)
-          const t = await clientToken(ctx, ref, rec, key)
-          if ('step' in t) return t.step
-          // "For users paying with ACH, you also need to pass mandate_data and collect the user's ip address and user agent."
-          // TO VERIFY: the mandate_data keys (the guide names the parameter only; these are the usual Stripe keys).
-          const ach = byId.get(rec.legId)?.types.includes('us_bank_account')
-          const ua = str('userAgent').slice(0, 500)
-          if (ach && (!ctx.session.ip || !ua)) throw bad('ACH needs your IP address and browser user agent for the mandate.')
-          const body = ach
-            ? form([
-                ['mandate_data[customer_acceptance][type]', 'online'],
-                ['mandate_data[customer_acceptance][online][ip_address]', ctx.session.ip],
-                ['mandate_data[customer_acceptance][online][user_agent]', ua],
-              ])
-            : undefined
-          let s: OnrampSession
-          try {
-            // No idempotency key: the SDK calls again after a next action (3DS), and each call is a new attempt.
-            s = await stripeCall<OnrampSession>(ctx, 'POST', `/v1/crypto/onramp_sessions/${encodeURIComponent(rec.onrampSessionId)}/checkout`, { token: t.token, ...(body ? { body } : {}) })
-          } catch (e) {
-            throw toOpenRamp(e, 'take the payment', ctx.log)
+          case T.wallet: {
+            if (!rec.customerId) throw bad('Sign in to Link first.', 409)
+            const t = await clientToken(ctx, ref, rec, key)
+            if ('step' in t) return t.step
+            // The address is always the leg's own (set by the server at start), never an input.
+            const step = await walletCheck(ctx, ref, rec, t.token)
+            if (step.action?.transitions[0]?.name === T.wallet) throw bad('Stripe does not list this wallet for your Link account yet. Try again.', 409)
+            return step
           }
-          const step = sessionStep(s, ref, rec, ctx.log) ?? checkoutStep(ref, rec, s.client_secret)
-          if (step.status !== 'requires_action') await dropToken(ctx, ref)
-          return step
+          case T.paymentMethod: {
+            if (!rec.customerId) throw bad('Sign in to Link first.', 409)
+            const paymentToken = str('paymentToken')
+            if (!PAYMENT_TOKEN.test(paymentToken)) throw bad('Stripe did not give a payment token.')
+            const t = await clientToken(ctx, ref, rec, key)
+            if ('step' in t) return t.step
+            return createSession(ctx, ref, { ...rec, paymentToken }, t.token)
+          }
+          case T.checkout: {
+            if (!rec.onrampSessionId) throw bad('There is no purchase to pay yet.', 409)
+            const t = await clientToken(ctx, ref, rec, key)
+            if ('step' in t) return t.step
+            // "For users paying with ACH, you also need to pass mandate_data and collect the user's ip address and user agent."
+            // TO VERIFY: the mandate_data keys (the guide names the parameter only; these are the usual Stripe keys).
+            const ach = byId.get(rec.legId)?.types.includes('us_bank_account')
+            const ua = str('userAgent').slice(0, 500)
+            if (ach && (!ctx.session.ip || !ua)) throw bad('ACH needs your IP address and browser user agent for the mandate.')
+            const body = ach
+              ? form([
+                  ['mandate_data[customer_acceptance][type]', 'online'],
+                  ['mandate_data[customer_acceptance][online][ip_address]', ctx.session.ip],
+                  ['mandate_data[customer_acceptance][online][user_agent]', ua],
+                ])
+              : undefined
+            let s: OnrampSession
+            try {
+              // The SDK calls again after a next action (3DS), and each call is a new attempt: the key has the
+              // record version, which each checkout moves on. Two calls from the same version (only possible
+              // where the lease is not atomic, on Workers KV) send the same key, so Stripe runs one checkout.
+              s = await stripeCall<OnrampSession>(ctx, 'POST', `/v1/crypto/onramp_sessions/${encodeURIComponent(rec.onrampSessionId)}/checkout`, {
+                token: t.token,
+                idem: ctx.idempotencyKey(`stripe-link:checkout:${rec.onrampSessionId}:${rec.v ?? 0}`),
+                ...(body ? { body } : {}),
+              })
+            } catch (e) {
+              throw toOpenRamp(e, 'take the payment', ctx.log)
+            }
+            const step = sessionStep(s, ref, rec, ctx.log) ?? checkoutStep(ref, rec, s.client_secret)
+            if (step.status !== 'requires_action') await dropToken(ctx, ref)
+            return step
+          }
+          default:
+            throw bad(`Unknown transition ${name}.`, 409)
         }
-        default:
-          throw bad(`Unknown transition ${name}.`, 409)
-      }
+      })
     },
 
     async status(input, ctx) {
@@ -886,23 +958,15 @@ export function stripeLink(opts: StripeLinkOptions) {
         return { ...step, action: { kind: 'payment', transitions: step.action!.transitions } }
       }
       if (rec.stage === 'kyc_review' && rec.customerId) {
-        const t = await tokenOrSignIn(ctx, input.ref, rec)
-        if ('step' in t) return t.step
-        if (rec.paymentToken) {
-          let customer: CryptoCustomer
-          try {
-            customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(rec.customerId)}`, { token: t.token })
-          } catch (e) {
-            throw toOpenRamp(e, 'check your identity status', ctx.log)
-          }
-          const l2 = kycState(customer, 'l2')
-          if (l2 === 'ok') return createSession(ctx, input.ref, rec, t.token)
-          if (l2 === 'review') return stageStep(input.ref, rec)
-          const next: LegRecord = { ...rec, stage: 'documents' }
-          await saveRecord(ctx, input.ref, next)
-          return stageStep(input.ref, next)
+        // This check can move the leg (a new sign-in, the onramp session): only under the lease. When a
+        // transition holds it, the poll changes nothing and the next poll checks again.
+        const release = await lease(ctx, input.ref, rec)
+        if (!release) return stageStep(input.ref, rec)
+        try {
+          return await reviewCheck(ctx, input.ref, rec)
+        } finally {
+          await release()
         }
-        return afterAuth(ctx, input.ref, rec, t.token)
       }
       return stageStep(input.ref, rec)
     },

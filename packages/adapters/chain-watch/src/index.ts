@@ -15,8 +15,15 @@
 //   (`claimOnce` on `txUsedKey`), and the deposit id is the same on every poll, so the server makes one
 //   session. The server keeps `txused:` keys in one namespace for all adapters, so a transfer that
 //   another adapter counted (for example a Relay same-chain payment) is not a deposit here, and the
-//   other way round. An EVM log also skips a transaction that a wallet payment claimed, and marks its
-//   transaction (`:log`) so a wallet payment cannot use it later.
+//   other way round.
+// - Atomic claims: an EVM log first claims its transaction for logs (`claimTransferLog`: the
+//   transaction key gets `TX_LOGS_OWNER`), then the log. A wallet payment claims the same transaction
+//   key with its own ref. So exactly one of them wins, also when they run at the same time. A Solana
+//   transfer and a Solana wallet payment claim the same signature key. On stores with `putIfAbsent`
+//   (memory, Redis, Durable Object) each claim is one atomic step. Workers KV has none: there a claim
+//   writes, then reads back, which catches most races but not all.
+// - Two polls of one address at the same time are safe: the claim owner is the address, so both
+//   list the same deposits with the same ids, and the server makes one session per deposit id.
 // - One owner per address: a destination address (with its chain and token) belongs to the first user
 //   that gets a standing address for it. Another user gets a 409. The server only asks for such an
 //   address from the app's backend, for a destination that the app says is dedicated to the user.
@@ -29,7 +36,7 @@
 //
 // Server-side only. Web-standard APIs only (fetch), so it runs on Cloudflare Workers.
 
-import { claimOnce, createAdapter, createChainWatch, ERC20_TRANSFER_TOPIC, solanaMintDecimals, solanaNetReceived, topicAddress, txUsedKey } from '@openrampkit/adapter'
+import { claimOnce, claimTransferLog, createAdapter, createChainWatch, ERC20_TRANSFER_TOPIC, solanaMintDecimals, solanaNetReceived, topicAddress, txUsedKey } from '@openrampkit/adapter'
 import type { AdapterContext, ChainWatchOptions, ScopedKV, SolanaBalanceTx, StandingAddressInput, StandingDeposit, StandingDepositsInput, TransferLog } from '@openrampkit/adapter'
 import { OpenRampException, fromBaseUnits, isEvmChain, isSolanaChain, isUsdc, nativeDecimals, normalizeToken, openRampError, toBaseUnits } from '@openrampkit/core'
 import type { CryptoAsset, LegSpec, LegStep } from '@openrampkit/core'
@@ -205,19 +212,10 @@ export function chainWatch(opts: ChainWatchAdapterOptions = {}) {
         const amount = BigInt(l.data)
         if (amount < min) continue // dust, or below `minDeposit`
         const logIndex = l.logIndex ? BigInt(l.logIndex) : 0n
-        const txKey = txUsedKey(r.chain, l.transactionHash)
-        const logKey = `${txKey}:${logIndex}`
-        const logOwner = await ctx.shared.get<string>(logKey)
-        if (logOwner && logOwner !== owner) continue // another session or adapter counted this log
-        if (!logOwner) {
-          // A wallet payment (of any adapter) already used this transaction.
-          const txOwner = await ctx.shared.get<string>(txKey)
-          if (txOwner && txOwner !== owner) continue
-          // One log, one deposit: a log that another owner took is not ours.
-          if (!(await claimOnce(ctx.shared, logKey, owner, USED_TTL_SEC))) continue
-          // A wallet payment must not use this transaction later.
-          await ctx.shared.put(`${txKey}:log`, owner, USED_TTL_SEC)
-        }
+        // One atomic claim per step (`claimTransferLog`): the transaction for its logs (a wallet payment
+        // of any adapter that claimed the whole transaction wins, or loses, against it), then the log
+        // (another session or adapter may hold it). A repeat of our own claim is true.
+        if (!(await claimTransferLog(ctx.shared, r.chain, l.transactionHash, logIndex, owner, USED_TTL_SEC))) continue
         const now = Date.now()
         out.push({
           id: `${r.chain}:${l.transactionHash.toLowerCase()}:${logIndex}`,

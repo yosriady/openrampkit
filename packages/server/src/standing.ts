@@ -13,7 +13,9 @@
 //   only the app's backend can ask for one (`depositAddresses.get` with `dedicatedDestination: true`,
 //   never the widget), one user owns a destination (`sdwatch:` key, others get 409), and nothing else
 //   may deliver to a watched destination: a converting standing address to it and a deposit session to
-//   it are refused (409), because their deliveries would count twice.
+//   it are refused (409), because their deliveries would count twice. The `sdwatch:` key holds either
+//   the watching user or the converting kind, set by one atomic claim, so a watch and a converting
+//   address made at the same time cannot both win.
 // - One deposit, one session. The session id comes from the address id and the deposit id, an
 //   atomic claim (`standingdep:...`) picks the sweep that makes it, and a leg ref that already
 //   belongs to a session is never a new deposit.
@@ -165,9 +167,35 @@ const NOT_DEDICATED =
   'A same-chain standing address is the destination address itself: the server credits every transfer to it to this user. ' +
   'Pass `dedicatedDestination: true` only for an address that your backend made for this one user and that nothing else pays to. Never use a wallet address that the user typed or connected.'
 
-/** The marker of a destination that a converting standing address delivers to */
+/**
+ * The marker of a destination that a converting standing address delivers to, from before the binding
+ * (`destinationWatchKey`) held both kinds. Still read (a marker of an older version counts), and still
+ * written, for an older server that runs next to this one.
+ */
 async function convertKey(d: StandingAddress['destination']): Promise<string> {
   return `sdconv:${(await sha256Hex(JSON.stringify([d.chain, keyOf(d.token), keyOf(d.address)]))).slice(0, 40)}`
+}
+
+/** What a destination is bound to (the value of `destinationWatchKey`) */
+type DestinationBinding = { userId: string } | { convert: true }
+
+const WATCHED_BUSY = 'This destination already gets converted deposits (a standing address of another route delivers to it). Watching it would count each of them twice. Use another destination address.'
+const CONVERT_BUSY = 'This destination is watched on chain (a same-chain standing address), so a converted deposit to it would count twice. Use another destination address.'
+
+/**
+ * Bind a destination to one kind of standing address, with one atomic claim (`putIfAbsent`): a
+ * same-chain watch for one user, or converted deliveries. The first claim wins, and every later claim
+ * reads the same answer, so a watch and a converting address can never both hold it (two requests at
+ * the same time included). A loser leaves no mark. Returns the binding that holds the destination.
+ */
+async function bindDestination(rt: Runtime, d: StandingAddress['destination'], want: DestinationBinding): Promise<DestinationBinding | undefined> {
+  const kv = rt.store.kv
+  const key = await destinationWatchKey(d.chain, d.token, d.address)
+  let won: boolean
+  if (kv.putIfAbsent) won = await kv.putIfAbsent(key, want, 0)
+  else won = (await kv.get(key)) == null && (await kv.put(key, want), true)
+  if (won) return want
+  return (await kv.get<DestinationBinding>(key)) ?? undefined
 }
 
 /**
@@ -176,32 +204,22 @@ async function convertKey(d: StandingAddress['destination']): Promise<string> {
  * is refused, because each converted delivery would also count as a direct deposit.
  */
 async function claimWatchedDestination(rt: Runtime, route: ReturnType<typeof checkRoute>): Promise<void> {
-  const kv = rt.store.kv
   const d = route.destination
-  const busy = 'This destination already gets converted deposits (a standing address of another route delivers to it). Watching it would count each of them twice. Use another destination address.'
-  if ((await kv.get(await convertKey(d))) != null) throw conflict(busy)
-  const key = await destinationWatchKey(d.chain, d.token, d.address)
-  const owner = { userId: route.userId }
-  let won: boolean
-  if (kv.putIfAbsent) won = await kv.putIfAbsent(key, owner, 0)
-  else won = (await kv.get(key)) == null && (await kv.put(key, owner), true)
-  if (!won) {
-    const cur = await kv.get<{ userId?: string }>(key)
-    if (cur?.userId !== route.userId) throw conflict('This destination address already has a same-chain standing address for another user.')
-  }
-  // A converting address made at the same time: both sides check after their own write.
-  if ((await kv.get(await convertKey(d))) != null) throw conflict(busy)
+  // A converting address of an older version: it wrote only this marker.
+  if ((await rt.store.kv.get(await convertKey(d))) != null) throw conflict(WATCHED_BUSY)
+  const cur = await bindDestination(rt, d, { userId: route.userId })
+  if (cur && 'userId' in cur && cur.userId === route.userId) return
+  if (cur && 'convert' in cur) throw conflict(WATCHED_BUSY)
+  throw conflict('This destination address already has a same-chain standing address for another user.')
 }
 
-/** A converting route: refuse a watched destination, and mark the destination as one it delivers to */
+/** A converting route: refuse a watched destination, and bind the destination to converted deliveries */
 async function markConvertedDestination(rt: Runtime, route: ReturnType<typeof checkRoute>): Promise<void> {
-  const kv = rt.store.kv
   const d = route.destination
-  const watched = 'This destination is watched on chain (a same-chain standing address), so a converted deposit to it would count twice. Use another destination address.'
-  const watchKey = await destinationWatchKey(d.chain, d.token, d.address)
-  if ((await kv.get(watchKey)) != null) throw conflict(watched)
-  await kv.put(await convertKey(d), 1)
-  if ((await kv.get(watchKey)) != null) throw conflict(watched)
+  const cur = await bindDestination(rt, d, { convert: true })
+  if (!cur || !('convert' in cur)) throw conflict(CONVERT_BUSY)
+  // For an older server that checks only this marker
+  await rt.store.kv.put(await convertKey(d), 1)
 }
 
 const SAME_ROUTE_HINT = 'The origin and the destination are the same token on the same chain. Add chainWatch() from @openrampkit/adapter-chain-watch to watch such a route, or give the user the destination address itself.'

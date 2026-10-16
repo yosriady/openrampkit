@@ -3,7 +3,7 @@
 // - The smallest deposit that completes a leg (the expected amount minus the tolerance).
 // - Same chain and token, to the destination itself: Transfer logs (EVM) and signatures (Solana).
 
-import { claimOnce, minWithToleranceBps } from '@openrampkit/adapter'
+import { TX_LOGS_OWNER, claimOnce, claimTransferLog, minWithToleranceBps } from '@openrampkit/adapter'
 import type { AdapterContext } from '@openrampkit/adapter'
 import { fromBaseUnits } from '@openrampkit/core'
 import type { LegStep } from '@openrampkit/core'
@@ -185,18 +185,20 @@ export function directTransfer(rt: RelayRuntime) {
         const amount = BigInt(l.data)
         if (amount < min) continue // dust, or less than the user said
         const block = hexOr(l.blockNumber, page.from)
-        const key = `${usedKey(chain, l.transactionHash)}:${hexOr(l.logIndex, 0n).toString()}`
-        const usedBy = await ctx.shared.get<string>(key)
+        const logIndex = hexOr(l.logIndex, 0n)
+        const usedBy = await ctx.shared.get<string>(`${usedKey(chain, l.transactionHash)}:${logIndex.toString()}`)
         if (usedBy && usedBy !== owner) continue
         if (!usedBy) {
-          // A same-chain wallet payment already used this transaction.
-          if (await ctx.shared.get<string>(usedKey(chain, l.transactionHash))) continue
+          // A same-chain wallet payment already used this transaction (a fast check; the claim decides).
+          const txOwner = await ctx.shared.get<string>(usedKey(chain, l.transactionHash))
+          if (txOwner && txOwner !== TX_LOGS_OWNER) continue
           if (await contested(ctx, rec, owner, { amount, block })) {
             holdAt ??= block
             continue
           }
-          if (!(await claimOnce(ctx.shared, key, owner, USED_TTL_SEC))) continue
-          await ctx.shared.put(`${usedKey(chain, l.transactionHash)}:log`, owner, USED_TTL_SEC)
+          // Atomic: the transaction for logs (a wallet payment of the same transaction loses, or wins
+          // first), then the log.
+          if (!(await claimTransferLog(ctx.shared, chain, l.transactionHash, logIndex, owner, USED_TTL_SEC))) continue
         }
         const decimals = rec.output?.asset.kind === 'crypto' ? (rec.output.asset.decimals ?? 6) : 6
         return finish(ctx, ref, rec, {
