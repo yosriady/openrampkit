@@ -1,0 +1,53 @@
+{
+  "name": "@openrampkit/adapter-chain-watch",
+  "version": "0.0.1",
+  "description": "OpenRampKit chain-watch adapter: standing deposit addresses for the same token on the same chain, watched on chain with no provider account",
+  "keywords": [
+    "adapter",
+    "deposit-address",
+    "openrampkit",
+    "onchain"
+  ],
+  "homepage": "https://github.com/yosriady/openrampkit/tree/main/docs/adapters/chain-watch.md",
+  "bugs": {
+    "url": "https://github.com/yosriady/openrampkit/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yosriady/openrampkit.git",
+    "directory": "packages/adapters/chain-watch"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    }
+  },
+  "files": [
+    "README.md",
+    "dist"
+  ],
+  "sideEffects": false,
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "scripts": {
+    "build": "tsup src/index.ts --format esm,cjs --dts --clean",
+    "typecheck": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/adapter": "workspace:*"
+  },
+  "peerDependencies": {}
+}

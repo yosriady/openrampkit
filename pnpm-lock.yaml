@@ -335,6 +335,15 @@ importers:
         specifier: workspace:*
         version: link:../../core
 
+  packages/adapters/chain-watch:
+    dependencies:
+      '@openrampkit/adapter':
+        specifier: workspace:*
+        version: link:../../adapter
+      '@openrampkit/core':
+        specifier: workspace:*
+        version: link:../../core
+
   packages/adapters/coinbase:
     dependencies:
       '@openrampkit/adapter':

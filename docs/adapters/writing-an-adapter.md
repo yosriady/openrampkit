@@ -237,7 +237,7 @@ Only for bridge legs. Before the server quotes a two-leg pathway, it asks the se
 
 ## standingAddress() and standingDeposits()
 
-Only for a provider that can give a reusable deposit address. `standingAddress()` returns one address for a user and route (origin chain and token, crypto destination). The same input must return the same address: keep it in `shared`. `standingDeposits()` lists the deposits at that address since a time. Give each deposit an `id` that does not change (the provider request id, or the deposit transaction hash) and a `legRef` that your `status()` understands. The server makes one deposit session per new `id` and polls `status(legRef)` until the leg ends. See [Standing deposit addresses](../guide/deposit-addresses.md).
+Only for a provider that can give a reusable deposit address. `standingAddress()` returns one address for a user and route (origin chain and token, crypto destination). The same input must return the same address: keep it in `shared`. `standingDeposits()` lists the deposits at that address since a time. Give each deposit an `id` that does not change (the provider request id, or the deposit transaction hash) and a `legRef` that your `status()` understands. The server makes one deposit session per new `id` and polls `status(legRef)` until the leg ends. Set `standingRoutes: ['same']` only for an adapter that watches the destination token on the destination chain (its address is the destination itself). To watch a chain, use `createChainWatch` from `@openrampkit/adapter`, as the [chain-watch adapter](./chain-watch.md) does. See [Standing deposit addresses](../guide/deposit-addresses.md).
 
 ## routes()
 

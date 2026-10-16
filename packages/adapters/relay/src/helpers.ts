@@ -1,6 +1,6 @@
 // Pure helpers: chain and token ids, assets, fees, and leg steps. No options and no I/O.
 
-import { awaitPoll, httpErrorToOpenRamp, httpStatus, statusMap } from '@openrampkit/adapter'
+import { awaitPoll, httpErrorToOpenRamp, httpStatus, statusMap, txUsedKey } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
 import { CHAINS, OpenRampException, evmChainId, fromBaseUnits, isSolanaAddress, isUsdc, openRampError, sameToken } from '@openrampkit/core'
 import type { Amount, CryptoAsset, Fee, LegQuote, LegStep, LegTransaction, StepDetailCode } from '@openrampkit/core'
@@ -280,7 +280,5 @@ export function destAsset(ctx: AdapterContext, legTo: CryptoAsset | undefined): 
   return { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
 }
 
-/** Key that marks a transaction as used. EVM hashes are lowercased; Solana signatures are case-sensitive. */
-export function usedKey(chain: string, hash: string) {
-  return `txused:${chain}:${isSolana(chain) ? hash : hash.toLowerCase()}`
-}
+/** Key that marks a transaction as used. EVM hashes are lowercased; Solana signatures are case-sensitive (`txUsedKey`). */
+export const usedKey = txUsedKey

@@ -132,6 +132,9 @@ export type StandingDepositsInput = {
   since: number
 }
 
+/** A kind of standing address route (see `Adapter.standingRoutes`) */
+export type StandingRoute = 'convert' | 'same'
+
 /** One deposit at a standing address (see `Adapter.standingDeposits`) */
 export type StandingDeposit = {
   /** The same for one deposit on every call: a provider request id, or the deposit transaction hash */
@@ -183,6 +186,14 @@ export interface Adapter {
    * `input` is the deposit amount, when the provider says it.
    */
   standingDeposits?(input: StandingDepositsInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingDeposit[]>
+  /**
+   * Optional, with `standingAddress`: the routes that its standing addresses serve. `convert` (the
+   * default): the origin is another token or chain than the destination, and the provider converts.
+   * `same`: the origin is the destination token on the destination chain, so the address is the
+   * destination itself and the adapter watches the chain (see `@openrampkit/adapter-chain-watch`).
+   * The server picks, for each route, the first adapter that serves it.
+   */
+  standingRoutes?: ReadonlyArray<StandingRoute>
   /** Optional live catalog: returns legs refined for this user (methods, limits, assets) */
   catalog?(input: CatalogInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<LegSpec[]>
   quote(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote>
@@ -317,5 +328,6 @@ export * from './rsa.js'
 export * from './util.js'
 export * from './evm.js'
 export * from './solana.js'
+export * from './chain-watch.js'
 export * from './testkit.js'
 export * from './settlement.js'

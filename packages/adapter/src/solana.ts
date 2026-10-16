@@ -4,7 +4,7 @@
 import { SOLANA_SYSTEM_PROGRAM, SPL_TOKEN_2022_PROGRAM, SPL_TOKEN_PROGRAM } from '@openrampkit/core'
 
 /** A token balance entry of `getTransaction` (`meta.preTokenBalances` / `meta.postTokenBalances`) */
-export type SolanaTokenBalance = { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string } }
+export type SolanaTokenBalance = { accountIndex: number; mint: string; owner?: string; uiTokenAmount: { amount: string; decimals?: number } }
 
 /** A `jsonParsed` instruction. Unknown programs have no `parsed` field. */
 export type SolanaParsedInstruction = {
@@ -84,4 +84,40 @@ export function solanaPaidTo(tx: SolanaParsedTx, owner: string, mint: string): b
     }
   }
   return paid
+}
+
+/** The balance fields that `solanaNetReceived` reads (a `getTransaction` result, `jsonParsed`) */
+export type SolanaBalanceTx = {
+  meta: { err?: unknown; preBalances?: number[]; postBalances?: number[]; preTokenBalances?: SolanaTokenBalance[]; postTokenBalances?: SolanaTokenBalance[] } | null
+  transaction: { message: { accountKeys: Array<string | { pubkey: string }> } }
+}
+
+/**
+ * The net amount (base units) that `tx` moved to `owner`, from the balance changes: lamports for
+ * `mint: 'native'`, else the sum of the changes of every token account of `mint` that `owner` owns
+ * (a new account has no pre balance). Negative when the owner sent more than it got.
+ */
+export function solanaNetReceived(tx: SolanaBalanceTx, owner: string, mint: string): bigint {
+  const meta = tx.meta
+  if (!meta) return 0n
+  if (mint === 'native') {
+    const keys = tx.transaction.message.accountKeys.map(keyOf)
+    const i = keys.indexOf(owner)
+    return i < 0 ? 0n : BigInt(meta.postBalances?.[i] ?? 0) - BigInt(meta.preBalances?.[i] ?? 0)
+  }
+  const mine = (b: SolanaTokenBalance) => b.owner === owner && b.mint === mint
+  const pre = new Map<number, bigint>()
+  for (const b of meta.preTokenBalances ?? []) if (mine(b)) pre.set(b.accountIndex, BigInt(b.uiTokenAmount.amount))
+  let total = 0n
+  for (const b of meta.postTokenBalances ?? []) if (mine(b)) total += BigInt(b.uiTokenAmount.amount) - (pre.get(b.accountIndex) ?? 0n)
+  return total
+}
+
+/** The decimals of `mint` from the token balances of `tx`, when it has one (SOL: 9) */
+export function solanaMintDecimals(tx: SolanaBalanceTx, mint: string): number | undefined {
+  if (mint === 'native') return 9
+  for (const b of [...(tx.meta?.postTokenBalances ?? []), ...(tx.meta?.preTokenBalances ?? [])]) {
+    if (b.mint === mint && typeof b.uiTokenAmount.decimals === 'number') return b.uiTokenAmount.decimals
+  }
+  return undefined
 }

@@ -42,10 +42,10 @@ The server checks the input like a session create:
 | `origin.chain` | A CAIP-2 chain id |
 | `origin.token` | A token address, or `native` |
 | `destination` | A crypto destination with a valid chain, token and address. No `settlement` and no `calls`. |
-| Route | The origin and the destination are not the same token on the same chain |
-| `adapterId` | Optional. Default: the first adapter with `standingAddress` and a `transfer` leg. |
+| Route | Any route. The same token on the same chain needs an adapter that watches the chain (see [Same chain and token](#same-chain-and-token)). |
+| `adapterId` | Optional. Default: the first adapter with `standingAddress` and a `transfer` leg that serves the route. |
 
-With no such adapter, `get` throws `400` (`No configured adapter gives standing deposit addresses`). An unknown `adapterId` throws `404`.
+With no such adapter, `get` throws `400` (`No configured adapter gives standing deposit addresses`, or for the same token on the same chain a message that names `chainWatch()`). An unknown `adapterId` throws `404`, and an adapter that does not serve the route throws `400`.
 
 ## Show it in the widget
 
@@ -84,6 +84,28 @@ The sweep keeps the addresses on a [store queue](../deploy/stores.md#queues), ea
 
 Each poll asks for the deposits of the last hour again, so a deposit that the provider lists late is not missed. `SweepResult.standing` counts the addresses polled and the new deposits.
 
+## Same chain and token
+
+When the user sends the destination token on the destination chain, no bridge is needed: the deposit address is the destination address itself. Add the [chain-watch adapter](../adapters/chain-watch.md) to serve such routes with no provider account:
+
+```ts
+import { chainWatch } from '@openrampkit/adapter-chain-watch'
+
+createOpenRamp({
+  // ...
+  adapters: [relay({ apiKey }), chainWatch({ rpcUrls: { 'eip155:8453': process.env.BASE_RPC_URL! } })],
+})
+```
+
+`get` with the same chain and token as origin and destination then returns the destination address, with `adapterId: 'chain-watch'`. A route that converts still goes to Relay. The adapter watches ERC-20 `Transfer` logs on EVM chains, and SOL and SPL transfers on Solana (native ETH transfers have no log, so they are refused). Each transfer in becomes one deposit session, as above:
+
+- A transfer counts only after its confirmations (`confirmations`, default 12 blocks on EVM; `finalized` on Solana).
+- Each log or signature makes one session, never two.
+- Before the session succeeds, the adapter reads the transaction again. A transfer that a re-org removed, or with another amount, fails the session.
+- Transfers below `minDeposit` are ignored.
+
+Every transfer of the token into the address counts, whoever sent it. Use a destination that receives only these deposits. See [Read this first](../adapters/chain-watch.md#read-this-first).
+
 ## Relay notes
 
 Relay is the first adapter with standing addresses. The address is a Relay open deposit address from the origin token to the destination, with the destination address as the recipient. The adapter keeps it in its shared store for 400 days after the last call. Each deposit is one Relay request: `depositId` is the deposit transaction (`tx:...`), else the request id, and the leg follows that request.
@@ -99,10 +121,10 @@ The refund address is part of the address key, so a change of `refundTo` gives n
 ## Limits
 
 - **One route per address.** Send only the origin token on the origin chain. Another token or chain may be lost.
-- **Providers.** Only Relay gives standing addresses now. Bridge virtual accounts (a fiat bank account per user) could implement the same two methods next.
-- **Same chain and token.** A route with the same token on the same chain needs no conversion: give the user the destination address itself. A later version could watch such a route on chain.
+- **Providers.** Relay gives standing addresses that convert, and chain-watch gives them for the same token on the same chain. Bridge virtual accounts (a fiat bank account per user) could implement the same two methods next.
+- **Native ETH.** chain-watch cannot watch native transfers on EVM chains (no log). Use a token such as USDC.
 - **Polling only.** Deposits are found by the sweep, so run it every minute or so (see [Background sweep](../api/server.md#background-sweep)).
 
 ## For adapter authors
 
-An adapter gives standing addresses with two optional methods, `standingAddress()` and `standingDeposits()`, plus `status()` for each deposit's `legRef` and a leg with the method `transfer`. See [@openrampkit/adapter](../api/adapter.md#adapter).
+An adapter gives standing addresses with two optional methods, `standingAddress()` and `standingDeposits()`, plus `status()` for each deposit's `legRef` and a leg with the method `transfer`. `standingRoutes` says which routes it serves (`convert`, the default, or `same`). See [@openrampkit/adapter](../api/adapter.md#adapter).

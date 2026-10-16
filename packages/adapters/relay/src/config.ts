@@ -1,8 +1,8 @@
 // Relay adapter options, public RPC defaults, and constants.
 
-import { POLL } from '@openrampkit/adapter'
+import { DEFAULT_LOG_BLOCK_RANGE as WATCH_LOG_BLOCK_RANGE, DEFAULT_LOG_PAGES, POLL, PUBLIC_RPC_URLS } from '@openrampkit/adapter'
 import type { SettlementIntentTypedData } from '@openrampkit/adapter'
-import { SOLANA_DEVNET, SOLANA_MAINNET } from '@openrampkit/core'
+import { SOLANA_MAINNET } from '@openrampkit/core'
 import type { PollSpec } from '@openrampkit/core'
 
 export type RelayOptions = {
@@ -59,23 +59,17 @@ export type RelayOptions = {
    * can deliver a little less than its quote.
    */
   amountToleranceBps?: number
-  /** Most blocks in one `eth_getLogs` call (same-chain `transfer` checks). Default 2000. */
+  /** Most blocks in one `eth_getLogs` call (same-chain `transfer` checks). Default 2000, at most 10000. */
   logBlockRange?: number
+  /**
+   * Most JSON-RPC requests per second to one RPC URL, from this adapter instance (calls wait for their
+   * turn). Default: no limit. Set it when you use public RPCs.
+   */
+  rpcRequestsPerSecond?: number
 }
 
-/** Public RPCs for on-chain verification. Rate-limited: use your own in production. */
-export const DEFAULT_RPC_URLS: Record<string, string> = {
-  'eip155:1': 'https://ethereum-rpc.publicnode.com',
-  'eip155:8453': 'https://mainnet.base.org',
-  'eip155:42161': 'https://arb1.arbitrum.io/rpc',
-  'eip155:10': 'https://mainnet.optimism.io',
-  'eip155:137': 'https://polygon-rpc.com',
-  'eip155:4217': 'https://rpc.tempo.xyz',
-  [SOLANA_MAINNET]: 'https://api.mainnet-beta.solana.com',
-  [SOLANA_DEVNET]: 'https://api.devnet.solana.com',
-  'eip155:421614': 'https://sepolia-rollup.arbitrum.io/rpc',
-  'eip155:46630': 'https://rpc.testnet.chain.robinhood.com',
-}
+/** Public RPCs for on-chain verification (`PUBLIC_RPC_URLS` of `@openrampkit/adapter`). Rate-limited: use your own in production. */
+export const DEFAULT_RPC_URLS: Readonly<Record<string, string>> = PUBLIC_RPC_URLS
 
 /** Allowed difference between our clock and block timestamps when a direct payment checks its tx age */
 export const DIRECT_TX_CLOCK_SKEW_MS = 5 * 60_000
@@ -99,9 +93,9 @@ export const WATCH_TTL_SEC = 24 * 60 * 60
 export const USED_TTL_SEC = 90 * 24 * 60 * 60
 export const DEFAULT_TOLERANCE_BPS = 50
 export const HOP_TOLERANCE_BPS = 500
-export const DEFAULT_LOG_BLOCK_RANGE = 2000
+export const DEFAULT_LOG_BLOCK_RANGE = WATCH_LOG_BLOCK_RANGE
 /** Most `eth_getLogs` pages in one status check; the next check goes on from where this one stopped */
-export const LOG_PAGES_PER_CHECK = 5
+export const LOG_PAGES_PER_CHECK = DEFAULT_LOG_PAGES
 export const WALLET_QUOTE_REUSE_MS = 20_000
 /** Lifetime of a wallet quote, in minutes */
 export const WALLET_QUOTE_TTL_MIN = 1

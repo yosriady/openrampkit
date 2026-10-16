@@ -6,14 +6,14 @@ import type { AdapterContext, EvmReceipt, SettlementIntent, StartInput } from '@
 import { OpenRampException, chainName, evmChainId, isSolanaTx, openRampError } from '@openrampkit/core'
 import type { LegStep, TxRequest } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
-import { DEFAULT_RPC_URLS, DIRECT_TX_CLOCK_SKEW_MS, RECORD_TTL_SEC, USED_TTL_SEC, WALLET_QUOTE_REUSE_MS } from './config.js'
+import { DIRECT_TX_CLOCK_SKEW_MS, RECORD_TTL_SEC, USED_TTL_SEC, WALLET_QUOTE_REUSE_MS } from './config.js'
 import { SUBMIT_TX, awaitingTx, caip2FromRelay, cryptoAsset, fitsChain, isNative, isSolana, knownDecimals, requestIdOf, sameChainTransactions, sameUser, settlementOf, toOpenRamp, usedKey } from './helpers.js'
 import { solanaReceived } from './solana.js'
 import type { SolStatus } from './solana.js'
 import type { RelayQuoteResponse, RelayStep, WalletRecord } from './types.js'
 
 export function walletLeg(rt: RelayRuntime) {
-  const { opts, api, rpc, solanaTx } = rt
+  const { opts, api, rpc, rpcUrl, solanaTx } = rt
 
   /** Wallet transactions from Relay steps. `unsupported` names the first step kind we cannot run (e.g. `signature`). */
   function walletTxsFrom(steps: RelayStep[]): { txs: TxRequest[]; unsupported?: string } {
@@ -186,7 +186,7 @@ export function walletLeg(rt: RelayRuntime) {
   async function verifySettlementWallet(ctx: AdapterContext, ref: string, rec: WalletRecord): Promise<LegStep> {
     const chain = rec.chain!
     const s = rec.settlement!
-    const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
+    const url = rpcUrl(chain)
     if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
     const r = await verifySettlement({
       rpcUrl: url,

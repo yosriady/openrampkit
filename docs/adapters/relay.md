@@ -30,7 +30,8 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#relay).
 | `settlementIntentTtlSec` | `number` | `1800` | How long a signed settlement intent stays valid, in seconds |
 | `slippageBps` | `number` | none (Relay picks) | Relay `slippageTolerance` in basis points (0 to 10000), sent with every quote. A `wallet` quote then has this value as `slippageBps`. |
 | `amountToleranceBps` | `number` | `50` | How far below the expected amount a deposit can be and still complete a `transfer` leg, in basis points. A `bridge` leg uses at least 500. See [One deposit, one session](#one-deposit-one-session). |
-| `logBlockRange` | `number` | `2000` | The most blocks in one `eth_getLogs` call, for same-chain `transfer` checks. Set it to the limit of your RPC. |
+| `logBlockRange` | `number` | `2000` | The most blocks in one `eth_getLogs` call, for same-chain `transfer` checks. Set it to the limit of your RPC. At most `10000`. |
+| `rpcRequestsPerSecond` | `number` | no limit | The most JSON-RPC requests per second to one RPC URL, from this adapter instance. Calls wait for their turn. Set it when you use the public RPCs. |
 
 ::: warning No API key
 Set an API key. Two facts apply:
@@ -94,7 +95,7 @@ In a [withdraw session](../guide/withdraw.md), the `wallet` leg sends the sessio
 
 ### Standing deposit addresses
 
-`standingAddress()` gives one Relay open deposit address per user and route, with the destination address as the recipient. The adapter keeps it in the shared store for 400 days after the last call. `standingDeposits()` reads the Relay requests of that address (`depositAddress=...`, up to 5 pages of 20). It looks back 24 hours before `since`, because Relay can show a deposit transaction some time after it made the request. The server drops deposits it already has. A request with no deposit transaction yet is left out until Relay shows one, so every deposit id is a deposit transaction. Relay can give a session's transfer leg the same address as a standing address. Both flows claim a deposit with the same key, so one deposit goes to one of them only, the first that claims it. A deposit's `legRef` is `sreq:<requestId>|<address>|<depositKey>`. Relay can re-quote a deposit under a new request id, so `status()` takes the newest request at the address for the same deposit transaction, and reads the request by id when it is not there. The refund address follows `refundTo`: for user wallets set `refundTo: 'recipient'`. See [Standing deposit addresses](../guide/deposit-addresses.md).
+`standingAddress()` gives one Relay open deposit address per user and route, with the destination address as the recipient. The adapter keeps it in the shared store for 400 days after the last call. `standingDeposits()` reads the Relay requests of that address (`depositAddress=...`, up to 5 pages of 20). It looks back 24 hours before `since`, because Relay can show a deposit transaction some time after it made the request. The server drops deposits it already has. A request with no deposit transaction yet is left out until Relay shows one, so every deposit id is a deposit transaction. Relay can give a session's transfer leg the same address as a standing address. Both flows claim a deposit with the same key, so one deposit goes to one of them only, the first that claims it. A deposit's `legRef` is `sreq:<requestId>|<address>|<depositKey>`. Relay can re-quote a deposit under a new request id, so `status()` takes the newest request at the address for the same deposit transaction, and reads the request by id when it is not there. The refund address follows `refundTo`: for user wallets set `refundTo: 'recipient'`. See [Standing deposit addresses](../guide/deposit-addresses.md). Relay gives standing addresses only for a route that converts (another token or chain). For the destination token on the destination chain, add the [chain-watch adapter](./chain-watch.md).
 
 ## Source tokens
 
@@ -114,7 +115,7 @@ In a [withdraw session](../guide/withdraw.md), the `wallet` leg sends the sessio
 
 ## Same-chain moves
 
-When the source and the destination are the same token on the same chain, Relay is not involved. The adapter checks the chain itself, with JSON-RPC calls to `rpcUrls[chain]` (or the default public RPC). A chain without an RPC URL cannot use same-chain moves: the RPC step (the `transfer` start, or the `wallet` status check) fails with `PROVIDER_UNAVAILABLE` ("No RPC is configured to verify transfers on ...").
+When the source and the destination are the same token on the same chain, Relay is not involved. The adapter checks the chain itself with the shared chain watcher of `@openrampkit/adapter` (`createChainWatch`), with JSON-RPC calls to `rpcUrls[chain]` (or the default public RPC). A chain without an RPC URL cannot use same-chain moves: the RPC step (the `transfer` start, or the `wallet` status check) fails with `PROVIDER_UNAVAILABLE` ("No RPC is configured to verify transfers on ...").
 
 | Leg | Check |
 |---|---|

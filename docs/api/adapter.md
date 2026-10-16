@@ -64,12 +64,16 @@ interface Adapter {
 
 An adapter with standing addresses needs both methods, `status()` (the server polls each deposit with its `legRef`), and a leg with the method `transfer` (the deposit sessions use it). `checkAdapterShape` checks this. See [Standing deposit addresses](../guide/deposit-addresses.md).
 
+`standingRoutes` (optional) says which routes the addresses serve. `['convert']` is the default: the origin is another token or chain, and the provider converts each deposit. `['same']`: the origin is the destination token on the destination chain. Then `standingAddress` must return the destination address itself (the server refuses another address with `502`), and the adapter reports the transfers it sees on chain. The server picks, for each route, the first adapter that serves it. The [chain-watch adapter](../adapters/chain-watch.md) serves `same`.
+
 ```ts
 type StandingAddressInput = {
   userId: string
   origin: { chain: string; token: string }             // the asset the user sends
   destination: Extract<Destination, { type: 'crypto' }> // where each deposit goes
 }
+
+type StandingRoute = 'convert' | 'same' // Adapter.standingRoutes?: StandingRoute[]
 
 type StandingDepositsInput = { ref: string; address: string; origin: { chain: string; token: string }; since: number }
 
@@ -275,7 +279,38 @@ Plain JSON-RPC over `fetch`. No viem.
 |---|---|
 | `solanaPaidTo(tx, owner, mint)` | The amount (base units, `bigint`) that the transfer instructions of a parsed transaction (`getTransaction` with `jsonParsed`) send to `owner`. With `mint: 'native'`, it counts System Program transfers in lamports. With an SPL mint, it counts SPL Token and Token-2022 `transfer` and `transferChecked` instructions into a token account of `owner`. A failed transaction gives `0n`. |
 
-Types: `SolanaParsedTx`, `SolanaParsedInstruction`, `SolanaTokenBalance`, `SolanaSignatureStatus`.
+| `solanaNetReceived(tx, owner, mint)` | The net amount (base units, `bigint`) that a transaction moved to `owner`, from the balance changes: lamports for `mint: 'native'`, else the sum over the token accounts of `mint` that `owner` owns. Negative when the owner sent more than it got. |
+| `solanaMintDecimals(tx, mint)` | The decimals of `mint` from the token balances of the transaction (9 for `native`), or `undefined` |
+
+Types: `SolanaParsedTx`, `SolanaParsedInstruction`, `SolanaTokenBalance`, `SolanaSignatureStatus`, `SolanaBalanceTx`.
+
+## Chain watch
+
+`createChainWatch(options)` watches chains with no provider: JSON-RPC calls with per-chain URLs and a rate limit, ERC-20 `Transfer` logs page by page, and Solana reads. The Relay adapter (same-chain transfers) and the [chain-watch adapter](../adapters/chain-watch.md) use it. Make one per adapter instance: the rate limit is per instance.
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `rpcUrls` | `Record<string, string>` | none | JSON-RPC URL per CAIP-2 chain. It wins over `defaultRpcUrls`. |
+| `defaultRpcUrls` | `Record<string, string>` | `PUBLIC_RPC_URLS` | The URLs of the chains that `rpcUrls` does not name. Pass `{}` to use only `rpcUrls`. The public RPCs have rate limits: set your own in production. |
+| `logBlockRange` | `number` | `2000` | The most blocks in one `eth_getLogs` call. At most `10000`. |
+| `maxLogPages` | `number` | `5` | The most `eth_getLogs` pages in one check. At most `50`. The next check goes on from where this one stopped. |
+| `requestsPerSecond` | `number` | no limit | The most RPC requests per second to one RPC URL, in this process. Calls wait for their turn. |
+| `timeoutMs` | `number` | `8000` | The timeout of one RPC call |
+| `confirmations` | `number \| Record<string, number>` | `12` | EVM: the blocks on top of a log's block before the log counts. One number, or one per chain (other chains get 12). |
+| `solanaCommitment` | `'confirmed' \| 'finalized'` | `'finalized'` | The commitment of Solana reads |
+
+| Method | Description |
+|---|---|
+| `rpc(ctx, chain, method, params)` | One JSON-RPC call. A chain with no URL throws `PROVIDER_UNAVAILABLE` ("No RPC is configured to verify transfers on ..."). |
+| `rpcUrl(chain)` | The URL for the chain, or `undefined` |
+| `latestBlock(ctx, chain)` | `eth_blockNumber` as a `bigint` |
+| `confirmationsFor(chain)` | The confirmation depth of the chain |
+| `transferLogPages(ctx, { chain, token, to, from, latest })` | An async generator of pages `{ from, to, logs }`: the `Transfer` logs of `token` to `to`, at most `logBlockRange` blocks and `maxLogPages` pages. Each page has its logs oldest first, with removed logs left out. |
+| `solanaSignatures(ctx, chain, account, { limit, before?, until?, commitment? })` | `getSignaturesForAddress`, newest first |
+| `solanaTokenAccounts(ctx, chain, owner, mint)` | The token accounts of `mint` that `owner` owns |
+| `solanaTx(ctx, chain, signature, commitment?)` | `getTransaction` with `jsonParsed`, or `null` |
+
+Also exported: `txUsedKey(chain, hash)` (the `claimOnce` key of a used transaction; add `:{logIndex}` for one log), `PUBLIC_RPC_URLS`, `DEFAULT_LOG_BLOCK_RANGE`, `MAX_LOG_BLOCK_RANGE`, `DEFAULT_LOG_PAGES`, `MAX_LOG_PAGES`, `DEFAULT_CONFIRMATIONS`.
 
 ## Settlement helpers
 

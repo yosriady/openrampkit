@@ -1,10 +1,10 @@
 // The Relay HTTP API and the JSON-RPC calls, with the options of one adapter instance.
 
-import { cachedJson, evmRpc, fetchJson } from '@openrampkit/adapter'
+import { cachedJson, createChainWatch, fetchJson } from '@openrampkit/adapter'
 import type { AdapterContext, Logger } from '@openrampkit/adapter'
-import { OpenRampException, chainName, openRampError } from '@openrampkit/core'
+import { OpenRampException, openRampError } from '@openrampkit/core'
 import type { CryptoAsset } from '@openrampkit/core'
-import { DEFAULT_LOG_BLOCK_RANGE, DEFAULT_RPC_URLS, DEFAULT_TOLERANCE_BPS, EVM_NATIVE, SOLANA_NATIVE } from './config.js'
+import { DEFAULT_RPC_URLS, DEFAULT_TOLERANCE_BPS, EVM_NATIVE, SOLANA_NATIVE } from './config.js'
 import type { RelayOptions } from './config.js'
 import { fitsChain, isSolana, knownDecimals, relayChainId, relayCurrency, toOpenRamp } from './helpers.js'
 import type { SolTx } from './solana.js'
@@ -17,7 +17,17 @@ export function createRuntime(opts: RelayOptions) {
   const baseUrl = (opts.baseUrl ?? 'https://api.relay.link').replace(/\/+$/, '')
   let warnedV2 = false
   const toleranceBps = Math.max(0, Math.min(10_000, Math.round(opts.amountToleranceBps ?? DEFAULT_TOLERANCE_BPS)))
-  const logBlockRange = BigInt(Math.max(1, Math.floor(opts.logBlockRange ?? DEFAULT_LOG_BLOCK_RANGE)))
+  // The chain watcher (`@openrampkit/adapter`): RPC URLs, the `eth_getLogs` block range and the rate limit.
+  // Relay reads Solana at `confirmed` and counts an EVM log as soon as it is in a block (no confirmations).
+  const watch = createChainWatch({
+    ...(opts.rpcUrls ? { rpcUrls: opts.rpcUrls } : {}),
+    defaultRpcUrls: DEFAULT_RPC_URLS,
+    ...(opts.logBlockRange !== undefined ? { logBlockRange: opts.logBlockRange } : {}),
+    ...(opts.rpcRequestsPerSecond !== undefined ? { requestsPerSecond: opts.rpcRequestsPerSecond } : {}),
+    confirmations: 0,
+    solanaCommitment: 'confirmed',
+  })
+  const logBlockRange = watch.logBlockRange
   /** The `slippageTolerance` (bps) sent with every quote, or undefined when Relay picks it */
   const slippageBps = opts.slippageBps !== undefined ? Math.max(0, Math.min(10_000, Math.round(opts.slippageBps))) : undefined
 
@@ -109,15 +119,11 @@ export function createRuntime(opts: RelayOptions) {
     }
   }
 
-  async function rpc<T>(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, method: string, params: unknown[]): Promise<T> {
-    const url = (opts.rpcUrls ?? {})[chain] ?? DEFAULT_RPC_URLS[chain]
-    if (!url) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: `No RPC is configured to verify transfers on ${chainName(chain)}.` }), 502)
-    return evmRpc<T>(ctx.fetch, url, method, params, { log: ctx.log })
-  }
+  const { rpc, rpcUrl } = watch
 
   function solanaTx(ctx: Pick<AdapterContext, 'fetch' | 'log'>, chain: string, signature: string) {
-    return rpc<SolTx | null>(ctx, chain, 'getTransaction', [signature, { encoding: 'jsonParsed', commitment: 'confirmed', maxSupportedTransactionVersion: 0 }])
+    return watch.solanaTx<SolTx>(ctx, chain, signature, 'confirmed')
   }
 
-  return { opts, toleranceBps, slippageBps, logBlockRange, warnNoKey, api, listRequests, listRequestsPage, decimalsOf, refundTo, baseBody, rpc, solanaTx }
+  return { opts, toleranceBps, slippageBps, logBlockRange, watch, warnNoKey, api, listRequests, listRequestsPage, decimalsOf, refundTo, baseBody, rpc, rpcUrl, solanaTx }
 }

@@ -4,6 +4,10 @@
 // is already `processing`), so the usual machinery takes over: status polls on the open-session list,
 // session webhooks, the admin views and the reversal rules.
 //
+// Two kinds of route (`Adapter.standingRoutes`): `convert` (another token or chain: a provider such as
+// Relay converts each deposit) and `same` (the destination token on the destination chain: the address
+// is the destination itself, and an adapter such as chain-watch reports the transfers it sees on chain).
+//
 // Money safety:
 // - One deposit, one session. The session id comes from the address id and the deposit id, an
 //   atomic claim (`standingdep:...`) picks the sweep that makes it, and a leg ref that already
@@ -14,7 +18,7 @@
 // the last `get`, `sda:{id}:poll` the poll state. Queues: STANDING_QUEUE (the addresses to poll, with
 // their next poll time) and one index queue per user (`list`).
 
-import type { Adapter, StandingDeposit } from '@openrampkit/adapter'
+import type { Adapter, StandingDeposit, StandingRoute } from '@openrampkit/adapter'
 import { OpenRampException, isDecimal, normalizeToken, openRampError } from '@openrampkit/core'
 import type { Amount, CryptoAsset, Destination, LegQuote, LegSpec, MethodOption, Pathway, StandingAddress } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
@@ -39,7 +43,10 @@ export type DepositAddressInput = {
   origin: { chain: string; token: string; symbol?: string; decimals?: number }
   /** Where each deposit goes. Only a crypto destination, with no `settlement` and no `calls`. */
   destination: Destination
-  /** The adapter to use. Default: the first adapter with `standingAddress` and a `transfer` leg. */
+  /**
+   * The adapter to use. Default: the first adapter with `standingAddress` and a `transfer` leg that
+   * serves the route (see `Adapter.standingRoutes`).
+   */
   adapterId?: string
 }
 
@@ -107,12 +114,17 @@ function supportsStanding(a: Adapter): boolean {
   return !!a.standingAddress && !!a.standingDeposits && !!a.status && !!transferLeg(a)
 }
 
+/** True when the adapter's standing addresses serve this kind of route (default: `convert` only) */
+function servesRoute(a: Adapter, kind: StandingRoute): boolean {
+  return (a.standingRoutes ?? ['convert']).includes(kind)
+}
+
 function adapterCtx(rt: Runtime, a: Adapter) {
   return { fetch: rt.fetch, log: rt.log, shared: scopedKV(rt.store, `a:${a.id}`) }
 }
 
 /** Check the input like a session create does. Returns the route with normalized tokens. */
-function checkRoute(input: DepositAddressInput): { userId: string; origin: StandingAddress['origin']; destination: StandingAddress['destination'] } {
+function checkRoute(input: DepositAddressInput): { userId: string; origin: StandingAddress['origin']; destination: StandingAddress['destination']; kind: StandingRoute } {
   if (!input || typeof input !== 'object') throw bad('The input must be an object.')
   const d = input.destination
   if (!d || typeof d !== 'object' || d.type !== 'crypto') throw bad('A standing deposit address needs a crypto `destination`.')
@@ -128,22 +140,24 @@ function checkRoute(input: DepositAddressInput): { userId: string; origin: Stand
   if (input.adapterId !== undefined && typeof input.adapterId !== 'string') throw bad('`adapterId` must be a string.')
   const origin = { chain: o.chain, token: normalizeToken(o.chain, o.token), ...(o.symbol ? { symbol: o.symbol } : {}), ...(o.decimals !== undefined ? { decimals: o.decimals } : {}) }
   const destination = { ...d, token: normalizeToken(d.chain, d.token) }
-  if (origin.chain === destination.chain && keyOf(origin.token) === keyOf(destination.token)) {
-    throw bad('The origin and the destination are the same token on the same chain. Give the user the destination address itself.')
-  }
-  return { userId: input.userId, origin, destination }
+  // The same token on the same chain needs no conversion: an adapter that watches the chain serves it.
+  const kind: StandingRoute = origin.chain === destination.chain && keyOf(origin.token) === keyOf(destination.token) ? 'same' : 'convert'
+  return { userId: input.userId, origin, destination, kind }
 }
 
-/** The adapter for a new address: `adapterId`, else the first adapter that supports standing addresses */
-function pickAdapter(rt: Runtime, adapterId?: string): Adapter {
+const SAME_ROUTE_HINT = 'The origin and the destination are the same token on the same chain. Add chainWatch() from @openrampkit/adapter-chain-watch to watch such a route, or give the user the destination address itself.'
+
+/** The adapter for a new address: `adapterId`, else the first adapter that gives standing addresses for this kind of route */
+function pickAdapter(rt: Runtime, kind: StandingRoute, adapterId?: string): Adapter {
   if (adapterId !== undefined) {
     const a = rt.adapters.get(adapterId)
     if (!a) throw new OpenRampException(openRampError('NOT_FOUND', { message: `Adapter ${adapterId} is not configured.` }), 404)
     if (!supportsStanding(a)) throw bad(`Adapter ${adapterId} does not give standing deposit addresses (it needs standingAddress, standingDeposits, status and a transfer leg).`)
+    if (!servesRoute(a, kind)) throw bad(kind === 'same' ? `Adapter ${adapterId} does not watch the same token on the same chain. ${SAME_ROUTE_HINT}` : `Adapter ${adapterId} gives standing addresses only for the same token on the same chain.`)
     return a
   }
-  const a = [...rt.adapters.values()].find(supportsStanding)
-  if (!a) throw bad('No configured adapter gives standing deposit addresses. Add one that does, for example relay().')
+  const a = [...rt.adapters.values()].find((x) => supportsStanding(x) && servesRoute(x, kind))
+  if (!a) throw bad(kind === 'same' ? SAME_ROUTE_HINT : 'No configured adapter gives standing deposit addresses. Add one that does, for example relay().')
   return a
 }
 
@@ -168,7 +182,7 @@ function publicView(r: StandingRecord): StandingAddress {
  */
 export async function getStandingAddress(rt: Runtime, input: DepositAddressInput): Promise<StandingAddress> {
   const route = checkRoute(input)
-  const a = pickAdapter(rt, input.adapterId)
+  const a = pickAdapter(rt, route.kind, input.adapterId)
   const id = await standingId(a.id, route)
   const key = `sda:${id}`
   const kv = rt.store.kv
@@ -176,7 +190,9 @@ export async function getStandingAddress(rt: Runtime, input: DepositAddressInput
   let rec = await kv.get<StandingRecord>(key)
   if (!rec) {
     const got = await a.standingAddress!({ userId: route.userId, origin: { chain: route.origin.chain, token: route.origin.token }, destination: route.destination }, adapterCtx(rt, a))
-    if (!got || typeof got.address !== 'string' || !isValidAddress(route.origin.chain, got.address) || typeof got.ref !== 'string' || !got.ref || got.ref.length > 500) {
+    // A same-chain route has no conversion: its address must be the destination itself.
+    const sameButOther = route.kind === 'same' && typeof got?.address === 'string' && keyOf(got.address) !== keyOf(route.destination.address)
+    if (!got || typeof got.address !== 'string' || !isValidAddress(route.origin.chain, got.address) || typeof got.ref !== 'string' || !got.ref || got.ref.length > 500 || sameButOther) {
       rt.log.error('adapter returned a standing address that is not valid', { adapter: a.id })
       throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The provider did not return a valid deposit address.' }), 502)
     }
@@ -244,7 +260,8 @@ export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, bod
   const a = depositAddressMethod(rt, rec) ? widgetStandingAdapter(rt, rec) : undefined
   if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session cannot use a standing deposit address.' }), 409)
   if (typeof body?.chain !== 'string' || typeof body.token !== 'string') throw bad('`chain` and `token` are required.')
-  const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: rec.destination!, adapterId: a.id })
+  // The adapter follows the route: a provider that converts, or a chain watcher for the destination token itself.
+  const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: rec.destination! })
   const d = sa.destination
   return { id: sa.id, address: sa.address, origin: sa.origin, destination: { chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}) } }
 }

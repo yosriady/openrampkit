@@ -3,20 +3,20 @@
 // - The smallest deposit that completes a leg (the expected amount minus the tolerance).
 // - Same chain and token, to the destination itself: Transfer logs (EVM) and signatures (Solana).
 
-import { ERC20_TRANSFER_TOPIC, claimOnce, minWithToleranceBps, topicAddress } from '@openrampkit/adapter'
+import { claimOnce, minWithToleranceBps } from '@openrampkit/adapter'
 import type { AdapterContext } from '@openrampkit/adapter'
 import { fromBaseUnits } from '@openrampkit/core'
 import type { LegStep } from '@openrampkit/core'
 import type { RelayRuntime } from './client.js'
-import { HOP_TOLERANCE_BPS, LOG_PAGES_PER_CHECK, RECORD_TTL_SEC, USED_TTL_SEC, WATCH_TTL_SEC } from './config.js'
-import { addrKey, cmpBig, hexOr, isNative, isSolana, sameChainTransactions, toHex, usedKey } from './helpers.js'
+import { HOP_TOLERANCE_BPS, RECORD_TTL_SEC, USED_TTL_SEC, WATCH_TTL_SEC } from './config.js'
+import { addrKey, hexOr, isNative, isSolana, sameChainTransactions, toHex, usedKey } from './helpers.js'
 import { solanaReceived } from './solana.js'
 import type { DepositRecord, Watcher } from './types.js'
 
 export type DirectTransfer = ReturnType<typeof directTransfer>
 
 export function directTransfer(rt: RelayRuntime) {
-  const { toleranceBps, logBlockRange, rpc, solanaTx } = rt
+  const { toleranceBps, watch, solanaTx } = rt
 
   // ---------- one deposit for one leg ----------
 
@@ -109,11 +109,10 @@ export function directTransfer(rt: RelayRuntime) {
   async function findSolanaDeposit(ctx: AdapterContext, ref: string, rec: DepositRecord, waiting: LegStep): Promise<LegStep | undefined> {
     const chain = rec.chain!
     const token = rec.token!
-    let watch: string[] = [rec.address]
+    let accounts: string[] = [rec.address]
     if (!isNative(chain, token)) {
-      const res = await rpc<{ value?: Array<{ pubkey: string }> } | null>(ctx, chain, 'getTokenAccountsByOwner', [rec.address, { mint: token }, { encoding: 'jsonParsed', commitment: 'confirmed' }])
-      watch = (res?.value ?? []).map((v) => v.pubkey)
-      if (!watch.length) return undefined
+      accounts = await watch.solanaTokenAccounts(ctx, chain, rec.address, token, 'confirmed')
+      if (!accounts.length) return undefined
     }
     const since = Math.floor(rec.since / 1000) - 60
     const owner = ownerOf(ctx, ref)
@@ -122,9 +121,9 @@ export function directTransfer(rt: RelayRuntime) {
     // so that all sessions on the address look at them in the same order.
     const seen = new Set<string>()
     const sigs: Array<{ signature: string; time: number }> = []
-    for (const account of watch) {
-      const page = await rpc<Array<{ signature: string; err: unknown; blockTime?: number | null }> | null>(ctx, chain, 'getSignaturesForAddress', [account, { limit: 20, commitment: 'confirmed' }])
-      for (const s of page ?? []) {
+    for (const account of accounts) {
+      const page = await watch.solanaSignatures(ctx, chain, account, { limit: 20, commitment: 'confirmed' })
+      for (const s of page) {
         if (s.err || seen.has(s.signature) || typeof s.blockTime !== 'number' || s.blockTime < since) continue
         seen.add(s.signature)
         sigs.push({ signature: s.signature, time: s.blockTime })
@@ -164,12 +163,10 @@ export function directTransfer(rt: RelayRuntime) {
     return ambiguous ? ambiguousStep(ctx, ref, rec.address, waiting) : undefined
   }
 
-  type TransferLog = { data: string; transactionHash: string; blockNumber?: string; logIndex?: string; removed?: boolean }
-
   /**
    * Transfer to the destination itself (same chain and token, EVM): read the token's Transfer logs to
-   * the address, page by page (`logBlockRange` blocks each, at most `LOG_PAGES_PER_CHECK` pages per
-   * check). One log completes the leg when it pays at least `minBase` (no sum of small transfers),
+   * the address, page by page (`watch.transferLogPages`: `logBlockRange` blocks each, at most
+   * `LOG_PAGES_PER_CHECK` pages per check). One log completes the leg when it pays at least `minBase` (no sum of small transfers),
    * no other leg has it, and no other open leg on the address could also claim it. The log is then
    * recorded as used, by (chain, tx hash, log index), so it never completes a second session.
    */
@@ -179,20 +176,15 @@ export function directTransfer(rt: RelayRuntime) {
     const chain = rec.chain
     const owner = ownerOf(ctx, ref)
     const min = rec.minBase ? BigInt(rec.minBase) : 1n
-    const latest = BigInt(await rpc<string>(ctx, chain, 'eth_blockNumber', []))
+    const latest = await watch.latestBlock(ctx, chain)
     const start = BigInt(rec.scanFrom ?? rec.fromBlock)
     let from = start
     let holdAt: bigint | undefined
-    for (let page = 0; page < LOG_PAGES_PER_CHECK && from <= latest; page++) {
-      const to = from + logBlockRange - 1n < latest ? from + logBlockRange - 1n : latest
-      const logs = await rpc<TransferLog[] | null>(ctx, chain, 'eth_getLogs', [
-        { fromBlock: toHex(from), toBlock: toHex(to), address: rec.token, topics: [ERC20_TRANSFER_TOPIC, null, topicAddress(rec.address)] },
-      ])
-      const ordered = (logs ?? []).filter((l) => !l.removed).sort((a, b) => cmpBig(hexOr(a.blockNumber, from), hexOr(b.blockNumber, from)) || cmpBig(hexOr(a.logIndex, 0n), hexOr(b.logIndex, 0n)))
-      for (const l of ordered) {
+    for await (const page of watch.transferLogPages(ctx, { chain, token: rec.token, to: rec.address, from, latest })) {
+      for (const l of page.logs) {
         const amount = BigInt(l.data)
         if (amount < min) continue // dust, or less than the user said
-        const block = hexOr(l.blockNumber, from)
+        const block = hexOr(l.blockNumber, page.from)
         const key = `${usedKey(chain, l.transactionHash)}:${hexOr(l.logIndex, 0n).toString()}`
         const usedBy = await ctx.shared.get<string>(key)
         if (usedBy && usedBy !== owner) continue
@@ -214,7 +206,7 @@ export function directTransfer(rt: RelayRuntime) {
           ...(rec.output ? { output: { ...rec.output, value: fromBaseUnits(amount.toString(), decimals) } } : {}),
         })
       }
-      from = to + 1n
+      from = page.to + 1n
     }
     // Go on from here next time. Keep an ambiguous log in range: a rival leg can end and free it.
     const next = holdAt ?? from
