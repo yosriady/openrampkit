@@ -6,6 +6,8 @@ OpenRampKit supports Solana as a destination and as a source. This page tells yo
 - Let users pay from a Solana wallet.
 - Connect a Solana wallet in the browser with `@openrampkit/solana`.
 
+For every export of `@openrampkit/solana`, read the [API reference](../api/solana.md).
+
 ## What works
 
 | Flow | Provider | Surface | Notes |
@@ -136,6 +138,8 @@ Use your own RPC in production. The public Solana RPC has low rate limits. The a
 | `sendTransactions(chain, txs)` | Builds, signs and sends each Solana transaction in order. Returns the last signature (base58). |
 
 The adapter signs with `solana:signAndSendTransaction`. When the wallet does not have it, the adapter signs with `solana:signTransaction` and sends through the RPC.
+
+The [API reference](../api/solana.md) lists all the methods and the other exports: `getSolanaWallets()`, `isSolanaWallet()`, `walletStandardChain()`, `associatedTokenAddress()` and `DEFAULT_SOLANA_RPC_URLS`.
 
 ## Solana transactions in WALLET_TX
 

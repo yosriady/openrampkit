@@ -116,6 +116,7 @@ export default withMermaid(
               { text: '@openrampkit/solid', link: '/api/solid' },
               { text: '@openrampkit/core', link: '/api/core' },
               { text: '@openrampkit/adapter', link: '/api/adapter' },
+              { text: '@openrampkit/solana', link: '/api/solana' },
             ],
           },
           {
