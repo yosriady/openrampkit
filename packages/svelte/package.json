@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/svelte",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Svelte wrapper for OpenRampKit: stores, actions and context helpers for Svelte 5 and 4 (SSR-safe)",
   "keywords": [
     "offramp",

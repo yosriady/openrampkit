@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-xendit",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Xendit adapter: QRIS, QR Ph, PromptPay and e-wallets into your merchant account",
   "keywords": [
     "adapter",

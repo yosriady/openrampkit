@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-chain-watch",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit chain-watch adapter: standing deposit addresses for the same token on the same chain, watched on chain with no provider account",
   "keywords": [
     "adapter",

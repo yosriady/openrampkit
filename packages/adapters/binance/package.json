@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-binance",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Binance adapter: deposit from a Binance account (Binance Pay Onchain on-ramp)",
   "keywords": [
     "adapter",

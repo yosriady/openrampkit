@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-stripe",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Stripe Crypto Onramp adapter",
   "keywords": [
     "adapter",

@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/web",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "<openramp-modal> web component (Lit, Shadow DOM) for deposits and withdrawals",
   "keywords": [
     "lit",

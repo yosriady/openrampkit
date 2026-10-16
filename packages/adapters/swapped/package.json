@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-swapped",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Swapped adapter: card, wallets and SEA local methods; sell for offramp",
   "keywords": [
     "adapter",

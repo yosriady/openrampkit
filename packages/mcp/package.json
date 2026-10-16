@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/mcp",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Model Context Protocol server for OpenRampKit: agents create deposit and payout sessions, a person pays through a hosted link",
   "keywords": [
     "agents",
