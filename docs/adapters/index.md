@@ -38,6 +38,7 @@ For withdrawals, three adapters have legs today: Relay (`wallet`, to any address
 | [Binance](./binance.md) | `@openrampkit/adapter-binance` | `account` | Connect exchange (`exchange`): pay from the Binance balance | Where Binance serves users; not US, CA, NL | `REDIRECT` | Yes, with Binance partner approval | New; several details TO VERIFY |
 | [Transak](./transak.md) | `@openrampkit/adapter-transak` | `card`, `apple_pay`, `google_pay`, `bank_transfer`, `upi`, `faster_payments`, `open_banking`, `pse` (live catalog) | card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE and more | Per fiat currency, from the catalog | `IFRAME` (or `REDIRECT`) | Yes | Working; several details TO VERIFY |
 | [MoonPay](./moonpay.md) | `@openrampkit/adapter-moonpay` | `card`, `apple_pay`, `google_pay`, `ach`, `sepa`, `gbp_bank`, `gbp_open_banking`, `pix`, `paypal`, `venmo`, `revolut_pay`, `interac` | Same; `gbp_bank` is Faster Payments, `gbp_open_banking` is pay by bank | Where MoonPay allows buying (live catalog) | `REDIRECT` (or `IFRAME`) | Yes | New; some details TO VERIFY |
+| [Banxa](./banxa.md) | `@openrampkit/adapter-banxa` | `card`, `apple_pay`, `google_pay`, `sepa`, `gbp_bank`, `payid`, `npp`, `ideal`, `klarna`, `paypal`, `interac`, `spei`, `khipu`, `zar_bank`, `vietqr`, `upi` (live catalog) | Same; `gbp_bank` is Faster Payments, `npp` and `zar_bank` are bank transfers | Where Banxa serves (live catalog) | `REDIRECT` (or `IFRAME`) | Yes (partner account) | Unverified; built from the docs; some details TO VERIFY |
 | [Stripe](./stripe.md) | `@openrampkit/adapter-stripe` | `card`, `apple_pay`, `google_pay`, `ach` | Same | US (not HI) and EU | `PROVIDER_SDK` (or `REDIRECT`) | Yes, with onramp approval | New; some details TO VERIFY |
 | [Stripe Link](./stripe-link.md) | `@openrampkit/adapter-stripe-link` | `card`, `apple_pay`, `google_pay`, `ach` | Same | US (not NY) | `PROVIDER_SDK` | Yes, with Stripe private preview onboarding | Unverified; some details TO VERIFY |
 | [Xendit](./xendit.md) | `@openrampkit/adapter-xendit` | One per country and channel, e.g. `id-qris` | QRIS, DANA, OVO, ShopeePay, QR Ph, GCash, Maya, GrabPay, PromptPay, TrueMoney, Touch 'n Go, MoMo, ZaloPay, PayNow | ID, PH, TH, MY, VN, SG | `QR`, `REDIRECT`, `DEEPLINK` | Yes | Working (merchant destination only) |
@@ -65,6 +66,7 @@ Each quote says how firm its output is (`guarantee`). The server uses the weakes
 | Binance | `estimate` | the Binance fee, when Binance names another currency | the leg ref (`externalOrderId`) |
 | Transak | `estimate` | none | Transak order id |
 | MoonPay | `estimate` | none | MoonPay transaction id |
+| Banxa | `estimate` | the Banxa spread in the rate | Banxa order id |
 | Stripe | `estimate` | none | the onramp session id (also the leg ref) |
 | Xendit | `firm` | none | the payment request id (also the leg ref) |
 | Mock | `firm` for fiat legs and plain transfers; `min_output` (50 bps) for bridge and swap legs | none | the leg ref |
@@ -93,7 +95,7 @@ An adapter may serve its own pages at `{baseUrl}/adapters/{adapterId}/*`. The mo
 
 ## Common patterns
 
-- **Static legs plus a live catalog.** Swapped, Coinbase, Transak, MoonPay, Meld, Onramper and Peer declare static legs and refine them with `catalog()` at plan time (cached in the store). If the catalog call fails, the server logs a warning and uses the static legs.
+- **Static legs plus a live catalog.** Swapped, Coinbase, Transak, MoonPay, Banxa, Meld, Onramper and Peer declare static legs and refine them with `catalog()` at plan time (cached in the store). If the catalog call fails, the server logs a warning and uses the static legs.
 - **Delivery for hops.** Onramp adapters deliver to `deliverTo.address` when the server gives one (the Relay deposit address in a two-leg pathway), else to the session's destination address.
 - **References.** Every started leg returns a `ref` (an order id, a deposit address or a request id). Webhooks and status checks find the leg by it. When the provider has its own order id, the leg also reports it as `providerRef`.
 - **Status tables.** Each adapter maps provider statuses with `statusMap` from `@openrampkit/adapter`. An unknown provider status gives no new step: the adapter logs it once, and the leg keeps its current step. It never becomes `processing` (or anything else) by accident. The raw provider status goes to `detail.providerStatus`.

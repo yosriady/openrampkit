@@ -29,6 +29,7 @@ The times are estimates for the first sandbox key. Production access can take lo
 | [Stripe](#stripe) | Application and review | Secret key, publishable key, webhook signing secret | Days (Stripe reviews the application) |
 | [Stripe Link](#stripe-link) | Private preview; Stripe onboards the account | Secret key, publishable key, Link OAuth client id, webhook signing secret, optional token key | Days to weeks (Stripe onboarding) |
 | [Swapped](#swapped) | Application (business onboarding) | Public key, secret key | Days |
+| [Banxa](#banxa) | Partner onboarding (sandbox first; production after Banxa approves the integration) | Partner reference, v2 API key, HMAC key pair | Days |
 | [Meld](#meld) | Sales (contact form) | API key, webhook secret | Days to weeks |
 | [Bridge](#bridge) | Sales | API key, webhook public key | Days to weeks |
 | [Binance](#binance) | Partner approval; no sandbox | API URL, client id, access token, RSA key pair, Binance public key | Weeks |
@@ -450,6 +451,40 @@ swapped({
 **Gotchas:**
 
 - An empty `secretKey` makes the adapter refuse every notification.
+
+## Banxa {#banxa}
+
+**Access type:** partner onboarding. Banxa issues sandbox credentials first. Production credentials come separately, after Banxa approves the integration. Banxa has no self-serve sign-up and no OAuth.
+
+**Get the keys:** in the Banxa Partner Dashboard (per environment, switch with the toggle at the top):
+
+| Value | Adapter option | Env var |
+|---|---|---|
+| Partner reference (the first segment of every API path) | `partnerRef` | `BANXA_PARTNER_REF` |
+| v2 API key (`x-api-key`) | `apiKey` | `BANXA_API_KEY` |
+| HMAC API key | `hmacKey` | `BANXA_HMAC_KEY` |
+| HMAC secret | `hmacSecret` | `BANXA_HMAC_SECRET` |
+
+```ts
+banxa({
+  partnerRef: process.env.BANXA_PARTNER_REF!,
+  apiKey: process.env.BANXA_API_KEY!,
+  hmacKey: process.env.BANXA_HMAC_KEY,
+  hmacSecret: process.env.BANXA_HMAC_SECRET,
+  env: 'sandbox',
+})
+```
+
+**Sandbox and production:** set `env: 'sandbox'` for `https://api.banxa-sandbox.com` with the sandbox keys, or `env: 'production'` for `https://api.banxa.com`. `env` is required. Sandbox keys work only on the sandbox host, and production keys only on the production host: the wrong pair gives `401`.
+
+**Webhooks:** set the webhook URL for each environment in the Partner Dashboard to `{baseUrl}/webhooks/banxa`. Banxa signs webhooks with the HMAC key pair, not with the v2 API key. With more than one active HMAC pair, Banxa signs with the oldest pair that is not revoked; the dashboard Webhooks page shows which one. Use **Send test** to check the URL.
+
+**Gotchas:**
+
+- The signature covers the path of your webhook URL. If a proxy rewrites the path, set `webhookPath` to the path that Banxa calls.
+- If the dashboard shows only a v2 API key, ask your Banxa account manager for the HMAC key pair.
+- Sandbox allows 120 requests per minute per merchant. Prefer webhooks over polling.
+- Before go-live, Banxa requires a disclaimer that Banxa processes the payment as merchant of record ([required disclaimer](https://docs.banxa.com/products/hosted-checkout/docs/getting-started/required-disclaimer)).
 
 ## Meld {#meld}
 
