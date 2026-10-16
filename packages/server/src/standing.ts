@@ -383,8 +383,21 @@ export async function getStandingAddress(rt: Runtime, input: DepositAddressInput
 /** The id of the widget method for a standing deposit address */
 export const DEPOSIT_ADDRESS_METHOD = 'deposit_address'
 
-/** What the browser sees of a standing address: no user id and no adapter id. The widget shows crypto origins only. */
-export type DepositAddressView = Pick<StandingAddress, 'id' | 'address'> & { origin: StandingCryptoOrigin; destination: { chain: string; token: string; symbol?: string } }
+/**
+ * What the browser sees of a standing address: no user id and no adapter id. A crypto origin, or a
+ * fiat origin (a standing bank account) with its bank details in `bank`.
+ */
+export type DepositAddressView = Pick<StandingAddress, 'id' | 'address' | 'bank'> & {
+  origin: StandingCryptoOrigin | { currency: string }
+  destination: { chain: string; token: string; symbol?: string }
+}
+
+/** True when the session may use a widget standing address: the option is on, a deposit, a plain crypto destination */
+function widgetFits(rt: Runtime, rec: SessionRecord): boolean {
+  if (!rt.config.depositAddresses?.widget || rec.direction === 'withdraw') return false
+  const d = rec.destination
+  return !!d && d.type === 'crypto' && !d.settlement && !d.calls?.length
+}
 
 /**
  * The adapter for the widget method, or undefined when the method does not fit the session: the option
@@ -392,11 +405,24 @@ export type DepositAddressView = Pick<StandingAddress, 'id' | 'address'> & { ori
  * address, or no adapter gives standing addresses.
  */
 export function widgetStandingAdapter(rt: Runtime, rec: SessionRecord): Adapter | undefined {
-  if (!rt.config.depositAddresses?.widget || rec.direction === 'withdraw') return undefined
-  const d = rec.destination
-  if (!d || d.type !== 'crypto' || d.settlement || d.calls?.length) return undefined
+  if (!widgetFits(rt, rec)) return undefined
   // Converting routes only: a same-chain address would be the session destination itself (see below).
   return [...rt.adapters.values()].find((x) => supportsStanding(x) && servesRoute(x, 'convert'))
+}
+
+/** The currencies that the widget offers for a bank adapter: its `standingCurrencies`, ISO 4217 codes only */
+function widgetCurrencies(a: Adapter): string[] {
+  const list = (a.standingCurrencies ?? []).filter((c) => typeof c === 'string' && /^[A-Za-z]{3}$/.test(c)).map((c) => c.toUpperCase())
+  return [...new Set(list)]
+}
+
+/**
+ * The adapter for a standing bank account in the widget, or undefined: the same session gates as
+ * `widgetStandingAdapter`, and an adapter that gives standing bank accounts and lists their currencies.
+ */
+export function widgetBankAdapter(rt: Runtime, rec: SessionRecord): Adapter | undefined {
+  if (!widgetFits(rt, rec)) return undefined
+  return [...rt.adapters.values()].find((x) => supportsStanding(x, 'bank') && servesRoute(x, 'bank') && widgetCurrencies(x).length > 0)
 }
 
 const WIDGET_SAME =
@@ -407,17 +433,31 @@ const WIDGET_SAME =
 /** The widget method for the plan, or undefined (see `widgetStandingAdapter`) */
 export function depositAddressMethod(rt: Runtime, rec: SessionRecord): MethodOption | undefined {
   const a = widgetStandingAdapter(rt, rec)
-  if (!a) return undefined
+  const bank = widgetBankAdapter(rt, rec)
+  if (!a && !bank) return undefined
   if (rec.allowedMethods && !rec.allowedMethods.includes(DEPOSIT_ADDRESS_METHOD)) return undefined
   if (rt.config.policy?.disabledMethods?.includes(DEPOSIT_ADDRESS_METHOD)) return undefined
-  return { method: DEPOSIT_ADDRESS_METHOD, name: 'Your deposit address', kind: 'crypto', group: 'more', providers: [a.name], pathwayIds: [], eta: transferLeg(a)?.eta ?? { min: 60, max: 600 } }
+  const main = (a ?? bank)!
+  const providers = [...new Set([a?.name, bank?.name].filter((x): x is string => !!x))]
+  return {
+    method: DEPOSIT_ADDRESS_METHOD,
+    name: 'Your deposit address',
+    kind: 'crypto',
+    group: 'more',
+    providers,
+    pathwayIds: [],
+    eta: transferLeg(main)?.eta ?? { min: 60, max: 600 },
+    ...(bank ? { standingOrigins: { crypto: !!a, currencies: widgetCurrencies(bank) } } : {}),
+  }
 }
 
 /** `POST /sessions/:id/deposit-address`: the session user's standing address for an origin and the session destination */
-export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, body: { chain?: unknown; token?: unknown }): Promise<DepositAddressView> {
+export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, body: { chain?: unknown; token?: unknown; currency?: unknown }): Promise<DepositAddressView> {
   if (!rt.config.depositAddresses?.widget) throw new OpenRampException(openRampError('NOT_FOUND'), 404)
   // The same gates as the plan: the session fits, and `allowedMethods` and `policy.disabledMethods` allow the method.
-  const a = depositAddressMethod(rt, rec) ? widgetStandingAdapter(rt, rec) : undefined
+  const allowed = !!depositAddressMethod(rt, rec)
+  if (body && typeof body === 'object' && body.currency !== undefined) return sessionBankAccount(rt, rec, body, allowed)
+  const a = allowed ? widgetStandingAdapter(rt, rec) : undefined
   if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session cannot use a standing deposit address.' }), 409)
   if (typeof body?.chain !== 'string' || typeof body.token !== 'string') throw bad('`chain` and `token` are required.')
   // The browser never gets a same-chain (watched) address: the user could make the server credit every
@@ -429,6 +469,25 @@ export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, bod
   // A crypto origin was asked, so the record has one (a bank account never reaches the widget).
   if (isFiatOrigin(sa.origin)) throw new OpenRampException(openRampError('INTERNAL'), 500)
   return { id: sa.id, address: sa.address, origin: sa.origin, destination: { chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}) } }
+}
+
+/**
+ * The widget's standing bank account (body `{ currency }`). Only what the server sets: the session's
+ * user and destination, and the bank adapter that the server picks. The browser chooses only a
+ * currency, and only one that the adapter lists.
+ */
+async function sessionBankAccount(rt: Runtime, rec: SessionRecord, body: { chain?: unknown; token?: unknown; currency?: unknown }, allowed: boolean): Promise<DepositAddressView> {
+  const a = allowed ? widgetBankAdapter(rt, rec) : undefined
+  if (!a) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'This session cannot use a standing bank account.' }), 409)
+  if (body.chain !== undefined || body.token !== undefined) throw bad('Send either `currency` (a bank account) or `chain` and `token`, not both.')
+  const currency = typeof body.currency === 'string' ? body.currency.toUpperCase() : ''
+  if (!widgetCurrencies(a).includes(currency)) throw bad(`\`currency\` must be one of ${widgetCurrencies(a).join(', ')}.`)
+  const dest = rec.destination as Extract<Destination, { type: 'crypto' }>
+  const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { currency }, destination: dest, adapterId: a.id })
+  const d = sa.destination
+  // A fiat origin was asked, so the record has one, with its bank details.
+  if (!isFiatOrigin(sa.origin) || !sa.bank) throw new OpenRampException(openRampError('INTERNAL'), 500)
+  return { id: sa.id, address: sa.address, origin: { currency: sa.origin.currency }, bank: sa.bank, destination: { chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}) } }
 }
 
 /** The standing addresses of a user, newest first (at most 200) */

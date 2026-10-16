@@ -3,11 +3,17 @@
 import { openRampError } from '@openrampkit/core'
 import type { HistoryItem, OpenRampError, PlanResult, PublicQuote, PublicSession, SourceChain } from '@openrampkit/core'
 
-/** The user's standing deposit address, as the server shows it to the browser */
+/**
+ * The user's standing deposit address, as the server shows it to the browser. A crypto origin
+ * (`chain` and `token`), or a fiat origin (`currency`): a standing bank account, with the bank
+ * details to show in `bank`.
+ */
 export type DepositAddressView = {
   id: string
   address: string
-  origin: { chain: string; token: string; symbol?: string; decimals?: number }
+  origin: { chain: string; token: string; symbol?: string; decimals?: number } | { currency: string }
+  /** Set for a fiat origin: every field the user needs to pay by bank transfer */
+  bank?: { fields: Array<{ label: string; value: string; copy: boolean }> }
   destination: { chain: string; token: string; symbol?: string }
 }
 
@@ -97,8 +103,11 @@ export function createOpenRampClient(opts: ClientOptions) {
     transition: (secret: string, name: string, inputs?: Record<string, unknown>) =>
       call<PublicSession>(secret, 'POST', `/sessions/${sessionId(secret)}/transitions/${encodeURIComponent(name)}`, { inputs: inputs ?? {} }, idemKey()),
     step: (secret: string) => call<PublicSession>(secret, 'GET', `/sessions/${sessionId(secret)}/step`),
-    /** Deposit: the user's standing deposit address for an origin (`POST /sessions/:id/deposit-address`) */
-    depositAddress: (secret: string, body: { chain: string; token: string }) =>
+    /**
+     * Deposit: the user's standing deposit address for a token (`{ chain, token }`), or the user's
+     * standing bank account for a currency (`{ currency }`) (`POST /sessions/:id/deposit-address`)
+     */
+    depositAddress: (secret: string, body: { chain: string; token: string } | { currency: string }) =>
       call<DepositAddressView>(secret, 'POST', `/sessions/${sessionId(secret)}/deposit-address`, body, idemKey()),
     /** Deposit: chains and tokens for the source picker of a method (`transfer`, `exchange_transfer` or `wallet`) */
     sources: (secret: string, method: string) =>

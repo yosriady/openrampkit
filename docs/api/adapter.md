@@ -68,6 +68,8 @@ An adapter with standing addresses needs both methods, `status()` (the server po
 
 `standingRoutes` (optional) says which routes the addresses serve. `['convert']` is the default: the origin is another token or chain, and the provider converts each deposit. `['same']`: the origin is the destination token on the destination chain. Then `standingAddress` must return the destination address itself (the server refuses another address with `502`), and the adapter reports the transfers it sees on chain. `['bank']`: the origin is a fiat currency paid by bank transfer. The adapter then needs `standingAccount`, and `standingDeposits` gets a `StandingAccountDepositsInput`. The server picks, for each route, the first adapter that serves it. The [chain-watch adapter](../adapters/chain-watch.md) serves `same`. The [Bridge adapter](../adapters/bridge.md#standing-deposit-addresses) serves `convert` and `bank` with the option `standing: true`.
 
+`standingCurrencies` (optional, with `standingAccount`): the ISO 4217 currencies of the standing bank accounts. The widget offers a bank account only for these (server option `depositAddresses.widget`).
+
 ```ts
 type StandingAddressInput = {
   userId: string

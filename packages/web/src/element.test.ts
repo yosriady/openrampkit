@@ -520,7 +520,7 @@ describe('payment steps (real server)', () => {
     expect(h.$('.notice.warning')!.textContent).toContain('Each deposit reaches your account in a few minutes.')
     // Another token: another address
     h.c.setSource({ chain: 'eip155:10', token: 'native', symbol: 'ETH', decimals: 18 })
-    await h.until(() => !!h.c.getSnapshot().depositAddress && h.c.getSnapshot().depositAddress!.origin.chain === 'eip155:10')
+    await h.until(() => (h.c.getSnapshot().depositAddress?.origin as { chain?: string } | undefined)?.chain === 'eip155:10')
     expect(h.c.getSnapshot().depositAddress!.address).not.toBe(first.address)
     h.c.back()
     expect(h.c.getSnapshot().screen).toBe('methods')
@@ -530,6 +530,67 @@ describe('payment steps (real server)', () => {
     await settle(h.el)
     await h.click(h.button('Done'))
     expect(h.el.open).toBe(false)
+  })
+
+  it('"Your deposit address": a standing bank account shows its bank fields with copy buttons, a currency pick and the tabs', async () => {
+    const h = await mount({ country: 'US', mock: { settleMs: 0, crypto: true, bridge: true, standing: true, standingBank: true }, config: { depositAddresses: { widget: true } } })
+    h.c.setTab('crypto')
+    await settle(h.el)
+    await h.click(h.$('[data-method="deposit_address"]')!)
+    await h.until(() => !!h.c.getSnapshot().depositAddress)
+    // Crypto first: the same view as without bank accounts, inside a tab panel
+    const tabs = h.$$('[role="tab"]')
+    expect(tabs.map((t) => t.textContent?.trim())).toEqual(['Crypto', 'Bank account'])
+    expect(h.$('[role="tablist"]')!.getAttribute('aria-label')).toBe('Send from')
+    expect(tabs[0]!.getAttribute('aria-selected')).toBe('true')
+    expect(h.$('#ork-origin-panel')!.getAttribute('aria-labelledby')).toBe('ork-origin-crypto')
+    expect(h.$('.qr svg')).not.toBeNull()
+    const crypto = h.c.getSnapshot().depositAddress!
+
+    // The bank tab: the session currency (USD), every field, copy buttons only where allowed, no QR code
+    await h.click(tabs[1]!)
+    await h.until(() => !!h.c.getSnapshot().depositAddress?.bank)
+    expect(h.c.getSnapshot().depositCurrency).toBe('USD')
+    expect(h.$('#ork-origin-panel')!.getAttribute('aria-labelledby')).toBe('ork-origin-bank')
+    expect(h.$('.qr svg')).toBeNull()
+    expect(h.$$('.kv-label').map((x) => x.textContent)).toEqual(['Bank', 'Account name', 'Account number', 'Routing number'])
+    const fields = h.c.getSnapshot().depositAddress!.bank!.fields
+    expect(h.$$('.kv-value').map((x) => x.textContent)).toEqual(fields.map((f) => f.value))
+    expect(h.$$('.copy-btn').map((b) => b.getAttribute('aria-label'))).toEqual(['Copy Account name', 'Copy Account number', 'Copy Routing number'])
+    expect(h.$('.notice.info')!.textContent).toContain('Send USD by bank transfer to this account. Each deposit reaches your account as USDC on Base.')
+    expect(h.text()).toContain('This bank account is yours. You can use it again.')
+    // A copy is announced through the status region
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: vi.fn(async () => undefined) }, configurable: true })
+    await h.click(h.$$('.copy-btn')[1]!)
+    expect(h.$$('.copy-btn')[1]!.getAttribute('aria-label')).toBe('Copied')
+    expect(h.$$('.sr-only[role="status"]').map((x) => x.textContent)).toContain('Copied')
+
+    // Another currency: the currency select loads that account
+    const select = h.$<HTMLSelectElement>('select[aria-label="Currency"]')!
+    expect([...select.options].map((o) => o.value)).toEqual(['USD', 'EUR'])
+    select.value = 'EUR'
+    select.dispatchEvent(new Event('change'))
+    await h.until(() => h.c.getSnapshot().depositCurrency === 'EUR' && !!h.c.getSnapshot().depositAddress?.bank)
+    expect(h.$$('.kv-label').map((x) => x.textContent)).toContain('IBAN')
+    expect(h.c.getSnapshot().depositAddress!.origin).toEqual({ currency: 'EUR' })
+
+    // Arrow keys move between the tabs; back on crypto, the same address as before
+    await h.key(h.$('[role="tablist"]')!, 'ArrowLeft')
+    await h.until(() => !!h.c.getSnapshot().depositAddress && !h.c.getSnapshot().depositAddress!.bank)
+    expect(h.c.getSnapshot().depositCurrency).toBeUndefined()
+    expect(h.c.getSnapshot().depositAddress!.address).toBe(crypto.address)
+    expect(h.$('.qr svg')).not.toBeNull()
+  })
+
+  it('"Your deposit address": the crypto view has no tabs when the server offers no bank account', async () => {
+    const h = await mount({ country: 'US', mock: { settleMs: 0, crypto: true, bridge: true, standing: true }, config: { depositAddresses: { widget: true } } })
+    h.c.setTab('crypto')
+    await settle(h.el)
+    await h.click(h.$('[data-method="deposit_address"]')!)
+    await h.until(() => !!h.c.getSnapshot().depositAddress)
+    expect(h.$('[role="tablist"]')).toBeNull()
+    expect(h.$('#ork-origin-panel')).toBeNull()
+    expect(h.c.depositCurrencies()).toEqual([])
   })
 
   it('autoClose: closes on completion with no success screen', async () => {

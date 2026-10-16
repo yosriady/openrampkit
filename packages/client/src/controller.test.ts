@@ -959,3 +959,71 @@ describe('notifySurface (provider iframe messages)', () => {
     expect(h.client.step).not.toHaveBeenCalled()
   })
 })
+
+describe('"Your deposit address": standing bank accounts', () => {
+  const BANK = { fields: [{ label: 'Account number', value: '900123456789', copy: true }] }
+  type Body = { currency?: string; chain?: string; token?: string }
+  const view = (body: Body) =>
+    body.currency
+      ? { id: `sda_${body.currency}`, address: '900123456789', origin: { currency: body.currency }, bank: BANK, destination: { chain: 'eip155:8453', token: USDC['eip155:8453']! } }
+      : { id: 'sda_c', address: BEEF, origin: { chain: body.chain!, token: body.token! }, destination: { chain: 'eip155:8453', token: USDC['eip155:8453']! } }
+  const client = (origins?: { crypto: boolean; currencies: string[] }) =>
+    fakeClient({
+      plan: vi.fn(async () => plan([method({ method: 'deposit_address', kind: 'crypto', group: 'more', pathwayIds: [], ...(origins ? { standingOrigins: origins } : {}) })], 'EUR')),
+      depositAddress: vi.fn(async (_s: string, body: Body) => view(body)),
+      sources: vi.fn(async () => ({ chains: [] })),
+    } as never)
+
+  it('bank accounts only: opens on the session currency, asks with `{ currency }`, and never loads the token picker', async () => {
+    const h = make({}, client({ crypto: false, currencies: ['EUR', 'USD'] }))
+    await h.c.start()
+    await h.c.selectMethod('deposit_address')
+    expect(h.client.depositAddress).toHaveBeenLastCalledWith('ors_1.sig', { currency: 'USD' })
+    expect(h.c.getSnapshot()).toMatchObject({ screen: 'deposit_address', depositCurrency: 'USD', depositAddress: { bank: BANK } })
+    expect(h.client.sources).not.toHaveBeenCalled()
+    expect(h.c.depositCrypto()).toBe(false)
+    // No crypto origin to switch to, and only a listed currency
+    h.c.setDepositCurrency(undefined)
+    h.c.setDepositCurrency('GBP')
+    expect(h.c.getSnapshot().depositCurrency).toBe('USD')
+    expect(h.client.depositAddress).toHaveBeenCalledTimes(1)
+    h.c.setDepositCurrency('EUR')
+    await vi.waitFor(() => expect(h.c.getSnapshot().depositAddress?.origin).toEqual({ currency: 'EUR' }))
+    // A token change does not reload the bank account
+    h.c.setSource({ chain: 'eip155:10', token: 'native', symbol: 'ETH', decimals: 18 })
+    expect(h.client.depositAddress).toHaveBeenCalledTimes(2)
+  })
+
+  it('crypto and bank: starts on crypto, switches to the bank account and back; a late answer of the old tab is dropped', async () => {
+    const h = make({}, client({ crypto: true, currencies: ['USD'] }))
+    await h.c.start()
+    await h.c.selectMethod('deposit_address')
+    expect(h.c.getSnapshot().depositCurrency).toBeUndefined()
+    expect(h.c.getSnapshot().depositAddress).toMatchObject({ id: 'sda_c' })
+    expect(h.c.depositCurrencies()).toEqual(['USD'])
+    let release!: () => void
+    h.client.depositAddress.mockImplementationOnce(async (_s: string, body: Body) => {
+      await new Promise<void>((r) => (release = r))
+      return view(body)
+    })
+    h.c.setSource({ chain: 'eip155:10', token: 'native', symbol: 'ETH', decimals: 18 })
+    h.c.setDepositCurrency('USD')
+    await vi.waitFor(() => expect(h.c.getSnapshot().depositAddress).toMatchObject({ bank: BANK }))
+    release()
+    await new Promise((r) => setTimeout(r, 0))
+    expect(h.c.getSnapshot().depositAddress).toMatchObject({ bank: BANK })
+    h.c.setDepositCurrency(undefined)
+    await vi.waitFor(() => expect(h.c.getSnapshot().depositAddress).toMatchObject({ id: 'sda_c' }))
+    expect(h.client.depositAddress).toHaveBeenLastCalledWith('ors_1.sig', { chain: 'eip155:10', token: 'native' })
+  })
+
+  it('a method without standingOrigins offers no bank account', async () => {
+    const h = make({}, client())
+    await h.c.start()
+    await h.c.selectMethod('deposit_address')
+    expect(h.c.depositCurrencies()).toEqual([])
+    h.c.setDepositCurrency('USD')
+    expect(h.c.getSnapshot().depositCurrency).toBeUndefined()
+    expect(h.client.depositAddress).toHaveBeenCalledTimes(1)
+  })
+})

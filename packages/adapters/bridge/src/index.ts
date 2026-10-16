@@ -1124,6 +1124,7 @@ export function bridge(opts: BridgeOptions) {
             return plannerLegs
           },
           standingRoutes: ['convert', 'bank'] as const,
+          standingCurrencies: [...new Set(depositRails.map((r) => r.currency))],
           standingAddress: standing.standingAddress,
           standingAccount: standing.standingAccount,
           standingDeposits: standing.standingDeposits,

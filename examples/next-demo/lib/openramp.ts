@@ -20,8 +20,10 @@ const EXTRA_METHODS = ['exchange_transfer', 'coinbase_account']
 const adapters = [
   // `offramp: true` adds a mock withdraw-to-cash leg (bank transfer, GCash, MoMo, PromptPay payouts).
   // `bankFields: true` shows bank transfer deposits as bank details with copy buttons.
+  // `standing` and `standingBank`: test standing deposit addresses and bank accounts for "Your deposit
+  // address" (playground `?standing=1`). No deposit ever arrives at them.
   ...(MOCK
-    ? [mockAdapter({ crypto: true, bridge: true, offramp: true, bankFields: true, exchange: true, exchangeConnect: true, settleMs: 4000 })]
+    ? [mockAdapter({ crypto: true, bridge: true, offramp: true, bankFields: true, exchange: true, exchangeConnect: true, standing: true, standingBank: true, settleMs: 4000 })]
     : [relay({ ...(process.env.RELAY_API_KEY ? { apiKey: process.env.RELAY_API_KEY } : {}) }), mockAdapter({ offramp: true, settleMs: 4000 })]),
   // LI.FI: a second wallet router next to Relay, in real mode when a LI.FI API key is set.
   ...(!MOCK && process.env.LIFI_API_KEY ? [lifi({ apiKey: process.env.LIFI_API_KEY, integrator: 'openrampkit-demo' })] : []),
@@ -31,8 +33,11 @@ const adapters = [
     : []),
 ]
 
+/** Mock mode: every method of the adapters' legs (the `allowedMethods` of a deposit with `?extras=1`) */
+export const allMethods = MOCK ? [...new Set(adapters.flatMap((a) => a.legs.flatMap((l) => l.methods ?? [])))] : undefined
+
 /** Mock mode: the `allowedMethods` of a deposit without `?extras=1` (every method but the extras) */
-export const defaultMethods = MOCK ? [...new Set(adapters.flatMap((a) => a.legs.flatMap((l) => l.methods ?? [])))].filter((m) => !EXTRA_METHODS.includes(m)) : undefined
+export const defaultMethods = allMethods?.filter((m) => !EXTRA_METHODS.includes(m))
 
 export const openramp =
   g.__openramp ??
@@ -45,6 +50,8 @@ export const openramp =
     // Admin tools and the ops dashboard at /api/openramp/admin, only when OPENRAMP_ADMIN_TOKEN is set
     // (at least 32 random characters). Put /admin behind your own auth or a VPN in production.
     ...(process.env.OPENRAMP_ADMIN_TOKEN ? { admin: { token: process.env.OPENRAMP_ADMIN_TOKEN } } : {}),
+    // Mock mode: "Your deposit address" in the widget, for sessions that allow it (playground `?standing=1`)
+    ...(MOCK ? { depositAddresses: { widget: true } } : {}),
     // Withdraw: screen target addresses. Connect a sanctions API here (e.g. Chainalysis) in production.
     // The demo refuses the well-known burn address.
     screenAddress: async (address) => address.toLowerCase() !== BURN,

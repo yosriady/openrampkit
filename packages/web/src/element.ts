@@ -672,31 +672,95 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  /** "Your deposit address": the token picker, then the user's standing address for that token */
+  /**
+   * "Your deposit address": the token picker, then the user's standing address for that token. When the
+   * server also offers standing bank accounts, "Crypto" / "Bank account" tabs, and the bank details.
+   */
   private _renderStandingAddress(m: Messages, s: Snapshot) {
+    const c = this.controller!
+    const currencies = c.depositCurrencies()
+    const tabs = currencies.length > 0 && c.depositCrypto()
+    const bank = !!s.depositCurrency
     const view = s.depositAddress
     const src = s.source
     const chain = src ? displayChain(src.chain) : ''
     const symbol = src ? (transferTokens(src.chain, s.sources).find((o) => sameTokenId(src.chain, o.token, src.token))?.symbol ?? src.symbol ?? '') : ''
-    return html`
-      ${this._renderTransferSource(m, s)}
+    const content = html`
+      ${bank
+        ? html`<div style="display:contents">${currencies.length > 1 ? currencySelect(m.currency, currencies, s.depositCurrency, (v) => c.setDepositCurrency(v)) : nothing}</div>`
+        : tabs
+          ? // In a wrapper element, so a switch of the tab replaces the picker in one piece
+            html`<div style="display:contents">${this._renderTransferSource(m, s)}</div>`
+          : this._renderTransferSource(m, s)}
       ${s.depositAddressLoading && !view
         ? html`<div class="status-line"><span class="spinner" aria-hidden="true"></span>${m.loading}</div>`
-        : view
-          ? html`
-              ${this._qr(view.address, m.address)}
-              <div class="kv">
-                ${this._copyRow(m, 'sda', m.address, view.address, { mono: true })}
-                <div class="select-row" style="margin:0">
-                  ${this._copyRow(m, 'sda-net', m.network, chain, { copy: false })} ${this._copyRow(m, 'sda-tok', m.token, symbol, { copy: false })}
+        : view?.bank && bank
+          ? this._renderStandingBank(m, s, view, s.depositCurrency!)
+          : view && !view.bank && !bank
+            ? html`
+                ${this._qr(view.address, m.address)}
+                <div class="kv">
+                  ${this._copyRow(m, 'sda', m.address, view.address, { mono: true })}
+                  <div class="select-row" style="margin:0">
+                    ${this._copyRow(m, 'sda-net', m.network, chain, { copy: false })} ${this._copyRow(m, 'sda-tok', m.token, symbol, { copy: false })}
+                  </div>
                 </div>
-              </div>
-              <div class="notice warning">${icons.alert}<span>${m.depositAddressNote(symbol, chain)}</span></div>
-              <div class="hint">${m.depositAddressReuse}</div>
-            `
-          : nothing}
+                <div class="notice warning">${icons.alert}<span>${m.depositAddressNote(symbol, chain)}</span></div>
+                <div class="hint">${m.depositAddressReuse}</div>
+              `
+            : nothing}
+    `
+    return html`
+      ${tabs ? this._renderDepositOriginTabs(m, s) : nothing}
+      ${tabs ? html`<div id="ork-origin-panel" role="tabpanel" aria-labelledby=${bank ? 'ork-origin-bank' : 'ork-origin-crypto'}>${content}</div>` : content}
       ${this._renderErrorNotice(s.error)}
       <div class="stack"><button class="btn" type="button" @click=${() => this.close()}>${m.done}</button></div>
+    `
+  }
+
+  /** "Crypto" / "Bank account" tabs of the deposit address screen */
+  private _renderDepositOriginTabs(m: Messages, s: Snapshot) {
+    const c = this.controller!
+    const bank = !!s.depositCurrency
+    const first = c.depositCurrencies()[0]
+    const pick = (toBank: boolean) => {
+      if (toBank === bank) return
+      c.setDepositCurrency(toBank ? first : undefined)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+      e.preventDefault()
+      pick(!bank)
+      void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>('.tab[aria-selected="true"]')?.focus())
+    }
+    return html`<div class="tabs" role="tablist" aria-label=${m.depositOriginLabel} @keydown=${onKey}>
+      ${([false, true] as const).map(
+        (b) => html`<button
+          class="tab"
+          role="tab"
+          type="button"
+          id=${b ? 'ork-origin-bank' : 'ork-origin-crypto'}
+          aria-controls="ork-origin-panel"
+          aria-selected=${bank === b ? 'true' : 'false'}
+          tabindex=${bank === b ? '0' : '-1'}
+          @click=${() => pick(b)}
+        >
+          ${b ? m.depositOriginBank : m.depositOriginCrypto}
+        </button>`,
+      )}
+    </div>`
+  }
+
+  /** The user's standing bank account: every bank field, with a copy button where the provider allows one */
+  private _renderStandingBank(m: Messages, s: Snapshot, view: NonNullable<Snapshot['depositAddress']>, currency: string) {
+    const d = view.destination
+    const sd = s.session?.destination
+    const known = transferTokens(d.chain, s.sources).find((o) => sameTokenId(d.chain, o.token, d.token))?.symbol
+    const symbol = d.symbol ?? (sd?.type === 'crypto' ? sd.symbol : undefined) ?? known ?? shortAddress(d.token)
+    return html`
+      <div class="kv">${(view.bank?.fields ?? []).map((f, i) => this._copyRow(m, `sdb-${i}`, f.label, f.value, { copy: f.copy }))}</div>
+      <div class="notice info"><span>${m.depositBankNote(currency, symbol, displayChain(d.chain))}</span></div>
+      <div class="hint">${m.depositBankReuse}</div>
     `
   }
 
@@ -1458,6 +1522,13 @@ function tokenLogo(t: { symbol: string; logoUrl?: string }): TemplateResult {
 function chainSelect(label: string, chains: string[], selected: string | undefined, onChange: (chain: string) => void): TemplateResult {
   return html`<select class="input" aria-label=${label} @change=${(e: Event) => onChange((e.target as HTMLSelectElement).value)}>
     ${chains.map((ch) => html`<option value=${ch} ?selected=${selected === ch}>${displayChain(ch)}</option>`)}
+  </select>`
+}
+
+/** The currency select of a standing bank account, in its own template (see `chainSelect`) */
+function currencySelect(label: string, currencies: string[], selected: string | undefined, onChange: (currency: string) => void): TemplateResult {
+  return html`<select class="input" aria-label=${label} @change=${(e: Event) => onChange((e.target as HTMLSelectElement).value)}>
+    ${currencies.map((cur) => html`<option value=${cur} ?selected=${selected === cur}>${cur}</option>`)}
   </select>`
 }
 

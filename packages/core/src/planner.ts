@@ -54,6 +54,12 @@ export type MethodOption = {
   pathwayIds: string[]
   eta: { min: number; max: number }
   limits?: { min?: string; max?: string; currency: string }
+  /**
+   * Method `deposit_address` only, set when the user can also get a standing bank account: `crypto`
+   * is true when a crypto origin (a token picker) is offered too, and `currencies` lists the fiat
+   * currencies of the bank accounts (ISO 4217, upper case). Absent: crypto origins only.
+   */
+  standingOrigins?: { crypto: boolean; currencies: string[] }
 }
 
 export type PlanResult = { pathways: Pathway[]; methods: MethodOption[]; currency: string }

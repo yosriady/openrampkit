@@ -50,6 +50,8 @@ export function Playground({ mock }: { mock: boolean }) {
   const { isConnected } = useAccount()
   // `?extras=1`: mock mode also offers the exchange methods (the "From an exchange" picker)
   const [extras] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('extras') === '1')
+  // `?standing=1`: mock mode also offers "Your deposit address" (a standing address, or a standing bank account)
+  const [standing] = useState(() => typeof window !== 'undefined' && new URLSearchParams(window.location.search).get('standing') === '1')
 
   const theme = useMemo(() => (mode === 'dark' ? darkTheme({ accent }) : mode === 'auto' ? autoTheme({ accent }) : lightTheme({ accent })), [mode, accent])
 
@@ -73,7 +75,7 @@ export function Playground({ mock }: { mock: boolean }) {
     const r =
       direction === 'withdraw'
         ? await fetch('/api/withdraw-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, custody }) })
-        : await fetch('/api/deposit-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, destination, ...(extras ? { extras } : {}) }) })
+        : await fetch('/api/deposit-session', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ country, destination, ...(extras ? { extras } : {}), ...(standing ? { standing } : {}) }) })
     const j = (await r.json()) as { clientSecret: string }
     return j.clientSecret
   }

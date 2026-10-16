@@ -56,12 +56,14 @@ With no such adapter, `get` throws `400` (`No configured adapter gives standing 
 Set `depositAddresses: { widget: true }` in the server config. The plan of a deposit session then has the method `deposit_address` ("Your deposit address") on the crypto tab, when:
 
 - the destination is a crypto address with no `settlement` and no `calls`,
-- an adapter gives standing addresses, and
+- an adapter gives standing addresses (or standing bank accounts, see below), and
 - the session's `allowedMethods` and `policy.disabledMethods` allow `deposit_address`.
 
 The user picks the network and the token they send. The widget calls `POST /sessions/:id/deposit-address` and shows the address for the session's user and destination, with a QR code, a copy button and a warning. A new token loads its own address. This session takes no payment: each deposit to the address becomes its own session, as above. The browser never sees the user id or the adapter id.
 
 The widget gives only addresses that convert (another token or chain). For the destination token on the destination chain, it answers `400`: that address would be the session destination itself, so the payments of the session would count twice, and the browser could make the server credit transfers to an address it chose. Use `depositAddresses.get` with `dedicatedDestination: true` from your backend instead.
+
+When an adapter also gives standing bank accounts and lists their currencies in `standingCurrencies` (Bridge with `standing: true` does), the screen has two tabs: "Crypto" and "Bank account". The bank tab calls the route with `{ currency }` and shows every bank field, with a copy button where the provider allows one. The method then has `standingOrigins: { crypto, currencies }`; with no adapter that converts tokens, `crypto` is false and the screen shows only the bank account. The browser picks only the currency, and only one that the adapter lists: the server sets the user, the destination and the adapter.
 
 ## Webhooks
 
@@ -149,7 +151,7 @@ const account = await openramp.depositAddresses.get({
 //   bank: { fields: [{ label: 'Routing number', value: '101019644', copy: true }, ...] }, destination, createdAt }
 ```
 
-- `address` is the main account identifier (account number, IBAN, CLABE or Pix code). `bank.fields` has every field the user needs, as in a `BANK_FIELDS` surface. Show them in your app: the widget shows crypto origins only.
+- `address` is the main account identifier (account number, IBAN, CLABE or Pix code). `bank.fields` has every field the user needs, as in a `BANK_FIELDS` surface. Show them in your app, or let the widget show them (see [Show it in the widget](#show-it-in-the-widget)).
 - The route kind is `bank`. The server uses the first adapter with `'bank'` in `standingRoutes` and a `standingAccount` method, or `adapterId`.
 - A bank route delivers converted funds, so it binds its destination like a converting route: a same-chain watch of that destination is refused (`409`).
 - Each deposit makes a deposit session as above. Its leg input is the deposit in the account currency. An input in another currency is left out.

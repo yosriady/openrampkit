@@ -183,7 +183,7 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
 
   if (action === 'target' && method === 'POST') return targetRoute(rt, req, rec)
 
-  if (action === 'deposit-address' && method === 'POST' && !arg) return json(await sessionDepositAddress(rt, rec, await readJson<{ chain?: unknown; token?: unknown }>(req, {})))
+  if (action === 'deposit-address' && method === 'POST' && !arg) return json(await sessionDepositAddress(rt, rec, await readJson<{ chain?: unknown; token?: unknown; currency?: unknown }>(req, {})))
 
   if (action === 'pay-link' && method === 'POST') {
     // A pay link cannot mint or revoke pay links: only the client secret can.

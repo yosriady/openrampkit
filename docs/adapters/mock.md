@@ -38,6 +38,7 @@ mockAdapter({ bankFields: true })                      // bank transfer shows ba
 | `exchange` | `boolean` | `false` | With `crypto`: the `transfer` leg also offers the method `exchange_transfer` ("From an exchange") |
 | `exchangeConnect` | `boolean` | `false` | The card leg also offers `coinbase_account`. With `exchange`, the widget shows the exchange picker. |
 | `standing` | `boolean` | `false` | With `crypto`: give standing deposit addresses (a fake address per user and route, no deposits). Use it with the server option `depositAddresses.widget`. |
+| `standingBank` | `boolean` | `false` | With `standing`: also give standing bank accounts in USD and EUR (test bank details, no deposits), for the widget's "Bank account" tab. |
 | `localChain` | `{ chain, rpcUrl, token, symbol?, decimals? }` | none | Test only. Add an `onchain` leg that pays with a real ERC-20 transfer on a local chain (for example Anvil). See [Local chain leg](#local-chain-leg). |
 | `solanaLocalChain` | `{ chain, rpcUrl, mint, symbol?, decimals? }` | none | Test only. Add a `solana-onchain` leg that pays with a real SPL (or SOL) transfer on a Solana cluster, for example devnet. See [Solana local chain leg](#solana-local-chain-leg). |
 

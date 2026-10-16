@@ -117,13 +117,15 @@ Same response as `GET /sessions/:id`. Before answering, the server asks the acti
 
 ## POST /sessions/:id/deposit-address
 
-Body: `{ "chain": "eip155:42161", "token": "0xaf88..." }`, the asset the user sends. Only with the server option `depositAddresses.widget`, else `404`. A withdrawal, a destination with `settlement` or `calls`, or a session whose `allowedMethods` or `policy.disabledMethods` leave out `deposit_address`, gets `409`. After the session deadline it gets `410`. It counts against the per-session request limit.
+Body: `{ "chain": "eip155:42161", "token": "0xaf88..." }`, the asset the user sends, or `{ "currency": "USD" }` for the user's standing bank account (only a currency in the bank adapter's `standingCurrencies`, else `400`). Only with the server option `depositAddresses.widget`, else `404`. A withdrawal, a destination with `settlement` or `calls`, or a session whose `allowedMethods` or `policy.disabledMethods` leave out `deposit_address`, gets `409`. After the session deadline it gets `410`. It counts against the per-session request limit.
 
 Response `200`: the session user's standing address for that origin and the session destination. It is the same on each call.
 
 ```json
 { "id": "sda_...", "address": "0x...", "origin": { "chain": "eip155:42161", "token": "0xaf88..." }, "destination": { "chain": "eip155:8453", "token": "0x8335..." } }
 ```
+
+For a currency, `origin` is `{ "currency": "USD" }`, `address` is the main account identifier, and `bank.fields` has the bank details (`label`, `value`, `copy`).
 
 ## GET /sessions/:id/history
 

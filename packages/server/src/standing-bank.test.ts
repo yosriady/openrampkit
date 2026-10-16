@@ -30,7 +30,7 @@ const FIELDS = [
   { label: 'Account number', value: '900123456789', copy: true },
 ]
 
-function bankAdapter(opts: { bank?: unknown; routes?: Array<'convert' | 'same' | 'bank'> } = {}) {
+function bankAdapter(opts: { bank?: unknown; routes?: Array<'convert' | 'same' | 'bank'>; currencies?: string[] } = {}) {
   const deposits: StandingDeposit[] = []
   const statusOf: Record<string, LegStatus> = {}
   const calls = { account: 0, inputs: [] as unknown[] }
@@ -39,6 +39,7 @@ function bankAdapter(opts: { bank?: unknown; routes?: Array<'convert' | 'same' |
     name: 'Bank',
     legs: [transferSpec],
     standingRoutes: opts.routes ?? ['bank'],
+    ...(opts.currencies ? { standingCurrencies: opts.currencies } : {}),
     async quote() {
       throw new Error('no quotes')
     },
@@ -61,7 +62,7 @@ function bankAdapter(opts: { bank?: unknown; routes?: Array<'convert' | 'same' |
   return { adapter, deposits, statusOf, calls }
 }
 
-function make(fake = bankAdapter(), extra: { adapters?: ReturnType<typeof createAdapter>[] } = {}) {
+function make(fake = bankAdapter(), extra: { adapters?: ReturnType<typeof createAdapter>[]; config?: Partial<Parameters<typeof createOpenRamp>[0]> } = {}) {
   const sent: Array<{ type: string; sessionId: string; object: Record<string, unknown> }> = []
   const fetchFn: typeof fetch = async (_u, init) => {
     const body = JSON.parse(String(init?.body))
@@ -69,7 +70,7 @@ function make(fake = bankAdapter(), extra: { adapters?: ReturnType<typeof create
     return new Response('ok')
   }
   const store = memoryStore() as SessionStore
-  const ramp = createOpenRamp({ secret: 's'.repeat(40), baseUrl: BASE, adapters: extra.adapters ?? [fake.adapter], logger: quiet, webhooks: HOOKS, fetch: fetchFn, store })
+  const ramp = createOpenRamp({ secret: 's'.repeat(40), baseUrl: BASE, adapters: extra.adapters ?? [fake.adapter], logger: quiet, webhooks: HOOKS, fetch: fetchFn, store, ...extra.config })
   const get = (userId = 'u1', currency = 'usd') => ramp.depositAddresses.get({ userId, origin: { currency }, destination: DEST })
   return { ramp, fake, sent, store, get }
 }
@@ -167,5 +168,71 @@ describe('standing bank accounts (fiat origin)', () => {
     expect((await t.ramp.sweep()).standing.deposits).toBe(2)
     const inputs = t.sent.filter((e) => e.type === 'deposit_address.deposit').map((e) => e.object.input)
     expect(inputs).toEqual([undefined, undefined])
+  })
+})
+
+describe('widget: standing bank accounts', () => {
+  const widget = (currencies: string[] | undefined = ['USD', 'eur'], config: Partial<Parameters<typeof createOpenRamp>[0]> = {}) => {
+    const fake = bankAdapter(currencies ? { currencies } : {})
+    return make(fake, { config: { depositAddresses: { widget: true }, ...config } })
+  }
+  async function session(t: ReturnType<typeof make>, input: Record<string, unknown> = {}) {
+    const s = await t.ramp.sessions.create({ userId: 'u1', country: 'US', destination: DEST, ...input } as never)
+    const call = (path: string, body: unknown = {}) =>
+      t.ramp.handle(new Request(`${BASE}/sessions/${s.id}${path}`, { method: 'POST', headers: { authorization: `Bearer ${s.clientSecret}`, 'content-type': 'application/json' }, body: JSON.stringify(body) }))
+    return { s, call }
+  }
+  const methodOf = async (call: Awaited<ReturnType<typeof session>>['call']) =>
+    ((await (await call('/plan')).json()).methods as Array<{ method: string; standingOrigins?: unknown }>).find((m) => m.method === 'deposit_address')
+
+  it('the plan offers the method with the bank currencies, and no crypto origin when no adapter converts tokens', async () => {
+    const t = widget()
+    expect(await methodOf((await session(t)).call)).toMatchObject({ method: 'deposit_address', providers: ['Bank'], standingOrigins: { crypto: false, currencies: ['USD', 'EUR'] } })
+    // No currencies in `standingCurrencies`: the widget offers no bank account (the backend API still does)
+    expect(await methodOf((await session(widget([]))).call)).toBeUndefined()
+    // Off without the option
+    expect(await methodOf((await session(make(bankAdapter({ currencies: ['USD'] })))).call)).toBeUndefined()
+  })
+
+  it("the route returns the session user's bank account for the session destination, with its bank details", async () => {
+    const t = widget()
+    const { call } = await session(t)
+    const res = await call('/deposit-address', { currency: 'usd' })
+    expect(res.status).toBe(200)
+    const view = await res.json()
+    expect(view).toEqual({ id: expect.stringMatching(/^sda_/), address: '900123456789', origin: { currency: 'USD' }, bank: { fields: FIELDS }, destination: { chain: DEST.chain, token: DEST.token } })
+    // The backend API sees the same account for this user
+    expect((await t.get('u1', 'USD')).id).toBe(view.id)
+    expect(t.fake.calls.account).toBe(1)
+  })
+
+  it('the browser picks only a listed currency: the user, the destination and the adapter come from the server', async () => {
+    const t = widget()
+    const { call } = await session(t)
+    // Fields that the server sets are ignored
+    const view = await (await call('/deposit-address', { currency: 'EUR', userId: 'u2', destination: { ...DEST, address: '0x000000000000000000000000000000000000dEaD' }, adapterId: 'other' })).json()
+    expect(view.destination).toEqual({ chain: DEST.chain, token: DEST.token })
+    expect(await t.ramp.depositAddresses.list('u2')).toEqual([])
+    expect((await t.ramp.depositAddresses.list('u1')).map((a) => a.id)).toEqual([view.id])
+    // A currency that the adapter does not list, a bad currency, or both kinds of origin: refused, no adapter call
+    const before = t.fake.calls.account
+    for (const body of [{ currency: 'GBP' }, { currency: 12 }, { currency: '' }, { currency: 'USD', chain: 'eip155:42161', token: USDC['eip155:42161'] }]) {
+      expect((await call('/deposit-address', body)).status).toBe(400)
+    }
+    expect(t.fake.calls.account).toBe(before)
+    // A crypto origin with an adapter that gives only bank accounts
+    expect((await call('/deposit-address', { chain: 'eip155:42161', token: USDC['eip155:42161'] })).status).toBe(409)
+  })
+
+  it('the route has the same gates as the plan', async () => {
+    const t = widget()
+    const limited = await session(t, { allowedMethods: ['transfer'] })
+    expect(await methodOf(limited.call)).toBeUndefined()
+    expect((await limited.call('/deposit-address', { currency: 'USD' })).status).toBe(409)
+    const disabled = widget(['USD'], { policy: { disabledMethods: ['deposit_address'] } })
+    expect((await (await session(disabled)).call('/deposit-address', { currency: 'USD' })).status).toBe(409)
+    const off = make(bankAdapter({ currencies: ['USD'] }))
+    expect((await (await session(off)).call('/deposit-address', { currency: 'USD' })).status).toBe(404)
+    expect(t.fake.calls.account + disabled.fake.calls.account + off.fake.calls.account).toBe(0)
   })
 })

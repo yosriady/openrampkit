@@ -73,6 +73,11 @@ export type Snapshot = {
   /** True while the standing address for the current `source` loads */
   depositAddressLoading?: boolean
   /**
+   * Method `deposit_address`: set when the user picked a standing bank account in this currency
+   * (see `MethodOption.standingOrigins`). Unset: a crypto origin, the current `source`.
+   */
+  depositCurrency?: string
+  /**
    * The user's past sessions (`client.history()`, server option `history`), newest first. Undefined
    * until it loads, and when the server does not offer it. It loads at start and again when a payment
    * reaches a final state. A UI shows its History link only when the list has at least one item.
@@ -614,9 +619,12 @@ export class RampController {
     this.emit('method.selected', { method })
     this.set({ method: m, exchange: opts.exchange, quotes: [], quoteErrors: [], error: undefined, selectedQuoteId: undefined })
     if (method === DEPOSIT_ADDRESS_METHOD) {
-      // No payment in this session: the widget shows the user's standing address for the chosen token.
-      this.set({ screen: 'deposit_address', depositAddress: undefined })
-      void this.loadSources('transfer')
+      // No payment in this session: the widget shows the user's standing address for the chosen token,
+      // or the user's standing bank account when the server offers only bank accounts.
+      const o = m.standingOrigins
+      const depositCurrency = o && !o.crypto ? this.defaultDepositCurrency(o.currencies) : undefined
+      this.set({ screen: 'deposit_address', depositAddress: undefined, depositCurrency })
+      if (!depositCurrency) void this.loadSources('transfer')
       return this.loadDepositAddress()
     }
     if (isAddressTransfer(method)) {
@@ -659,14 +667,45 @@ export class RampController {
 
   private depositAddressSeq = 0
 
-  /** Method `deposit_address`: load the standing address for the current `source`. A newer call wins. */
+  /** The first bank currency to show: the session currency when the server offers it, else the first one */
+  private defaultDepositCurrency(currencies: string[]): string | undefined {
+    const cur = this.snap.session?.currency?.toUpperCase() ?? this.snap.plan?.currency?.toUpperCase()
+    return cur && currencies.includes(cur) ? cur : currencies[0]
+  }
+
+  /** The bank currencies of method `deposit_address` (`MethodOption.standingOrigins`), empty when none */
+  depositCurrencies(): string[] {
+    return this.snap.method?.method === DEPOSIT_ADDRESS_METHOD ? (this.snap.method.standingOrigins?.currencies ?? []) : []
+  }
+
+  /** True when method `deposit_address` offers a crypto origin (the token picker) */
+  depositCrypto(): boolean {
+    return this.snap.method?.standingOrigins?.crypto !== false
+  }
+
+  /**
+   * Method `deposit_address`: show the user's standing bank account in `currency`, or the standing
+   * address for the current `source` (`undefined`). Only a currency that the server offers.
+   */
+  setDepositCurrency(currency: string | undefined) {
+    if (this.snap.screen !== 'deposit_address') return
+    if (currency !== undefined && !this.depositCurrencies().includes(currency)) return
+    if (currency === undefined && !this.depositCrypto()) return
+    if (currency === this.snap.depositCurrency) return
+    this.set({ depositCurrency: currency, depositAddress: undefined })
+    if (currency === undefined) void this.loadSources('transfer')
+    void this.loadDepositAddress()
+  }
+
+  /** Method `deposit_address`: load the standing address for the current `source` (or the bank account for `depositCurrency`). A newer call wins. */
   async loadDepositAddress() {
+    const currency = this.snap.depositCurrency
     const src = this.snap.source
-    if (!src) return
+    if (!currency && !src) return
     const seq = ++this.depositAddressSeq
     this.set({ depositAddressLoading: true, error: undefined })
     try {
-      const view = await this.opts.client.depositAddress(this.opts.clientSecret, { chain: src.chain, token: src.token })
+      const view = await this.opts.client.depositAddress(this.opts.clientSecret, currency ? { currency } : { chain: src!.chain, token: src!.token })
       if (seq === this.depositAddressSeq && !this.destroyed) this.set({ depositAddress: view, depositAddressLoading: false })
     } catch (e) {
       if (seq === this.depositAddressSeq) this.set({ depositAddress: undefined, depositAddressLoading: false, error: toOpenRampError(e) })
@@ -676,6 +715,8 @@ export class RampController {
   setSource(source: NonNullable<Snapshot['source']>) {
     this.set({ source })
     if (this.snap.screen === 'deposit_address') {
+      // The bank account does not depend on the token
+      if (this.snap.depositCurrency) return
       this.set({ depositAddress: undefined })
       void this.loadDepositAddress()
       return

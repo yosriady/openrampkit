@@ -243,6 +243,11 @@ export interface Adapter {
    * The server picks, for each route, the first adapter that serves it.
    */
   standingRoutes?: ReadonlyArray<StandingRoute>
+  /**
+   * Optional, with `standingAccount`: the fiat currencies (ISO 4217, upper case) of its standing bank
+   * accounts. The widget offers a bank account only for these (server option `depositAddresses.widget`).
+   */
+  standingCurrencies?: ReadonlyArray<string>
   /** Optional live catalog: returns legs refined for this user (methods, limits, assets) */
   catalog?(input: CatalogInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<LegSpec[]>
   quote(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote>

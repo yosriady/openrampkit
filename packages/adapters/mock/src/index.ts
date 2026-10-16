@@ -60,6 +60,11 @@ export type MockOptions = {
    */
   standing?: boolean
   /**
+   * With `standing`: also give standing bank accounts (`standingAccount`, the `bank` route) in USD and
+   * EUR, with test bank details. No deposit ever arrives: use it to show the bank account in the widget.
+   */
+  standingBank?: boolean
+  /**
    * Test only: add an `onchain` leg (method `wallet`, surface WALLET_TX) on a local dev chain such as
    * Anvil. It asks the wallet to send `token` to the destination address with a real ERC-20 transfer,
    * and completes only when the receipt, read over JSON-RPC from `rpcUrl`, shows that transfer.
@@ -207,6 +212,28 @@ const CARD_FIELDS: FieldSpec[] = [
 ]
 /** The test card number that the `form` card checkout declines */
 export const MOCK_DECLINED_CARD = '4000000000000002'
+
+/** Test bank details of a standing bank account (option `standingBank`), the same for the same route */
+async function standingBankFor(currency: string, seed: string) {
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(seed)))
+  const digits = [...digest.slice(0, 12)].map((b) => String(b % 10)).join('')
+  const eur = currency === 'EUR'
+  const address = eur ? `DE89 3704 0044 ${digits.slice(0, 4)} ${digits.slice(4, 8)} ${digits.slice(8, 10)}` : digits
+  const fields = eur
+    ? [
+        { label: 'Bank', value: 'Test Bank', copy: false },
+        { label: 'Account name', value: 'OpenRampKit Test', copy: true },
+        { label: 'IBAN', value: address, copy: true },
+        { label: 'BIC', value: 'TESTDEFFXXX', copy: true },
+      ]
+    : [
+        { label: 'Bank', value: 'Test Bank', copy: false },
+        { label: 'Account name', value: 'OpenRampKit Test', copy: true },
+        { label: 'Account number', value: address, copy: true },
+        { label: 'Routing number', value: '101019644', copy: true },
+      ]
+  return { address, ref: address, bank: { fields } }
+}
 
 /** Test bank details of the `bankFields` option. The reference ties the transfer to the order. */
 function bankFieldsFor(currency: string, amount: string, reference: string) {
@@ -572,6 +599,15 @@ export function mockAdapter(opts: MockOptions = {}) {
           async standingDeposits() {
             return []
           },
+          ...(opts.standingBank
+            ? {
+                standingRoutes: ['convert', 'bank'] as const,
+                standingCurrencies: ['USD', 'EUR'],
+                async standingAccount(input: { userId: string; origin: { currency: string }; destination: { chain: string; address: string } }) {
+                  return standingBankFor(input.origin.currency, `standing-bank:${input.userId}:${input.origin.currency}:${input.destination.chain}:${input.destination.address}`)
+                },
+              }
+            : {}),
         }
       : {}),
 

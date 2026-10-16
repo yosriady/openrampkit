@@ -634,3 +634,22 @@ describe('mock adapter: several instances (demo options)', () => {
     expect((await a.status!({ leg: transferLeg, ref: s2.ref! }, ctx)).output?.value).toBe(q2.output.value)
   })
 })
+
+describe('standing bank accounts (option standingBank)', () => {
+  it('gives a stable test bank account per route in USD and EUR, only with the option', async () => {
+    const ctx = { fetch: fakeFetch([]).fetch, log: makeCtx({ fetch: fakeFetch([]).fetch }).log, shared: memoryKV() }
+    expect(mockAdapter({ crypto: true, standing: true }).standingAccount).toBeUndefined()
+    const a = mockAdapter({ crypto: true, standing: true, standingBank: true })
+    expect(a.standingRoutes).toEqual(['convert', 'bank'])
+    expect(a.standingCurrencies).toEqual(['USD', 'EUR'])
+    const input = (userId: string, currency: string) => ({ userId, origin: { currency }, destination: { type: 'crypto' as const, ...BASE_USDC, address: DEST } })
+    const usd = await a.standingAccount!(input('u1', 'USD'), ctx)
+    expect(usd.bank.fields.map((f) => f.label)).toEqual(['Bank', 'Account name', 'Account number', 'Routing number'])
+    expect(usd.bank.fields.find((f) => f.label === 'Account number')!.value).toBe(usd.address)
+    expect(usd.bank.fields[0]!.copy).toBe(false)
+    expect(await a.standingAccount!(input('u1', 'USD'), ctx)).toEqual(usd)
+    expect((await a.standingAccount!(input('u2', 'USD'), ctx)).address).not.toBe(usd.address)
+    const eur = await a.standingAccount!(input('u1', 'EUR'), ctx)
+    expect(eur.bank.fields.map((f) => f.label)).toContain('IBAN')
+  })
+})
