@@ -1,0 +1,252 @@
+// Gas abstraction: the checks on Relay's permit messages (EIP-712) before the wallet signs them and
+// again before the server posts the signatures. Every check fails closed: a message that is not
+// exactly one of the known shapes, or a field that cannot be read, refuses the whole permit.
+//
+// Shapes from https://docs.relay.link/features/gasless-swaps (EIP-3009 permits, and the
+// MulticallAuthorization of Relay's approval proxy 3.2) and a live keyless quote on 2026-10-16.
+
+import type { TypedDataRequest } from '@openrampkit/core'
+import type { RelayStep } from './types.js'
+
+/** Where Relay takes permit signatures (https://docs.relay.link/references/api/execute-permits) */
+export const PERMIT_ENDPOINT = '/execute/permits'
+
+/**
+ * Relay's ApprovalProxy contracts, v3 and v3.2, London and Cancun EVMs
+ * (https://docs.relay.link/references/api/api_resources/contract-addresses). An EIP-3009 authorization
+ * must pay one of these, and a MulticallAuthorization must be for one of these.
+ */
+export const RELAY_APPROVAL_PROXIES: ReadonlySet<string> = new Set([
+  '0x8754bc615047de01228a7527b712806a71a8dc9a',
+  '0xccc88a9d1b4ed6b0eaba998850414b24f1c315be',
+  '0xe4dfbd5e6784db1058124e2c87554c0591f0fb7b',
+  '0x5567954cd026cebfe486062cb75848e0f1c12e58',
+])
+
+/** Relay contracts a MulticallAuthorization may call or name: the approval proxies, the v3 and v3.2 routers, RelayReceiver and the EVM solver */
+export const RELAY_CONTRACTS: ReadonlySet<string> = new Set([
+  ...RELAY_APPROVAL_PROXIES,
+  '0x9ef6d3c2f60d7b9008d74cab1fc0f899c957c819',
+  '0xb92fe925dc43a0ecde6c8b1a2709c170ec4fff4f',
+  '0x6328ea02d28131e58b28e55c6258258a30d90e05',
+  '0x0729e2a4716d9f7dd17858d5d504426d228697f7',
+  '0xa5f565650890fba1824ee0f21ebbbf660a179934',
+  '0xf70da97812cb96acdf810712aa562db8dfa3dbef',
+])
+
+/** A permit may be valid for at most this long (Relay's default `permitExpiry` is 10 minutes) */
+export const PERMIT_MAX_TTL_SEC = 3600
+/** Allowed difference between our clock and the permit's `validAfter` */
+const CLOCK_SKEW_SEC = 300
+
+const EIP3009_FIELDS = [
+  ['from', 'address'],
+  ['to', 'address'],
+  ['value', 'uint256'],
+  ['validAfter', 'uint256'],
+  ['validBefore', 'uint256'],
+  ['nonce', 'bytes32'],
+]
+/** The exact `types` of each message the adapter accepts, and the `/execute/permits` kind it is posted with */
+const SHAPES: Record<string, { kind: string; types: Record<string, string[][]> }> = {
+  ReceiveWithAuthorization: { kind: 'eip3009', types: { ReceiveWithAuthorization: EIP3009_FIELDS } },
+  TransferWithAuthorization: { kind: 'eip3009', types: { TransferWithAuthorization: EIP3009_FIELDS } },
+  MulticallAuthorization: {
+    kind: 'multicall-authorization',
+    types: {
+      MulticallAuthorization: [
+        ['from', 'address'],
+        ['relayer', 'address'],
+        ['msgValue', 'uint256'],
+        ['refundTo', 'address'],
+        ['nftRecipient', 'address'],
+        ['metadata', 'bytes'],
+        ['fundingIndex', 'uint256'],
+        ['calls', 'Call3Value[]'],
+        ['funding', 'FundingAuthorization[]'],
+      ],
+      Call3Value: [
+        ['target', 'address'],
+        ['allowFailure', 'bool'],
+        ['value', 'uint256'],
+        ['callData', 'bytes'],
+      ],
+      FundingAuthorization: [
+        ['token', 'address'],
+        ['from', 'address'],
+        ['value', 'uint256'],
+        ['validAfter', 'uint256'],
+        ['validBefore', 'uint256'],
+      ],
+    },
+  },
+}
+
+/** ERC-20 calls on the origin token that a MulticallAuthorization may make, and the argument that must be a Relay contract */
+const TOKEN_CALLS: Record<string, string> = {
+  '0xa9059cbb': 'transfer(to)',
+  '0x095ea7b3': 'approve(spender)',
+}
+
+export type PermitItem = { typedData: TypedDataRequest; body: Record<string, unknown> }
+export type PermitCheck = { chainId: number; token: string; user: string; maxBase: bigint; requestId: string; nowSec: number }
+
+/**
+ * The EIP-712 items of Relay's permit steps (`authorize1`), in order. Undefined when the route also
+ * needs a transaction (for example an approval), when an item is already complete, or when an item is
+ * not an EIP-712 signature for `POST /execute/permits`: then the wallet must pay gas.
+ */
+export function permitItems(steps: RelayStep[]): PermitItem[] | undefined {
+  const out: PermitItem[] = []
+  for (const st of steps) {
+    if (st.kind !== 'signature') return undefined
+    for (const it of st.items ?? []) {
+      // An item we did not see signed is not ours to skip.
+      if (it.status !== 'incomplete') return undefined
+      const sign = it.data?.sign
+      const post = it.data?.post
+      if (sign?.signatureKind !== 'eip712' || !isObject(sign.domain) || !isObject(sign.types) || typeof sign.primaryType !== 'string' || !isObject(sign.value)) return undefined
+      if (post?.endpoint !== PERMIT_ENDPOINT || (post.method !== undefined && String(post.method).toUpperCase() !== 'POST') || !isObject(post.body)) return undefined
+      const { EIP712Domain: _domain, ...types } = sign.types
+      out.push({ typedData: { domain: sign.domain as TypedDataRequest['domain'], types, primaryType: sign.primaryType, message: sign.value }, body: post.body })
+    }
+  }
+  return out.length ? out : undefined
+}
+
+function isObject(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+const addr = (v: unknown): string | undefined => (typeof v === 'string' && /^0x[0-9a-fA-F]{40}$/.test(v) ? v.toLowerCase() : undefined)
+
+/** A uint256 field, or undefined when it is not a non-negative integer */
+function uint(v: unknown): bigint | undefined {
+  if (typeof v === 'number') return Number.isSafeInteger(v) && v >= 0 ? BigInt(v) : undefined
+  if (typeof v === 'string' && /^(0x[0-9a-fA-F]+|\d+)$/.test(v)) return BigInt(v)
+  return undefined
+}
+
+function sameTypes(types: TypedDataRequest['types'], want: Record<string, string[][]>): boolean {
+  const names = Object.keys(types)
+  if (names.length !== Object.keys(want).length) return false
+  return names.every((n) => {
+    const w = want[n]
+    const got = types[n]
+    return !!w && Array.isArray(got) && got.length === w.length && got.every((f, i) => f?.name === w[i]![0] && f?.type === w[i]![1])
+  })
+}
+
+/** A validity window that is open now, and closes within `PERMIT_MAX_TTL_SEC` */
+function windowProblem(validAfter: unknown, validBefore: unknown, nowSec: number): string | undefined {
+  const after = uint(validAfter)
+  const before = uint(validBefore)
+  if (after === undefined || before === undefined) return 'the permit has no valid time window'
+  if (after > BigInt(nowSec + CLOCK_SKEW_SEC)) return 'the permit is not valid yet'
+  if (before <= BigInt(nowSec)) return 'the permit has expired'
+  if (before > BigInt(nowSec + PERMIT_MAX_TTL_SEC)) return 'the permit stays valid for too long'
+  return undefined
+}
+
+function eip3009Problem(t: TypedDataRequest, p: PermitCheck): string | undefined {
+  const m = t.message
+  if (addr(t.domain.verifyingContract) !== p.token.toLowerCase()) return 'the permit is for another token'
+  if (addr(m.from) !== p.user.toLowerCase()) return 'the permit is for another account'
+  const to = addr(m.to)
+  if (!to || !RELAY_APPROVAL_PROXIES.has(to)) return 'the permit pays an address that is not Relay'
+  const value = uint(m.value)
+  if (value === undefined || value === 0n || value > p.maxBase) return 'the permit moves more than the quoted amount'
+  if (typeof m.nonce !== 'string' || !/^0x[0-9a-fA-F]{64}$/.test(m.nonce)) return 'the permit has no valid nonce'
+  return windowProblem(m.validAfter, m.validBefore, p.nowSec)
+}
+
+function multicallProblem(t: TypedDataRequest, p: PermitCheck): string | undefined {
+  const m = t.message
+  const user = p.user.toLowerCase()
+  const token = p.token.toLowerCase()
+  const proxy = addr(t.domain.verifyingContract)
+  if (!proxy || !RELAY_APPROVAL_PROXIES.has(proxy)) return 'the authorization is for a contract that is not Relay'
+  if (addr(m.from) !== user) return 'the permit is for another account'
+  // Refunds and anything left over go back to the user.
+  if (addr(m.refundTo) !== user || addr(m.nftRecipient) !== user) return 'the authorization refunds to another account'
+  const relayer = addr(m.relayer)
+  if (!relayer || !RELAY_CONTRACTS.has(relayer)) return 'the authorization names a relayer that is not Relay'
+  if (uint(m.msgValue) !== 0n) return 'the authorization sends native value'
+  if (typeof m.metadata !== 'string' || !/^0x([0-9a-fA-F]{2})*$/.test(m.metadata)) return 'the authorization has invalid metadata'
+  const funding = m.funding
+  if (!Array.isArray(funding) || !funding.length) return 'the authorization has no funding'
+  const index = uint(m.fundingIndex)
+  if (index === undefined || index >= BigInt(funding.length)) return 'the authorization has an invalid funding index'
+  let total = 0n
+  for (const f of funding) {
+    if (!isObject(f) || addr(f.token) !== token || addr(f.from) !== user) return 'the permit funds from another token or account'
+    const v = uint(f.value)
+    if (v === undefined || v === 0n) return 'the permit moves more than the quoted amount'
+    total += v
+    const w = windowProblem(f.validAfter, f.validBefore, p.nowSec)
+    if (w) return w
+  }
+  if (total > p.maxBase) return 'the permit moves more than the quoted amount'
+  const calls = m.calls
+  if (!Array.isArray(calls) || !calls.length) return 'the authorization has no calls'
+  for (const c of calls) {
+    if (!isObject(c) || typeof c.allowFailure !== 'boolean') return 'the authorization has an invalid call'
+    if (uint(c.value) !== 0n) return 'the authorization sends native value'
+    const target = addr(c.target)
+    const data = typeof c.callData === 'string' && /^0x([0-9a-fA-F]{2})*$/.test(c.callData) ? c.callData.toLowerCase() : undefined
+    if (!target || data === undefined) return 'the authorization has an invalid call'
+    if (RELAY_CONTRACTS.has(target)) continue
+    // A call on the origin token: only a transfer or an approval, to a Relay contract.
+    if (target !== token || !TOKEN_CALLS[data.slice(0, 10)] || data.length < 74) return 'the authorization calls a contract that is not Relay'
+    const arg = `0x${data.slice(34, 74)}`
+    if (data.slice(10, 34) !== '0'.repeat(24) || !RELAY_CONTRACTS.has(arg)) return 'the authorization moves the token to an address that is not Relay'
+  }
+  return undefined
+}
+
+/**
+ * Checks what Relay asks the wallet to sign, before the user sees it and again before the server
+ * posts the signatures. Each item must be a known message type with exactly the known `types`, for
+ * the origin chain and this request, posted with the matching kind. Exactly one EIP-3009 authorization:
+ * from the user, for the origin token, paying a Relay approval proxy at most the quoted input, open
+ * now for at most `PERMIT_MAX_TTL_SEC`. At most one MulticallAuthorization, before it: from the user,
+ * refunds to the user, a Relay proxy and relayer, no native value, funding only of the origin token
+ * from the user (at most the quoted input in total), and calls only to Relay contracts (or a token
+ * transfer or approval to one). Returns the first problem, or undefined.
+ */
+export function permitProblem(items: PermitItem[], p: PermitCheck): string | undefined {
+  let eip3009: TypedDataRequest | undefined
+  let multicall: TypedDataRequest | undefined
+  for (const { typedData: t, body } of items) {
+    const shape = SHAPES[t.primaryType]
+    if (!shape) return `the permit has an unknown message type (${t.primaryType.slice(0, 40)})`
+    if (!sameTypes(t.types, shape.types)) return 'the permit message has unexpected fields'
+    if (body.kind !== shape.kind) return 'the permit is posted with another kind'
+    if (typeof body.requestId !== 'string' || body.requestId.toLowerCase() !== p.requestId.toLowerCase()) return 'the permit is for another request'
+    if (Number(t.domain.chainId) !== p.chainId || uint(t.domain.chainId) === undefined) return 'the permit is for another chain'
+    const problem = shape.kind === 'eip3009' ? eip3009Problem(t, p) : multicallProblem(t, p)
+    if (problem) return problem
+    if (shape.kind === 'eip3009') {
+      if (eip3009) return 'the permit has more than one token authorization'
+      eip3009 = t
+    } else {
+      // Relay's order: the MulticallAuthorization is posted first.
+      if (multicall || eip3009) return 'the permit has its authorizations in an unexpected order'
+      multicall = t
+    }
+  }
+  if (!eip3009) return 'the permit has no token authorization'
+  if (multicall) {
+    // The token authorization funds the approval proxy that runs the authorized calls.
+    if (addr(eip3009.message.to) !== addr(multicall.domain.verifyingContract)) return 'the token authorization pays another contract than the authorized calls'
+    const funded = (multicall.message.funding as Array<Record<string, unknown>>).reduce((s, f) => s + uint(f.value)!, 0n)
+    if (uint(eip3009.message.value) !== funded) return 'the token authorization does not match the funding'
+  }
+  return undefined
+}
+
+/** The EIP-3009 nonce of a checked permit, for the one-use claim */
+export function permitNonce(items: PermitItem[]): string | undefined {
+  const t = items.find((i) => SHAPES[i.typedData.primaryType]?.kind === 'eip3009')?.typedData
+  return typeof t?.message.nonce === 'string' ? t.message.nonce.toLowerCase() : undefined
+}

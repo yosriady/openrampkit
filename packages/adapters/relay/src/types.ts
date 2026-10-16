@@ -68,7 +68,13 @@ export type WalletRecord = {
    * Gas abstraction (Relay permit flow): the EIP-712 messages the wallet signs, the account that must
    * sign them, the `/execute/permits` bodies to post them with, and how many are posted already.
    */
-  permit?: { signer: string; items: Array<{ typedData: TypedDataRequest; body: Record<string, unknown> }>; posted: number }
+  permit?: {
+    signer: string
+    items: Array<{ typedData: TypedDataRequest; body: Record<string, unknown> }>
+    posted: number
+    /** What `permitProblem` checks the items against again before the server posts them (`maxBase` as a decimal string) */
+    check?: { chainId: number; token: string; user: string; maxBase: string; requestId: string }
+  }
 }
 export type DepositRecord = {
   address: string

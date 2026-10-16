@@ -1,7 +1,7 @@
 // Gas abstraction end to end: a wallet with USDC and no native gas on Base pays a USDC deposit on
 // Arbitrum through the real controller, server and Relay adapter (Relay's API stubbed). The wallet
 // signs Relay's permit; the server checks the signature, posts it, and completes on Relay's fill.
-import { describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { relay } from '@openrampkit/adapter-relay'
 import { DepositController, createOpenRampClient } from '@openrampkit/client'
 import { USDC } from '@openrampkit/core'
@@ -120,6 +120,15 @@ async function setup(native?: string) {
   await c.confirm()
   return { ramp, c, s, api, ...w }
 }
+
+// The signed permit is valid until 1792147801 (Unix seconds): run 5 minutes before that.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ['Date'] })
+  vi.setSystemTime((1792147801 - 300) * 1000)
+})
+afterEach(() => {
+  vi.useRealTimers()
+})
 
 describe('Relay wallet payment without native gas', () => {
   it('a wallet with only USDC signs a permit, and the deposit completes on Relay\'s fill', async () => {

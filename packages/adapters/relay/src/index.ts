@@ -169,6 +169,9 @@ export function relay(opts: RelayOptions = {}) {
         if (s.status === 'success') {
           // Relay filled: report what arrived, so the server checks it against the quote.
           const output = await walletOutput(ctx, input.ref, rec?.output)
+          // A permit payment has no wallet transaction of the user to fall back on: it completes only
+          // with the delivered amount, so the server can check it. Until Relay reports it, it waits.
+          if (rec?.permit && !output) return { status: 'processing', detail: { code: 'confirming' }, ...extra }
           return relayStep(s.status, { ...extra, ...(output ? { output } : {}) })!
         }
         const step = relayStep(s.status, extra, ctx.log)

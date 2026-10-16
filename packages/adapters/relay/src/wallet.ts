@@ -21,74 +21,12 @@ import { DIRECT_TX_CLOCK_SKEW_MS, RECORD_TTL_SEC, USED_TTL_SEC, WALLET_QUOTE_REU
 import { SUBMIT_SIGNATURES, SUBMIT_TX, awaitingTx, caip2FromRelay, cryptoAsset, fitsChain, isNative, isSolana, knownDecimals, requestIdOf, sameChainTransactions, sameUser, settlementOf, toOpenRamp, usedKey } from './helpers.js'
 import { solanaReceived } from './solana.js'
 import type { SolStatus } from './solana.js'
+import { PERMIT_ENDPOINT, permitItems, permitNonce, permitProblem } from './permit.js'
+import type { PermitCheck } from './permit.js'
 import type { RelayQuoteResponse, RelayStep, WalletRecord } from './types.js'
 
-/** Where Relay takes permit signatures (https://docs.relay.link/references/api/execute-permits) */
-const PERMIT_ENDPOINT = '/execute/permits'
-/** EIP-3009 authorizations: the token moves `value` from `from` (USDC and other EIP-3009 tokens) */
-const EIP3009_TYPES = new Set(['TransferWithAuthorization', 'ReceiveWithAuthorization'])
 /** Headroom over the accepted quote's input for a re-quote (EXACT_OUTPUT can need a little more input) */
 const PERMIT_INPUT_HEADROOM_BPS = 100n
-
-type PermitItem = { typedData: TypedDataRequest; body: Record<string, unknown> }
-
-/**
- * The EIP-712 items of Relay's permit steps (`authorize1`), in order. Undefined when the route also
- * needs a transaction (for example an approval) or a signature that is not EIP-712 for `/execute/permits`:
- * then the wallet must pay gas anyway.
- */
-export function permitItems(steps: RelayStep[]): PermitItem[] | undefined {
-  const out: PermitItem[] = []
-  for (const st of steps) {
-    if (st.kind !== 'signature') return undefined
-    for (const it of st.items ?? []) {
-      if (it.status === 'complete') continue
-      const sign = it.data?.sign
-      const post = it.data?.post
-      if (sign?.signatureKind !== 'eip712' || !sign.domain || !sign.types || !sign.primaryType || !sign.value || typeof sign.value !== 'object') return undefined
-      if (post?.endpoint !== PERMIT_ENDPOINT || (post.method && post.method.toUpperCase() !== 'POST') || !post.body || typeof post.body !== 'object') return undefined
-      const { EIP712Domain: _domain, ...types } = sign.types
-      out.push({ typedData: { domain: sign.domain as TypedDataRequest['domain'], types, primaryType: sign.primaryType, message: sign.value }, body: post.body })
-    }
-  }
-  return out.length ? out : undefined
-}
-
-const lower = (v: unknown) => (typeof v === 'string' ? v.toLowerCase() : undefined)
-
-/**
- * Checks what Relay asks the wallet to sign before the user sees it: the origin chain, the paying
- * account, and for each token authorization the origin token and at most the quoted input.
- * Returns the first problem, or undefined.
- */
-export function permitProblem(items: PermitItem[], p: { chainId: number; token: string; user: string; maxBase: bigint }): string | undefined {
-  const token = p.token.toLowerCase()
-  const user = p.user.toLowerCase()
-  const amountOk = (v: unknown) => {
-    try {
-      const n = BigInt(String(v))
-      return n >= 0n && n <= p.maxBase
-    } catch {
-      return false
-    }
-  }
-  for (const { typedData: t } of items) {
-    if (Number(t.domain.chainId) !== p.chainId) return 'the permit is for another chain'
-    const m = t.message
-    if (m.from !== undefined && lower(m.from) !== user) return 'the permit is for another account'
-    if (EIP3009_TYPES.has(t.primaryType)) {
-      if (lower(t.domain.verifyingContract) !== token) return 'the permit is for another token'
-      if (!amountOk(m.value)) return 'the permit moves more than the quoted amount'
-    }
-    if (Array.isArray(m.funding)) {
-      for (const f of m.funding as Array<Record<string, unknown> | undefined>) {
-        if (lower(f?.token) !== token || lower(f?.from) !== user) return 'the permit funds from another token or account'
-        if (!amountOk(f?.value)) return 'the permit moves more than the quoted amount'
-      }
-    }
-  }
-  return undefined
-}
 
 export function walletLeg(rt: RelayRuntime) {
   const { opts, api, rpc, rpcUrl, solanaTx } = rt
@@ -323,17 +261,39 @@ export function walletLeg(rt: RelayRuntime) {
       ctx.log.info('relay: no permit route for this token; the wallet pays gas', { chain: origin.chain, token: origin.token })
       return undefined
     }
+    // The most the permit may move: the accepted quote's input plus the headroom. No decimals: refuse.
     const quoted = input.quote.input
     const decimals = quoted.asset.kind === 'crypto' ? quoted.asset.decimals : undefined
-    const maxBase = decimals === undefined ? 0n : (BigInt(toBaseUnits(quoted.value, decimals)) * (10_000n + PERMIT_INPUT_HEADROOM_BPS)) / 10_000n
-    const problem = permitProblem(items, { chainId, token: origin.token, user, maxBase })
+    let maxBase: bigint
+    try {
+      if (decimals === undefined) throw new Error('no decimals')
+      maxBase = (BigInt(toBaseUnits(quoted.value, decimals)) * (10_000n + PERMIT_INPUT_HEADROOM_BPS)) / 10_000n
+    } catch {
+      ctx.log.warn('relay: cannot bound the permit amount; the wallet pays gas', { requestId })
+      return undefined
+    }
+    const check: Omit<PermitCheck, 'nowSec'> = { chainId, token: origin.token.toLowerCase(), user: user.toLowerCase(), maxBase, requestId }
+    const problem = permitProblem(items, { ...check, nowSec: Math.floor(Date.now() / 1000) })
     if (problem) {
       ctx.log.warn('relay: refused the permit that Relay returned; the wallet pays gas', { problem, requestId })
       return undefined
     }
+    // One EIP-3009 nonce serves one payment: a nonce that Relay already gave another session is refused.
+    const nonce = permitNonce(items)!
+    const nonceKey = `permitnonce:${origin.chain}:${check.token}:${check.user}:${nonce}`
+    if (!(await claimOnce(ctx.shared, nonceKey, `${ctx.session.id}:${requestId}`, USED_TTL_SEC))) {
+      ctx.log.warn('relay: refused a permit nonce that was already used; the wallet pays gas', { requestId })
+      return undefined
+    }
     await ctx.store.put(
       `w:${requestId}`,
-      { mode: 'relay', requestId, chain: origin.chain, output: input.quote.output, permit: { signer: user.toLowerCase(), items, posted: 0 } } satisfies WalletRecord,
+      {
+        mode: 'relay',
+        requestId,
+        chain: origin.chain,
+        output: input.quote.output,
+        permit: { signer: check.user, items, posted: 0, check: { ...check, maxBase: maxBase.toString() } },
+      } satisfies WalletRecord,
       RECORD_TTL_SEC,
     )
     return signStep(requestId, { chain: origin.chain, address: user, signatures: items.map((i) => i.typedData) })
@@ -357,6 +317,13 @@ export function walletLeg(rt: RelayRuntime) {
       throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Send ${n} signature${n === 1 ? '' : 's'} as 65-byte hex strings.` }))
     }
     const signatures = sigs as string[]
+    // Check the stored messages again (they may have expired), and never post without the check.
+    const c = permit.check
+    const problem = c ? permitProblem(permit.items, { ...c, maxBase: BigInt(c.maxBase), nowSec: Math.floor(Date.now() / 1000) }) : 'the permit has no stored check'
+    if (problem) {
+      ctx.log.warn('relay: refused to post the permit', { problem, ref })
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: `This permit can no longer be used (${problem}). Choose the payment again.`, recovery: 'choose_other' }), 409)
+    }
     permit.items.forEach((item, i) => {
       if (recoverTypedDataSigner(item.typedData, signatures[i]!) !== permit.signer) {
         throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'A signature is not from the paying wallet. Sign again with the same account.' }))
