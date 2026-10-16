@@ -13,6 +13,7 @@ Thank you for your help. Contributions of all sizes are welcome. New provider ad
 - [Scripts](#scripts)
 - [Write an adapter](#write-an-adapter)
 - [Tests](#tests)
+- [Live provider checks](#live-provider-checks)
 - [Changesets](#changesets)
 - [Releases](#releases)
 - [Commits and pull requests](#commits-and-pull-requests)
@@ -98,7 +99,7 @@ Run these from the repo root.
 | `pnpm playground:build` | Build the playground |
 | `pnpm site:build` | Build the docs and the playground into one site |
 | `pnpm dev:example` | Next.js demo (`examples/next-demo`) |
-| `pnpm live:relay` | Live Relay API check with your key (moves no money) |
+| `pnpm live:relay` | Live Relay API check with your key (moves no money). See [Live provider checks](#live-provider-checks) |
 | `pnpm testnet:settle` | One real settlement on Arbitrum Sepolia (or `NETWORK=tempo-testnet`) with test tokens. Reads `DEPLOYER_PRIVATE_KEY` |
 | `pnpm solana:key` | Create or show the Solana devnet key of the playground (`--airdrop` asks for devnet SOL) |
 | `pnpm solana:settle` | One real payment on Solana devnet with that key |
@@ -170,6 +171,29 @@ When `pnpm size` fails:
 3. In the pull request, give the old size, the new size and the reason.
 
 To add a browser entry point, add a row to `scripts/size-budget.json` with the same rule for the budget.
+
+## Live provider checks
+
+Unit tests use `fakeFetch`, so they do not see a change in a provider API. The live checks call the real provider API. They move no money.
+
+`pnpm live:relay` ([scripts/live-relay.mjs](scripts/live-relay.mjs)) checks the Relay adapter. It reads `RELAY_API_KEY` from the environment first, then from `examples/next-demo/.env.local`. It never prints the key. Without a key, it prints a `SKIP` message and exits with code 0.
+
+```bash
+RELAY_API_KEY=... pnpm live:relay
+```
+
+The [Live checks](.github/workflows/live.yml) workflow runs the checks each night and on a manual run (`workflow_dispatch`):
+
+- A maintainer adds the key as the `RELAY_API_KEY` repository secret. Without the secret, the check skips and says so in the job summary.
+- Only the check step gets the key. The other jobs have only the permissions that they need.
+- When a check fails, the workflow opens one issue with the title **Live check failed: provider API**. On the next failure, it adds a comment to the same issue. Close the issue when you fix the cause.
+
+To add a live check for another provider:
+
+1. Copy `scripts/live-relay.mjs` to `scripts/live-<id>.mjs`. Read the key from the environment, and skip with a clear message when there is no key.
+2. Use only calls that move no money: health, quotes, and status.
+3. Add a `live:<id>` script to the root `package.json`.
+4. Add a job to `.github/workflows/live.yml` with the key from a new repository secret, and add the job to `needs` of the `report` job.
 
 ## Changesets
 

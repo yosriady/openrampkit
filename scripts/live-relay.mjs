@@ -1,21 +1,38 @@
 // Live check of the Relay adapter against the real Relay API with your key.
-// Reads RELAY_API_KEY from examples/next-demo/.env.local (never prints it). Moves no money.
-// Run: node scripts/live-relay.mjs
-import { readFileSync } from 'node:fs'
-import { relay } from '../packages/adapters/relay/dist/index.js'
-import { makeCtx } from '../packages/adapter/dist/testing.js'
+// Reads RELAY_API_KEY from the environment first, then from examples/next-demo/.env.local.
+// Never prints the key. Moves no money. Without a key, it skips and exits 0.
+// Run: pnpm live:relay (or node scripts/live-relay.mjs after a build)
+import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 
-const env = Object.fromEntries(
-  readFileSync(new URL('../examples/next-demo/.env.local', import.meta.url), 'utf8')
-    .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && l.includes('='))
-    .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).replace(/^["']|["']$/g, '')]),
-)
-const apiKey = env.RELAY_API_KEY
-if (!apiKey) {
-  console.error('RELAY_API_KEY is not set in examples/next-demo/.env.local')
-  process.exit(1)
+// Writes a line to the GitHub Actions job summary, when the script runs in Actions.
+function summary(line) {
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `${line}\n`)
 }
-console.log(`Using a Relay key ending in ...${apiKey.slice(-4)}`)
+
+function keyFromEnvFile() {
+  const file = new URL('../examples/next-demo/.env.local', import.meta.url)
+  if (!existsSync(file)) return undefined
+  const env = Object.fromEntries(
+    readFileSync(file, 'utf8')
+      .split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#') && l.includes('='))
+      .map((l) => [l.slice(0, l.indexOf('=')), l.slice(l.indexOf('=') + 1).replace(/^["']|["']$/g, '')]),
+  )
+  return env.RELAY_API_KEY || undefined
+}
+
+const fromEnv = process.env.RELAY_API_KEY?.trim() || undefined
+const apiKey = fromEnv ?? keyFromEnvFile()
+if (!apiKey) {
+  const msg = 'SKIP Relay live check: RELAY_API_KEY is not set. Set it in the environment or in examples/next-demo/.env.local. In GitHub Actions, add the RELAY_API_KEY repository secret.'
+  console.log(msg)
+  summary(`### Relay live check skipped\n\n${msg}`)
+  process.exit(0)
+}
+console.log(`Using a Relay key from ${fromEnv ? 'the RELAY_API_KEY environment variable' : 'examples/next-demo/.env.local'}`)
+
+// Load the built packages only after the key check, so the skip works without a build.
+const { relay } = await import('../packages/adapters/relay/dist/index.js')
+const { makeCtx } = await import('../packages/adapter/dist/testing.js')
 
 const USDC_BASE = '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913'
 const USDC_ARB = '0xaf88d065e77c8cc2239327c5edb3a432268e5831'
@@ -58,5 +75,7 @@ await check('deposit-address status via /requests/v3 (needs the key)', async () 
   const s = await a.status({ leg: leg('transfer', 'user_wallet'), ref: depositAddress }, ctx)
   return `state ${s.state} (${s.status}); no deposit sent, so waiting is correct`
 })
-console.log(failed ? `\n${failed} check(s) failed` : '\nAll Relay checks passed')
+const result = failed ? `${failed} check(s) failed` : 'All Relay checks passed'
+console.log(`\n${result}`)
+summary(`### Relay live check\n\n${result}`)
 process.exit(failed ? 1 : 0)
