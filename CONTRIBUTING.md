@@ -89,6 +89,7 @@ Run these from the repo root.
 | `pnpm test` | Unit and integration tests (Vitest) |
 | `pnpm coverage` | Tests with coverage (CI runs this) |
 | `pnpm smoke` | Pack and install each package, then check ESM, CJS, SSR and TypeScript |
+| `pnpm size` | Check the min+gzip size of each browser entry against its budget (run `pnpm build` first) |
 | `pnpm test:chain` | A real `WALLET_TX` on a local Anvil chain (needs Foundry) |
 | `pnpm chain:local` | Start a local Anvil chain with mock USDC |
 | `pnpm docs:dev` | Docs site with hot reload |
@@ -151,7 +152,24 @@ Rules:
 - Tests must not call real provider APIs. Use `fakeFetch` and the mock adapter.
 - A UI change needs an axe check on the new screen. Use `expectAccessible` from `examples/next-demo/e2e/a11y.ts`.
 
-CI runs on each push to `main` and on each pull request: typecheck, `pnpm coverage`, a typecheck of the examples, `pnpm smoke`, `pnpm docs:build`, the Anvil test and the Foundry tests. See [.github/workflows/ci.yml](.github/workflows/ci.yml).
+CI runs on each push to `main` and on each pull request: typecheck, `pnpm coverage`, a typecheck of the examples, `pnpm smoke`, `pnpm size`, `pnpm docs:build`, the Anvil test and the Foundry tests. See [.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+### Bundle size
+
+The modal ships to each user of an app, so CI checks the size of the browser packages. `pnpm size` ([scripts/size.mjs](scripts/size.mjs)) bundles each entry point from `dist/` with esbuild, the way an app bundler does. It includes all dependencies except the peer dependencies (React, Vue, viem, ...), then minifies and gzips the result. It prints a table and fails when an entry is over its budget in [scripts/size-budget.json](scripts/size-budget.json).
+
+```bash
+pnpm build
+pnpm size
+```
+
+When `pnpm size` fails:
+
+1. Find the cause first. Usual causes are a new dependency, or a server-only import that leaked into a browser package.
+2. If the growth is correct, raise `limitKb` for that entry in `scripts/size-budget.json`. Set it to the new size plus about 10 percent, rounded up to a whole kB.
+3. In the pull request, give the old size, the new size and the reason.
+
+To add a browser entry point, add a row to `scripts/size-budget.json` with the same rule for the budget.
 
 ## Changesets
 

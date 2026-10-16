@@ -1,0 +1,71 @@
+{
+  "note": "Budgets are min+gzip in kB (1 kB = 1000 bytes). Checked by pnpm size (scripts/size.mjs). Read Bundle size in CONTRIBUTING.md before you raise one.",
+  "entries": [
+    {
+      "name": "@openrampkit/core",
+      "package": "packages/core",
+      "entry": "dist/index.js",
+      "limitKb": 13
+    },
+    {
+      "name": "@openrampkit/client",
+      "package": "packages/client",
+      "entry": "dist/index.js",
+      "limitKb": 11
+    },
+    {
+      "name": "@openrampkit/web",
+      "package": "packages/web",
+      "entry": "dist/index.js",
+      "limitKb": 65
+    },
+    {
+      "name": "@openrampkit/web/theme",
+      "package": "packages/web",
+      "entry": "dist/theme.js",
+      "limitKb": 2
+    },
+    {
+      "name": "@openrampkit/react",
+      "package": "packages/react",
+      "entry": "dist/index.js",
+      "limitKb": 68
+    },
+    {
+      "name": "@openrampkit/vue",
+      "package": "packages/vue",
+      "entry": "dist/index.js",
+      "limitKb": 68
+    },
+    {
+      "name": "@openrampkit/svelte",
+      "package": "packages/svelte",
+      "entry": "dist/index.js",
+      "limitKb": 68
+    },
+    {
+      "name": "@openrampkit/solid",
+      "package": "packages/solid",
+      "entry": "dist/index.js",
+      "limitKb": 68
+    },
+    {
+      "name": "@openrampkit/wagmi",
+      "package": "packages/wagmi",
+      "entry": "dist/index.js",
+      "limitKb": 4
+    },
+    {
+      "name": "@openrampkit/privy",
+      "package": "packages/privy",
+      "entry": "dist/index.js",
+      "limitKb": 4
+    },
+    {
+      "name": "@openrampkit/solana",
+      "package": "packages/solana",
+      "entry": "dist/index.js",
+      "limitKb": 27
+    }
+  ]
+}

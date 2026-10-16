@@ -17,6 +17,9 @@ importers:
       '@vitest/coverage-v8':
         specifier: ^3.2.7
         version: 3.2.7(vitest@3.2.7(@types/debug@4.1.13)(@types/node@22.20.4)(happy-dom@18.0.1))
+      esbuild:
+        specifier: 0.28.2
+        version: 0.28.2
       happy-dom:
         specifier: ^18.0.1
         version: 18.0.1

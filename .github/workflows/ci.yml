@@ -38,6 +38,8 @@ jobs:
           pnpm --filter playground typecheck
       - name: Package smoke test (pack, install, ESM, CJS, SSR, TypeScript)
         run: pnpm smoke
+      - name: Bundle size budget (browser packages, min+gzip)
+        run: pnpm size
       - name: Docs build
         run: pnpm docs:build
 
