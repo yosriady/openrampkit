@@ -14,6 +14,7 @@ import type { LegStep, PathwayLeg } from '@openrampkit/core'
 import { OpenRampStore, durableObjectStore } from './durable-object-store.js'
 import type { DurableObjectNamespaceLike } from './durable-object-store.js'
 import { createOpenRamp } from './index.js'
+import { destinationWatchKey } from './sessions.js'
 import { KV_PUT_IF_ABSENT_SCRIPT, redisStore } from './redis-store.js'
 import type { RedisLike } from './redis-store.js'
 import { memoryStore, scopedKV } from './store.js'
@@ -281,6 +282,97 @@ describe('race: a watched destination and a converting address to it, made at th
       expect(a.standing.deposits + b.standing.deposits).toBe(1)
       await ramp.depositAddresses.get({ userId: 'u1', origin: same, destination: dest, dedicatedDestination: true })
       expect((await ramp.sweep()).standing.deposits).toBe(0)
+    })
+  }
+})
+
+/** The `sdconv:` key of a destination, as standing.ts (and every older server) writes it */
+async function convertMarkerKey(chain: string, token: string, address: string): Promise<string> {
+  const k = (s: string) => (s.startsWith('0x') ? s.toLowerCase() : s)
+  return `sdconv:${(await sha256Hex(JSON.stringify([chain, k(token), k(address)]))).slice(0, 40)}`
+}
+
+/**
+ * A converting standing address of an older server (before the `sdwatch:` key held both kinds), as it
+ * claimed the destination: read `sdwatch:`, write `sdconv:`, read `sdwatch:` again. True when it won.
+ */
+async function olderConvert(store: SessionStore, chain: string, token: string, address: string): Promise<boolean> {
+  const watchKey = await destinationWatchKey(chain, token, address)
+  if ((await store.kv.get(watchKey)) != null) return false
+  await store.kv.put(await convertMarkerKey(chain, token, address), 1)
+  return (await store.kv.get(watchKey)) == null
+}
+
+describe('race: a new watch and a converting address of an older server', () => {
+  const dest = { type: 'crypto' as const, chain: CHAIN, token: TOKEN, address: DEST }
+  const same = { chain: CHAIN, token: TOKEN }
+  for (const [name, make] of SERVER_STORES) {
+    it(`${name}: at the same time, never both win`, async () => {
+      for (let i = 0; i < 40; i++) {
+        const store = jitter(make())
+        const { ramp } = server(store)
+        const [w, c] = await Promise.allSettled([
+          ramp.depositAddresses.get({ userId: 'u1', origin: same, destination: dest, dedicatedDestination: true }),
+          // A random start, so its three calls land before, inside or after the claim of the watch.
+          (async () => (await new Promise((r) => setTimeout(r, Math.floor(Math.random() * 30))), olderConvert(store, CHAIN, TOKEN, DEST)))(),
+        ])
+        const converted = c.status === 'fulfilled' && c.value
+        expect(Number(w.status === 'fulfilled') + Number(converted)).toBeLessThanOrEqual(1)
+        if (w.status === 'rejected') expect(w.reason).toMatchObject({ status: 409 })
+        // A converted destination never gets a watch later, whoever ran first.
+        if (converted) await expect(ramp.depositAddresses.get({ userId: 'u1', origin: same, destination: dest, dedicatedDestination: true })).rejects.toMatchObject({ status: 409 })
+      }
+    })
+
+    it(`${name}: the older converter runs between the check and the claim of the watch, the watch is refused`, async () => {
+      const base = make()
+      const watchKey = await destinationWatchKey(CHAIN, TOKEN, DEST)
+      let older: boolean | undefined
+      // The exact order: the watch has read `sdconv:` (none), then the older converter runs all of its
+      // calls, then the watch claims `sdwatch:`.
+      const store: SessionStore = {
+        ...base,
+        kv: {
+          ...base.kv,
+          putIfAbsent: async (k: string, v: unknown, ttl: number) => {
+            if (k === watchKey && older === undefined) older = await olderConvert(base, CHAIN, TOKEN, DEST)
+            return base.kv.putIfAbsent!(k, v, ttl)
+          },
+        },
+      }
+      const { ramp } = server(store)
+      await expect(ramp.depositAddresses.get({ userId: 'u1', origin: same, destination: dest, dedicatedDestination: true })).rejects.toMatchObject({ status: 409 })
+      expect(older).toBe(true)
+      // A session to the destination is refused (fail closed): the binding stays, with the older marker.
+      expect(await base.kv.get(watchKey)).toEqual({ userId: 'u1' })
+    })
+
+    it(`${name}: a marker of an older server refuses a watch (checksum case too), and leaves no binding`, async () => {
+      const store = make()
+      const { ramp } = server(store)
+      await store.kv.put(await convertMarkerKey(CHAIN, TOKEN, DEST), 1)
+      const upper = { ...dest, address: DEST.replace('beef', 'BEEF'), token: TOKEN.toUpperCase().replace('0X', '0x') }
+      for (const d of [dest, upper]) await expect(ramp.depositAddresses.get({ userId: 'u1', origin: same, destination: d, dedicatedDestination: true })).rejects.toMatchObject({ status: 409 })
+      expect(await store.kv.get(await destinationWatchKey(CHAIN, TOKEN, DEST))).toBeFalsy()
+    })
+
+    it(`${name}: the same user twice at the same time gets one address, and an older converter is then refused`, async () => {
+      for (let i = 0; i < 10; i++) {
+        const store = jitter(make())
+        const { ramp } = server(store)
+        const get = () => ramp.depositAddresses.get({ userId: 'u1', origin: same, destination: dest, dedicatedDestination: true })
+        const [a, b] = await Promise.all([get(), get()])
+        expect(a.id).toBe(b.id)
+        expect(await olderConvert(store, CHAIN, TOKEN, DEST)).toBe(false)
+      }
+    })
+
+    it(`${name}: a new converting address writes the older marker too, so an older watch sees it`, async () => {
+      const store = make()
+      const { ramp } = server(store)
+      await ramp.depositAddresses.get({ userId: 'u1', origin: { chain: 'eip155:42161', token: USDC['eip155:42161']! }, destination: dest })
+      expect(await store.kv.get(await convertMarkerKey(CHAIN, TOKEN, DEST))).not.toBeNull()
+      expect(await store.kv.get(await destinationWatchKey(CHAIN, TOKEN, DEST))).toEqual({ convert: true })
     })
   }
 })

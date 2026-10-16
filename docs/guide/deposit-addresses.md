@@ -115,6 +115,7 @@ Every transfer of the token into the address counts as a deposit of its user, wh
 - **Only the backend can ask** (`dedicatedDestination: true`). The widget refuses this route.
 - **One user per address.** Another user gets `409 CONFLICT`.
 - **Nothing else may deliver to it.** A new deposit session or a converting standing address to a watched address throws `409`, because its delivery would count twice. Sessions made before the watch are not checked: do not watch an address with open deposit sessions.
+- **One kind per destination, under races.** One atomic claim binds a destination to a watch or to converting addresses, so two requests at the same time cannot both win. During a rolling upgrade, an older server marks a converting address only with its own marker. A new watch reads that marker before and after its claim, so a watch and a converting address of an older server cannot both win either. When the two meet at the same time, both can be refused (`409`): the destination then stays closed to watches, so use another address.
 - **One claim per transfer.** The server keeps the transaction claims (`txused:` keys) of all adapters in one namespace, so one transfer completes one payment only.
 
 See [Security](../adapters/chain-watch.md#security) for the details.

@@ -205,12 +205,17 @@ async function bindDestination(rt: Runtime, d: StandingAddress['destination'], w
  */
 async function claimWatchedDestination(rt: Runtime, route: ReturnType<typeof checkRoute>): Promise<void> {
   const d = route.destination
+  const convKey = await convertKey(d)
   // A converting address of an older version: it wrote only this marker.
-  if ((await rt.store.kv.get(await convertKey(d))) != null) throw conflict(WATCHED_BUSY)
+  if ((await rt.store.kv.get(convKey)) != null) throw conflict(WATCHED_BUSY)
   const cur = await bindDestination(rt, d, { userId: route.userId })
-  if (cur && 'userId' in cur && cur.userId === route.userId) return
   if (cur && 'convert' in cur) throw conflict(WATCHED_BUSY)
-  throw conflict('This destination address already has a same-chain standing address for another user.')
+  if (!cur || !('userId' in cur) || cur.userId !== route.userId) throw conflict('This destination address already has a same-chain standing address for another user.')
+  // Again after the binding: an older server makes a converting address without the binding (it reads
+  // `sdwatch:`, writes `sdconv:`, then reads `sdwatch:` again). Each side reads the other's key after
+  // its own write, so at least one of the two sees the other and refuses: never both win. The binding
+  // stays when this refuses (fail closed): the `sdconv:` marker already blocks a watch of the destination.
+  if ((await rt.store.kv.get(convKey)) != null) throw conflict(WATCHED_BUSY)
 }
 
 /** A converting route: refuse a watched destination, and bind the destination to converted deliveries */
