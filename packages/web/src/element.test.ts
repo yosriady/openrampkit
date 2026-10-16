@@ -472,6 +472,25 @@ describe('payment steps (real server)', () => {
     expect(h.text()).toContain('In Binance, withdraw USDC and choose the')
   })
 
+  it('exchange picker: the deposit hint uses the network name of the picked exchange, else the chain name', async () => {
+    const hint = async (exchange: string, chain: string) => {
+      const h = await mount({ country: 'US', mock: { settleMs: 0, crypto: true, bridge: true, exchange: true, exchangeConnect: true } })
+      h.el.open = false
+      await settle(h.el)
+      await h.c.selectExchange(exchange)
+      h.c.setSource({ chain, token: USDC[chain]!, symbol: 'USDC', decimals: 6 })
+      await h.until(() => !h.c.getSnapshot().quotesLoading && h.c.getSnapshot().quotes.length > 0)
+      await h.c.confirm()
+      h.el.open = true
+      await settle(h.el)
+      return h.$('.notice.info')!.textContent!.trim()
+    }
+    // Verified label: Binance shows "Arbitrum One" for Arbitrum
+    expect(await hint('binance', 'eip155:42161')).toBe('In Binance, withdraw USDC and choose the Arbitrum One network.')
+    // No verified label for Bybit on Optimism: the generic chain name, and the exchange still shows
+    expect(await hint('bybit', 'eip155:10')).toBe('In Bybit, withdraw USDC and choose the Optimism network.')
+  })
+
   it('exchange picker: when the exchange payment waits, the user can send from the same exchange to an address', async () => {
     const h = await mount({ country: 'US', mock: { settleMs: 0, crypto: true, bridge: true, exchange: true, exchangeConnect: true } })
     await h.c.selectExchange('coinbase')

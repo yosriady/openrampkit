@@ -394,6 +394,17 @@ type PlannerInput = {
 }
 ```
 
+## Exchanges
+
+| Export | Description |
+|---|---|
+| `EXCHANGES` | The exchanges of the "From an exchange" picker: Binance, Coinbase, OKX, Bybit, Kraken. Each has its connect methods and its verified withdraw network names (`networks`). |
+| `exchangeOptions(methods)` | The picker rows for a plan: connect or deposit per exchange, then "Other exchange" |
+| `isExchangeMethod(method)` | `true` for a method that the picker row stands for |
+| `exchangeNetworkLabel(exchange, chain)` | The name that the exchange shows for the chain in its withdraw screen, for example `Arbitrum One` or `BNB Smart Chain (BEP20)`. `undefined` when there is no verified value. |
+
+`networks` maps a CAIP-2 chain id to `{ label, source, read }`. `source` is the official page or API of the exchange where we read the label. `read` is the date of that read. The widget's deposit hint uses the label of the picked exchange ("In Binance, withdraw USDC and choose the Arbitrum One network."). When there is no label, the hint uses the generic chain name. A missing label never hides an exchange.
+
 ## Events
 
 | Export | Description |

@@ -4,7 +4,7 @@ import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
-import { OTHER_EXCHANGE, isAddressTransfer, isExchangeMethod, isWebUrl, methodName, searchSourceTokens, sourceTokenKey } from '@openrampkit/core'
+import { OTHER_EXCHANGE, exchangeNetworkLabel, isAddressTransfer, isExchangeMethod, isWebUrl, methodName, searchSourceTokens, sourceTokenKey } from '@openrampkit/core'
 import type { ExchangeOption, FieldSpec, MethodOption, OpenRampError, Payment, PublicQuote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
@@ -1249,7 +1249,7 @@ export class OpenRampModal extends LitElement {
         const symbol = surface.symbol ?? 'tokens'
         return html`
           ${s.method?.method === 'exchange_transfer'
-            ? html`<div class="notice info">${icons.exchange}<span>${namedExchange(c, s) ? m.exchangeHintNamed(namedExchange(c, s)!, symbol, chain) : m.exchangeHint(symbol, chain)}</span></div>`
+            ? html`<div class="notice info">${icons.exchange}<span>${exchangeHint(c, s, m, symbol, surface.chain, chain)}</span></div>`
             : nothing}
           <div class="hint" style="margin-top:0">${m.depositAddressHint(symbol, chain)}</div>
           ${this._qr(surface.address, m.address)}
@@ -1473,10 +1473,21 @@ function exchangeNames(rows: ExchangeOption[], m: Messages): string {
   return rows.some((x) => x.id === OTHER_EXCHANGE) ? m.exchangeNamesMore(named.join(', ')) : named.join(', ')
 }
 
-/** The exchange the user picked, by name, for the deposit address hint ("Other exchange" has none) */
-function namedExchange(c: DepositController, s: Snapshot): string | undefined {
+/** The exchange the user picked, for the deposit address hint ("Other exchange" has none) */
+function namedExchange(c: DepositController, s: Snapshot): ExchangeOption | undefined {
   if (!s.exchange || s.exchange === OTHER_EXCHANGE) return undefined
-  return c.exchangeOptions().find((x) => x.id === s.exchange)?.name
+  return c.exchangeOptions().find((x) => x.id === s.exchange)
+}
+
+/**
+ * The deposit address hint for `exchange_transfer`. With a picked exchange it names the exchange and uses
+ * the network name that this exchange shows (for example "Arbitrum One"), when we verified it; else the
+ * generic chain name.
+ */
+function exchangeHint(c: DepositController, s: Snapshot, m: Messages, symbol: string, chainId: string, chain: string): string {
+  const x = namedExchange(c, s)
+  if (!x) return m.exchangeHint(symbol, chain)
+  return m.exchangeHintNamed(x.name, symbol, exchangeNetworkLabel(x.id, chainId) ?? chain)
 }
 
 function sameTokenId(chain: string, a: string, b: string): boolean {
