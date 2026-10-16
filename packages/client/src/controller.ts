@@ -74,7 +74,8 @@ export type Snapshot = {
   depositAddressLoading?: boolean
   /**
    * The user's past sessions (`client.history()`, server option `history`), newest first. Undefined
-   * until it loads, and when the server does not offer it: a UI then hides its History link.
+   * until it loads, and when the server does not offer it. It loads at start and again when a payment
+   * reaches a final state. A UI shows its History link only when the list has at least one item.
    */
   history?: HistoryItem[]
   /** True while the history loads */
@@ -243,7 +244,7 @@ export class RampController {
       }
       this.set({ session, direction: session.direction, walletConnected: !!walletAddress, ...(walletAddress ? { walletAddress } : {}) })
       if (session.step.state !== 'SELECT_METHOD') return this.applySession(session)
-      // In the background: the History link shows only when the server offers the history.
+      // In the background: the History link shows only when the user has a past session.
       void this.loadHistory()
       if (walletAddress && this.opts.wallet?.getBalances) {
         const balances = await this.opts.wallet.getBalances(accounts).catch(() => [] as WalletBalance[])
@@ -284,6 +285,8 @@ export class RampController {
   /** The screen to go back to from the history */
   private historyFrom: ScreenName = 'methods'
   private historySeq = 0
+  /** The final step state that last loaded the history (see `applySession`) */
+  private historyAtFinal?: Step['state']
 
   /**
    * Load the user's past sessions into `snapshot.history`. Quiet: an error (for example `404` when the
@@ -860,10 +863,17 @@ export class RampController {
     if (isTerminal(step.state)) {
       this.set({ screen: 'result' })
       clearTimeout(this.pollTimer)
+      // Load the history again (quietly) once per final state: the new payment now shows, so the
+      // History link can show after the user's first payment.
+      if (this.historyAtFinal !== step.state) {
+        this.historyAtFinal = step.state
+        void this.loadHistory()
+      }
       // Only COMPLETED settles `done`: after a failure the user may still try again.
       if (step.state === 'COMPLETED') this.resolveDone(session)
       return
     }
+    this.historyAtFinal = undefined
     if (step.state === 'SELECT_METHOD') {
       clearTimeout(this.pollTimer)
       this.set({ method: undefined, quotes: [], quoteErrors: [], selectedQuoteId: undefined, amount: '' })

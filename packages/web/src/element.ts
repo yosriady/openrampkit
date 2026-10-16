@@ -589,9 +589,9 @@ export class OpenRampModal extends LitElement {
     `
   }
 
-  /** The History link: only when the user's history loaded (server option `history`) */
+  /** The History link: only when the user's history (server option `history`) has at least one item */
   private _renderHistoryLink(m: Messages, s: Snapshot) {
-    if (!s.history) return nothing
+    if (!s.history?.length) return nothing
     return html`<div class="stack history-link">
       <button class="btn ghost" type="button" data-history @click=${() => void this.controller?.openHistory()}>${icons.clock}${m.historyTitle}</button>
     </div>`

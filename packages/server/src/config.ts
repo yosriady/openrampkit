@@ -94,7 +94,8 @@ export type OpenRampConfig = {
   /** Timeouts in ms. Defaults: quote 9000, webhook delivery 4000. */
   timeouts?: { quote?: number; webhook?: number }
   /**
-   * Per-session request limits for routes that call provider APIs (plan, quotes, target, select, transitions).
+   * Per-session request limits for routes that call provider APIs (plan, quotes, target, select, transitions,
+   * deposit-address) and for the history route.
    * Default 60 per minute. The counter lives in the store's KV space (best effort on non-atomic stores).
    */
   limits?: { providerCallsPerMinute?: number }
@@ -148,8 +149,12 @@ export type OpenRampConfig = {
    * small view with no secret, user id or address. The server keeps one index per user from the time
    * you turn this on, so older sessions do not show. Needs a store queue with `range` (all built-in
    * stores have it). Default `false`: the route answers `404`, and the widget hides its History link.
+   *
+   * `true` or `{ retentionDays }`: each new session also removes up to 20 entries older than
+   * `retentionDays` (default 90) from its user's index, so those sessions no longer show. The route
+   * counts against `limits.providerCallsPerMinute`.
    */
-  history?: boolean
+  history?: boolean | { retentionDays?: number }
   /** Withdraw options. See `WithdrawConfig`. */
   withdraw?: WithdrawConfig
   /** Standing deposit addresses (see `openramp.depositAddresses`) */

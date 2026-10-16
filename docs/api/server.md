@@ -40,7 +40,7 @@ const openramp = createOpenRamp({
 | `fetch` | `typeof fetch` | global `fetch` | Used by the server and passed to adapters |
 | `timeouts.quote` | `number` (ms) | `9000` | Per quoted pathway |
 | `timeouts.webhook` | `number` (ms) | `4000` | Per outgoing webhook |
-| `limits.providerCallsPerMinute` | `number` | `60` | Per session: requests to `/plan`, `/target`, `/quotes`, `/select` and `/transitions/*` in one minute. More get `429 RATE_LIMITED`. |
+| `limits.providerCallsPerMinute` | `number` | `60` | Per session: requests to `/plan`, `/target`, `/quotes`, `/select`, `/transitions/*`, `/deposit-address` and `/history` in one minute. More get `429 RATE_LIMITED`. |
 | `screenAddress` | `(address, chain) => Promise<boolean>` | none | Withdraw: check a "To wallet" address. `false` or an error refuses it (fail closed). See [Screen addresses](../guide/withdraw.md#screen-addresses). |
 | `screenDepositWallets` | `boolean` | `false` | Deposit: also run `screenAddress` on the connected wallet before a `wallet` payment starts, on the chain it pays from. A refused wallet gets `403 ADDRESS_REJECTED`. A deposit to an address (`transfer`) has no known sender before the money arrives, so it is not screened. |
 | `treasury` | `TreasuryHook` | none | Withdraw with `custody: 'app'`: sends the transactions from your wallet. Throw `TreasuryRefusedError` (exported) to refuse when nothing was sent; any other error makes the failure final. See [Custody](../guide/withdraw.md#custody-app). |
@@ -54,7 +54,7 @@ const openramp = createOpenRamp({
 | `routing.breakerFailureRate` | `number` | `0.8` | The circuit breaker skips an adapter when more than this share of its quotes and starts in the last one to two hours failed. `1` turns the breaker off. |
 | `routing.breakerCooldownMinutes` | `number` | `10` | How long an open breaker skips the adapter before it lets one probe quote through |
 | `routing.breaker` | `boolean` | `true` | `false` turns the circuit breaker off. Ranking and failover still work. |
-| `history` | `boolean` | `false` | The user's history: `GET /sessions/:id/history` and the History link in the widget. The server keeps one index of sessions per user from the time you turn it on. Off: the route answers `404` and the widget hides the link. See [History](../guide/history.md). |
+| `history` | `boolean \| { retentionDays?: number }` | `false` | The user's history: `GET /sessions/:id/history` and the History link in the widget (shown when the user has at least one past session). The server keeps one index of sessions per user from the time you turn it on. Each new session removes up to 20 index entries older than `retentionDays` (default `90`; `true` keeps 90 days). The route counts against `limits.providerCallsPerMinute`. Off: the route answers `404` and the widget hides the link. See [History](../guide/history.md). |
 | `depositAddresses.widget` | `boolean` | `false` | Offer "Your deposit address" in the widget (method `deposit_address`) and `POST /sessions/:id/deposit-address`. See [Standing deposit addresses](../guide/deposit-addresses.md#show-it-in-the-widget). |
 
 The default geo lookup reads `cf-ipcountry` or `x-vercel-ip-country` (ignoring `XX`), and `x-vercel-ip-country-region` for the region (as `{country}-{region}`).

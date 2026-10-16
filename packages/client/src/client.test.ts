@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { OpenRampException, openRampError } from '@openrampkit/core'
 import { DepositController, OpenRampClientError, createOpenRampClient, toOpenRampError } from './index.js'
-import { BASE_DEST, fakeClient, setupServer } from './testctx.js'
+import { BASE_DEST, fakeClient, session, setupServer } from './testctx.js'
 
 type Call = { url: string; init: RequestInit }
 
@@ -167,6 +167,55 @@ describe('controller history', () => {
     expect(c.canGoBack()).toBe(true)
     c.back()
     expect(c.getSnapshot().screen).toBe('methods')
+  })
+
+  it('loads again (quietly) when a payment reaches a final state, once per state', async () => {
+    const client = fakeClient({
+      getSession: vi.fn(async () => session('PROCESSING')),
+      transition: vi.fn(async () => session('COMPLETED')),
+      history: vi.fn().mockResolvedValueOnce([]).mockResolvedValue([...items]),
+    })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    await c.start()
+    // A session in progress at start does not load the history.
+    expect(client.history).not.toHaveBeenCalled()
+    await c.fire('simulate_payment')
+    expect(c.getSnapshot().screen).toBe('result')
+    await vi.waitFor(() => expect(c.getSnapshot().history).toEqual([]))
+    expect(c.getSnapshot().historyLoading).toBe(false)
+    // The same final state again: no new load.
+    await c.fire('simulate_payment')
+    expect(client.history).toHaveBeenCalledOnce()
+    // A failed load stays quiet: no error on the result screen.
+    client.history.mockRejectedValueOnce(new OpenRampClientError(openRampError('NOT_FOUND'), 404))
+    client.transition.mockResolvedValueOnce(session('FAILED'))
+    await c.fire('x')
+    await vi.waitFor(() => expect(client.history).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(c.getSnapshot().historyLoading).toBe(false))
+    expect(c.getSnapshot()).toMatchObject({ history: [], historyError: undefined })
+  })
+
+  it('a session that is already final at start loads the history', async () => {
+    const client = fakeClient({ getSession: vi.fn(async () => session('COMPLETED')), history: vi.fn(async () => [...items]) })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    await c.start()
+    await vi.waitFor(() => expect(c.getSnapshot().history).toEqual(items))
+    expect(client.history).toHaveBeenCalledOnce()
+  })
+
+  it('real server: after the first payment, the history holds that session', async () => {
+    const server = setupServer(undefined, { history: true })
+    const first = await server.ramp.sessions.create({ userId: 'u', country: 'VN', destination: BASE_DEST })
+    const c1 = new DepositController({ client: server.client, clientSecret: first.clientSecret })
+    await c1.start()
+    await vi.waitFor(() => expect(c1.getSnapshot().history).toEqual([]))
+    await c1.selectMethod('vietqr')
+    c1.setAmount('500000')
+    await c1.submitAmount()
+    await c1.confirm()
+    await c1.fire('simulate_payment')
+    await vi.waitFor(() => expect(c1.getSnapshot().screen).toBe('result'), { timeout: 5000 })
+    await vi.waitFor(() => expect(c1.getSnapshot().history?.map((x) => x.id)).toEqual([first.id]))
   })
 
   it('a failed reload on the history screen shows historyError and keeps the list', async () => {

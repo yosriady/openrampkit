@@ -7,6 +7,7 @@ import { webhookKey } from './crypto.js'
 import type { OpenRampConfig } from './config.js'
 import { memoryStore, migratingStore, scopedKV, VersionConflictError } from './store.js'
 import type { ActivePayment, SessionRecord, SessionStore } from './store.js'
+import { historyRetentionDays } from './history.js'
 import { legTransactions } from './legs.js'
 
 /** Everything the server modules share. Built once per `createOpenRamp` call. */
@@ -36,6 +37,8 @@ export function createRuntime(config: OpenRampConfig): Runtime {
   if (config.admin?.token !== undefined && (typeof config.admin.token !== 'string' || config.admin.token.length < 32)) {
     throw new Error('OpenRamp: `admin.token` must be at least 32 characters')
   }
+  // A bad `history.retentionDays` fails at start, not at the first session.
+  if (config.history) historyRetentionDays(config.history)
   const ids = new Set<string>()
   for (const a of config.adapters) {
     if (a.apiVersion !== ADAPTER_API_VERSION) throw new Error(`OpenRamp: adapter ${a.id} targets API v${a.apiVersion}, server supports v${ADAPTER_API_VERSION}`)

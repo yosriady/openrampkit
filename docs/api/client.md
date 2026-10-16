@@ -29,7 +29,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
 | `step(secret)` | `GET /sessions/:id/step` | `PublicSession` |
 | `depositAddress(secret, { chain, token })` | `POST /sessions/:id/deposit-address` | `DepositAddressView`. The controller loads it on the `deposit_address` screen, into `snapshot.depositAddress`. |
-| `history(secret)` | `GET /sessions/:id/history` | `HistoryItem[]`, newest first. Throws `NOT_FOUND` (404) when the server option `history` is off. The controller loads it at start, into `snapshot.history`. |
+| `history(secret)` | `GET /sessions/:id/history` | `HistoryItem[]`, newest first. Throws `NOT_FOUND` (404) when the server option `history` is off. The controller loads it at start, into `snapshot.history`, and again when a payment reaches a final status. |
 | `sources(secret, method)` | `GET /sessions/:id/sources?method=` | `{ chains: SourceChain[] }`. The controller loads it when the user picks an address transfer, into `snapshot.sources`. |
 | `cancel(secret)` | `POST /sessions/:id/cancel` (with a random `idempotency-key`) | `PublicSession`. Cancels the session while no payment is under way. |
 | `baseUrl` | | The base URL without a trailing slash |
@@ -84,7 +84,7 @@ It works like an external store: `getSnapshot()` returns an immutable `Snapshot`
 | `notifySurface(kind, detail?)` | For a UI that reads provider iframe messages: `'completed'`, `'failed'` or `'closed'`. Polls at once. `closed` sets `surfaceClosed`. Never sets the outcome. |
 | `reopenSurface()` | Clears `surfaceClosed` |
 | `restart()` | Fires the server `restart` transition (back to the methods) |
-| `loadHistory()` | Loads the user's history into `snapshot.history`. `start()` calls it. An error leaves `history` as it was (undefined when the server answers `404`). |
+| `loadHistory()` | Loads the user's history into `snapshot.history`. `start()` calls it, and the controller calls it again when a payment reaches a final status. An error leaves `history` as it was (undefined when the server answers `404`). |
 | `openHistory()` | Shows the `history` screen and loads the list again. `back()` returns to the screen before. |
 | `back()` | Quotes to amount (or methods for transfer), amount to methods (to the target form for a withdrawal to a wallet), and `PAYMENT` step to `restart()` |
 | `close()` | Emits `modal.closed`, rejects `done` unless completed, and destroys the controller |

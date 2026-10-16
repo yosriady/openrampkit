@@ -141,7 +141,7 @@ The overlay click does not close the modal while a payment step is on screen.
 
 ### History
 
-With the server option `history`, the methods screen (and the withdraw "To wallet" form) shows a History link. It opens a list of the user's past sessions: the kind, the amount, the asset that arrives, a relative date ("5 minutes ago"), a status badge and a "View transaction" link to the block explorer when the server knows the transaction. Back returns to the screen before. The link shows only when `GET /sessions/:id/history` answers: with the option off, the server answers `404` and the link stays hidden. See [History](../guide/history.md).
+With the server option `history`, the methods screen (and the withdraw "To wallet" form) shows a History link. It opens a list of the user's past sessions: the kind, the amount, the asset that arrives, a relative date ("5 minutes ago"), a status badge and a "View transaction" link to the block explorer when the server knows the transaction. Back returns to the screen before. The link shows only when `GET /sessions/:id/history` answers with at least one item: with the option off, the server answers `404` and the link stays hidden. A new user has no item, so the link shows after the user's first payment (the widget loads the history again when a payment reaches a final status). See [History](../guide/history.md).
 
 ### Parts and styles
 

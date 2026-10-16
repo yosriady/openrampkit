@@ -127,7 +127,7 @@ Response `200`: the session user's standing address for that origin and the sess
 
 ## GET /sessions/:id/history
 
-Only with the server option `history`, else `404`. Only with the client secret: a pay link gets `403`, because a pay link can go to another person. A store queue with no `range` gets `501`.
+Only with the server option `history`, else `404`. Only with the client secret: a pay link gets `403`, because a pay link can go to another person. A store queue with no `range` gets `501`. The route counts against the per-session limit `limits.providerCallsPerMinute`: more requests get `429 RATE_LIMITED`.
 
 Response `200`: the sessions of the session's user, newest first, at most 50. A session where no payment started is left out. A deposit to the user's [standing deposit address](../guide/deposit-addresses.md) has `kind: "standing"`. See [`HistoryItem`](./core.md#historyitem).
 

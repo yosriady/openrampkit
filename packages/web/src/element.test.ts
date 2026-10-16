@@ -1222,15 +1222,58 @@ describe('history', () => {
     expect(h.$('[data-history]')).toBeNull()
   })
 
-  it('real server with history on: the link opens the empty state, and Back returns to the methods', async () => {
+  it('real server with history on: no link while the history is empty; after the first payment it shows', async () => {
     const h = await mount({ config: { history: true } })
     await h.until(() => !!h.c.getSnapshot().history)
+    expect(h.c.getSnapshot().history).toEqual([])
+    expect(h.$('[data-history]')).toBeNull()
+
+    // The user pays in a second session. The next widget shows the link and the payment.
+    const s2 = await h.server.ramp.sessions.create({ userId: 'u', country: 'VN', destination: BASE_DEST })
+    const c2 = createDepositController({ baseUrl: BASE, clientSecret: s2.clientSecret, fetch: h.server.fetch })
+    await c2.start()
+    await c2.selectMethod('vietqr')
+    c2.setAmount('500000')
+    await c2.submitAmount()
+    await c2.confirm()
+    await c2.fire('simulate_payment')
+    await waitFor(() => c2.getSnapshot().screen === 'result' && !!c2.getSnapshot().history?.length)
+
+    const s3 = await h.server.ramp.sessions.create({ userId: 'u', country: 'US', destination: BASE_DEST })
+    const c3 = createDepositController({ baseUrl: BASE, clientSecret: s3.clientSecret, fetch: h.server.fetch })
+    const el = document.createElement(TAG_NAME) as OpenRampModal
+    mounted.push(el)
+    el.open = true
+    el.controller = c3
+    document.body.appendChild(el)
+    await c3.start()
+    const h3 = helpers(el)
+    await h3.until(() => !!c3.getSnapshot().history?.length)
+    await h3.click(h3.$('[data-history]')!)
+    expect(h3.title()).toBe('History')
+    expect(h3.$$('.history-item').map((r) => r.dataset.session)).toEqual([s2.id])
+    await h3.click(h3.button('Back'))
+    expect(c3.getSnapshot().screen).toBe('methods')
+    expect(h3.$('[data-method]')).not.toBeNull()
+  })
+
+  it('the history screen shows the empty state when the list becomes empty', async () => {
+    const client = fakeClient({ history: vi.fn().mockResolvedValueOnce([{ id: 'ors_a', kind: 'session', direction: 'deposit', status: 'expired', createdAt: new Date().toISOString() }]).mockResolvedValue([]) })
+    const c = new DepositController({ client, clientSecret: 'ors_1.sig' })
+    const el = document.createElement(TAG_NAME) as OpenRampModal
+    mounted.push(el)
+    el.open = true
+    el.controller = c
+    document.body.appendChild(el)
+    await c.start()
+    const h = helpers(el)
+    await h.until(() => !!c.getSnapshot().history?.length)
     await h.click(h.$('[data-history]')!)
-    expect(h.title()).toBe('History')
+    await h.until(() => c.getSnapshot().history?.length === 0)
     expect(h.text()).toContain('No deposits or withdrawals yet.')
     await h.click(h.button('Back'))
-    expect(h.c.getSnapshot().screen).toBe('methods')
-    expect(h.$('[data-method]')).not.toBeNull()
+    // Back on the methods, with no link now.
+    expect(h.$('[data-history]')).toBeNull()
   })
 
   it('lists items with status badges, amounts, relative dates and safe explorer links', async () => {

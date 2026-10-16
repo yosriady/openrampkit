@@ -7,7 +7,9 @@ import type { HistoryItem } from '@openrampkit/core'
 import { createOpenRamp, memoryStore } from './index.js'
 import type { OpenRampConfig, SessionStore } from './index.js'
 import { sha256Hex } from './crypto.js'
-import { HISTORY_LIMIT } from './history.js'
+import { HISTORY_LIMIT, HISTORY_PRUNE_LIMIT, HISTORY_RETENTION_DAYS, indexUserSession } from './history.js'
+import type { Runtime } from './runtime.js'
+import type { SessionRecord } from './store.js'
 
 const BASE = 'https://app.test/api/openramp'
 const quiet = { debug() {}, info() {}, warn() {}, error() {} }
@@ -138,5 +140,80 @@ describe('GET /sessions/:id/history', () => {
     const r = await t.history(s)
     expect(r.status).toBe(501)
     expect(r.body.error).toMatchObject({ code: 'INTERNAL', message: expect.stringMatching(/range/) })
+  })
+
+  it('counts against the per-session rate limit', async () => {
+    const t = make({ limits: { providerCallsPerMinute: 2 } })
+    const s = await t.ramp.sessions.create({ userId: 'u1', country: 'VN', destination: DEST })
+    expect((await t.history(s)).status).toBe(200)
+    expect((await t.history(s)).status).toBe(200)
+    const r = await t.history(s)
+    expect(r.status).toBe(429)
+    expect(r.body.error?.code).toBe('RATE_LIMITED')
+    // Another session has its own count.
+    const other = await t.ramp.sessions.create({ userId: 'u1', country: 'VN', destination: DEST })
+    expect((await t.history(other)).status).toBe(200)
+  })
+})
+
+describe('index retention', () => {
+  const DAY = 86_400_000
+  const T0 = Date.parse('2026-01-01T00:00:00Z')
+  const indexOf = async (userId: string) => `sessions-user:${(await sha256Hex(userId)).slice(0, 32)}`
+  const ids = async (store: SessionStore, userId: string) => (await store.queue!.range!(await indexOf(userId), { max: Number.MAX_SAFE_INTEGER, limit: 1000 })).map((e) => e.id)
+  const create = (t: ReturnType<typeof make>, userId = 'u1') => t.ramp.sessions.create({ userId, country: 'VN', destination: DEST }).then((s) => s.id)
+
+  it(`history: true keeps ${HISTORY_RETENTION_DAYS} days: a new session removes the older entries and keeps the newer ones`, async () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] })
+    const store = memoryStore()
+    const t = make({ store })
+    const old = await create(t)
+    const otherUser = await create(t, 'u2')
+    vi.setSystemTime(T0 + 2 * DAY)
+    const recent = await create(t)
+    vi.setSystemTime(T0 + (HISTORY_RETENTION_DAYS + 1) * DAY)
+    const now = await create(t)
+    expect(await ids(store, 'u1')).toEqual([now, recent])
+    // Another user's index is not touched.
+    expect(await ids(store, 'u2')).toEqual([otherUser])
+    // The history still answers, with the entries that stay.
+    const s = await t.ramp.sessions.create({ userId: 'u1', country: 'VN', destination: DEST })
+    expect((await t.history(s)).status).toBe(200)
+  })
+
+  it(`{ retentionDays } sets the period, and one new session removes at most ${HISTORY_PRUNE_LIMIT} entries`, async () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] })
+    const store = memoryStore()
+    const t = make({ store, history: { retentionDays: 1 } })
+    const old: string[] = []
+    for (let i = 0; i < HISTORY_PRUNE_LIMIT + 5; i++) {
+      vi.setSystemTime(T0 + i * 1000)
+      old.push(await create(t))
+    }
+    vi.setSystemTime(T0 + 2 * DAY)
+    const a = await create(t)
+    // The oldest 20 go first; 5 old entries and the new one stay.
+    expect((await ids(store, 'u1')).sort()).toEqual([a, ...old.slice(HISTORY_PRUNE_LIMIT)].sort())
+    const b = await create(t)
+    expect((await ids(store, 'u1')).sort()).toEqual([a, b].sort())
+  })
+
+  it('never removes the session just pushed, even with a createdAt before the cutoff', async () => {
+    const store = memoryStore()
+    const rt = { config: { history: true }, store } as unknown as Runtime
+    const old = Date.now() - (HISTORY_RETENTION_DAYS + 10) * DAY
+    await indexUserSession(rt, { id: 'ors_a', userId: 'u1', createdAt: old - 1 } as SessionRecord)
+    await indexUserSession(rt, { id: 'ors_b', userId: 'u1', createdAt: old } as SessionRecord)
+    // ors_a was older than the cutoff and went; ors_b stays, with its own due time and no claim.
+    expect(await store.queue!.range!(await indexOf('u1'), { max: Number.MAX_SAFE_INTEGER, limit: 10 })).toEqual([{ id: 'ors_b', dueAt: old }])
+    const token = 'x'
+    expect(await store.queue!.claim(await indexOf('u1'), { now: old, limit: 5, leaseMs: 1, token })).toEqual(['ors_b'])
+  })
+
+  it('a retentionDays that is not a positive number fails at start', () => {
+    for (const retentionDays of [0, -1, Number.NaN, Number.POSITIVE_INFINITY, '30' as unknown as number]) {
+      expect(() => make({ history: { retentionDays } })).toThrow(/retentionDays/)
+    }
+    expect(() => make({ history: {} })).not.toThrow()
   })
 })

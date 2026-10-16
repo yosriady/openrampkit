@@ -159,6 +159,8 @@ async function sessionAction(rt: Runtime, req: Request, rec: SessionRecord, meth
   if (action === 'history' && method === 'GET' && !arg) {
     if (!rt.config.history) return errorResponse(openRampError('NOT_FOUND'), 404)
     if (isPayCredential((req.headers.get('authorization') ?? '').split('.')[1] ?? '')) return errorResponse(openRampError('UNAUTHORIZED'), 403)
+    // One call reads up to 200 records, so it counts against the per-session limit too.
+    await checkRate(rt, rec.id)
     return json({ items: await userHistory(rt, rec) })
   }
 
