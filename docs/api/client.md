@@ -23,7 +23,7 @@ Every method takes the client secret first and calls one [HTTP route](./http.md)
 |---|---|---|
 | `getSession(secret)` | `GET /sessions/:id` | `PublicSession` |
 | `plan(secret, { walletConnected, walletAddress?, surfaces? })` | `POST /sessions/:id/plan` | `PlanResult` |
-| `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }` or `{ type: 'fiat', currency }`. |
+| `target(secret, target & { walletConnected?, walletAddress?, surfaces? })` | `POST /sessions/:id/target` | `PlanResult`. `target` is `{ type: 'crypto', chain, token, address, symbol?, decimals? }`, `{ type: 'fiat', currency }` or `{ type: 'lightning', address }`. |
 | `quotes(secret, { method, amount, amountSide, source? })` | `POST /sessions/:id/quotes` | `{ quotes: PublicQuote[]; errors: OpenRampError[] }` |
 | `select(secret, { quoteId, walletAddress?, gasless? })` | `POST /sessions/:id/select` (with a random `idempotency-key`) | `PublicSession` |
 | `transition(secret, name, inputs?)` | `POST /sessions/:id/transitions/:name` (with a random `idempotency-key`) | `PublicSession` |
@@ -98,13 +98,14 @@ These methods serve withdraw sessions:
 
 | Method | Description |
 |---|---|
-| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedDestinations.crypto` is set, `'cash'` ("To cash") when `allowedDestinations.fiat` is set, both without `allowedDestinations`. With no tab, `start()` shows `DESTINATION_NOT_ALLOWED`. A locked target gives one tab. |
+| `withdrawTabs()` | The tabs the app allows: `'crypto'` ("To wallet") when `allowedDestinations.crypto` is set, `'cash'` ("To cash") when `allowedDestinations.fiat` is set, `'lightning'` ("To Cash App") when `allowedDestinations.lightning` is set, and `crypto` and `cash` without `allowedDestinations`. With no tab, `start()` shows `DESTINATION_NOT_ALLOWED`. A locked target gives one tab. |
 | `lockedTarget()` | The target that the app set and locked (`session.destinationLocked`), else `undefined`. With a locked target, `start()` does not show the target screen and never calls `/target`. It gets the plan with `/plan` and shows the methods (or the amount screen when one wallet method is available). `setTab()` keeps the tab of the locked target, and `back()` from the amount screen goes to the methods. See [Locked targets](../guide/withdraw.md#locked-targets). |
 | `withdrawChains()` | The networks for "To wallet": `allowedDestinations.crypto.chains`, else every chain with a known USDC address plus the source chain |
 | `targetTokens(chain?)` | Token choices for a chain: USDC when known, the native token, and the source token on the source chain |
 | `setTargetChain(chain)` | Picks a network. The token becomes the source token on the source chain, else USDC, else native. The native token stays native. |
 | `setTargetToken(token)` | Picks a token from `targetTokens()` |
 | `setTargetAddress(address)` | Sets the address (trimmed) |
+| `setLightningAddress(v)`, `submitLightningTarget()` | "To Cash App": keep the `$cashtag` or Lightning address (`snapshot.lightningAddress`), check its format (`parseLightningTarget`), send it to the server, and show the methods (or the amount screen when one method is available). Emits `target.selected` with `{ type: 'lightning', cashApp }`. |
 | `submitTarget()` | Checks the address format (`isValidTargetAddress`), sends the target to the server, and shows the methods. When only one method is available, it selects it and goes to the amount screen. Emits `target.selected`. |
 | `sourceBalance()` | The wallet balance of the session's source token, when the wallet reports it |
 

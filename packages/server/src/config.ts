@@ -13,9 +13,10 @@ export type CreateSessionInput = {
   direction?: Direction
   /**
    * Where the money ends. Deposit: required. Withdraw: optional, a destination that the app sets at
-   * creation (`{ type: 'crypto', chain, token, address }` or `{ type: 'fiat', currency }`, the same shape
-   * as the body of `POST /sessions/:id/target`). The server checks it with `allowedDestinations` and
-   * `screenAddress`. Without it, the user picks the destination.
+   * creation (`{ type: 'crypto', chain, token, address }`, `{ type: 'fiat', currency }` or
+   * `{ type: 'lightning', address }`, the same shape as the body of `POST /sessions/:id/target`). The
+   * server checks it with `allowedDestinations`, `screenAddress` and `screenLightningAddress`. Without
+   * it, the user picks the destination.
    */
   destination?: Destination
   /** Withdraw: the asset to send out and who holds it (required for withdraw) */
@@ -105,6 +106,14 @@ export type OpenRampConfig = {
    * With `screenDepositWallets`, it also screens the wallet that pays a deposit.
    */
   screenAddress?: (address: string, chain: string) => Promise<boolean>
+  /**
+   * Withdraw: screen a Lightning target (a Cash App `$cashtag` or a Lightning address) before the user
+   * can use it. `address` is the normalized Lightning address (`alice@cash.app` for `$alice`), and
+   * `info.cashtag` is set for a Cash App user. Return false to refuse it. An error also refuses it (fail
+   * closed). When `screenAddress` is set and this hook is not, every Lightning target is refused
+   * (`403 DESTINATION_NOT_ALLOWED`), so a payout never skips your screening.
+   */
+  screenLightningAddress?: (address: string, info: { cashtag?: string }) => Promise<boolean>
   /**
    * Deposit: also run `screenAddress` on the connected wallet before a `wallet` payment starts (on the
    * chain the user pays from). A refused wallet gets `403 ADDRESS_REJECTED`. Default `false`. A deposit to

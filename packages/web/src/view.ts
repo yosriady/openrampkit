@@ -50,7 +50,7 @@ export function screenTitle(s: Snapshot | undefined, m: Messages, appearance?: A
   if (!s) return base
   switch (s.screen) {
     case 'amount':
-      if (withdraw && s.tab === 'crypto') return m.withdrawAmountTitle
+      if (withdraw && (s.tab === 'crypto' || s.tab === 'lightning')) return m.withdrawAmountTitle
       return s.method?.name ?? base
     case 'exchanges':
       return m.exchangePickerTitle
@@ -94,9 +94,9 @@ export function liveText(s: Snapshot | undefined, error: OpenRampError | undefin
 }
 
 /** Which tab to show and its methods. Tabs show only when both tabs have methods. */
-export function methodTabs(crypto: MethodOption[], cash: MethodOption[], tab: 'crypto' | 'cash') {
+export function methodTabs(crypto: MethodOption[], cash: MethodOption[], tab: 'crypto' | 'cash' | 'lightning') {
   const showTabs = crypto.length > 0 && cash.length > 0
-  const active: 'crypto' | 'cash' = showTabs ? tab : crypto.length ? 'crypto' : 'cash'
+  const active: 'crypto' | 'cash' = showTabs && tab !== 'lightning' ? tab : crypto.length ? 'crypto' : 'cash'
   return { showTabs, tab: active, list: active === 'crypto' ? crypto : cash }
 }
 
@@ -266,6 +266,7 @@ export function historyRow(item: HistoryItem, m: Messages, now: number): History
   const d = item.destination
   let to = ''
   if (d?.type === 'fiat') to = d.currency.toUpperCase()
+  else if (d?.type === 'lightning') to = m.lightningPayout
   else if (d) {
     const symbol = d.symbol ?? (d.token === 'native' ? CHAINS[d.chain]?.nativeSymbol : USDC[d.chain]?.toLowerCase() === d.token.toLowerCase() ? 'USDC' : undefined)
     to = symbol ? m.assetOn(symbol, displayChain(d.chain)) : displayChain(d.chain)

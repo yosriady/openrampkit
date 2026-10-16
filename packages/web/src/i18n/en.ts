@@ -233,6 +233,13 @@ export const en = {
   withdrawSuccessBody: 'Your funds are on the way.',
   withdrawFailedTitle: 'Withdrawal failed',
   withdrawErrorBody: 'We could not load this withdrawal.',
+  tabToCashApp: 'To Cash App',
+  lightningAddressLabel: '$cashtag or Lightning address',
+  lightningPlaceholder: '$cashtag or name@domain',
+  invalidLightning: 'Enter a valid $cashtag or Lightning address.',
+  cashAppDollarsHint: 'To get dollars, turn on Receive Lightning as dollars in the Bitcoin section of Cash App. Otherwise you get bitcoin.',
+  toLightning: (address: string) => `To ${address}`,
+  lightningPayout: 'Lightning',
 }
 /** Every user-facing string of the modal. Translations must define every key. */
 export type Messages = typeof en

@@ -210,13 +210,19 @@ Body, "To cash":
 { "type": "fiat", "currency": "PHP" }
 ```
 
-Both can also carry the `/plan` fields `walletConnected`, `walletAddress` and `surfaces`.
+Body, "To Cash App" (a `$cashtag` or a Lightning address):
+
+```json
+{ "type": "lightning", "address": "$alice" }
+```
+
+Each can also carry the `/plan` fields `walletConnected`, `walletAddress` and `surfaces`.
 
 The server:
 
-1. checks the format: a CAIP-2 `chain`, a token address or `native`, and an address that is valid for the chain; or an ISO 4217 `currency` (uppercased),
+1. checks the format: a CAIP-2 `chain`, a token address or `native`, and an address that is valid for the chain; or an ISO 4217 `currency` (uppercased); or a `$cashtag` or Lightning address (see [To Cash App](../guide/withdraw.md#to-cash-app)),
 2. checks the session's `allowedDestinations`,
-3. calls `screenAddress(address, chain)` for a crypto target,
+3. calls `screenAddress(address, chain)` for a crypto target, or `screenLightningAddress(address, { cashtag })` for a Lightning target,
 4. stores the target as the session `destination`, clears the stored quotes, and plans.
 
 Response `200`: a `PlanResult`.
@@ -224,9 +230,9 @@ Response `200`: a `PlanResult`.
 | Status | When |
 |---|---|
 | `400` | The body is not valid (for example "Enter a valid address for this network.") |
-| `403` | `DESTINATION_NOT_ALLOWED` (not in `allowedDestinations`) or `ADDRESS_REJECTED` (`screenAddress` returned something other than `true`) |
+| `403` | `DESTINATION_NOT_ALLOWED` (not in `allowedDestinations`, or a Lightning target when only `screenAddress` is set) or `ADDRESS_REJECTED` (the screening hook returned something other than `true`) |
 | `409` | Not a withdraw session; the app locked the target (`DESTINATION_LOCKED`); a payment is in progress; the withdrawal is complete or expired |
-| `503` | `screenAddress` threw (`PROVIDER_UNAVAILABLE`, "We could not check this address. Try again.") |
+| `503` | The screening hook threw (`PROVIDER_UNAVAILABLE`, "We could not check this address. Try again.") |
 
 On a withdraw session, `/plan` and `/quotes` answer `409` ("Choose where to send the funds first.") until a target is set.
 

@@ -219,4 +219,11 @@ export const th: Messages = {
   withdrawSuccessBody: 'เงินของคุณกำลังส่งไป',
   withdrawFailedTitle: 'ถอนเงินไม่สำเร็จ',
   withdrawErrorBody: 'ไม่สามารถโหลดรายการถอนเงินนี้ได้',
+  tabToCashApp: 'ไปยัง Cash App',
+  lightningAddressLabel: '$cashtag หรือที่อยู่ Lightning',
+  lightningPlaceholder: '$cashtag หรือ ชื่อ@โดเมน',
+  invalidLightning: 'กรอก $cashtag หรือที่อยู่ Lightning ที่ถูกต้อง',
+  cashAppDollarsHint: 'หากต้องการรับเป็นดอลลาร์ ให้เปิด Receive Lightning as dollars ในส่วน Bitcoin ของ Cash App มิฉะนั้นคุณจะได้รับบิตคอยน์',
+  toLightning: (address) => `ไปยัง ${address}`,
+  lightningPayout: 'Lightning',
 }

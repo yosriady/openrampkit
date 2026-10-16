@@ -90,7 +90,12 @@ export function createOpenRampClient(opts: ClientOptions) {
     /** Withdraw: set the target the user picked, and get the plan for it */
     target: (
       secret: string,
-      body: ({ type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number } | { type: 'fiat'; currency: string }) & {
+      body: (
+        | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number }
+        | { type: 'fiat'; currency: string }
+        /** A Cash App `$cashtag` or a Lightning address (`name@domain`) */
+        | { type: 'lightning'; address: string }
+      ) & {
         walletConnected?: boolean
         walletAddress?: string
         surfaces?: string[]

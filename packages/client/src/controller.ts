@@ -2,7 +2,7 @@
 // state for one session. UIs render `getSnapshot()` and call its actions. The session's direction
 // picks the flow: deposit (methods, amount, quotes) or withdraw (target, amount, quotes).
 
-import { CHAINS, USDC, accountFor, defaultSourceTokens, exchangeOptions, nativeDecimals, sourceTokenKey, chainNamespace, cmp, createClientEvent, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError } from '@openrampkit/core'
+import { CHAINS, USDC, accountFor, defaultSourceTokens, exchangeOptions, nativeDecimals, sourceTokenKey, chainNamespace, cmp, createClientEvent, currencyForCountry, isAddressTransfer, isSafeLinkUrl, isTerminal, isWebUrl, openRampError, parseLightningTarget } from '@openrampkit/core'
 import type {
   Direction,
   HistoryItem,
@@ -27,7 +27,8 @@ import type { DepositAddressView, OpenRampClient } from './client.js'
 /** The longest delay that `setTimeout` takes (2^31 - 1 ms); a longer one fires at once */
 const MAX_TIMER_MS = 2_147_483_647
 
-export type Tab = 'crypto' | 'cash'
+/** `lightning`: withdraw only, "To Cash App" (a `$cashtag` or a Lightning address) */
+export type Tab = 'crypto' | 'cash' | 'lightning'
 
 /** What an embedded provider page reported, via `notifySurface()`. */
 export type SurfaceSignal = 'completed' | 'failed' | 'closed'
@@ -93,6 +94,8 @@ export type Snapshot = {
   target?: TargetDraft
   /** Withdraw: the currency paid out on the "To cash" tab */
   cashCurrency?: string
+  /** Withdraw: the `$cashtag` or Lightning address on the "To Cash App" tab, as the user typed it */
+  lightningAddress?: string
 }
 
 /**
@@ -100,7 +103,10 @@ export type Snapshot = {
  * fit the session (a method the plan does not have, a tab with no methods) is ignored.
  */
 export type FlowOptions = {
-  /** The tab to show first. Deposit: `crypto` (wallet, transfer, exchanges) or `cash`. Withdraw: `crypto` (To wallet) or `cash` (To cash). */
+  /**
+   * The tab to show first. Deposit: `crypto` (wallet, transfer, exchanges) or `cash`. Withdraw: `crypto`
+   * (To wallet), `cash` (To cash) or `lightning` (To Cash App).
+   */
   initialTab?: Tab
   /** Deposit: open this method at once, for example `qris`, `transfer` or `exchanges` (the exchange picker) */
   initialMethod?: string
@@ -163,6 +169,11 @@ export function withdrawTokens(chain: string): Array<{ token: string; symbol: st
 }
 
 /** Keeps digits and the first decimal point, so "1,000.50" becomes "1000.50". */
+/** The withdraw tab of a target */
+function tabOf(d: { type: 'crypto' | 'fiat' | 'lightning' }): Tab {
+  return d.type === 'fiat' ? 'cash' : d.type
+}
+
 function cleanAmount(amount: string): string {
   const clean = amount.replace(/[^0-9.]/g, '')
   const dot = clean.indexOf('.')
@@ -374,12 +385,12 @@ export class RampController {
 
   setTab(tab: Tab) {
     const locked = this.lockedTarget()
-    if (locked) tab = locked.type === 'crypto' ? 'crypto' : 'cash'
+    if (locked) tab = tabOf(locked)
     this.set({ tab })
     if (this.snap.direction !== 'withdraw' || !this.snap.session) return
     this.set({ error: undefined, method: undefined, quotes: [], quoteErrors: [], selectedQuoteId: undefined })
     if (locked) void this.loadLockedPlan()
-    else if (tab === 'crypto') {
+    else if (tab === 'crypto' || tab === 'lightning') {
       this.targetSeq++ // drop a cash plan that is still loading
       this.set({ screen: 'target' })
     } else void this.loadCashMethods()
@@ -391,19 +402,23 @@ export class RampController {
    * The target the app set and locked at creation (`destinationLocked`), else undefined. With a locked
    * target the controller skips the target screen and never calls `/target`.
    */
-  lockedTarget(): Extract<NonNullable<PublicSession['destination']>, { type: 'crypto' | 'fiat' }> | undefined {
+  lockedTarget(): Extract<NonNullable<PublicSession['destination']>, { type: 'crypto' | 'fiat' | 'lightning' }> | undefined {
     const s = this.snap.session
     const d = s?.direction === 'withdraw' && s.destinationLocked ? s.destination : undefined
-    return d && (d.type === 'crypto' || d.type === 'fiat') ? d : undefined
+    return d && (d.type === 'crypto' || d.type === 'fiat' || d.type === 'lightning') ? d : undefined
   }
 
-  /** Tabs the app allows for this withdrawal: `crypto` (To wallet) and `cash` (To cash). A locked target gives one tab. */
+  /**
+   * Tabs the app allows for this withdrawal: `crypto` (To wallet), `cash` (To cash) and `lightning`
+   * (To Cash App). The Lightning tab shows only when `allowedDestinations.lightning` is set. A locked
+   * target gives one tab.
+   */
   withdrawTabs(): Tab[] {
     const locked = this.lockedTarget()
-    if (locked) return [locked.type === 'crypto' ? 'crypto' : 'cash']
+    if (locked) return [tabOf(locked)]
     const allowed = this.snap.session?.allowedDestinations
     if (!allowed) return ['crypto', 'cash']
-    return [...(allowed.crypto ? (['crypto'] as const) : []), ...(allowed.fiat ? (['cash'] as const) : [])]
+    return [...(allowed.crypto ? (['crypto'] as const) : []), ...(allowed.fiat ? (['cash'] as const) : []), ...(allowed.lightning ? (['lightning'] as const) : [])]
   }
 
   /** Networks the user may withdraw to: the allowed chains, else every chain with USDC plus the source chain. */
@@ -434,8 +449,9 @@ export class RampController {
         target: { chain: locked.chain, token: locked.token, symbol: locked.symbol ?? known?.symbol ?? 'TOKEN', decimals: locked.decimals ?? known?.decimals ?? 18, address: locked.address },
       })
     } else if (locked?.type === 'fiat') this.set({ cashCurrency: locked.currency })
+    else if (locked?.type === 'lightning') this.set({ lightningAddress: locked.cashtag ?? locked.address })
     if (locked) {
-      this.set({ tab: locked.type === 'crypto' ? 'crypto' : 'cash' })
+      this.set({ tab: tabOf(locked) })
       return this.loadLockedPlan()
     }
     const tabs = this.withdrawTabs()
@@ -516,6 +532,31 @@ export class RampController {
     }
   }
 
+  setLightningAddress(address: string) {
+    this.set({ lightningAddress: address.trim(), error: undefined })
+  }
+
+  /** "To Cash App": send the `$cashtag` or Lightning address to the server, then show the payout methods. */
+  async submitLightningTarget() {
+    const t = parseLightningTarget(this.snap.lightningAddress ?? '')
+    if (!t) {
+      this.set({ error: openRampError('BAD_REQUEST', { message: 'Enter a valid $cashtag or Lightning address.' }) })
+      return
+    }
+    this.set({ busy: true, error: undefined })
+    try {
+      // The server parses and checks the address again; it never trusts this one.
+      const plan = await this.opts.client.target(this.opts.clientSecret, { type: 'lightning', address: t.cashtag ?? t.address, ...this.planFields() })
+      this.emit('target.selected', { type: 'lightning', cashApp: !!t.cashtag })
+      this.set({ busy: false, plan })
+      const usable = plan.methods.filter((m) => m.group !== 'unavailable')
+      if (usable.length === 1) return this.selectMethod(usable[0]!.method)
+      this.set({ screen: 'methods' })
+    } catch (e) {
+      this.fail(e)
+    }
+  }
+
   /** "To cash": set the fiat target and show the payout methods. */
   private async loadCashMethods() {
     const currency = this.snap.cashCurrency ?? currencyForCountry(this.snap.session?.country)
@@ -544,7 +585,7 @@ export class RampController {
       if (seq !== this.targetSeq || this.destroyed) return
       this.set({ plan })
       const usable = plan.methods.filter((m) => m.group !== 'unavailable')
-      if (this.snap.tab === 'crypto' && usable.length === 1) return this.selectMethod(usable[0]!.method)
+      if (this.snap.tab !== 'cash' && usable.length === 1) return this.selectMethod(usable[0]!.method)
       this.set({ screen: 'methods' })
     } catch (e) {
       if (seq !== this.targetSeq || this.destroyed) return
@@ -926,7 +967,7 @@ export class RampController {
     else if (screen === 'exchanges' || screen === 'deposit_address') this.set({ screen: 'methods', error: undefined })
     else if (screen === 'quotes') this.set({ screen: isAddressTransfer(this.snap.method?.method) ? list : 'amount', error: undefined })
     else if (screen === 'amount') {
-      const toTarget = this.snap.direction === 'withdraw' && this.snap.tab === 'crypto' && !this.lockedTarget()
+      const toTarget = this.snap.direction === 'withdraw' && (this.snap.tab === 'crypto' || this.snap.tab === 'lightning') && !this.lockedTarget()
       this.set({ screen: toTarget ? 'target' : list, error: undefined })
     }
     else if (screen === 'step' && this.snap.session?.step.state === 'PAYMENT') void this.restart()

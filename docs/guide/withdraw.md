@@ -1,6 +1,6 @@
 # Withdrawals
 
-A withdraw session moves funds out of your app. Your backend decides **what** leaves (the source asset) and **who holds it** (the user's wallet or your app). The user picks **where it goes**: a wallet address ("To wallet") or their own bank or e-wallet account ("To cash"). Your backend can also set the target and lock it (see [Locked targets](#locked-targets)).
+A withdraw session moves funds out of your app. Your backend decides **what** leaves (the source asset) and **who holds it** (the user's wallet or your app). The user picks **where it goes**: a wallet address ("To wallet"), their own bank or e-wallet account ("To cash"), or a Cash App `$cashtag` or Lightning address ("To Cash App"). Your backend can also set the target and lock it (see [Locked targets](#locked-targets)).
 
 The same modal, server and adapters run deposits and withdrawals. The session's `direction` picks the flow.
 
@@ -110,6 +110,38 @@ Adapters with offramp legs:
 - [Swapped](../adapters/swapped.md#sell-legs-withdraw-to-cash): bank transfer (EUR, DKK, GBP), Skrill, PIX and Interac, with a live payout catalog.
 - [Mock](../adapters/mock.md#offramp-leg) with `offramp: true`: bank transfer, GCash, MoMo and PromptPay. It moves no money.
 
+## To Cash App
+
+The "To Cash App" tab pays out over Lightning to a Cash App `$cashtag` or to any Lightning address (`name@domain`). The [Flashnet adapter](../adapters/flashnet.md#payouts-to-cash-app-or-a-lightning-address) runs it from USDC on Base, Ethereum, Arbitrum, Optimism or Polygon. The modal shows the tab only when you set `allowedDestinations.lightning`:
+
+```ts
+openramp.sessions.create({
+  userId: user.id,
+  direction: 'withdraw',
+  source: { chain: 'eip155:8453', token: USDC_BASE, custody: 'user_wallet' },
+  allowedDestinations: { crypto: {}, lightning: { domains: ['cash.app'] } }, // To wallet, and Cash App only
+  country: 'US',
+})
+```
+
+1. The user types `$alice` (or `alice`, or `alice@cash.app`) or a Lightning address. The modal checks the format, then sends `{ type: 'lightning', address }` to `POST /sessions/:id/target`.
+2. The server parses the address again, then checks [`allowedDestinations`](#allowed-targets), then your [`screenLightningAddress`](#screen-lightning-targets) hook. It stores the normalized target as the session destination: `{ type: 'lightning', address: 'alice@cash.app', cashtag: '$alice' }`. The adapter reads the recipient only from this stored target.
+3. The user enters the amount in the source token and confirms a quote. The output is BTC (sats) and is an estimate: Lightning delivery is variable.
+4. The leg asks for a `WALLET_TX`: a USDC transfer to the provider's deposit address. The user signs it, or your [treasury](#custody-app) sends it.
+5. The provider pays the Lightning address. The leg completes.
+
+The format rules:
+
+| Input | Target |
+|---|---|
+| `$alice`, `alice`, `alice@cash.app` | Cash App: 1 to 20 letters or digits, with at least one letter. Case is kept. |
+| `name@domain` | A Lightning address: a user name of letters, digits, `.`, `_`, `-` or `+`, and a domain with a dot and a letter TLD. The domain is made lower case. |
+| Anything else | `400`: "Enter a valid $cashtag or Lightning address (name@domain)." Invoices (BOLT11, BOLT12), LNURL strings, URLs and IP addresses are refused. |
+
+::: warning Cash App dollars
+A completed payout means the Lightning payment arrived, not that Cash App credited dollars. To get dollars, the user turns on "Receive Lightning as dollars" in the Bitcoin section of Cash App. The modal shows this hint under the input. A missing account or an amount outside the wallet's limits can fail after funding: then the provider refunds the sender.
+:::
+
 ## Custody
 
 `source.custody` tells the server who signs the transaction that sends the funds.
@@ -194,10 +226,11 @@ Set `treasury.address` when you use Relay. Relay builds its transactions for a s
 type AllowedDestinations = {
   crypto?: { chains?: string[] }       // absent: no "To wallet". chains absent: any chain
   fiat?: { currencies?: string[] }     // absent: no "To cash". currencies absent: any currency
+  lightning?: { domains?: string[] }   // absent: no "To Cash App". domains absent: any domain
 }
 ```
 
-- The modal shows only the allowed tabs. With `crypto.chains`, the network list shows only those chains. Without it, the list has every chain with a known USDC address, plus the source chain.
+- The modal shows only the allowed tabs. Without `allowedDestinations`, it shows "To wallet" and "To cash" (the "To Cash App" tab needs `lightning`). With `crypto.chains`, the network list shows only those chains. With `lightning.domains` (for example `['cash.app']`), the server refuses a Lightning address on another domain. Without it, the list has every chain with a known USDC address, plus the source chain.
 - The server checks every target. A target that is not allowed gets `403 DESTINATION_NOT_ALLOWED`.
 - When the app allows neither type, the modal shows an error.
 
@@ -225,6 +258,22 @@ It fails closed:
 
 The server calls it only for crypto targets. Fiat payout accounts are checked by the offramp provider.
 
+### Screen Lightning targets
+
+Add `screenLightningAddress` to check each "To Cash App" target. `address` is the normalized Lightning address, and `info.cashtag` is set for a Cash App user.
+
+```ts
+createOpenRamp({
+  // ...
+  screenLightningAddress: async (address, { cashtag }) => {
+    const r = await risk.checkPayee(cashtag ?? address)
+    return r.clean // true to allow
+  },
+})
+```
+
+It fails closed like `screenAddress`: `false` (or any value that is not `true`) gives `403 ADDRESS_REJECTED`, and an error gives `503 PROVIDER_UNAVAILABLE`. When you set `screenAddress` but not `screenLightningAddress`, every Lightning target gets `403 DESTINATION_NOT_ALLOWED`, so a payout never skips your screening. The server never passes a Lightning address to `screenAddress`.
+
 ## The /target route
 
 `POST {baseUrl}/sessions/:id/target` sets the target of a withdraw session and returns the plan. The client calls it for you. See [HTTP routes](../api/http.md#post-sessions-id-target) for the body and the errors.
@@ -247,7 +296,7 @@ const session = await openramp.sessions.create({
 ```
 
 - `destination` has the same shape as the body of [`POST /sessions/:id/target`](../api/http.md#post-sessions-id-target).
-- The server checks it at creation, as for `/target`: the format, then [`allowedDestinations`](#allowed-targets), then [`screenAddress`](#screen-addresses). A refused target throws (`400`, `403` or `503`), and the server makes no session.
+- The server checks it at creation, as for `/target`: the format, then [`allowedDestinations`](#allowed-targets), then [`screenAddress`](#screen-addresses) (or [`screenLightningAddress`](#screen-lightning-targets) for `{ type: 'lightning', address }`). A refused target throws (`400`, `403` or `503`), and the server makes no session.
 - The server stores it as the session destination. `PublicSession` has `destination` and `destinationLocked: true`.
 - `POST /sessions/:id/target` answers `409 DESTINATION_LOCKED` ("The app set where these funds go. You cannot change it."). Get the plan with `POST /sessions/:id/plan`.
 - The modal does not show the target screen or the tabs. A wallet target shows as a read-only line ("To 0x2222...2222 on Arbitrum") on the methods and amount screens. A cash target opens the payout methods in its currency. With one wallet method, the modal goes straight to the amount screen.
@@ -277,7 +326,7 @@ The `source` transaction is the one that sent the funds from the user's wallet o
 
 `outputConfirmed` is `false` when `output` is the quote, not a value that the provider or the chain reported. For example, Swapped sell legs do not report the payout amount, so `output` stays the estimate from the quote.
 
-The browser also emits `target.selected` with `{ type: 'crypto', chain, token }` or `{ type: 'fiat', currency }`. See [Events](../concepts/events.md).
+The browser also emits `target.selected` with `{ type: 'crypto', chain, token }`, `{ type: 'fiat', currency }` or `{ type: 'lightning', cashApp }` (no address). See [Events](../concepts/events.md).
 
 ## How withdrawals are planned
 

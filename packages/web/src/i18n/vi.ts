@@ -218,4 +218,11 @@ export const vi: Messages = {
   withdrawSuccessBody: 'Tiền của bạn đang được chuyển đến.',
   withdrawFailedTitle: 'Rút tiền thất bại',
   withdrawErrorBody: 'Không thể tải khoản rút này.',
+  tabToCashApp: 'Về Cash App',
+  lightningAddressLabel: '$cashtag hoặc địa chỉ Lightning',
+  lightningPlaceholder: '$cashtag hoặc ten@tenmien',
+  invalidLightning: 'Nhập $cashtag hoặc địa chỉ Lightning hợp lệ.',
+  cashAppDollarsHint: 'Để nhận đô la, hãy bật Receive Lightning as dollars trong mục Bitcoin của Cash App. Nếu không, bạn sẽ nhận bitcoin.',
+  toLightning: (address) => `Đến ${address}`,
+  lightningPayout: 'Lightning',
 }

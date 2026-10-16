@@ -1,5 +1,6 @@
-// Flashnet Orchestra adapter (experimental): Cash App and Lightning onramp to USDC, and deposits from
-// Bitcoin and Tron to USDC through Orchestra deposit addresses. Docs: https://docs.flashnet.xyz/llms.txt
+// Flashnet Orchestra adapter (experimental): Cash App and Lightning onramp to USDC, deposits from
+// Bitcoin and Tron to USDC through Orchestra deposit addresses, and payouts of USDC to a Cash App user
+// or a Lightning address (withdraw). Docs: https://docs.flashnet.xyz/llms.txt
 // and the OpenAPI spec at https://orchestration.flashnet.xyz/openapi.json (read on 2026-10-16).
 //
 // - Base URL: https://orchestration.flashnet.xyz. There is no sandbox in the docs or the spec.
@@ -23,14 +24,21 @@
 //   `X-Flashnet-Timestamp` (ms) and `X-Flashnet-Signature` (hex HMAC-SHA256 of `{timestamp}.{rawBody}`).
 //   Dedupe on (data.id, event, data.updatedAt). Register with POST /v1/webhooks (the secret is shown once).
 //
-// Not built yet: payouts to Cash App (`POST /v1/orchestration/offramp`). They need a withdraw target
-// for a `$cashtag` or a Lightning address, which the server does not have.
+// - Offramp (payouts): POST /v1/orchestration/offramp (X-Idempotency-Key) with { sourceChain, sourceAsset,
+//   amount, recipientAddress ($cashtag or user@domain), refundAddress, tag } -> the quote answer
+//   ({ quoteId, depositAddress, amountIn, estimatedOut (sats), expiresAt, source, destination }). Exact in,
+//   variable delivery: the dollar amount is not locked. Funding the deposit address makes the order.
+//   `completed` means the Lightning payment was delivered, not that Cash App credited dollars.
+//   The withdraw target is the server's validated `lightning` destination (never a client value).
+//   Sources: USDC on Base, Ethereum, Arbitrum, Optimism and Polygon (routes.json lists `lightning:BTC`
+//   for them). The user's wallet or the app's treasury sends an ERC-20 transfer that we build (WALLET_TX).
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
 import {
   POLL,
   awaitPoll,
+  erc20TransferData,
   bytesToHex,
   claimOnce,
   createAdapter,
@@ -49,6 +57,8 @@ import {
 import type { AdapterContext, AdapterEnv, DeliverableAsset, LegEvent, Logger, ScopedKV } from '@openrampkit/adapter'
 import {
   BITCOIN_MAINNET,
+  LIGHTNING,
+  LIGHTNING_BTC,
   OpenRampException,
   SOLANA_MAINNET,
   TRON_MAINNET,
@@ -56,10 +66,13 @@ import {
   USDC,
   chainName,
   cmp,
+  evmChainId,
   fromBaseUnits,
   isDecimal,
   openRampError,
+  parseLightningTarget,
   roundTo,
+  sameLightningAddress,
   toBaseUnits,
 } from '@openrampkit/core'
 import type { Amount, CryptoAsset, Fee, LegQuote, LegSpec, LegStatus, LegStep, OpenRampErrorCode, PathwayLeg, StepDetailCode, Surface } from '@openrampkit/core'
@@ -68,7 +81,11 @@ import { bolt11ExpiresAt, decodeBolt11 } from './bolt11.js'
 export { decodeBolt11 } from './bolt11.js'
 export type { Bolt11 } from './bolt11.js'
 
-export type FlashnetLeg = 'cash_app' | 'lightning' | 'transfer'
+export type FlashnetLeg = 'cash_app' | 'lightning' | 'transfer' | 'cash_app_payout' | 'lightning_payout'
+
+/** The payout (withdraw) legs: USDC to a Cash App user or to a Lightning address */
+type PayoutLeg = 'cash_app_payout' | 'lightning_payout'
+const isPayout = (id: FlashnetLeg): id is PayoutLeg => id === 'cash_app_payout' || id === 'lightning_payout'
 
 export type FlashnetDeliverAsset = DeliverableAsset & {
   /** Orchestra chain id, e.g. `base` */
@@ -86,7 +103,10 @@ export type FlashnetOptions = {
   webhookSecret?: string
   /** Assets Orchestra may deliver, most preferred first. Default: USDC on Base, Solana, Ethereum, Arbitrum, Optimism, Polygon. */
   deliverAssets?: FlashnetDeliverAsset[]
-  /** The legs to offer. Default: all (`cash_app`, `lightning`, `transfer`). */
+  /**
+   * The legs to offer. Default: all (`cash_app`, `lightning`, `transfer`, and the withdraw legs
+   * `cash_app_payout` and `lightning_payout`).
+   */
   legs?: FlashnetLeg[]
   /** How the Lightning invoice shows. 'qr' (default): a QR code (scan with a phone). 'deeplink': a button that opens Cash App or the wallet. */
   invoiceSurface?: 'qr' | 'deeplink'
@@ -94,7 +114,7 @@ export type FlashnetOptions = {
    * Refund addresses per origin chain, used when the user's own address is not known. Orchestra needs one
    * for Tron deposits. A refund then goes to this address (yours), not to the user.
    */
-  refundAddresses?: { tron?: string; bitcoin?: string }
+  refundAddresses?: { tron?: string; bitcoin?: string; evm?: string }
   apiUrl?: string
 }
 
@@ -128,6 +148,22 @@ export const FLASHNET_SOURCES: SourceDef[] = [
   { chain: TRON_MAINNET, token: TRON_USDT, symbol: 'USDT', decimals: 6, fnChain: 'tron', fnAsset: 'USDT' },
 ]
 
+/** What a payout leg takes: USDC on the EVM chains whose route lists `lightning:BTC` (routes.json, read on 2026-10-16) */
+export const FLASHNET_PAYOUT_SOURCES: SourceDef[] = ['eip155:8453', 'eip155:1', 'eip155:42161', 'eip155:10', 'eip155:137'].map((chain) => ({
+  chain,
+  token: USDC[chain]!.toLowerCase(),
+  symbol: 'USDC',
+  decimals: 6,
+  fnChain: FN_CHAIN[chain]!,
+  fnAsset: 'USDC',
+}))
+
+/** What a payout delivers: BTC over Lightning, in sats (Orchestra `lightning:BTC`, 8 decimals) */
+const LN_OUT: FlashnetDeliverAsset = { chain: LIGHTNING, token: 'native', symbol: 'BTC', decimals: 8, fnChain: 'lightning', fnAsset: 'BTC' }
+
+const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/
+const EVM_ZERO = /^0x0{40}$/
+const EVM_TX = /^0x[0-9a-fA-F]{64}$/
 const BITCOIN_ADDRESS = /^(?:[13][1-9A-HJ-NP-Za-km-z]{25,34}|bc1[ac-hj-np-z02-9]{11,71}|BC1[AC-HJ-NP-Z02-9]{11,71})$/
 const TRON_ADDRESS = /^T[1-9A-HJ-NP-Za-km-z]{33}$/
 const SAFE_ID = /^[A-Za-z0-9_-]{1,128}$/
@@ -171,6 +207,8 @@ type FnOrder = {
   status?: string
   quoteId?: string | null
   updatedAt?: string
+  sourceChain?: string | null
+  sourceAsset?: string | null
   destinationChain?: string | null
   destinationAsset?: string | null
   destinationAddress?: string | null
@@ -192,7 +230,7 @@ type FnHookOrder = {
   amountIn?: string | null
   amountOut?: string | null
   recipientAddress?: string | null
-  source?: { txHash?: string | null } | null
+  source?: { chain?: string | null; asset?: string | null; txHash?: string | null } | null
   destination?: { chain?: string | null; asset?: string | null; address?: string | null; txHash?: string | null } | null
   refund?: { txHash?: string | null } | null
   error?: { code?: string | null } | null
@@ -203,6 +241,8 @@ type Order = {
   id?: string
   status?: string
   quoteId?: string
+  srcChain?: string
+  srcAsset?: string
   destChain?: string
   destAsset?: string
   destAddress?: string
@@ -226,6 +266,8 @@ type LegRecord = {
   sourceChain?: string
   /** Lightning legs: when the invoice expires (ms) */
   invoiceExpiresAt?: number
+  /** Payout legs: what the user must send, and the funding transaction once it is reported */
+  payout?: { fnChain: string; fnAsset: string; token: string; amount: string; depositAddress: string; fundTx?: string }
 }
 
 type Mapped = { status: LegStatus; detail?: StepDetailCode; special?: 'failed' | 'fallback' | 'expired' }
@@ -261,6 +303,8 @@ function fromStatus(o: FnOrder): Order {
     id: str(o.id),
     status: str(o.status),
     quoteId: str(o.quoteId),
+    srcChain: str(o.sourceChain),
+    srcAsset: str(o.sourceAsset),
     destChain: str(o.destinationChain),
     destAsset: str(o.destinationAsset),
     destAddress: str(o.destinationAddress),
@@ -279,6 +323,8 @@ function fromHook(d: FnHookOrder): Order {
     id: str(d.id),
     status: str(d.status),
     quoteId: str(d.quoteId),
+    srcChain: str(d.source?.chain),
+    srcAsset: str(d.source?.asset),
     destChain: str(d.destination?.chain),
     destAsset: str(d.destination?.asset),
     destAddress: str(d.destination?.address),
@@ -292,9 +338,10 @@ function fromHook(d: FnHookOrder): Order {
   }
 }
 
-/** Two addresses on a chain are the same (EVM without case; others exact) */
+/** Two addresses on a chain are the same (EVM without case; Lightning addresses parsed, without case; others exact) */
 function sameAddress(chain: string, a: string | undefined, b: string): boolean {
   if (!a) return false
+  if (chain === LIGHTNING) return sameLightningAddress(a, b)
   return chain.startsWith('eip155:') ? a.toLowerCase() === b.toLowerCase() : a === b
 }
 
@@ -346,6 +393,8 @@ export function flashnet(opts: FlashnetOptions) {
   for (const d of deliver) (toChains[d.chain] ??= []).push(d.chain.startsWith('eip155:') ? d.token.toLowerCase() : d.token)
   const fromChains: Record<string, string[]> = {}
   for (const s of FLASHNET_SOURCES) (fromChains[s.chain] ??= []).push(s.token)
+  const payoutChains: Record<string, string[]> = {}
+  for (const s of FLASHNET_PAYOUT_SOURCES) (payoutChains[s.chain] ??= []).push(s.token)
 
   const legs: LegSpec[] = []
   if (enabled('cash_app')) {
@@ -389,6 +438,20 @@ export function flashnet(opts: FlashnetOptions) {
       surfaces: ['DEPOSIT_ADDRESS'],
     })
   }
+  // Withdraw: USDC from the user's wallet or the app's treasury, paid out over Lightning
+  const payoutLeg = (id: PayoutLeg): LegSpec => ({
+    id,
+    kind: 'crypto_offramp',
+    methods: [id === 'cash_app_payout' ? 'cash_app' : 'lightning'],
+    from: { asset: { kind: 'crypto', chains: payoutChains }, location: ['user_wallet', 'address'] },
+    to: { asset: { kind: 'crypto', chains: { [LIGHTNING]: ['native'] } }, location: [id === 'cash_app_payout' ? 'cash_app' : 'lightning_address'] },
+    // Cash App is US only. TO VERIFY with Flashnet: the region rules of the offramp (the onramp excludes New York City).
+    regions: id === 'cash_app_payout' ? { allow: ['US'], deny: ['US-NY'] } : { allow: ['*'], deny: ['US-NY'] },
+    eta: { min: 60, max: 1800 },
+    surfaces: ['WALLET_TX'],
+  })
+  if (enabled('cash_app_payout')) legs.push(payoutLeg('cash_app_payout'))
+  if (enabled('lightning_payout')) legs.push(payoutLeg('lightning_payout'))
   if (!legs.length) throw new Error('flashnet: `legs` selects no leg')
 
   const legId = (leg: PathwayLeg): FlashnetLeg => {
@@ -706,6 +769,200 @@ export function flashnet(opts: FlashnetOptions) {
     }
   }
 
+  /** The payout source of a quote or a start: USDC on a supported EVM chain, and the session's own source when it is given */
+  function payoutSource(asset: { chain: string; token: string } | undefined, sessionSource?: { chain: string; token: string }): SourceDef {
+    const s = asset && FLASHNET_PAYOUT_SOURCES.find((x) => x.chain === asset.chain && x.token === asset.token.toLowerCase())
+    if (!s) throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Flashnet pays out from USDC on Base, Ethereum, Arbitrum, Optimism or Polygon.', recovery: 'choose_other' }), 422)
+    if (sessionSource && (sessionSource.chain !== s.chain || sessionSource.token.toLowerCase() !== s.token)) {
+      throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'The quote is for another source asset.' }), 400)
+    }
+    return s
+  }
+
+  /**
+   * The payout recipient: the session's validated Lightning destination, parsed again (fail closed).
+   * The Cash App leg pays a `$cashtag` only, and the Lightning leg any other Lightning address.
+   */
+  function payoutRecipient(ctx: AdapterContext, id: PayoutLeg): { address: string; send: string } {
+    const d = ctx.destination
+    const t = d.type === 'lightning' ? parseLightningTarget(d.cashtag ?? d.address) : undefined
+    if (d.type !== 'lightning' || !t || t.address !== d.address || t.cashtag !== d.cashtag || (id === 'cash_app_payout') !== !!t.cashtag) {
+      throw new OpenRampException(openRampError('NO_QUOTES', { message: "Flashnet pays this method only to the session's Lightning target.", recovery: 'choose_other' }), 422)
+    }
+    // Orchestra takes `$name` for Cash App and `user@domain` for a Lightning address (offramp page).
+    return { address: t.address, send: t.cashtag ?? t.address }
+  }
+
+  /** Where Orchestra refunds a failed payout: the sender on the source chain, else the app's EVM refund address */
+  function payoutRefund(sender: string | undefined): string | undefined {
+    const ok = (a: string | undefined) => !!a && EVM_ADDRESS.test(a) && !EVM_ZERO.test(a)
+    if (ok(sender)) return sender
+    return ok(opts.refundAddresses?.evm) ? opts.refundAddresses!.evm : undefined
+  }
+
+  const noRefund = () =>
+    new OpenRampException(
+      openRampError('NO_QUOTES', { message: 'Flashnet needs a refund address on the source chain. Connect a wallet, or set refundAddresses.evm.', recovery: 'choose_other' }),
+      422,
+    )
+
+  async function quotePayout(
+    id: PayoutLeg,
+    input: { leg: PathwayLeg; amountIn?: Amount; amountOut?: Amount; source?: { chain: string; token: string; address?: string } },
+    ctx: AdapterContext,
+  ): Promise<LegQuote> {
+    payoutRecipient(ctx, id)
+    const a = input.amountIn?.asset
+    // Exact in only: Orchestra does not lock the amount that arrives.
+    if (!input.amountIn || a?.kind !== 'crypto') {
+      throw new OpenRampException(openRampError('NO_QUOTES', { message: 'Flashnet quotes a payout from the amount you send.', recovery: 'choose_other' }), 422)
+    }
+    const src = payoutSource(a, input.source)
+    if (!payoutRefund(input.source?.address)) throw noRefund()
+    const amount = toBaseUnits(roundTo(input.amountIn.value, src.decimals), src.decimals)
+    if (!INT.test(amount) || BigInt(amount) <= 0n) throw new OpenRampException(openRampError('AMOUNT_TOO_LOW', { recovery: 'requote' }), 422)
+    // TO VERIFY: GET /estimate prices a `lightning:BTC` destination as the offramp quote does (sats out).
+    const r = await estimate(ctx, src, LN_OUT, amount)
+    const fees: Fee[] = [usdFee(r)]
+    if (id === 'cash_app_payout') fees.push({ kind: 'other', label: 'Cash App bitcoin to USD rate', amount: null, included: true })
+    return {
+      adapterId: 'flashnet',
+      legId: id,
+      input: { value: fromBaseUnits(amount, src.decimals), asset: { kind: 'crypto', chain: src.chain, token: src.token, symbol: src.symbol, decimals: src.decimals } },
+      output: { value: fromBaseUnits(r.estimatedOut!, 8), asset: LIGHTNING_BTC },
+      fees,
+      // Variable delivery: the sats (and the dollars in Cash App) are not locked.
+      guarantee: 'estimate',
+      eta: { min: 60, max: 1800 },
+      expiresAt: quoteExpiresAt(2),
+      data: { amount },
+    }
+  }
+
+  type FnOfframp = FnQuote & {
+    amountMode?: string
+    source?: { chain?: string; asset?: string; decimals?: number; contractAddress?: string | null }
+  }
+
+  async function startPayout(
+    id: PayoutLeg,
+    input: { quote: LegQuote; leg: PathwayLeg; deliverTo?: { address: string }; source?: { chain: string; token: string; address?: string } },
+    ctx: AdapterContext,
+  ): Promise<LegStep> {
+    const badQuote = (message: string) => new OpenRampException(openRampError('BAD_REQUEST', { message }), 400)
+    // A payout is the last leg: it never delivers to another leg's address.
+    if (input.deliverTo) throw badQuote("Flashnet payouts deliver only to the session's Lightning target.")
+    // The recipient comes only from the session destination that the server checked (format, allowed, screened).
+    const recipient = payoutRecipient(ctx, id)
+    const q = input.quote
+    if (q.adapterId !== 'flashnet' || q.legId !== id) throw badQuote('The quote is for another method.')
+    const out = q.output.asset
+    if (out.kind !== 'crypto' || out.chain !== LIGHTNING || out.token !== 'native') throw badQuote('The quote is for another asset.')
+    const qa = q.input.asset
+    const src = payoutSource(qa.kind === 'crypto' ? qa : undefined, input.source)
+    // The amount is the quote's amount, in base units. A quote whose data disagrees is refused.
+    const amount = toBaseUnits(roundTo(q.input.value, src.decimals), src.decimals)
+    const data = (q.data ?? {}) as { amount?: unknown }
+    if (data.amount !== amount || !INT.test(amount) || BigInt(amount) <= 0n) throw badQuote('The quote amount is not valid.')
+    const refund = payoutRefund(input.source?.address)
+    if (!refund) throw noRefund()
+    const body = {
+      sourceChain: src.fnChain,
+      sourceAsset: src.fnAsset,
+      amount,
+      recipientAddress: recipient.send,
+      refundAddress: refund,
+      tag: tagFor(ctx),
+    }
+    let res: FnOfframp
+    try {
+      res = await post<FnOfframp>(ctx, '/v1/orchestration/offramp', body)
+    } catch (e) {
+      throw flashnetError(e, ctx.log, 'create this payout')
+    }
+    const ref = res?.quoteId
+    if (!ref || !SAFE_ID.test(ref)) throw unavailable('Flashnet returned a quote id that is not valid.')
+    // Fail closed on every field we can check: the funds go to this deposit address.
+    const refuse = (why: string, message: string) => {
+      ctx.log.error(`flashnet: ${why}; refusing the payout`, { quoteId: ref })
+      return unavailable(message)
+    }
+    if (res.amountIn !== amount) throw refuse('the offramp amount is not the amount we asked for', 'Flashnet returned a quote for another amount.')
+    if (res.amountMode !== undefined && res.amountMode !== 'exact_in') throw refuse('the offramp quote is not exact in', 'Flashnet returned another kind of quote.')
+    checkDestination(res, LN_OUT)
+    const rs = res.source
+    if (
+      rs &&
+      ((rs.chain && rs.chain !== src.fnChain) ||
+        (rs.asset && rs.asset !== src.fnAsset) ||
+        (rs.decimals !== undefined && rs.decimals !== src.decimals) ||
+        (rs.contractAddress && rs.contractAddress.toLowerCase() !== src.token))
+    ) {
+      throw refuse('the offramp source is not the session source', 'Flashnet answered for another asset.')
+    }
+    if (res.recipientAddress !== undefined && !sameLightningAddress(res.recipientAddress, recipient.address)) {
+      throw refuse('the offramp recipient is not the session target', 'Flashnet returned another recipient.')
+    }
+    // We send a plain ERC-20 transfer: a deposit that needs a memo cannot be paid that way.
+    if (res.depositMemo) throw refuse('the offramp deposit needs a memo', 'Flashnet returned a deposit that this wallet cannot pay.')
+    const address = res.depositAddress
+    if (!address || !EVM_ADDRESS.test(address) || EVM_ZERO.test(address)) throw unavailable('Flashnet returned a deposit address that is not valid.')
+    const chainId = evmChainId(src.chain)
+    if (!chainId) throw unavailable('The Flashnet payout chain is not an EVM chain.')
+    // One Orchestra quote pays one leg, and one deposit address takes one payout (atomic claims).
+    if (!(await claimOnce(ctx.shared, `payout:${ref}`, `${ctx.session.id}:${ctx.pathway.index}`, CLAIM_TTL_SEC))) {
+      throw refuse('this offramp quote already belongs to another leg', 'Flashnet returned a quote that is in use.')
+    }
+    if (!(await claimOnce(ctx.shared, `addr:${src.chain}:${address.toLowerCase()}`, ref, CLAIM_TTL_SEC))) {
+      throw refuse('this deposit address already belongs to another leg', 'Flashnet returned a deposit address that is in use.')
+    }
+    // A retried start (the same idempotency key gives the same quote) keeps the funding transaction it saw.
+    const fundTx = (await ctx.shared.get<LegRecord>(recKey(ref)))?.payout?.fundTx
+    await saveRecord(ctx, ref, {
+      legId: id,
+      recipient: recipient.address,
+      output: { ...LIGHTNING_BTC, decimals: 8 },
+      fnChain: LN_OUT.fnChain,
+      fnAsset: LN_OUT.fnAsset,
+      sourceChain: src.chain,
+      payout: { fnChain: src.fnChain, fnAsset: src.fnAsset, token: src.token, amount, depositAddress: address.toLowerCase(), ...(fundTx ? { fundTx } : {}) },
+    })
+    return {
+      status: 'requires_action',
+      action: {
+        kind: 'payment',
+        // We build the transfer from the checked quote: the token, the amount and the deposit address.
+        surface: { kind: 'WALLET_TX', chain: src.chain, txs: [{ to: src.token, data: erc20TransferData(address, amount), value: '0', chainId }] },
+        transitions: [{ name: 'submit_tx', kind: 'SURFACE_RESULT', expects: 'tx_hash' }],
+      },
+      ref,
+    }
+  }
+
+  /** `submit_tx` of a payout leg: keep the funding transaction (once), and tell Orchestra about it. */
+  async function submitPayoutTx(ref: string, inputs: Record<string, unknown> | undefined, ctx: AdapterContext): Promise<LegStep> {
+    const rec = (await ctx.shared.get<LegRecord>(recKey(ref))) ?? (await ctx.store.get<LegRecord>(recKey(ref)))
+    if (!rec?.payout || !rec.sourceChain) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'Unknown Flashnet payout.' }), 404)
+    const hash = typeof inputs?.txHash === 'string' ? inputs.txHash.toLowerCase() : ''
+    if (!EVM_TX.test(hash)) throw new OpenRampException(openRampError('BAD_REQUEST', { message: 'Send a valid transaction hash.' }), 400)
+    // One funding transaction per payout, and one payout per transaction (atomic claims).
+    if (!(await claimOnce(ctx.shared, `fund:${ref}`, hash, CLAIM_TTL_SEC))) {
+      throw new OpenRampException(openRampError('CONFLICT', { message: 'This payout already has another transaction.' }), 409)
+    }
+    if (!(await claimOnce(ctx.shared, `src:${hash}`, ref, CLAIM_TTL_SEC))) {
+      ctx.log.error('flashnet: this transaction already funded another leg', { quoteId: ref })
+      throw new OpenRampException(openRampError('CONFLICT', { message: 'This transaction already paid another withdrawal.' }), 409)
+    }
+    if (rec.payout.fundTx !== hash) await saveRecord(ctx, ref, { ...rec, payout: { ...rec.payout, fundTx: hash } })
+    // Orchestra detects EVM deposits by itself; /submit is the documented fallback. A failure here is not fatal.
+    try {
+      await post(ctx, '/v1/orchestration/submit', { quoteId: ref, txHash: hash })
+    } catch (e) {
+      ctx.log.warn('flashnet: POST /submit failed; Orchestra should still detect the deposit', { quoteId: ref, error: String((e as Error)?.message ?? e).slice(0, 200) })
+    }
+    return { status: 'processing', detail: { code: 'confirming' }, poll: POLL.onchain, ref, transactions: [{ role: 'source', chain: rec.sourceChain, hash }] }
+  }
+
   /** `tag` on each order, for support: the session id in the allowed characters */
   function tagFor(ctx: AdapterContext): string {
     return `ork:${ctx.session.id}`.replace(/[^A-Za-z0-9._:-]/g, '').slice(0, 64)
@@ -736,8 +993,9 @@ export function flashnet(opts: FlashnetOptions) {
     if (m.special === 'failed') return { ...held(`order failed (${o.errorCode ?? 'no code'})`), ...(txs.length ? { transactions: txs } : {}) }
     if (m.special === 'fallback') return held('the order delivered a fallback asset, not the quoted asset')
     if (m.special === 'expired') {
-      // No deposit seen: the leg expires. A deposit: money may have moved, so it stays processing.
-      if (!o.sourceTx && !(o.amountIn && INT.test(o.amountIn) && BigInt(o.amountIn) > 0n)) {
+      // No deposit seen: the leg expires. A deposit (or a payout transaction that we know of): money may
+      // have moved, so it stays processing.
+      if (!o.sourceTx && !rec.payout?.fundTx && !(o.amountIn && INT.test(o.amountIn) && BigInt(o.amountIn) > 0n)) {
         return { ref, status: 'expired', error: openRampError('QUOTE_EXPIRED', { recovery: 'requote' }) }
       }
       return held('the order expired after a deposit')
@@ -749,12 +1007,20 @@ export function flashnet(opts: FlashnetOptions) {
     if (m.status !== 'succeeded') return { ...base, ...(txs.length ? { transactions: txs } : {}) }
     // Completion checks
     if (o.destChain !== rec.fnChain || o.destAsset !== rec.fnAsset) return held('the order delivered another asset')
-    const to = o.destAddress ?? o.recipient
+    const p = rec.payout
+    if (p) {
+      // A payout: the order took the quoted source asset and amount. TO VERIFY: the order echoes them as sent.
+      if ((o.srcChain && o.srcChain !== p.fnChain) || (o.srcAsset && o.srcAsset !== p.fnAsset)) return held('the payout order took another asset')
+      if (o.amountIn && o.amountIn !== p.amount) return held('the payout order took another amount')
+    }
+    // TO VERIFY: a payout order names the Lightning address in recipientAddress (destinationAddress may differ).
+    const to = rec.output.chain === LIGHTNING ? (o.recipient ?? o.destAddress) : (o.destAddress ?? o.recipient)
     if (!sameAddress(rec.output.chain, to, rec.recipient)) return held('the order delivered to another address')
     if (!o.amountOut || !INT.test(o.amountOut) || BigInt(o.amountOut) <= 0n) return held('the order has no delivered amount')
     if (!o.id || !(await claimOnce(shared, `order:${o.id}`, ref, CLAIM_TTL_SEC))) return held('the order already completed another leg')
     if (o.sourceTx && !(await claimOnce(shared, `src:${/^(0x)?[0-9a-fA-F]+$/.test(o.sourceTx) ? o.sourceTx.toLowerCase() : o.sourceTx}`, ref, CLAIM_TTL_SEC))) return held('the deposit already completed another leg')
-    if (o.destTx && HASH.test(o.destTx)) txs.push({ role: 'destination', chain: rec.output.chain, hash: o.destTx })
+    // A Lightning payment has no chain transaction to show
+    if (o.destTx && HASH.test(o.destTx) && rec.output.chain !== LIGHTNING) txs.push({ role: 'destination', chain: rec.output.chain, hash: o.destTx })
     const output: Amount = { value: fromBaseUnits(o.amountOut, rec.output.decimals), asset: rec.output }
     return { ...base, output, ...(txs.length ? { transactions: txs } : {}) }
   }
@@ -772,17 +1038,28 @@ export function flashnet(opts: FlashnetOptions) {
 
     async quote(input, ctx) {
       const id = legId(input.leg)
+      if (isPayout(id)) return quotePayout(id, input, ctx)
       return id === 'transfer' ? quoteTransfer(input, ctx) : quoteLightning(id, input, ctx)
     },
 
     async start(input, ctx) {
       const id = legId(input.leg)
+      if (isPayout(id)) return startPayout(id, input, ctx)
       return id === 'transfer' ? startTransfer(input, ctx) : startLightning(id, input, ctx)
+    },
+
+    async transition(input, ctx) {
+      const id = legId(input.leg)
+      if (!isPayout(id) || input.name !== 'submit_tx') {
+        throw new OpenRampException(openRampError('BAD_REQUEST', { message: `Transition ${input.name} is not supported.` }), 409)
+      }
+      if (!SAFE_ID.test(input.ref)) throw new OpenRampException(openRampError('NOT_FOUND', { message: 'Unknown Flashnet payout.' }), 404)
+      return submitPayoutTx(input.ref, input.inputs, ctx)
     },
 
     async status(input, ctx) {
       const id = legId(input.leg)
-      const poll = id === 'transfer' ? POLL.onchain : POLL.checkout
+      const poll = id === 'transfer' || isPayout(id) ? POLL.onchain : POLL.checkout
       const rec = (await ctx.store.get<LegRecord>(recKey(input.ref))) ?? (await ctx.shared.get<LegRecord>(recKey(input.ref)))
       let res: { order?: FnOrder | null }
       try {
@@ -796,6 +1073,8 @@ export function flashnet(opts: FlashnetOptions) {
         if (rec?.invoiceExpiresAt && Date.now() > rec.invoiceExpiresAt + INVOICE_GRACE_MS) {
           return { status: 'expired', ref: input.ref, error: openRampError('QUOTE_EXPIRED', { message: 'The invoice expired. Get a new quote to continue.', recovery: 'requote' }) }
         }
+        // A payout whose funding transaction was sent: wait for Orchestra to see it (never back to the wallet step).
+        if (rec?.payout?.fundTx) return { status: 'processing', detail: { code: 'confirming' }, poll, ref: input.ref }
         return legStepFromEvent(undefined, input.ref, poll)
       }
       const ev = await eventFrom(fromStatus(res.order), input.ref, rec, ctx.shared, ctx.log)

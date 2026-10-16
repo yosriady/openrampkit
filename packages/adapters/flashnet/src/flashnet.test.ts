@@ -157,11 +157,11 @@ async function startCashApp(over: FakeRoute[] = [], o: { shared?: MemoryKV; adap
 }
 
 describe('flashnet adapter: setup', () => {
-  it('declares cash_app, lightning and transfer legs', () => {
+  it('declares cash_app, lightning and transfer legs, and the payout legs', () => {
     const a = flashnet(opts)
     expect(checkAdapterShape(a)).toEqual([])
     expect(a.env).toBe('production')
-    expect(a.legs.map((l) => l.id)).toEqual(['cash_app', 'lightning', 'transfer'])
+    expect(a.legs.map((l) => l.id)).toEqual(['cash_app', 'lightning', 'transfer', 'cash_app_payout', 'lightning_payout'])
     const cash = a.legs[0]!
     expect(cash.methods).toEqual(['cash_app'])
     expect(cash.surfaces).toEqual(['QR', 'DEEPLINK'])

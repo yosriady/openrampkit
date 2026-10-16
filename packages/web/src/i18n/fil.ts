@@ -219,4 +219,11 @@ export const fil: Messages = {
   withdrawSuccessBody: 'Papunta na ang pondo mo.',
   withdrawFailedTitle: 'Hindi natuloy ang withdrawal',
   withdrawErrorBody: 'Hindi namin ma-load ang withdrawal na ito.',
+  tabToCashApp: 'Sa Cash App',
+  lightningAddressLabel: '$cashtag o Lightning address',
+  lightningPlaceholder: '$cashtag o pangalan@domain',
+  invalidLightning: 'Maglagay ng valid na $cashtag o Lightning address.',
+  cashAppDollarsHint: 'Para makatanggap ng dolyar, i-on ang Receive Lightning as dollars sa Bitcoin section ng Cash App. Kung hindi, bitcoin ang matatanggap mo.',
+  toLightning: (address) => `Sa ${address}`,
+  lightningPayout: 'Lightning',
 }

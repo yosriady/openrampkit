@@ -1,7 +1,7 @@
 // Withdraw sessions: validate the source at creation, and the target the user picks.
 
 import { erc20BalanceOfData, evmRpc } from '@openrampkit/adapter'
-import { CHAINS, OpenRampException, cmp, fromBaseUnits, isUsdc, nativeDecimals, normalizeToken, openRampError, sameToken } from '@openrampkit/core'
+import { CHAINS, OpenRampException, cmp, fromBaseUnits, isUsdc, lightningDomain, nativeDecimals, normalizeToken, openRampError, parseLightningTarget, sameToken } from '@openrampkit/core'
 import type { Amount, Destination, OpenRampError, WithdrawSource, WithdrawDestination } from '@openrampkit/core'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
@@ -80,7 +80,13 @@ export function parseTarget(body: unknown): WithdrawDestination {
     const token = normToken(chain, rawToken)
     return { type: 'crypto', chain, token, address, ...tokenMeta(chain, token, b) }
   }
-  throw bad('`type` must be "crypto" or "fiat".')
+  if (b.type === 'lightning') {
+    // Only the address the user typed counts. A `cashtag` field in the body is ignored: the server sets it.
+    const t = parseLightningTarget(b.address)
+    if (!t) throw bad('Enter a valid $cashtag or Lightning address (name@domain).')
+    return t
+  }
+  throw bad('`type` must be "crypto", "fiat" or "lightning".')
 }
 
 /** Throw a 403 when the app does not allow this target. */
@@ -91,14 +97,23 @@ export function checkAllowed(rec: SessionRecord, t: WithdrawDestination): void {
   if (t.type === 'crypto') {
     if (!allowed.crypto) throw refuse()
     if (allowed.crypto.chains && !allowed.crypto.chains.includes(t.chain)) throw refuse()
+  } else if (t.type === 'lightning') {
+    if (!allowed.lightning) throw refuse()
+    const domains = allowed.lightning.domains
+    if (domains && !domains.map((d) => String(d).toLowerCase()).includes(lightningDomain(t.address))) throw refuse()
   } else {
     if (!allowed.fiat) throw refuse()
     if (allowed.fiat.currencies && !allowed.fiat.currencies.map((c) => c.toUpperCase()).includes(t.currency)) throw refuse()
   }
 }
 
-/** Run the app's `screenAddress` hook. Refused or failed checks throw (fail closed). */
+/**
+ * Run the app's screening hook: `screenAddress` for a crypto target, `screenLightningAddress` for a
+ * Lightning target. Refused or failed checks throw (fail closed). An app that screens crypto addresses
+ * but has no Lightning hook gets no unscreened Lightning payout: the target is refused.
+ */
 export async function screenTarget(rt: Runtime, t: WithdrawDestination): Promise<void> {
+  if (t.type === 'lightning') return screenLightning(rt, t)
   if (t.type !== 'crypto' || !rt.config.screenAddress) return
   let ok: boolean
   try {
@@ -110,9 +125,27 @@ export async function screenTarget(rt: Runtime, t: WithdrawDestination): Promise
   if (ok !== true) throw new OpenRampException(openRampError('ADDRESS_REJECTED'), 403)
 }
 
+async function screenLightning(rt: Runtime, t: Extract<WithdrawDestination, { type: 'lightning' }>): Promise<void> {
+  const hook = rt.config.screenLightningAddress
+  if (!hook) {
+    if (!rt.config.screenAddress) return
+    rt.log.warn('a Lightning target was refused: `screenAddress` is set but `screenLightningAddress` is not')
+    throw new OpenRampException(openRampError('DESTINATION_NOT_ALLOWED', { message: 'This app cannot pay to a Lightning address.' }), 403)
+  }
+  let ok: boolean
+  try {
+    ok = await hook(t.address, t.cashtag ? { cashtag: t.cashtag } : {})
+  } catch (e) {
+    rt.log.warn('screenLightningAddress failed', { error: String(e) })
+    throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'We could not check this address. Try again.' }), 503)
+  }
+  if (ok !== true) throw new OpenRampException(openRampError('ADDRESS_REJECTED'), 403)
+}
+
 /** The session destination for a target. Adapters read it as `ctx.destination`. */
 export function targetDestination(t: WithdrawDestination): Destination {
   if (t.type === 'fiat') return { type: 'fiat', currency: t.currency }
+  if (t.type === 'lightning') return { type: 'lightning', address: t.address, ...(t.cashtag ? { cashtag: t.cashtag } : {}) }
   return {
     type: 'crypto',
     chain: t.chain,

@@ -3,6 +3,7 @@
 import { DEFAULT_METHOD_PRIORITY, METHODS, currencyForCountry, methodAvailableIn, methodName, normalizeToken, sameToken } from './codes.js'
 import { openRampError } from './errors.js'
 import { isRegionAllowed } from './region.js'
+import { lightningEndpoint } from './lightning.js'
 import type {
   Asset,
   CryptoAsset,
@@ -103,6 +104,7 @@ export function destinationEndpoint(d: Destination): Endpoint {
     }
   }
   if (d.type === 'fiat') return { asset: { kind: 'fiat', currency: d.currency }, location: { kind: 'user_account' } }
+  if (d.type === 'lightning') return lightningEndpoint(d)
   return { asset: { kind: 'fiat', currency: d.currency }, location: { kind: 'merchant_account', ...(d.accountRef ? { accountRef: d.accountRef } : {}) } }
 }
 
@@ -158,7 +160,7 @@ const DEFAULT_HOPS: CryptoAsset[] = [
 
 export function planPathways(input: PlannerInput): PlanResult {
   const { destination, user, policy = {} } = input
-  const currency = destination.type === 'crypto' ? currencyForCountry(user.country) : destination.currency
+  const currency = destination.type === 'crypto' || destination.type === 'lightning' ? currencyForCountry(user.country) : destination.currency
   const target = destinationEndpoint(destination)
   const sources = sourceEndpoints(currency)
   const maxLegs = policy.maxLegs ?? 2

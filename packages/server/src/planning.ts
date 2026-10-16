@@ -33,7 +33,7 @@ function tallyAdd(t: QuoteTally, adapterId: string, key: 'quoteOk' | 'quoteFail'
 /** Collect leg specs (live catalogs when available), run the planner, apply the session's method allow list. */
 export async function plan(rt: Runtime, rec: SessionRecord, body: PlanBody): Promise<PlanResult> {
   const destination = destinationOf(rec)
-  const currency = destination.type === 'crypto' ? currencyForCountry(rec.country) : destination.currency
+  const currency = destination.type === 'crypto' || destination.type === 'lightning' ? currencyForCountry(rec.country) : destination.currency
   const legs = []
   for (const a of rt.adapters.values()) {
     let specs = a.legs

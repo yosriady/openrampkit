@@ -1,5 +1,6 @@
 // Withdraw flow of the controller, against the real server handler with the mock adapter (offramp on).
 import { describe, expect, it, vi } from 'vitest'
+import { flashnet } from '@openrampkit/adapter-flashnet'
 import { USDC } from '@openrampkit/core'
 import type { ClientEvent, WithdrawSource } from '@openrampkit/core'
 import type { CreateSessionInput } from '@openrampkit/server'
@@ -237,8 +238,64 @@ describe('withdraw: to cash', () => {
   })
 })
 
+describe('withdraw: to Cash App (Lightning)', () => {
+  // The Flashnet payout legs, with Orchestra answers from a fake fetch
+  const flashnetConfig = () => {
+    // Orchestra's estimate for the payout quote; nothing else is called before select
+    const fetch = (async (input: RequestInfo | URL) =>
+      String(input).includes('/v1/orchestration/estimate')
+        ? new Response(JSON.stringify({ estimatedOut: '49500', destination: { chain: 'lightning', asset: 'BTC', decimals: 8 } }), { headers: { 'content-type': 'application/json' } })
+        : new Response('{}', { status: 404 })) as typeof globalThis.fetch
+    return { adapters: [flashnet({ apiKey: 'fn_test', legs: ['cash_app_payout', 'lightning_payout'] })], fetch }
+  }
+  const US = { country: 'US', region: 'US-CA' }
+
+  it('shows the tab only when allowedDestinations.lightning is set', async () => {
+    const plain = await make()
+    await plain.c.start()
+    expect(plain.c.withdrawTabs()).toEqual(['crypto', 'cash'])
+    const on = await make({ session: { allowedDestinations: { crypto: {}, lightning: {} } } })
+    await on.c.start()
+    expect(on.c.withdrawTabs()).toEqual(['crypto', 'lightning'])
+  })
+
+  it('checks the $cashtag, sends it to /target, and goes to the amount of the one payout method', async () => {
+    const { c, requests, events } = await make({ session: { ...US, allowedDestinations: { lightning: {} } }, config: flashnetConfig() })
+    await c.start()
+    expect(c.getSnapshot()).toMatchObject({ screen: 'target', tab: 'lightning' })
+    c.setLightningAddress('https://cash.app/$alice')
+    await c.submitLightningTarget()
+    expect(c.getSnapshot().error?.message).toBe('Enter a valid $cashtag or Lightning address.')
+    expect(requests.some((r) => r.url.endsWith('/target'))).toBe(false)
+    c.setLightningAddress(' $alice ')
+    expect(c.getSnapshot()).toMatchObject({ lightningAddress: '$alice', error: undefined })
+    await c.submitLightningTarget()
+    expect(await bodyOf(requests, '/target')).toEqual([expect.objectContaining({ type: 'lightning', address: '$alice', walletConnected: true, walletAddress: USER })])
+    expect(events.find((e) => e.type === 'target.selected')?.data).toEqual({ object: { type: 'lightning', cashApp: true } })
+    expect(c.getSnapshot()).toMatchObject({ screen: 'amount', method: { method: 'cash_app' } })
+    c.back()
+    expect(c.getSnapshot().screen).toBe('target')
+  })
+
+  it('a server refusal keeps the user on the form with the error', async () => {
+    const { c } = await make({ session: { ...US, allowedDestinations: { lightning: { domains: ['cash.app'] } } }, config: flashnetConfig() })
+    await c.start()
+    c.setLightningAddress('bob@example.com')
+    await c.submitLightningTarget()
+    expect(c.getSnapshot()).toMatchObject({ screen: 'target', error: { code: 'DESTINATION_NOT_ALLOWED' } })
+  })
+
+  it('a locked Lightning target skips the form and never calls /target', async () => {
+    const { c, requests } = await make({ session: { ...US, destination: { type: 'lightning', address: '$alice' } as never, lockDestination: true }, config: flashnetConfig() })
+    await c.start()
+    expect(c.withdrawTabs()).toEqual(['lightning'])
+    expect(c.getSnapshot()).toMatchObject({ tab: 'lightning', lightningAddress: '$alice', screen: 'amount', method: { method: 'cash_app' } })
+    expect(requests.some((r) => r.url.endsWith('/target'))).toBe(false)
+  })
+})
+
 describe('withdraw: locked target', () => {
-  const LOCKED = { type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: ARB }
+  const LOCKED ={ type: 'crypto' as const, chain: 'eip155:42161', token: USDC['eip155:42161']!, address: ARB }
 
   it('skips the target form, never calls /target, and back goes to the methods', async () => {
     const { c, requests } = await make({ session: { destination: LOCKED, lockDestination: true } })

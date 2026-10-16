@@ -20,6 +20,10 @@ export type Location =
   | { kind: 'user_account' }
   | { kind: 'merchant_account'; accountRef?: string }
   | { kind: 'address'; address: string }
+  /** A Cash App user, as a Lightning address (`alice@cash.app`) */
+  | { kind: 'cash_app'; address: string }
+  /** Any other Lightning address (`user@domain`, LUD-16) */
+  | { kind: 'lightning_address'; address: string }
 
 export type Endpoint = { asset: Asset; location: Location }
 
@@ -55,6 +59,21 @@ export type Destination =
   | { type: 'merchant'; currency: string; accountRef?: string }
   /** Withdraw to cash: the user's own bank or e-wallet account, paid out in `currency` */
   | { type: 'fiat'; currency: string }
+  /** Withdraw over Lightning (see `LightningDestination`) */
+  | LightningDestination
+
+/**
+ * Withdraw to a Lightning address: a Cash App user (`$cashtag`) or any `user@domain` Lightning
+ * address. The server makes it from the user's input with `parseLightningTarget`; never build it
+ * from unchecked input.
+ */
+export type LightningDestination = {
+  type: 'lightning'
+  /** The Lightning address, `user@domain` with a lower-case domain. A Cash App user is `name@cash.app`. */
+  address: string
+  /** Cash App only: the `$cashtag` (case as the user typed it). Set exactly when the domain is `cash.app`. */
+  cashtag?: string
+}
 
 // ---------- Withdraw ----------
 
@@ -83,12 +102,18 @@ export type WithdrawSource = {
 export type AllowedDestinations = {
   crypto?: { chains?: string[] }
   fiat?: { currencies?: string[] }
+  /**
+   * Lightning payouts: a Cash App `$cashtag` or a Lightning address. `domains` limits the address
+   * domains, e.g. `['cash.app']` for Cash App only.
+   */
+  lightning?: { domains?: string[] }
 }
 
 /** The target the user picks for a withdrawal (`POST /sessions/:id/target`). */
 export type WithdrawDestination =
   | { type: 'crypto'; chain: string; token: string; address: string; symbol?: string; decimals?: number }
   | { type: 'fiat'; currency: string }
+  | LightningDestination
 
 export type LegKind =
   | 'fiat_onramp'
@@ -879,7 +904,7 @@ export type HistoryItem = {
   /** What the user paid in (the first leg's input), else what arrived. Absent before a quote. */
   amount?: Amount
   /** The asset that arrives: a chain and a token, or a currency. Never the address. */
-  destination?: { type: 'crypto'; chain: string; token: string; symbol?: string; decimals?: number } | { type: 'fiat'; currency: string }
+  destination?: { type: 'crypto'; chain: string; token: string; symbol?: string; decimals?: number } | { type: 'fiat'; currency: string } | { type: 'lightning' }
   /** The delivery transaction (`settlement` or `destination`), else the one that paid in, when known */
   tx?: { chain: string; hash: string; explorerUrl?: string }
 }
@@ -973,7 +998,7 @@ export type WebhookEvent = { [T in WebhookEventType]: WebhookEventOf<T> }[Webhoo
 /** The data that each browser event type carries */
 export type ClientEventFields = {
   'modal.opened': {}
-  'target.selected': { type: 'crypto'; chain: string; token: string } | { type: 'fiat'; currency: string }
+  'target.selected': { type: 'crypto'; chain: string; token: string } | { type: 'fiat'; currency: string } | { type: 'lightning'; cashApp: boolean }
   'method.selected': { method: string }
   'quotes.shown': { method: string; count: number }
   'quote.selected': { quoteId: string }

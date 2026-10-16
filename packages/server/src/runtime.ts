@@ -269,6 +269,7 @@ export function destinationOf(rec: SessionRecord): Destination {
 
 export function normalizeDestination(d: Destination): Destination {
   if (d.type === 'crypto') return { ...d, token: normalizeToken(d.chain, d.token), ...(d.settlement ? { settlement: { contract: d.settlement.contract.toLowerCase() } } : {}) }
+  if (d.type === 'lightning') return d
   return { ...d, currency: d.currency.toUpperCase() }
 }
 

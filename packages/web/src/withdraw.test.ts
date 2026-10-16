@@ -3,6 +3,7 @@
 // and `openWithdraw()`.
 
 import { afterEach, describe, expect, it, vi } from 'vitest'
+import { flashnet } from '@openrampkit/adapter-flashnet'
 import { createMockWallet } from '@openrampkit/client'
 import { USDC } from '@openrampkit/core'
 import type { Snapshot } from '@openrampkit/client'
@@ -239,6 +240,53 @@ describe('withdraw: to cash screens', () => {
     expect(h.title()).toBe('Rút tiền')
     expect(h.$$('[role="tab"]').map((t) => t.textContent?.trim())).toEqual(['Về ví', 'Về tiền mặt'])
     expect(h.$('label[for="ork-address"]')!.textContent).toBe('Địa chỉ ví')
+  })
+})
+
+describe('withdraw: to Cash App screens', () => {
+  const flashnetConfig = () => {
+    // Orchestra's estimate for the payout quote; nothing else is called before select
+    const fetch = (async (input: RequestInfo | URL) =>
+      String(input).includes('/v1/orchestration/estimate')
+        ? new Response(JSON.stringify({ estimatedOut: '49500', destination: { chain: 'lightning', asset: 'BTC', decimals: 8 } }), { headers: { 'content-type': 'application/json' } })
+        : new Response('{}', { status: 404 })) as typeof globalThis.fetch
+    return { adapters: [flashnet({ apiKey: 'fn_test', legs: ['cash_app_payout', 'lightning_payout'] })], fetch }
+  }
+  const US = { country: 'US', region: 'US-CA' }
+
+  it('third tab with the $cashtag input, validation, the dollars hint, then the amount names the target', async () => {
+    const h = await mount({ session: { ...US, allowedDestinations: { crypto: {}, fiat: {}, lightning: {} } }, config: flashnetConfig() })
+    expect(h.$$('[role="tab"]').map((t) => t.textContent?.trim())).toEqual(['To wallet', 'To cash', 'To Cash App'])
+    // Arrow keys cycle through the three tabs
+    h.$('[role="tablist"]')!.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }))
+    await h.until(() => h.c.getSnapshot().tab === 'lightning' && h.c.getSnapshot().screen === 'target')
+    expect(h.$('label[for="ork-lightning"]')!.textContent).toBe('$cashtag or Lightning address')
+    expect(h.$('#ork-lightning-hint')!.textContent).toMatch(/Receive Lightning as dollars/)
+    const input = h.$<HTMLInputElement>('#ork-lightning')!
+    await h.type(input, 'lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzq')
+    expect(h.$('#ork-lightning-error')!.textContent).toBe('Enter a valid $cashtag or Lightning address.')
+    expect(h.button('Continue').disabled).toBe(true)
+    await h.type(input, '$alice')
+    expect(h.$('#ork-lightning-error')).toBeNull()
+    await h.click(h.button('Continue'))
+    await h.until(() => h.c.getSnapshot().screen === 'amount')
+    expect(h.title()).toBe('Amount to withdraw')
+    expect(h.$('.target-summary')!.textContent).toBe('To $alice')
+  })
+
+  it('a locked Lightning target shows read only on the methods, with no tabs', async () => {
+    const h = await mount({ session: { ...US, destination: { type: 'lightning', address: 'bob@example.com' } as never, lockDestination: true, allowedDestinations: { lightning: {} } }, config: flashnetConfig() })
+    expect(h.$$('[role="tab"]')).toHaveLength(0)
+    expect(h.c.getSnapshot()).toMatchObject({ screen: 'amount', tab: 'lightning' })
+    expect(h.$('.target-summary')!.textContent).toBe('To bob@example.com')
+  })
+
+  it('renders the Cash App copy in each locale', async () => {
+    const tab = { en: 'To Cash App', fil: 'Sa Cash App', id: 'Ke Cash App', ms: 'Ke Cash App', th: 'ไปยัง Cash App', vi: 'Về Cash App' }
+    for (const [locale, label] of Object.entries(tab)) {
+      const h = await mount({ locale, session: { ...US, allowedDestinations: { crypto: {}, lightning: {} } }, config: flashnetConfig() })
+      expect(h.$$('[role="tab"]').map((t) => t.textContent?.trim())[1], locale).toBe(label)
+    }
   })
 })
 

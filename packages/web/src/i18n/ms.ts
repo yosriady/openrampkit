@@ -218,4 +218,11 @@ export const ms: Messages = {
   withdrawSuccessBody: 'Dana anda dalam perjalanan.',
   withdrawFailedTitle: 'Pengeluaran gagal',
   withdrawErrorBody: 'Kami tidak dapat memuatkan pengeluaran ini.',
+  tabToCashApp: 'Ke Cash App',
+  lightningAddressLabel: '$cashtag atau alamat Lightning',
+  lightningPlaceholder: '$cashtag atau nama@domain',
+  invalidLightning: 'Masukkan $cashtag atau alamat Lightning yang sah.',
+  cashAppDollarsHint: 'Untuk menerima dolar, hidupkan Receive Lightning as dollars di bahagian Bitcoin Cash App. Jika tidak, anda menerima bitcoin.',
+  toLightning: (address) => `Ke ${address}`,
+  lightningPayout: 'Lightning',
 }

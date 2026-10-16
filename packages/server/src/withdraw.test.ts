@@ -62,7 +62,7 @@ describe('withdraw sessions: creation', () => {
     await expect(create({ source: { ...SRC_USER, chain: 'base' } })).rejects.toMatchObject({ status: 400 })
     await expect(create({ source: { ...SRC_USER, token: '0x12' } })).rejects.toMatchObject({ status: 400 })
     await expect(create({ source: { ...SRC_USER, custody: 'bank' as never } })).rejects.toMatchObject({ status: 400 })
-    await expect(create({ destination: { type: 'merchant', currency: 'PHP' } })).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/"crypto" or "fiat"/) } })
+    await expect(create({ destination: { type: 'merchant', currency: 'PHP' } })).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/"crypto", "fiat" or "lightning"/) } })
     // The names before 0.1.0 are refused with the new name.
     await expect(create({ target: { type: 'fiat', currency: 'PHP' } } as never)).rejects.toMatchObject({ status: 400, error: { message: '`target` is now `destination`.' } })
     await expect(create({ allowedTargets: {} } as never)).rejects.toMatchObject({ status: 400, error: { message: '`allowedTargets` is now `allowedDestinations`.' } })
@@ -592,6 +592,88 @@ describe('address format', () => {
     expect(isValidAddress(tron, 'TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6')).toBe(false)
     expect(isValidAddress(tron, ARB_ADDR)).toBe(false)
     expect(isValidAddress(tron, 'T0OIlqjeKQxGTCi8q8ZY4pL8otSzgjLj6t')).toBe(false)
+  })
+})
+
+describe('Lightning targets (a Cash App $cashtag or a Lightning address)', () => {
+  const target = (t: ReturnType<typeof make>, s: { id: string; clientSecret: string }, body: unknown) => t.call<PlanResult>(`/sessions/${s.id}/target`, s.clientSecret, body)
+
+  it('parses the address on the server: format, normalization, and no client-set cashtag', async () => {
+    const t = make()
+    const s = await t.create()
+    for (const address of ['lnbc2500u1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzq', 'https://cash.app/$alice', '$123', 'alice@127.0.0.1', 'alice@localhost', '', 42]) {
+      const r = await target(t, s, { type: 'lightning', address })
+      expect(r.status, String(address)).toBe(400)
+      expect(r.body.error?.message).toBe('Enter a valid $cashtag or Lightning address (name@domain).')
+    }
+    expect((await target(t, s, { type: 'lightning', address: 'Alice' })).status).toBe(200)
+    expect((await t.ramp.sessions.retrieve(s.id))!.destination).toEqual({ type: 'lightning', address: 'Alice@cash.app', cashtag: '$Alice' })
+    // A cashtag from the client is ignored: the server sets it from the address
+    expect((await target(t, s, { type: 'lightning', address: 'bob@Example.com', cashtag: '$alice' })).status).toBe(200)
+    expect((await t.ramp.sessions.retrieve(s.id))!.destination).toEqual({ type: 'lightning', address: 'bob@example.com' })
+    // A crypto target cannot name the Lightning pseudo chain (it is not CAIP-2)
+    expect((await target(t, s, { type: 'crypto', chain: 'lightning:bitcoin', token: 'native', address: 'alice@cash.app' })).status).toBe(400)
+  })
+
+  it('applies allowedDestinations.lightning and its domains', async () => {
+    const t = make()
+    const none = await t.create({ allowedDestinations: { crypto: {} } })
+    const r = await target(t, none, { type: 'lightning', address: '$alice' })
+    expect(r.status).toBe(403)
+    expect(r.body.error?.code).toBe('DESTINATION_NOT_ALLOWED')
+    const cashOnly = await t.create({ allowedDestinations: { lightning: { domains: ['Cash.App'] } } })
+    expect((await target(t, cashOnly, { type: 'lightning', address: '$alice' })).status).toBe(200)
+    expect((await target(t, cashOnly, { type: 'lightning', address: 'bob@example.com' })).status).toBe(403)
+    expect((await target(t, cashOnly, TO_ARB)).status).toBe(403)
+    const any = await t.create({ allowedDestinations: { lightning: {} } })
+    expect((await target(t, any, { type: 'lightning', address: 'bob@example.com' })).status).toBe(200)
+  })
+
+  it('screens with screenLightningAddress and fails closed', async () => {
+    const screenLightningAddress = vi.fn(async (address: string) => address !== 'mallory@cash.app')
+    const t = make({ screenLightningAddress })
+    const s = await t.create()
+    const r = await target(t, s, { type: 'lightning', address: '$mallory' })
+    expect(r.status).toBe(403)
+    expect(r.body.error?.code).toBe('ADDRESS_REJECTED')
+    expect(screenLightningAddress).toHaveBeenCalledWith('mallory@cash.app', { cashtag: '$mallory' })
+    expect((await t.ramp.sessions.retrieve(s.id))!.destination).toBeUndefined()
+    expect((await target(t, s, { type: 'lightning', address: 'bob@example.com' })).status).toBe(200)
+    expect(screenLightningAddress).toHaveBeenLastCalledWith('bob@example.com', {})
+
+    // A hook that throws or answers something other than true refuses the target
+    const failing = make({ screenLightningAddress: async () => { throw new Error('screening down') } })
+    const s2 = await failing.create()
+    const r2 = await target(failing, s2, { type: 'lightning', address: '$alice' })
+    expect(r2.status).toBe(503)
+    expect(r2.body.error?.code).toBe('PROVIDER_UNAVAILABLE')
+    const truthy = make({ screenLightningAddress: async () => 'yes' as never })
+    const s3 = await truthy.create()
+    expect((await target(truthy, s3, { type: 'lightning', address: '$alice' })).status).toBe(403)
+
+    // An app that screens crypto addresses but has no Lightning hook: every Lightning target is refused
+    const cryptoOnly = make({ screenAddress: async () => true })
+    const s4 = await cryptoOnly.create()
+    const r4 = await target(cryptoOnly, s4, { type: 'lightning', address: '$alice' })
+    expect(r4.status).toBe(403)
+    expect(r4.body.error?.code).toBe('DESTINATION_NOT_ALLOWED')
+    // screenAddress is never called with a Lightning address
+    const screenAddress = vi.fn(async () => true)
+    const both = make({ screenAddress, screenLightningAddress: async () => true })
+    const s5 = await both.create()
+    expect((await target(both, s5, { type: 'lightning', address: '$alice' })).status).toBe(200)
+    expect(screenAddress).not.toHaveBeenCalled()
+  })
+
+  it('can be set and locked at creation with the same checks; a deposit cannot go to Lightning', async () => {
+    const t = make({ screenLightningAddress: async (a) => a !== 'mallory@cash.app' })
+    const s = await t.create({ destination: { type: 'lightning', address: '$alice' } as never, lockDestination: true })
+    expect((await t.ramp.sessions.retrieve(s.id))!).toMatchObject({ destinationLocked: true, destination: { type: 'lightning', address: 'alice@cash.app', cashtag: '$alice' } })
+    expect((await target(t, s, { type: 'lightning', address: '$bob' })).body.error?.code).toBe('DESTINATION_LOCKED')
+    await expect(t.create({ destination: { type: 'lightning', address: '$mallory' } as never, lockDestination: true })).rejects.toMatchObject({ status: 403, error: { code: 'ADDRESS_REJECTED' } })
+    await expect(t.create({ destination: { type: 'lightning', address: 'lnbc1junk@x' } as never })).rejects.toMatchObject({ status: 400 })
+    await expect(t.create({ destination: { type: 'lightning', address: '$alice' } as never, allowedDestinations: { fiat: {} } })).rejects.toMatchObject({ status: 403 })
+    await expect(t.ramp.sessions.create({ userId: 'u', destination: { type: 'lightning', address: 'alice@cash.app' } })).rejects.toMatchObject({ status: 400, error: { message: expect.stringMatching(/withdraw sessions only/) } })
   })
 })
 

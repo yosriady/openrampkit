@@ -103,6 +103,7 @@ export function checkInput(input: CreateSessionInput): void {
   }
   // A withdraw destination gets the checks of `POST /sessions/:id/target` in `createSession`.
   const d = input.direction === 'withdraw' ? undefined : input.destination
+  if (d?.type === 'lightning') throw bad('A Lightning `destination` is for withdraw sessions only.')
   if (d?.type === 'crypto') {
     if (typeof d.chain !== 'string' || !CAIP2.test(d.chain)) throw bad('`destination.chain` must be a CAIP-2 chain id, e.g. eip155:8453.')
     if (typeof d.token !== 'string' || !isValidToken(d.chain, d.token)) throw bad('`destination.token` must be a token address or "native".')

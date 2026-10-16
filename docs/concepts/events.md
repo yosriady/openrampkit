@@ -38,7 +38,7 @@ Receive them with `onEvent` on `OpenRampProvider`, `DepositButton`, `WithdrawBut
 | Type | When | `data.object` |
 |---|---|---|
 | `modal.opened` | The controller starts for the first time | `{}` |
-| `target.selected` | Withdraw: the server accepted the target | `{ type: 'crypto', chain, token }` or `{ type: 'fiat', currency }` |
+| `target.selected` | Withdraw: the server accepted the target | `{ type: 'crypto', chain, token }`, `{ type: 'fiat', currency }` or `{ type: 'lightning', cashApp }` |
 | `method.selected` | The user picks a method | `{ method }` |
 | `quotes.shown` | Quotes arrived | `{ method, count }` |
 | `quote.selected` | The user confirms a quote | `{ quoteId }` |

@@ -4,7 +4,7 @@ import type { PropertyValues, TemplateResult } from 'lit'
 import { live } from 'lit/directives/live.js'
 import { isValidTargetAddress } from '@openrampkit/client'
 import type { DepositController, Snapshot, Tab } from '@openrampkit/client'
-import { OTHER_EXCHANGE, exchangeNetworkLabel, isAddressTransfer, isExchangeMethod, isWebUrl, methodName, searchSourceTokens, sourceTokenKey } from '@openrampkit/core'
+import { OTHER_EXCHANGE, exchangeNetworkLabel, isAddressTransfer, isExchangeMethod, isWebUrl, methodName, parseLightningTarget, searchSourceTokens, sourceTokenKey } from '@openrampkit/core'
 import type { ExchangeOption, FieldSpec, MethodOption, OpenRampError, Payment, PublicQuote, Step, Surface, Transition } from '@openrampkit/core'
 import { displayChain, formatAmount, formatCountdown, formatEta, formatFiat, formatToken, shortAddress, titleCase } from './format.js'
 import { icons, methodIcon } from './icons.js'
@@ -782,9 +782,11 @@ export class OpenRampModal extends LitElement {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
       e.preventDefault()
-      c.setTab(s.tab === 'crypto' ? 'cash' : 'crypto')
+      const i = tabs.indexOf(s.tab)
+      c.setTab(tabs[(i + (e.key === 'ArrowRight' ? 1 : tabs.length - 1)) % tabs.length]!)
       void this.updateComplete.then(() => this.renderRoot.querySelector<HTMLElement>('.tab[aria-selected="true"]')?.focus())
     }
+    const label = (t: Tab) => (t === 'crypto' ? m.tabToWallet : t === 'lightning' ? m.tabToCashApp : m.tabToCash)
     return html`<div class="tabs" role="tablist" aria-label=${m.withdrawTabsLabel} @keydown=${onKey}>
       ${tabs.map(
         (t: Tab) => html`<button
@@ -797,14 +799,57 @@ export class OpenRampModal extends LitElement {
           tabindex=${s.tab === t ? '0' : '-1'}
           @click=${() => s.tab !== t && c.setTab(t)}
         >
-          ${t === 'crypto' ? m.tabToWallet : m.tabToCash}
+          ${label(t)}
         </button>`,
       )}
     </div>`
   }
 
+  /** "To Cash App": one input for a `$cashtag` or a Lightning address */
+  private _renderLightningTarget(m: Messages, s: Snapshot) {
+    const c = this.controller!
+    const tabs = c.withdrawTabs().length > 1
+    const value = s.lightningAddress ?? ''
+    const valid = !!parseLightningTarget(value)
+    const showInvalid = !!value && !valid
+    const submit = () => {
+      if (valid && !s.busy) void c.submitLightningTarget()
+    }
+    return html`
+      ${this._renderWithdrawTabs(m, s)}
+      <div id="ork-panel" role=${tabs ? 'tabpanel' : nothing} aria-labelledby=${tabs ? 'ork-tab-lightning' : nothing}>
+        <label class="field-label" for="ork-lightning">${m.lightningAddressLabel}</label>
+        <input
+          class="input mono"
+          id="ork-lightning"
+          autocomplete="off"
+          autocapitalize="off"
+          spellcheck="false"
+          enterkeyhint="done"
+          maxlength="320"
+          placeholder=${m.lightningPlaceholder}
+          aria-invalid=${showInvalid ? 'true' : 'false'}
+          aria-describedby=${showInvalid ? 'ork-lightning-error ork-lightning-hint' : 'ork-lightning-hint'}
+          .value=${live(value)}
+          @input=${(e: Event) => c.setLightningAddress((e.target as HTMLInputElement).value)}
+          @keydown=${(e: KeyboardEvent) => e.key === 'Enter' && submit()}
+        />
+        ${showInvalid ? html`<div class="field-error" id="ork-lightning-error">${m.invalidLightning}</div>` : nothing}
+        <div class="hint" id="ork-lightning-hint">${m.cashAppDollarsHint}</div>
+      </div>
+      ${this._renderErrorNotice(s.error)}
+      <div class="stack">
+        <button class="btn" type="button" ?disabled=${!valid || s.busy} @click=${submit}>
+          ${s.busy ? html`<span class="spinner" aria-hidden="true"></span>` : nothing}${m.continue}
+        </button>
+      </div>
+      ${this._renderHistoryLink(m, s)}
+    `
+  }
+
   private _renderTarget(m: Messages, s: Snapshot) {
     const c = this.controller!
+    if (s.tab === 'lightning') return this._renderLightningTarget(m, s)
     const t = s.target
     const tabs = c.withdrawTabs().length > 1
     if (!t) return this._renderLoading(m)
@@ -877,6 +922,9 @@ export class OpenRampModal extends LitElement {
         ${s.tab === 'crypto' && s.target && this.controller!.lockedTarget()
           ? html`<div class="hint locked-target" style="margin:0 0 12px">${m.toAddressOn(shortAddress(s.target.address), displayChain(s.target.chain))}</div>`
           : nothing}
+        ${s.tab === 'lightning' && lightningLabel(s)
+          ? html`<div class="hint locked-target" style="margin:0 0 12px">${m.toLightning(lightningLabel(s))}</div>`
+          : nothing}
         ${list.length === 0 ? html`<div class="notice info">${m.noPayoutMethods}</div>` : nothing}
         ${groupMethods(list).map(({ group, items }) => {
           const label = groupLabel(group, m)
@@ -903,7 +951,9 @@ export class OpenRampModal extends LitElement {
       ? ''
       : s.tab === 'crypto' && t
         ? m.toAddressOn(shortAddress(t.address), displayChain(t.chain))
-        : s.method && s.plan
+        : s.tab === 'lightning' && lightningLabel(s)
+          ? m.toLightning(lightningLabel(s))
+          : s.method && s.plan
           ? `${s.method.name} · ${m.payoutIn(s.plan.currency)}`
           : ''
 
@@ -1478,6 +1528,12 @@ export class OpenRampModal extends LitElement {
           : html`<button class="btn ${canRetry ? 'secondary' : ''}" type="button" @click=${() => this.close()}>${m.close}</button>`}
       </div>`
   }
+}
+
+/** The Lightning target as the user knows it: the `$cashtag`, else the Lightning address. Empty when it is not valid. */
+function lightningLabel(s: Snapshot): string {
+  const t = parseLightningTarget(s.lightningAddress ?? '')
+  return t ? (t.cashtag ?? t.address) : ''
 }
 
 /**

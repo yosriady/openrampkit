@@ -66,6 +66,7 @@ export async function indexUserSession(rt: Runtime, rec: SessionRecord): Promise
 function destinationView(d: Destination | undefined): HistoryItem['destination'] {
   if (!d) return undefined
   if (d.type === 'crypto') return { type: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
+  if (d.type === 'lightning') return { type: 'lightning' }
   return { type: 'fiat', currency: d.currency }
 }
 
