@@ -1,12 +1,12 @@
 import { createHmac } from 'node:crypto'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { checkAdapterShape, checkLegQuote, checkLegStep, resultChannels } from '@openrampkit/adapter'
 import type { AdapterContext, ScopedKV } from '@openrampkit/adapter'
 import { USDC, isRegionAllowed, stateFor } from '@openrampkit/core'
 import type { LegQuote, PathwayLeg } from '@openrampkit/core'
 import { TEST_DESTINATION, fakeFetch, makeCtx, makeWebhookCtx, memoryKV, recordingLog, runAdapterConformance } from '@openrampkit/adapter/testing'
 import type { FakeCall, FakeRoute } from '@openrampkit/adapter/testing'
-import { PAYTRIE_MAX_CODES, PAYTRIE_MAX_WRONG_CODES, PAYTRIE_TRANSITIONS as T, paytrie, paytrieSignature } from './index.js'
+import { PAYTRIE_LIMITS, PAYTRIE_MAX_CODES, PAYTRIE_MAX_WRONG_CODES, PAYTRIE_TRANSITIONS as T, emailKey, paytrie, paytrieSignature } from './index.js'
 
 const API_KEY = 'pt_api_key_test'
 const SECRET = 'whsec_paytrie_test_secret'
@@ -76,6 +76,11 @@ function atomicKV(): ScopedKV & { data: Map<string, unknown> } {
   const held = new Map<string, number>()
   return {
     ...kv,
+    async put(key: string, value: unknown, ttlSec?: number) {
+      // A plain write also makes the key live (until its TTL), like the built-in stores
+      held.set(key, ttlSec ? Date.now() + ttlSec * 1000 : Number.POSITIVE_INFINITY)
+      await kv.put(key, value, ttlSec)
+    },
     async putIfAbsent(key: string, value: unknown, ttlSec: number) {
       const until = held.get(key)
       if (until !== undefined && until > Date.now()) return false
@@ -94,6 +99,13 @@ function setup(o: Opts = {}, extra: { session?: Partial<AdapterContext['session'
   const ctx = makeCtx({ fetch, store, shared, log, session: { country: 'CA', email: EMAIL, ...extra.session } })
   const adapter = paytrie({ ...opts, ...extra.adapterOpts })
   return { adapter, ctx, calls, store, shared, log }
+}
+
+/** Another session of the same server: its own session store, the same adapter, shared store and fetch */
+function otherSession(s: ReturnType<typeof setup>, n: number, session: Partial<AdapterContext['session']> = {}): ReturnType<typeof setup> {
+  const store = atomicKV()
+  const ctx = makeCtx({ fetch: s.ctx.fetch, store, shared: s.shared, log: s.log, session: { id: `sess_${n}`, userId: `user_${n}`, country: 'CA', email: EMAIL, ...session } })
+  return { ...s, ctx, store }
 }
 
 async function quoteAndStart(s: ReturnType<typeof setup>) {
@@ -248,7 +260,7 @@ describe('paytrie adapter', () => {
     })
 
     it('without a session email: asks for it, then emails a code', async () => {
-      const s = setup({}, { session: { email: undefined } })
+      const s = setup({}, { session: { email: undefined }, adapterOpts: { requireSessionEmail: false } })
       const { step } = await quoteAndStart(s)
       expect(step.action).toMatchObject({ kind: 'auth', surface: { kind: 'FORM', fields: [{ id: 'email', type: 'email' }] } })
       await expect(s.adapter.transition!({ leg, ref: step.ref!, name: T.email, inputs: { email: 'nope' } }, s.ctx)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
@@ -256,9 +268,10 @@ describe('paytrie adapter', () => {
       expect(next.action?.surface).toMatchObject({ kind: 'OTP', to: 's***@example.ca' })
     })
 
-    it('requireSessionEmail refuses a session with no email', async () => {
-      const s = setup({}, { session: { email: undefined }, adapterOpts: { requireSessionEmail: true } })
+    it('by default refuses a session with no email (requireSessionEmail is true)', async () => {
+      const s = setup({}, { session: { email: undefined } })
       await expect(quoteAndStart(s)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      expect(s.calls.filter((c) => !c.url.includes('/v2/quotes'))).toHaveLength(0)
     })
 
     it('sends a user with no PayTrie account to the PayTrie sign-up page, then checks again', async () => {
@@ -314,6 +327,126 @@ describe('paytrie adapter', () => {
       expect(JSON.stringify(step)).not.toContain(TOKEN)
       expect(JSON.stringify([...s.store.data.values()])).not.toContain(TOKEN)
       expect(JSON.stringify([...s.shared.data.values()])).not.toContain(TOKEN)
+    })
+  })
+
+  describe('limits across sessions', () => {
+    // `1234` is the right code; anything else is wrong (401)
+    const codeRoute: FakeRoute = {
+      method: 'POST',
+      match: '/v2/auth/login-codes/verify',
+      reply: (c) =>
+        (c.body as { code?: string })?.code === '1234'
+          ? ok({ accessToken: TOKEN, tokenType: 'Bearer', expiresIn: 3600 })
+          : new Response(JSON.stringify({ success: false, errors: [{ field: 'code', message: 'Invalid code' }] }), { status: 401 }),
+    }
+    const L = PAYTRIE_LIMITS
+    const guess = (s: ReturnType<typeof setup>, ref: string, code: string) => s.adapter.transition!({ leg, ref, name: T.code, inputs: { code } }, s.ctx)
+    const startAll = (sessions: Array<ReturnType<typeof setup>>) => Promise.all(sessions.map(async (x) => ({ x, ref: (await quoteAndStart(x)).step.ref! })))
+
+    it('stops concurrent wrong codes from many sessions for one email at the limit', async () => {
+      const s = setup({}, { over: [codeRoute] })
+      const sessions = Array.from({ length: L.sendsPerEmail }, (_, i) => otherSession(s, i + 10))
+      const legs = await startAll(sessions)
+      // Every session guesses at the same time, a few codes each
+      const results = (await Promise.all(legs.map(async ({ x, ref }) => {
+        const out: PromiseSettledResult<unknown>[] = []
+        for (const code of ['0001', '0002', '0003']) out.push(...(await Promise.allSettled([guess(x, ref, code)])))
+        return out
+      }))).flat()
+      expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
+      const codes = results.map((r) => (r.status === 'rejected' ? (r.reason as { error: { code: string } }).error.code : 'ok'))
+      expect(codes.filter((c) => c === 'BAD_REQUEST')).toHaveLength(L.triesPerEmail)
+      expect(codes.filter((c) => c === 'RATE_LIMITED')).toHaveLength(results.length - L.triesPerEmail)
+      // Locked: even the right code does not reach PayTrie now
+      await expect(guess(legs[0]!.x, legs[0]!.ref, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
+    })
+
+    it('stops concurrent checks on one leg too (one check at a time)', async () => {
+      const s = setup({}, { over: [codeRoute] })
+      const { step } = await quoteAndStart(s)
+      const all = await Promise.allSettled(Array.from({ length: 8 }, (_, i) => guess(s, step.ref!, `000${i}`)))
+      expect(posts(s.calls, '/verify').length).toBeLessThanOrEqual(1)
+      expect(all.filter((r) => r.status === 'rejected')).toHaveLength(8)
+    })
+
+    it('after a lockout, needs a new code once the window has passed', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const s = setup({}, { over: [codeRoute] })
+        const a = otherSession(s, 21)
+        const b = otherSession(s, 22)
+        const [la, lb] = await startAll([a, b])
+        for (const code of ['0001', '0002', '0003']) await expect(guess(a, la!.ref, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        for (const code of ['0004', '0005']) await expect(guess(b, lb!.ref, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        await expect(guess(a, la!.ref, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+        vi.setSystemTime(Date.now() + (L.triesWindowSec + 60) * 1000)
+        // The old code (sent before the lockout) never counts again
+        await expect(guess(a, la!.ref, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED', message: expect.stringContaining('new code') } })
+        await a.adapter.transition!({ leg, ref: la!.ref, name: T.resend }, a.ctx)
+        await expect(guess(a, la!.ref, '1234')).resolves.toMatchObject({ status: 'requires_action', action: { kind: 'payment' } })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('a new code does not reset the tries of the email', async () => {
+      const s = setup({}, { over: [codeRoute] })
+      const { step } = await quoteAndStart(s)
+      for (const code of ['0001', '0002', '0003']) await expect(guess(s, step.ref!, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      await s.adapter.transition!({ leg, ref: step.ref!, name: T.resend }, s.ctx)
+      for (const code of ['0004', '0005']) await expect(guess(s, step.ref!, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      await expect(guess(s, step.ref!, '0006')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
+    })
+
+    it('a correct code gives its try back', async () => {
+      vi.useFakeTimers({ toFake: ['Date'] })
+      try {
+        const s = setup({}, { over: [codeRoute] })
+        const a = otherSession(s, 31)
+        const b = otherSession(s, 32)
+        const [la, lb] = await startAll([a, b])
+        for (const code of ['0001', '0002', '0003', '0004']) await expect(guess(a, la!.ref, code)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        await guess(a, la!.ref, '1234')
+        // The freed slot is live for 1 more second (ScopedKV has no delete)
+        vi.setSystemTime(Date.now() + 2000)
+        await expect(guess(b, lb!.ref, '0005')).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+        await expect(guess(b, lb!.ref, '0006')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      } finally {
+        vi.useRealTimers()
+      }
+    })
+
+    it('limits code emails per email across sessions and app users', async () => {
+      const s = setup()
+      const sessions = Array.from({ length: L.sendsPerEmail + 1 }, (_, i) => otherSession(s, i + 40))
+      const all = await Promise.allSettled(sessions.map((x) => quoteAndStart(x)))
+      expect(all.filter((r) => r.status === 'fulfilled')).toHaveLength(L.sendsPerEmail)
+      expect(all.find((r) => r.status === 'rejected')).toMatchObject({ reason: { error: { code: 'RATE_LIMITED' } } })
+      expect(posts(s.calls, '/v2/auth/login-codes')).toHaveLength(L.sendsPerEmail)
+      // The same email in other spelling counts as the same email
+      const upper = otherSession(s, 99, { email: `  ${EMAIL.toUpperCase()}` })
+      await expect(quoteAndStart(upper)).rejects.toMatchObject({ error: { code: expect.stringMatching(/RATE_LIMITED|BAD_REQUEST/) } })
+      expect(posts(s.calls, '/v2/auth/login-codes')).toHaveLength(L.sendsPerEmail)
+    })
+
+    it('limits code emails per app user across emails', async () => {
+      const s = setup()
+      const sessions = Array.from({ length: L.sendsPerUser + 1 }, (_, i) => otherSession(s, i + 60, { userId: 'one_app_user', email: `user${i}@example.com` }))
+      const all = await Promise.allSettled(sessions.map((x) => quoteAndStart(x)))
+      expect(all.filter((r) => r.status === 'fulfilled')).toHaveLength(L.sendsPerUser)
+      expect(posts(s.calls, '/v2/auth/login-codes')).toHaveLength(L.sendsPerUser)
+    })
+
+    it('keeps no plain email in the shared store', async () => {
+      const s = setup({}, { over: [codeRoute] })
+      const { step } = await quoteAndStart(s)
+      await expect(guess(s, step.ref!, '0001')).rejects.toBeTruthy()
+      expect(JSON.stringify([...s.shared.data.keys()])).not.toContain(EMAIL)
+      const ek = await emailKey(EMAIL)
+      expect([...s.shared.data.keys()].some((k) => k.startsWith(`te:${ek}`))).toBe(true)
     })
   })
 

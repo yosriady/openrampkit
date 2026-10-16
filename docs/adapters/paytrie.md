@@ -27,7 +27,7 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#paytrie).
 | `env` | `'sandbox' \| 'production'` | `'production'` | PayTrie documents only `https://api.paytrie.com`. `'sandbox'` needs `apiUrl` (a test host from PayTrie). The server checks `env` against `livemode`. |
 | `apiUrl` | `string` | `https://api.paytrie.com` | Override the host |
 | `tokenKey` | `string` | derived from `apiKey` | Secret for the key that encrypts the user's access token in the session store (at least 32 characters) |
-| `requireSessionEmail` | `boolean` | `false` | Only the session's own `email` may sign in. With `true`, a session with no email cannot start this leg. |
+| `requireSessionEmail` | `boolean` | `true` | Only the session's own `email` (set by your `authorize` hook) may sign in, and a session with no email cannot start this leg. With `false`, the user types an email, so any user can make PayTrie email a code to any address and guess codes for it (within the limits below). Keep `true` unless your app has no email for its users. |
 | `deliverAssets` | `PaytrieDeliverAsset[]` | USDC on Base, Ethereum, Arbitrum, Optimism, Polygon, Solana | Tokens PayTrie may deliver, with the PayTrie label (for example `USDC-BASE`). A destination token that is not in the list gets no quote (`NO_QUOTES`). |
 | `signupUrl` | `string` | `https://app.paytrie.com/SignupEmail` | The PayTrie sign-up page for users with no account |
 
@@ -46,7 +46,7 @@ USDC labels from the Price Quotes page: `USDC-ETH`, `USDC-POLY`, `USDC-ARB`, `US
 
 | Stage | PayTrie call | Step |
 |---|---|---|
-| Email | none | `requires_action`, `auth`, `FORM` with an `email` field, transition `submit_email`. Skipped when the session has an email (that email is locked). |
+| Email | none | `requires_action`, `auth`, `FORM` with an `email` field, transition `submit_email`. Only with `requireSessionEmail: false` and a session with no email. A session email is always used and locked. |
 | Account | `GET /v2/users?email=` | No account: `requires_action`, `auth`, `REDIRECT` to the PayTrie sign-up page, transition `signed_up` (checks again) |
 | Sign-in | `POST /v2/auth/login-codes` | `requires_action`, `auth`, `OTP` (`channel: 'email'`, the email masked), transitions `submit_code` (input `code`, 4 digits) and `resend_code` |
 | Code | `POST /v2/auth/login-codes/verify` | The access token (1 hour) is sealed in the session store. It never goes to the client. |
@@ -104,7 +104,7 @@ Register `{baseUrl}/webhooks/paytrie` with `PUT /v2/webhook-configurations` and 
 | Quote `400` or `422` | `NO_QUOTES` with the PayTrie message |
 | Order `400` or `422` (a limit, an open transaction count) | `PROVIDER_DECLINED` with the PayTrie message (recovery `requote`); the user may try again |
 | Order timeout or `5xx` | The leg fails with `contact_support`; the adapter never creates a second order for the leg |
-| Wrong sign-in code | `BAD_REQUEST`; after 5 wrong codes the user must ask for a new code; at most 3 codes per leg (`RATE_LIMITED`) |
+| Wrong sign-in code | `BAD_REQUEST`. Over a limit (below): `RATE_LIMITED` |
 | `401` on a call with the user token | Before the order: the leg asks for a new sign-in code. After the order: the leg waits for the webhook. |
 | `401` or `403` on a call with only the API key | `PROVIDER_UNAVAILABLE`, not retryable, with an operator log |
 | `429` | `RATE_LIMITED` |
@@ -114,9 +114,22 @@ Register `{baseUrl}/webhooks/paytrie` with `PUT /v2/webhook-configurations` and 
 
 - The wallet is set by the server at start (`deliverTo` or the session destination). No client input can change it, nor the token or the amount.
 - A session email is locked. A typed email is locked after the code check. The access token is sealed with AES-256-GCM, bound to the session, the app user, the leg and the email, and dropped when the leg ends or is canceled.
+- Sign-in code limits. A code has 4 digits, so the adapter limits tries and emails across all sessions, in the adapter's shared store (`PAYTRIE_LIMITS`):
+
+  | Limit | Value |
+  |---|---|
+  | Code checks per email (trimmed, lowercase), wrong or right | 5 per 15 minutes; a right code gives its try back |
+  | Code checks per app user | 10 per 15 minutes |
+  | Code emails per email | 5 per hour |
+  | Code emails per app user | 10 per hour |
+  | Account lookups per app user | 20 per hour |
+  | Per leg | 5 wrong codes per code, 3 codes |
+
+  Each check and each email takes one slot, an atomic claim with a TTL, before the PayTrie call, so requests at the same time never pass together. When the email limit is hit, the email is locked: a code sent before the lock never counts again, and the user needs a new code after the window. A new code does not reset the tries of the email. The shared store keeps the SHA-256 of the email, never the email. On a store with no atomic `putIfAbsent` (Workers KV), a claim writes and reads back, which catches most races but not all.
+- A code works only on the leg that sent it: the leg record names its session, app user and email, and the token is bound to them.
 - Each change of a leg runs under a lease (`claimOnce`), and the order creation has its own claim, so two requests never create two orders.
 - Each leg record names its session and app user; another session gets `SESSION_EXPIRED`.
-- A user who types an email learns whether PayTrie has an account for it (the sign-up step). Set `requireSessionEmail: true` to allow only the app's email.
+- With `requireSessionEmail: false`, a user who types an email learns whether PayTrie has an account for it (the sign-up step), and can make PayTrie email codes to it (within the limits). The default (`true`) allows only the email that your `authorize` hook sets. Do not copy an email from the browser into the session unless you verified it.
 
 ## Verified vs TO VERIFY
 
