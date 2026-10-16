@@ -22,8 +22,14 @@
 // Webhooks: `X-Webhook-Signature: t=<ms>,v0=<base64>`, RSA PKCS#1 v1.5 over SHA-256(SHA-256(`${t}.${body}`))
 // with the endpoint's public key (PEM). Bridge suggests a 10 minute age limit.
 //
+// Standing deposit addresses (option `standing: true`, see standing.ts): a virtual account per user,
+// currency and destination for fiat in (`standingAccount`, the `bank` route), and a liquidation address
+// per user, chain and destination for USDC in (`standingAddress`, the `convert` route). Each deposit
+// becomes a deposit session on the `standing` leg, which the planner never sees.
+//
 // We store only Bridge ids (customer, KYC link, virtual account, external account, transfer), never
-// names, emails or bank account numbers.
+// names, emails or bank account numbers. A standing virtual account also keeps its bank details (they
+// are shown to the user each time), never the sender's details.
 //
 // Server-side only. Web-standard APIs only (fetch, WebCrypto), so it runs on Cloudflare Workers.
 
@@ -46,6 +52,8 @@ import {
   statusMap,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger, QuoteInput, StartInput } from '@openrampkit/adapter'
+import { STANDING_DEPOSIT_REF, bridgeStanding } from './standing.js'
+import type { Drain } from './standing.js'
 import {
   OpenRampException,
   USDC,
@@ -93,8 +101,17 @@ export type BridgeOptions = {
   legs?: string[]
   /** Add the withdraw legs (USDC to a bank account). Default true. */
   withdraw?: boolean
-  /** Look up the Bridge customer, or the name and email for a new KYC link, for one of your users. */
+  /**
+   * Look up the Bridge customer, or the name and email for a new KYC link, for one of your users.
+   * Standing addresses use its `customerId` (else the customer of an earlier Bridge KYC of the same user).
+   */
   customer?: (user: { userId: string; email?: string }) => Promise<BridgeCustomerHint | undefined>
+  /**
+   * Standing deposit addresses (`openramp.depositAddresses.get`): a virtual account for a fiat origin,
+   * and a liquidation address for USDC from another chain. Needs a KYC-approved Bridge customer for the
+   * user (see `customer`). Default false.
+   */
+  standing?: boolean
 }
 
 // ---------- rails, chains and regions ----------
@@ -412,6 +429,19 @@ export function bridge(opts: BridgeOptions) {
       requires: ['provider_kyc'],
     })),
   ]
+  // The leg of the deposit sessions of standing addresses. The planner never sees it (see `catalog`).
+  const standingLeg: LegSpec = {
+    id: 'standing',
+    kind: 'wallet_transfer',
+    methods: ['transfer'],
+    from: { asset: { kind: 'crypto', chains: usdcChains }, location: ['user_wallet'] },
+    to: { asset: { kind: 'crypto', chains: usdcChains }, location: ['address'] },
+    regions,
+    eta: { min: 60, max: 3 * DAY },
+    surfaces: ['DEPOSIT_ADDRESS'],
+  }
+  const plannerLegs = [...legs]
+  if (opts.standing) legs.push(standingLeg)
   const depositById = new Map(depositRails.map((r) => [r.id, r]))
   const payoutById = new Map(payoutRails.map((r) => [r.id, r]))
 
@@ -698,11 +728,15 @@ export function bridge(opts: BridgeOptions) {
   // ---------- deposits ----------
 
   function bankFields(i: DepositInstructions, amount: string, currency: string): Surface {
+    return { kind: 'BANK_FIELDS', fields: [{ label: 'Amount', value: `${amount} ${currency}`, copy: true }, ...bankFieldList(i)] }
+  }
+
+  /** The bank details of a virtual account, without an amount. A Pix account shows its BR Code. */
+  function bankFieldList(i: DepositInstructions): Array<{ label: string; value: string; copy: boolean }> {
     const f: Array<{ label: string; value: string; copy: boolean }> = []
     const add = (label: string, value: string | undefined, copy = true) => {
       if (value) f.push({ label, value, copy })
     }
-    add('Amount', `${amount} ${currency}`)
     add('Bank name', i.bank_name, false)
     add('Routing number', i.bank_routing_number)
     add('Account number', i.bank_account_number ?? i.account_number)
@@ -714,7 +748,8 @@ export function bridge(opts: BridgeOptions) {
     add('Beneficiary address', i.bank_beneficiary_address, false)
     add('Bank address', i.bank_address, false)
     add('Reference', i.deposit_message)
-    return { kind: 'BANK_FIELDS', fields: f }
+    add('Pix code', i.br_code)
+    return f
   }
 
   function depositSurface(rec: LegRec): Surface {
@@ -1008,6 +1043,20 @@ export function bridge(opts: BridgeOptions) {
     return step
   }
 
+  // ---------- standing addresses ----------
+
+  const standing = bridgeStanding({
+    call,
+    chains: BRIDGE_CHAINS,
+    rails: depositRails,
+    ...(opts.customer ? { customerHook: opts.customer } : {}),
+    userKey,
+    vaMap,
+    bankFields: bankFieldList,
+    ...(opts.developerFeePercent ? { developerFeePercent: opts.developerFeePercent } : {}),
+    poll: BANK_POLL,
+  })
+
   // ---------- the state machine ----------
 
   /** The `status()` step of a provider event: the same v2 shape, with the bank poll for a step that waits. */
@@ -1053,6 +1102,18 @@ export function bridge(opts: BridgeOptions) {
     env,
     name: 'Bridge',
     legs,
+    ...(opts.standing
+      ? {
+          // The planner gets every leg but `standing` (only deposit sessions of standing addresses use it).
+          async catalog() {
+            return plannerLegs
+          },
+          standingRoutes: ['convert', 'bank'] as const,
+          standingAddress: standing.standingAddress,
+          standingAccount: standing.standingAccount,
+          standingDeposits: standing.standingDeposits,
+        }
+      : {}),
 
     async quote(input, ctx) {
       const { deposit, payout } = railOf(input.leg.legId)
@@ -1123,6 +1184,7 @@ export function bridge(opts: BridgeOptions) {
     },
 
     async status({ ref }, ctx) {
+      if (ref.startsWith(STANDING_DEPOSIT_REF)) return standing.standingStatus(ref, ctx)
       const rec = await loadRec(ref, ctx)
       return advance(ref, rec, ctx)
     },
@@ -1157,8 +1219,18 @@ export function bridge(opts: BridgeOptions) {
           return []
         }
         const obj = env.event_object ?? {}
+        const eventId = typeof env.event_id === 'string' && env.event_id ? env.event_id : undefined
+        if (env.event_category === 'liquidation_address.drain') return standing.drainWebhook(obj as unknown as Drain, eventId, ctx)
         if (env.event_category === 'virtual_account.activity') {
           const ev = obj as unknown as VaEvent
+          // A standing account: its own rules (see standing.ts). A deposit that a session owns goes to that session.
+          const own = await standing.vaWebhook(ev, eventId, ctx)
+          if (Array.isArray(own)) return own
+          if (own) {
+            const rec = await ctx.shared.get<LegRec>(recKey(own.sessionRef))
+            const le = rec ? vaEvent(own.sessionRef, rec, ev, ctx.log) : undefined
+            return le ? [le] : []
+          }
           if (!ev.virtual_account_id || !ev.deposit_id) return []
           const ref = await ctx.shared.get<string>(`vaRef:${ev.virtual_account_id}`)
           if (!ref) return []

@@ -2,7 +2,9 @@
 
 A standing deposit address is a permanent address for one user and one route. Your app shows it once, for example "Your USDC on Arbitrum deposit address". Any deposit to it, at any time, is converted and delivered to the user's destination. Your backend gets webhooks for each deposit. No session exists before the money arrives.
 
-Use it when users fund an account again and again, from an exchange or a wallet, without opening a modal each time.
+Use it when users fund an account again and again, from an exchange, a wallet or a bank, without opening a modal each time.
+
+The origin can also be a fiat currency: then the "address" is a standing bank account (see [Bank accounts](#bank-accounts)).
 
 ## How it works
 
@@ -41,6 +43,7 @@ The server checks the input like a session create:
 | `userId` | 1 to 256 characters |
 | `origin.chain` | A CAIP-2 chain id |
 | `origin.token` | A token address, or `native` |
+| `origin.currency` | Instead of `chain` and `token`: an ISO 4217 currency (a [bank account](#bank-accounts)) |
 | `destination` | A crypto destination with a valid chain, token and address. No `settlement` and no `calls`. |
 | Route | Any route. The same token on the same chain needs an adapter that watches the chain (see [Same chain and token](#same-chain-and-token)). |
 | `adapterId` | Optional. Default: the first adapter with `standingAddress` and a `transfer` leg that serves the route. |
@@ -132,13 +135,33 @@ Relay binds the refund address to the deposit address. A standing address is reu
 
 The refund address is part of the address key, so a change of `refundTo` gives new addresses. Old addresses keep their refund rule and stay watched.
 
+## Bank accounts
+
+With a fiat origin, the user pays by bank transfer to a standing bank account, and the provider converts each deposit and delivers it to the destination. The [Bridge adapter](../adapters/bridge.md#standing-deposit-addresses) gives one (a Bridge virtual account) with `standing: true`.
+
+```ts
+const account = await openramp.depositAddresses.get({
+  userId: user.id,
+  origin: { currency: 'USD' },
+  destination: { type: 'crypto', chain: 'eip155:8453', token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', address: user.wallet },
+})
+// { id: 'sda_...', adapterId: 'bridge', address: '900123456789', origin: { currency: 'USD' },
+//   bank: { fields: [{ label: 'Routing number', value: '101019644', copy: true }, ...] }, destination, createdAt }
+```
+
+- `address` is the main account identifier (account number, IBAN, CLABE or Pix code). `bank.fields` has every field the user needs, as in a `BANK_FIELDS` surface. Show them in your app: the widget shows crypto origins only.
+- The route kind is `bank`. The server uses the first adapter with `'bank'` in `standingRoutes` and a `standingAccount` method, or `adapterId`.
+- A bank route delivers converted funds, so it binds its destination like a converting route: a same-chain watch of that destination is refused (`409`).
+- Each deposit makes a deposit session as above. Its leg input is the deposit in the account currency. An input in another currency is left out.
+- `dedicatedDestination` does not apply.
+
 ## Limits
 
 - **One route per address.** Send only the origin token on the origin chain. Another token or chain may be lost.
-- **Providers.** Relay gives standing addresses that convert, and chain-watch gives them for the same token on the same chain. Bridge virtual accounts (a fiat bank account per user) could implement the same two methods next.
+- **Providers.** Relay gives standing addresses that convert, chain-watch gives them for the same token on the same chain, and Bridge (`standing: true`) gives bank accounts (fiat in) and USDC liquidation addresses.
 - **Native ETH.** chain-watch cannot watch native transfers on EVM chains (no log). Use a token such as USDC.
-- **Polling only.** Deposits are found by the sweep, so run it every minute or so (see [Background sweep](../api/server.md#background-sweep)).
+- **Polling.** Deposits are found by the sweep, so run it every minute or so (see [Background sweep](../api/server.md#background-sweep)). Bridge webhooks add to the poll: a deposit that a webhook reported is found at the next poll, also when the provider's list shows it late.
 
 ## For adapter authors
 
-An adapter gives standing addresses with two optional methods, `standingAddress()` and `standingDeposits()`, plus `status()` for each deposit's `legRef` and a leg with the method `transfer`. `standingRoutes` says which routes it serves (`convert`, the default, or `same`). See [@openrampkit/adapter](../api/adapter.md#adapter).
+An adapter gives standing addresses with two optional methods, `standingAddress()` and `standingDeposits()`, plus `status()` for each deposit's `legRef` and a leg with the method `transfer`. `standingRoutes` says which routes it serves (`convert`, the default, `same`, or `bank`). A `bank` route needs `standingAccount()` instead of `standingAddress()`. See [@openrampkit/adapter](../api/adapter.md#adapter).

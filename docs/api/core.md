@@ -68,12 +68,21 @@ type StandingAddress = {
   id: string        // sda_...
   userId: string
   adapterId: string
-  address: string   // send `origin` here
-  origin: { chain: string; token: string; symbol?: string; decimals?: number }
+  address: string   // send `origin` here (for a bank account: its main identifier, e.g. the account number or IBAN)
+  origin: StandingOrigin
+  bank?: StandingBank // set for a fiat origin: the bank details to show
   destination: Extract<Destination, { type: 'crypto' }>
   createdAt: string // ISO 8601
 }
+
+type StandingOrigin =
+  | { chain: string; token: string; symbol?: string; decimals?: number } // StandingCryptoOrigin
+  | { currency: string }                                                 // StandingFiatOrigin: ISO 4217, upper case
+
+type StandingBank = { fields: Array<{ label: string; value: string; copy: boolean }> } // the fields of a BANK_FIELDS surface
 ```
+
+`isFiatOrigin(origin)` is true for a fiat origin (a standing bank account).
 
 ### HistoryItem
 

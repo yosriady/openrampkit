@@ -4,9 +4,12 @@
 // is already `processing`), so the usual machinery takes over: status polls on the open-session list,
 // session webhooks, the admin views and the reversal rules.
 //
-// Two kinds of route (`Adapter.standingRoutes`): `convert` (another token or chain: a provider such as
-// Relay converts each deposit) and `same` (the destination token on the destination chain: the address
-// is the destination itself, and an adapter such as chain-watch reports the transfers it sees on chain).
+// Three kinds of route (`Adapter.standingRoutes`): `convert` (another token or chain: a provider such as
+// Relay converts each deposit), `same` (the destination token on the destination chain: the address
+// is the destination itself, and an adapter such as chain-watch reports the transfers it sees on chain)
+// and `bank` (a fiat origin: a standing bank account from `Adapter.standingAccount`, such as a Bridge
+// virtual account; the provider converts each bank deposit). A `bank` route delivers converted funds,
+// so it binds its destination like a `convert` route.
 //
 // Money safety:
 // - A same-chain address is the destination itself, and every transfer to it counts for its user. So
@@ -27,7 +30,8 @@
 
 import type { Adapter, StandingDeposit, StandingRoute } from '@openrampkit/adapter'
 import { OpenRampException, isDecimal, normalizeToken, openRampError } from '@openrampkit/core'
-import type { Amount, CryptoAsset, Destination, LegQuote, LegSpec, MethodOption, Pathway, StandingAddress } from '@openrampkit/core'
+import { isFiatOrigin } from '@openrampkit/core'
+import type { Amount, Asset, CryptoAsset, Destination, LegQuote, LegSpec, MethodOption, Pathway, StandingAddress, StandingBank, StandingCryptoOrigin } from '@openrampkit/core'
 import type { CreateSessionInput } from './config.js'
 import { sha256Hex } from './crypto.js'
 import { indexSession } from './admin.js'
@@ -46,8 +50,11 @@ import { CAIP2, isValidAddress, isValidToken } from './withdraw.js'
 /** The input of `openramp.depositAddresses.get` */
 export type DepositAddressInput = {
   userId: string
-  /** The asset the user sends: a CAIP-2 chain and a token address (or `native`) */
-  origin: { chain: string; token: string; symbol?: string; decimals?: number }
+  /**
+   * What the user sends: a CAIP-2 chain and a token address (or `native`), or a fiat currency
+   * (`{ currency: 'USD' }`) for a standing bank account (an adapter with `'bank'` in `standingRoutes`).
+   */
+  origin: StandingCryptoOrigin | { currency: string }
   /** Where each deposit goes. Only a crypto destination, with no `settlement` and no `calls`. */
   destination: Destination
   /**
@@ -125,8 +132,10 @@ export function transferLeg(a: Adapter): LegSpec | undefined {
   return a.legs.find((l) => l.methods?.includes('transfer'))
 }
 
-function supportsStanding(a: Adapter): boolean {
-  return !!a.standingAddress && !!a.standingDeposits && !!a.status && !!transferLeg(a)
+/** True when the adapter can give standing addresses for this kind of route (its methods and a `transfer` leg) */
+function supportsStanding(a: Adapter, kind: StandingRoute = 'convert'): boolean {
+  const make = kind === 'bank' ? !!a.standingAccount : !!a.standingAddress
+  return make && !!a.standingDeposits && !!a.status && !!transferLeg(a)
 }
 
 /** True when the adapter's standing addresses serve this kind of route (default: `convert` only) */
@@ -140,25 +149,43 @@ function adapterCtx(rt: Runtime, a: Adapter) {
 
 /** Check the input like a session create does. Returns the route with normalized tokens. */
 function checkRoute(input: DepositAddressInput): { userId: string; origin: StandingAddress['origin']; destination: StandingAddress['destination']; kind: StandingRoute } {
+  if (input && typeof input === 'object' && input.origin && typeof input.origin === 'object' && 'currency' in input.origin) return checkBankRoute(input)
   if (!input || typeof input !== 'object') throw bad('The input must be an object.')
   const d = input.destination
   if (!d || typeof d !== 'object' || d.type !== 'crypto') throw bad('A standing deposit address needs a crypto `destination`.')
   // The same checks as a session create: `userId`, and the destination chain, token and address.
   checkInput({ userId: input.userId, destination: d })
   if (d.settlement || d.calls?.length) throw bad('A standing deposit address cannot use `destination.settlement` or `destination.calls`.')
-  const o = input.origin
+  const o = input.origin as StandingCryptoOrigin
   if (!o || typeof o !== 'object') throw bad('`origin` must be an object with `chain` and `token`.')
   if (typeof o.chain !== 'string' || !CAIP2.test(o.chain)) throw bad('`origin.chain` must be a CAIP-2 chain id, e.g. eip155:42161.')
   if (typeof o.token !== 'string' || !isValidToken(o.chain, o.token)) throw bad('`origin.token` must be a token address or "native".')
   if (o.symbol !== undefined && (typeof o.symbol !== 'string' || o.symbol.length > 20)) throw bad('`origin.symbol` must be a string of at most 20 characters.')
   if (o.decimals !== undefined && (!Number.isInteger(o.decimals) || o.decimals < 0 || o.decimals > 36)) throw bad('`origin.decimals` must be an integer from 0 to 36.')
-  if (input.adapterId !== undefined && typeof input.adapterId !== 'string') throw bad('`adapterId` must be a string.')
-  if (input.dedicatedDestination !== undefined && typeof input.dedicatedDestination !== 'boolean') throw bad('`dedicatedDestination` must be a boolean.')
+  checkOptions(input)
   const origin = { chain: o.chain, token: normalizeToken(o.chain, o.token), ...(o.symbol ? { symbol: o.symbol } : {}), ...(o.decimals !== undefined ? { decimals: o.decimals } : {}) }
   const destination = { ...d, token: normalizeToken(d.chain, d.token) }
   // The same token on the same chain needs no conversion: an adapter that watches the chain serves it.
   const kind: StandingRoute = origin.chain === destination.chain && keyOf(origin.token) === keyOf(destination.token) ? 'same' : 'convert'
   return { userId: input.userId, origin, destination, kind }
+}
+
+function checkOptions(input: DepositAddressInput): void {
+  if (input.adapterId !== undefined && typeof input.adapterId !== 'string') throw bad('`adapterId` must be a string.')
+  if (input.dedicatedDestination !== undefined && typeof input.dedicatedDestination !== 'boolean') throw bad('`dedicatedDestination` must be a boolean.')
+}
+
+/** A fiat origin (a standing bank account): the same destination checks, and an ISO 4217 currency. */
+function checkBankRoute(input: DepositAddressInput): ReturnType<typeof checkRoute> {
+  const d = input.destination
+  if (!d || typeof d !== 'object' || d.type !== 'crypto') throw bad('A standing deposit address needs a crypto `destination`.')
+  checkInput({ userId: input.userId, destination: d })
+  if (d.settlement || d.calls?.length) throw bad('A standing deposit address cannot use `destination.settlement` or `destination.calls`.')
+  const o = input.origin as Record<string, unknown>
+  if (typeof o.currency !== 'string' || !/^[A-Za-z]{3}$/.test(o.currency)) throw bad('`origin.currency` must be an ISO 4217 currency code, e.g. USD.')
+  if (o.chain !== undefined || o.token !== undefined) throw bad('`origin` has either `currency` (a bank account) or `chain` and `token`, not both.')
+  checkOptions(input)
+  return { userId: input.userId, origin: { currency: o.currency.toUpperCase() }, destination: { ...d, token: normalizeToken(d.chain, d.token) }, kind: 'bank' }
 }
 
 const conflict = (message: string) => new OpenRampException(openRampError('CONFLICT', { message }), 409)
@@ -229,24 +256,33 @@ async function markConvertedDestination(rt: Runtime, route: ReturnType<typeof ch
 
 const SAME_ROUTE_HINT = 'The origin and the destination are the same token on the same chain. Add chainWatch() from @openrampkit/adapter-chain-watch to watch such a route, or give the user the destination address itself.'
 
+const BANK_ROUTE_HINT = 'No configured adapter gives standing bank accounts for a fiat origin. Add one that does, for example bridge({ standing: true }).'
+
 /** The adapter for a new address: `adapterId`, else the first adapter that gives standing addresses for this kind of route */
 function pickAdapter(rt: Runtime, kind: StandingRoute, adapterId?: string): Adapter {
   if (adapterId !== undefined) {
     const a = rt.adapters.get(adapterId)
     if (!a) throw new OpenRampException(openRampError('NOT_FOUND', { message: `Adapter ${adapterId} is not configured.` }), 404)
+    if (kind === 'bank') {
+      if (!supportsStanding(a, 'bank') || !servesRoute(a, 'bank')) throw bad(`Adapter ${adapterId} does not give standing bank accounts (it needs standingAccount, standingDeposits, status, a transfer leg and 'bank' in standingRoutes).`)
+      return a
+    }
     if (!supportsStanding(a)) throw bad(`Adapter ${adapterId} does not give standing deposit addresses (it needs standingAddress, standingDeposits, status and a transfer leg).`)
     if (!servesRoute(a, kind)) throw bad(kind === 'same' ? `Adapter ${adapterId} does not watch the same token on the same chain. ${SAME_ROUTE_HINT}` : `Adapter ${adapterId} gives standing addresses only for the same token on the same chain.`)
     return a
   }
-  const a = [...rt.adapters.values()].find((x) => supportsStanding(x) && servesRoute(x, kind))
-  if (!a) throw bad(kind === 'same' ? SAME_ROUTE_HINT : 'No configured adapter gives standing deposit addresses. Add one that does, for example relay().')
+  const a = [...rt.adapters.values()].find((x) => supportsStanding(x, kind) && servesRoute(x, kind))
+  if (!a) throw bad(kind === 'same' ? SAME_ROUTE_HINT : kind === 'bank' ? BANK_ROUTE_HINT : 'No configured adapter gives standing deposit addresses. Add one that does, for example relay().')
   return a
 }
 
 /** The address id: the same for the same user, adapter and route */
 async function standingId(adapterId: string, r: ReturnType<typeof checkRoute>): Promise<string> {
   const d = r.destination
-  const key = JSON.stringify([r.userId, adapterId, r.origin.chain, keyOf(r.origin.token), d.chain, keyOf(d.token), keyOf(d.address)])
+  const o = r.origin
+  // A bank route has a currency where a crypto route has a chain and a token, so the two never share an id.
+  const from = isFiatOrigin(o) ? ['fiat', o.currency] : [o.chain, keyOf(o.token)]
+  const key = JSON.stringify([r.userId, adapterId, ...from, d.chain, keyOf(d.token), keyOf(d.address)])
   return `sda_${(await sha256Hex(key)).slice(0, 24)}`
 }
 
@@ -254,7 +290,43 @@ async function standingId(adapterId: string, r: ReturnType<typeof checkRoute>): 
 const userIndex = async (userId: string) => `standing-user:${(await sha256Hex(userId)).slice(0, 32)}`
 
 function publicView(r: StandingRecord): StandingAddress {
-  return { id: r.id, userId: r.userId, adapterId: r.adapterId, address: r.address, origin: r.origin, destination: r.destination, createdAt: r.createdAt }
+  return { id: r.id, userId: r.userId, adapterId: r.adapterId, address: r.address, origin: r.origin, ...(r.bank ? { bank: r.bank } : {}), destination: r.destination, createdAt: r.createdAt }
+}
+
+/** The bank details from an adapter, checked: 1 to 30 fields of short strings. Undefined when not well formed. */
+function checkBank(b: unknown): StandingBank | undefined {
+  const fields = (b as StandingBank | undefined)?.fields
+  if (!Array.isArray(fields) || !fields.length || fields.length > 30) return undefined
+  const out: StandingBank['fields'] = []
+  for (const f of fields) {
+    if (!f || typeof f.label !== 'string' || typeof f.value !== 'string' || !f.label || !f.value || f.label.length > 100 || f.value.length > 500) return undefined
+    out.push({ label: f.label, value: f.value, copy: f.copy === true })
+  }
+  return { fields: out }
+}
+
+const badProvider = () => new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The provider did not return a valid deposit address.' }), 502)
+
+/** Ask the adapter for the address (or the bank account) of a new route, and check what it returns. */
+async function askAdapter(rt: Runtime, a: Adapter, route: ReturnType<typeof checkRoute>): Promise<{ address: string; ref: string; bank?: StandingBank; data?: Record<string, unknown> }> {
+  const o = route.origin
+  if (isFiatOrigin(o)) {
+    const got = await a.standingAccount!({ userId: route.userId, origin: { currency: o.currency }, destination: route.destination }, adapterCtx(rt, a))
+    const bank = checkBank(got?.bank)
+    if (!got || typeof got.address !== 'string' || !got.address || got.address.length > 500 || typeof got.ref !== 'string' || !got.ref || got.ref.length > 500 || !bank) {
+      rt.log.error('adapter returned a standing bank account that is not valid', { adapter: a.id })
+      throw badProvider()
+    }
+    return { address: got.address, ref: got.ref, bank, ...(got.data ? { data: got.data } : {}) }
+  }
+  const got = await a.standingAddress!({ userId: route.userId, origin: { chain: o.chain, token: o.token }, destination: route.destination }, adapterCtx(rt, a))
+  // A same-chain route has no conversion: its address must be the destination itself.
+  const sameButOther = route.kind === 'same' && typeof got?.address === 'string' && keyOf(got.address) !== keyOf(route.destination.address)
+  if (!got || typeof got.address !== 'string' || !isValidAddress(o.chain, got.address) || typeof got.ref !== 'string' || !got.ref || got.ref.length > 500 || sameButOther) {
+    rt.log.error('adapter returned a standing address that is not valid', { adapter: a.id })
+    throw badProvider()
+  }
+  return { address: got.address, ref: got.ref, ...(got.data ? { data: got.data } : {}) }
 }
 
 /**
@@ -272,14 +344,9 @@ export async function getStandingAddress(rt: Runtime, input: DepositAddressInput
   const q = queueOf(rt.store)
   let rec = await kv.get<StandingRecord>(key)
   if (!rec) {
-    const got =await a.standingAddress!({ userId: route.userId, origin: { chain: route.origin.chain, token: route.origin.token }, destination: route.destination }, adapterCtx(rt, a))
-    // A same-chain route has no conversion: its address must be the destination itself.
-    const sameButOther = route.kind === 'same' && typeof got?.address === 'string' && keyOf(got.address) !== keyOf(route.destination.address)
-    if (!got || typeof got.address !== 'string' || !isValidAddress(route.origin.chain, got.address) || typeof got.ref !== 'string' || !got.ref || got.ref.length > 500 || sameButOther) {
-      rt.log.error('adapter returned a standing address that is not valid', { adapter: a.id })
-      throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'The provider did not return a valid deposit address.' }), 502)
-    }
-    // After the adapter call, so an adapter error leaves no mark on the destination.
+    const got = await askAdapter(rt, a, route)
+    // After the adapter call, so an adapter error leaves no mark on the destination. A bank route
+    // delivers converted funds, so it binds the destination like a converting route.
     if (route.kind === 'same') await claimWatchedDestination(rt, route)
     else await markConvertedDestination(rt, route)
     const fresh: StandingRecord = {
@@ -291,6 +358,7 @@ export async function getStandingAddress(rt: Runtime, input: DepositAddressInput
       destination: route.destination,
       createdAt: new Date().toISOString(),
       ref: got.ref,
+      ...(got.bank ? { bank: got.bank } : {}),
       ...(got.data ? { data: got.data } : {}),
     }
     // On the watch list before the write (and again below), so an address is never stored unwatched.
@@ -315,8 +383,8 @@ export async function getStandingAddress(rt: Runtime, input: DepositAddressInput
 /** The id of the widget method for a standing deposit address */
 export const DEPOSIT_ADDRESS_METHOD = 'deposit_address'
 
-/** What the browser sees of a standing address: no user id and no adapter id */
-export type DepositAddressView = Pick<StandingAddress, 'id' | 'address' | 'origin'> & { destination: { chain: string; token: string; symbol?: string } }
+/** What the browser sees of a standing address: no user id and no adapter id. The widget shows crypto origins only. */
+export type DepositAddressView = Pick<StandingAddress, 'id' | 'address'> & { origin: StandingCryptoOrigin; destination: { chain: string; token: string; symbol?: string } }
 
 /**
  * The adapter for the widget method, or undefined when the method does not fit the session: the option
@@ -358,6 +426,8 @@ export async function sessionDepositAddress(rt: Runtime, rec: SessionRecord, bod
   if (body.chain === dest.chain && keyOf(normalizeToken(body.chain, body.token)) === keyOf(normalizeToken(dest.chain, dest.token))) throw bad(WIDGET_SAME)
   const sa = await getStandingAddress(rt, { userId: rec.userId, origin: { chain: body.chain, token: body.token }, destination: dest, adapterId: a.id })
   const d = sa.destination
+  // A crypto origin was asked, so the record has one (a bank account never reaches the widget).
+  if (isFiatOrigin(sa.origin)) throw new OpenRampException(openRampError('INTERNAL'), 500)
   return { id: sa.id, address: sa.address, origin: sa.origin, destination: { chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}) } }
 }
 
@@ -383,10 +453,17 @@ function checkDeposit(d: StandingDeposit, origin: StandingAddress['origin']): St
   const at = typeof d.at === 'number' && Number.isFinite(d.at) ? d.at : Date.now()
   const i = d.input
   const asset = i?.asset
-  const input: Amount | undefined =
-    i && typeof i.value === 'string' && isDecimal(i.value) && asset?.kind === 'crypto' && typeof asset.chain === 'string' && typeof asset.token === 'string'
-      ? { value: i.value, asset: { ...asset, ...(asset.chain === origin.chain && keyOf(asset.token) === keyOf(origin.token) ? { token: origin.token } : {}) } }
-      : undefined
+  let input: Amount | undefined
+  if (isFiatOrigin(origin)) {
+    // A bank deposit: only an amount in the account's own currency counts (any other is left out).
+    const ok = i && typeof i.value === 'string' && isDecimal(i.value) && asset?.kind === 'fiat' && typeof asset.currency === 'string' && asset.currency.toUpperCase() === origin.currency
+    input = ok ? { value: i.value, asset: { kind: 'fiat', currency: origin.currency } } : undefined
+  } else {
+    input =
+      i && typeof i.value === 'string' && isDecimal(i.value) && asset?.kind === 'crypto' && typeof asset.chain === 'string' && typeof asset.token === 'string'
+        ? { value: i.value, asset: { ...asset, ...(asset.chain === origin.chain && keyOf(asset.token) === keyOf(origin.token) ? { token: origin.token } : {}) } }
+        : undefined
+  }
   return { id: d.id, legRef: d.legRef, at, ...(input ? { input } : {}) }
 }
 
@@ -458,11 +535,14 @@ async function createDepositSession(rt: Runtime, addr: StandingRecord, a: Adapte
   const { rec } = await draftSession(rt, input, sid, { standingAddressId: addr.id })
   const d = addr.destination
   const o = addr.origin
-  const from: CryptoAsset = { kind: 'crypto', chain: o.chain, token: o.token, ...(o.symbol ? { symbol: o.symbol } : {}), ...(o.decimals !== undefined ? { decimals: o.decimals } : {}) }
+  const bankOrigin = isFiatOrigin(o)
+  const from: Asset = bankOrigin
+    ? { kind: 'fiat', currency: o.currency }
+    : { kind: 'crypto', chain: o.chain, token: o.token, ...(o.symbol ? { symbol: o.symbol } : {}), ...(o.decimals !== undefined ? { decimals: o.decimals } : {}) }
   const to: CryptoAsset = { kind: 'crypto', chain: d.chain, token: d.token, ...(d.symbol ? { symbol: d.symbol } : {}), ...(d.decimals !== undefined ? { decimals: d.decimals } : {}) }
   const pathway: Pathway = {
     id: `standing:${addr.id}`,
-    legs: [{ adapterId: a.id, legId: spec.id, from: { asset: from, location: { kind: 'user_wallet' } }, to: { asset: to, location: { kind: 'address', address: d.address } }, method: 'transfer' }],
+    legs: [{ adapterId: a.id, legId: spec.id, from: { asset: from, location: { kind: bankOrigin ? 'user_account' : 'user_wallet' } }, to: { asset: to, location: { kind: 'address', address: d.address } }, method: 'transfer' }],
     method: 'transfer',
     group: 'recommended',
     eta: spec.eta,
@@ -546,7 +626,9 @@ export async function sweepStanding(rt: Runtime, opts: { now: number; limit: num
     const since = Math.max(createdAt - SLACK_MS, (poll.checkedAt ?? 0) - OVERLAP_MS)
     let deposits: StandingDeposit[]
     try {
-      deposits = await a.standingDeposits({ ref: addr.ref, address: addr.address, origin: { chain: addr.origin.chain, token: addr.origin.token }, since }, adapterCtx(rt, a))
+      const o = addr.origin
+      const input = isFiatOrigin(o) ? { ref: addr.ref, address: addr.address, origin: { currency: o.currency }, since } : { ref: addr.ref, address: addr.address, origin: { chain: o.chain, token: o.token }, since }
+      deposits = await a.standingDeposits(input, adapterCtx(rt, a))
       if (!Array.isArray(deposits)) throw new Error('standingDeposits did not return an array')
     } catch (e) {
       rt.log.warn('standing address: deposit check failed', { id, adapter: a.id, error: String(e) })

@@ -815,6 +815,23 @@ export type Session = PublicSession & {
 
 // ---------- Standing deposit addresses ----------
 
+/** A crypto origin of a standing address: a CAIP-2 chain and a token address (or `native`) */
+export type StandingCryptoOrigin = { chain: string; token: string; symbol?: string; decimals?: number }
+
+/** A fiat origin of a standing address (a standing bank account): an ISO 4217 currency, upper case */
+export type StandingFiatOrigin = { currency: string }
+
+/** What the user sends to a standing address. A fiat origin has `currency` and no `chain`. */
+export type StandingOrigin = StandingCryptoOrigin | StandingFiatOrigin
+
+/** True when the origin is fiat (a standing bank account) */
+export function isFiatOrigin(o: StandingOrigin): o is StandingFiatOrigin {
+  return typeof (o as StandingFiatOrigin).currency === 'string' && (o as StandingCryptoOrigin).chain === undefined
+}
+
+/** The bank details of a standing bank account */
+export type StandingBank = { fields: Array<{ label: string; value: string; copy: boolean }> }
+
 /**
  * A permanent deposit address for one user and one route (`openramp.depositAddresses.get`). Any
  * deposit of `origin` to `address`, at any time, goes to `destination`. The server watches the address
@@ -826,10 +843,18 @@ export type StandingAddress = {
   userId: string
   /** The adapter that gave the address and converts the deposits */
   adapterId: string
-  /** Send `origin` here */
+  /**
+   * Send `origin` here. For a crypto origin: the chain address. For a fiat origin (a bank account,
+   * see `bank`): the main account identifier (account number, IBAN, CLABE or Pix code).
+   */
   address: string
-  /** The asset to send: a CAIP-2 chain and a token address (or `native`) */
-  origin: { chain: string; token: string; symbol?: string; decimals?: number }
+  /**
+   * What the user sends: a CAIP-2 chain and a token address (or `native`), or a fiat currency
+   * (ISO 4217, upper case) paid by bank transfer to the account in `bank`.
+   */
+  origin: StandingOrigin
+  /** Set for a fiat origin: the bank details to show, the same fields as a `BANK_FIELDS` surface */
+  bank?: StandingBank
   /** Where each deposit goes */
   destination: Extract<Destination, { type: 'crypto' }>
   /** ISO 8601 */

@@ -41,11 +41,18 @@ export function checkAdapterShape(adapter: Adapter): ConformanceProblem[] {
     }
   }
   // A standing address needs both methods, `status()` for each deposit, and a `transfer` leg for its sessions.
-  if (!!adapter.standingAddress !== !!adapter.standingDeposits) {
+  if (adapter.standingAccount && !adapter.standingDeposits) {
+    out.push({ where: 'adapter', problem: 'standingAccount needs standingDeposits (the server polls it for the deposits of each account)' })
+  }
+  if (adapter.standingAccount && !adapter.standingRoutes?.includes('bank')) {
+    out.push({ where: 'adapter', problem: "standingAccount needs 'bank' in standingRoutes" })
+  }
+  if (!!adapter.standingAddress !== !!adapter.standingDeposits && !adapter.standingAccount) {
     out.push({ where: 'adapter', problem: 'standingAddress and standingDeposits come together (the server polls one for the address of the other)' })
   }
-  if (adapter.standingAddress && !adapter.status) out.push({ where: 'adapter', problem: 'standingAddress needs status(): the server polls each deposit with its legRef' })
-  if (adapter.standingAddress && !adapter.legs.some((l) => l.methods?.includes('transfer'))) {
+  const standing = !!adapter.standingAddress || !!adapter.standingAccount
+  if (standing && !adapter.status) out.push({ where: 'adapter', problem: 'standingAddress needs status(): the server polls each deposit with its legRef' })
+  if (standing && !adapter.legs.some((l) => l.methods?.includes('transfer'))) {
     out.push({ where: 'adapter', problem: 'standingAddress needs a leg with the method transfer (the deposit sessions use it)' })
   }
   if (adapter.legs.length && !adapter.status && !(adapter.webhook && adapter.webhook.configured !== false)) {

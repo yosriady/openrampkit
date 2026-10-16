@@ -138,8 +138,43 @@ export type StandingDepositsInput = {
   since: number
 }
 
-/** A kind of standing address route (see `Adapter.standingRoutes`) */
-export type StandingRoute = 'convert' | 'same'
+/**
+ * The route of a standing bank account (see `Adapter.standingAccount`): the user pays fiat by bank
+ * transfer, and the provider converts it and delivers to `destination`.
+ */
+export type StandingAccountInput = {
+  userId: string
+  /** The fiat currency the user pays in (ISO 4217, upper case) */
+  origin: { currency: string }
+  /** Where each deposit goes (always a crypto destination) */
+  destination: Extract<Destination, { type: 'crypto' }>
+}
+
+/** `standingDeposits` input for a standing bank account (the `ref` that `standingAccount` returned) */
+export type StandingAccountDepositsInput = {
+  ref: string
+  /** The main account identifier that `standingAccount` returned */
+  address: string
+  origin: { currency: string }
+  /** Return deposits seen at or after this time (ms). Repeats are fine: the server dedupes by `id`. */
+  since: number
+}
+
+/** A standing bank account (see `Adapter.standingAccount`) */
+export type StandingAccountResult = {
+  /** The main account identifier (account number, IBAN, CLABE or Pix code) */
+  address: string
+  ref: string
+  /** Every field the user needs to pay, as in a `BANK_FIELDS` surface */
+  bank: { fields: Array<{ label: string; value: string; copy: boolean }> }
+  data?: Record<string, unknown>
+}
+
+/**
+ * A kind of standing address route (see `Adapter.standingRoutes`): `convert` (another token or chain),
+ * `same` (the same token on the same chain) or `bank` (fiat by bank transfer, see `standingAccount`).
+ */
+export type StandingRoute = 'convert' | 'same' | 'bank'
 
 /** One deposit at a standing address (see `Adapter.standingDeposits`) */
 export type StandingDeposit = {
@@ -149,7 +184,7 @@ export type StandingDeposit = {
   legRef: string
   /** When the provider saw the deposit (ms) */
   at: number
-  /** The deposit amount, when known */
+  /** The deposit amount, when known: the origin token, or for a bank account the origin currency */
   input?: Amount
 }
 
@@ -191,12 +226,20 @@ export interface Adapter {
    * `legRef` is a ref that `status()` understands for this one deposit: the session's leg polls it.
    * `input` is the deposit amount, when the provider says it.
    */
-  standingDeposits?(input: StandingDepositsInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingDeposit[]>
+  standingDeposits?(input: StandingDepositsInput | StandingAccountDepositsInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingDeposit[]>
+  /**
+   * Optional, with `standingDeposits` and `'bank'` in `standingRoutes`: a standing bank account for one
+   * user and route. The user pays `origin.currency` by bank transfer to it, at any time, and each
+   * deposit must reach `destination`. Like `standingAddress`, it must be stable, and the server calls it
+   * once per route. `standingDeposits` then gets a `StandingAccountDepositsInput` (with `origin.currency`).
+   */
+  standingAccount?(input: StandingAccountInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingAccountResult>
   /**
    * Optional, with `standingAddress`: the routes that its standing addresses serve. `convert` (the
    * default): the origin is another token or chain than the destination, and the provider converts.
    * `same`: the origin is the destination token on the destination chain, so the address is the
    * destination itself and the adapter watches the chain (see `@openrampkit/adapter-chain-watch`).
+   * `bank`: the origin is a fiat currency paid by bank transfer (needs `standingAccount`).
    * The server picks, for each route, the first adapter that serves it.
    */
   standingRoutes?: ReadonlyArray<StandingRoute>

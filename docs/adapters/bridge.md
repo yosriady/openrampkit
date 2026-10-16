@@ -4,6 +4,7 @@
 
 - **Deposits:** Bridge opens a virtual bank account for the user. The user sends ACH, wire, SEPA, SPEI, Pix or Faster Payments to it. Bridge converts the money to USDC and sends it on chain to the destination address. A destination that is not USDC on a Bridge network gets no quote (`NO_QUOTES`).
 - **Withdrawals:** the user sends USDC to Bridge. Bridge pays out to the user's US bank account (ACH or wire) or IBAN (SEPA).
+- **Standing deposit addresses** (option `standing: true`): a permanent virtual account for fiat in, and a permanent liquidation address for USDC in from another chain. See [Standing deposit addresses](#standing-deposit-addresses).
 
 Bridge needs KYC for each user. The adapter sends the user to the Bridge hosted pages for the terms of service and for KYC. Then it shows the bank details.
 
@@ -42,7 +43,8 @@ To get the keys, see [Get provider keys](../guide/provider-keys.md#bridge).
 | `bridgeFeeBps` | `number` | `0` | Bridge's fee in basis points, for quotes only. Bridge pricing is per contract and the API has no fee quote. Set your contract rate. |
 | `legs` | `string[]` | all | Offer only these legs |
 | `withdraw` | `boolean` | `true` | Add the payout legs |
-| `customer` | `(user) => Promise<{ customerId?, fullName?, email? } \| undefined>` | none | Find the Bridge customer of a user, or give the name and email for a new KYC link |
+| `customer` | `(user) => Promise<{ customerId?, fullName?, email? } \| undefined>` | none | Find the Bridge customer of a user, or give the name and email for a new KYC link. Standing addresses use its `customerId`. |
+| `standing` | `boolean` | `false` | Give [standing deposit addresses](#standing-deposit-addresses): virtual accounts (route `bank`) and liquidation addresses (route `convert`) |
 
 ## Legs
 
@@ -145,11 +147,97 @@ The leg ref is `brg_` and 20 hex characters.
 
 ## Webhooks
 
-1. Create the endpoint: `POST /v0/webhooks` with `url: '{baseUrl}/webhooks/bridge'`, `event_epoch: 'webhook_creation'` and the categories `virtual_account.activity`, `transfer`, `kyc_link` and `customer`.
+1. Create the endpoint: `POST /v0/webhooks` with `url: '{baseUrl}/webhooks/bridge'`, `event_epoch: 'webhook_creation'` and the categories `virtual_account.activity`, `transfer`, `kyc_link` and `customer`. With `standing: true`, add `liquidation_address.drain`.
 2. Put the `public_key` from the answer in `webhookPublicKey`.
 3. Turn the endpoint on: `PUT /v0/webhooks/{id}` with `status: 'active'`. A new endpoint is `disabled`.
 
 Verification: the `X-Webhook-Signature` header is `t=<timestamp in ms>,v0=<base64 signature>`. Bridge signs `SHA-256("{t}.{raw body}")` with RSA PKCS#1 v1.5 and SHA-256. The adapter refuses an event more than 10 minutes from the server time. `kyc_link` and `customer` events give no leg event: the status poll moves the KYC step.
+
+## Standing deposit addresses
+
+With `standing: true`, the adapter gives [standing deposit addresses](../guide/deposit-addresses.md). Each user gets one permanent account or address for each route. Each deposit to it becomes a deposit session.
+
+```ts
+bridge({
+  apiKey: process.env.BRIDGE_API_KEY!,
+  webhookPublicKey: process.env.BRIDGE_WEBHOOK_PUBLIC_KEY!,
+  standing: true,
+  // Required in practice: the Bridge customer of the user, from your database
+  customer: async ({ userId }) => ({ customerId: (await db.users.get(userId)).bridgeCustomerId }),
+})
+
+// Fiat in: a virtual account. The user pays USD by ACH or wire, and gets USDC on Base.
+const account = await openramp.depositAddresses.get({
+  userId: user.id,
+  origin: { currency: 'USD' },
+  destination: { type: 'crypto', chain: 'eip155:8453', token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', address: user.wallet },
+  adapterId: 'bridge',
+})
+// account.address: the account number. account.bank.fields: routing number, account number, beneficiary, ...
+
+// USDC in: a liquidation address. The user sends USDC on Arbitrum, and gets USDC on Base.
+const address = await openramp.depositAddresses.get({
+  userId: user.id,
+  origin: { chain: 'eip155:42161', token: '0xaf88d065e77c8cc2239327c5edb3a432268e5831' },
+  destination: { type: 'crypto', chain: 'eip155:8453', token: '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', address: user.wallet },
+  adapterId: 'bridge',
+})
+```
+
+| Route | Bridge object | Origin | Destination |
+|---|---|---|---|
+| `bank` | Virtual account | USD, EUR, MXN, BRL or GBP (the deposit rails in `legs`) | USDC on a Bridge network |
+| `convert` | Liquidation address | USDC on a Bridge network | USDC on another Bridge network |
+
+Pass `adapterId: 'bridge'` when another adapter (for example Relay) also serves `convert` routes: the server picks the first adapter in the list.
+
+### The customer
+
+Bridge needs a KYC-approved customer for each user. The adapter takes the customer id from the server only: the `customer` hook (`customerId`), else the customer that a Bridge KYC of an earlier deposit session made for the same user id. The browser never gives it. With no customer, `get` throws `409`. The customer must be `active`. For a virtual account, the rail endorsement must be `approved` (for example `base` for USD).
+
+One Bridge customer belongs to one user id. The first user id that gets an address with a customer keeps it, and another user id with the same customer gets `409`. So a bug in your mapping cannot credit one user with another user's deposits.
+
+### Virtual accounts (fiat in)
+
+1. The adapter looks for a virtual account of the customer for this currency and destination (`GET /v0/customers/{id}/virtual_accounts`), else makes one (`POST`, with `source.currency`, `destination: { currency: 'usdc', payment_rail, address }` and the developer fee).
+2. Bridge's answer must name the same destination (rail, currency and address) and customer. Else `get` fails with `502`, and no address is kept.
+3. `StandingAddress.address` is the main account identifier, and `StandingAddress.bank.fields` holds the bank details (a Pix account shows its BR Code). The widget does not show bank accounts yet: show `bank.fields` in your app.
+4. Deposits: `GET .../virtual_accounts/{va}/history`, grouped by `deposit_id`. A deposit makes a session once the money arrived (`funds_received` or a later stage; `funds_scheduled` alone is not enough). Its input is the `funds_received` amount in the account currency. Events in another currency, of another account or of another customer are skipped and logged.
+5. Status: `GET .../history?deposit_id={id}`, with the table of [Deposit flow](#deposit-flow). `payment_processed` succeeds only when its currency and rail (when Bridge gives them) are USDC on the destination rail. Else the session fails with `DELIVERY_FAILED`.
+
+The session flow and the standing account share one virtual account for the same customer, currency and destination. Both claim a deposit with the same key (`dep:{deposit_id}`), so one deposit goes to one of them only. An open deposit session of the same user takes the first deposit after it started.
+
+### Liquidation addresses (USDC in)
+
+1. The adapter looks for a liquidation address of the customer for this route (`GET /v0/customers/{id}/liquidation_addresses`), else makes one (`POST`, with `chain`, `currency: 'usdc'`, `destination_payment_rail`, `destination_currency: 'usdc'`, `destination_address`, and `custom_developer_fee_percent`). Bridge refuses a second address with the same source chain, currency and destination, so the adapter looks first.
+2. Bridge's answer must name the same source chain and the same destination, with no bank account or Bridge wallet as destination. Else `get` fails with `502`.
+3. Deposits: `GET .../liquidation_addresses/{la}/drains`. A drain makes a session once its state is past `awaiting_funds`. Its input is the drain amount in USDC on the origin chain. A drain in another currency or from another chain is skipped and logged.
+4. Status: `GET .../drains?drain_id={id}`.
+
+| Drain state | Leg |
+|---|---|
+| `awaiting_funds` | no session yet |
+| `funds_received`, `payment_submitted` | `processing`, detail code `settling` |
+| `in_review` | `processing`, detail code `delayed` |
+| `refund_in_flight` | `processing`, detail code `refunding` |
+| `payment_processed` | `succeeded`, with `receipt.outgoing_amount`, when `destination.to_address` is the destination. Another address, rail or currency fails with `DELIVERY_FAILED`. With no `destination` yet, the leg stays `processing`. |
+| `refunded` | `refunded` |
+| `undeliverable`, `returned`, `missing_return_policy`, `refund_failed`, `error`, `canceled` | `failed` with `DELIVERY_FAILED` |
+
+Set up a [crypto return policy](https://apidocs.bridge.xyz/platform/orchestration/more/returns) with Bridge. A liquidation address is reused by any sender, so the adapter sets no `return_address`.
+
+### Webhooks of standing addresses
+
+The sweep polls each address (see [Polling](../guide/deposit-addresses.md#polling)). Webhooks add to it:
+
+- The adapter finds the account by its own index (the Bridge id of the virtual account or liquidation address), never by a ref in the body. The event's `customer_id` must be the account's customer. Else the event is ignored.
+- A deposit that the account does not own yet gives no leg event. The adapter keeps the event for the next poll (7 days), so a deposit that the history lists late still makes its session.
+- An event of a deposit that the account owns gives a leg event with the deposit's leg ref and the Bridge `event_id`. The server finds the session by its own ref index.
+- A deposit that a deposit session owns goes to that session.
+
+### Idempotency and data
+
+The create calls use a key from the customer and the route (`orb-sva-...`, `orb-sla-...`), so a retry gets the same account. The adapter keeps the account record in `shared` with no TTL: the Bridge ids, the customer id, the route and, for a virtual account, its bank details. It keeps deposit claims for 400 days, and webhook events for 7 days.
 
 ## Data
 
@@ -167,4 +255,11 @@ Verified against the Bridge docs and OpenAPI spec (2026-10-05): base URLs, `Api-
 - **TO VERIFY**: the wire payout minimum.
 - **TO VERIFY**: the refund event name. The docs table says `refunded` and the OpenAPI enum says `refund`. The adapter accepts both.
 - **TO VERIFY**: when Bridge fills `customer_id` on a KYC link. The adapter waits for it.
-- Not supported yet: payouts in MXN, BRL and GBP (the docs give no external account body for them), COP deposits, and USDT or EURC delivery.
+Standing deposit addresses (verified 2026-10-16): the virtual account list, create and history endpoints (`deposit_id`, `limit`, `starting_after`), the virtual account `destination` and `status` fields, the liquidation address list and create endpoints and fields (`chain`, `currency`, `destination_payment_rail`, `destination_currency`, `destination_address`, `custom_developer_fee_percent`, `state`), the rule that Bridge refuses a duplicate liquidation address, the drain list endpoint (`drain_id`, `limit`, `starting_after`), the drain fields and states, and the `liquidation_address.drain` webhook category.
+
+- **TO VERIFY**: the endorsement that a USDC to USDC liquidation address needs. The adapter checks that the customer is `active`.
+- **TO VERIFY**: the drain `currency` of a USDC address. The API reference shows `usdc` and the guide shows `usd`. The adapter accepts both, and nothing else.
+- **TO VERIFY**: the `currency` of a `payment_processed` virtual account event. The adapter accepts `usdc` or none.
+- **TO VERIFY**: whether Bridge allows two virtual accounts for the same customer, currency and destination. The adapter reuses the one it finds.
+- **TO VERIFY**: how long Bridge keeps an `Idempotency-Key`. The adapter also looks for an existing account before each create.
+- Not supported yet: payouts in MXN, BRL and GBP (the docs give no external account body for them), COP deposits, and USDT or EURC delivery. Standing addresses: USDT, EURC or multichain (`evm`) liquidation addresses, and bank accounts in the widget.

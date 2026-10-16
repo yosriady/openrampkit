@@ -25,7 +25,8 @@ interface Adapter {
   sourceTokens?(input: { chains: string[]; method: string }, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<SourceToken[]>
   standingAddress?(input: StandingAddressInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>):
     Promise<{ address: string; ref: string; data?: Record<string, unknown> }>
-  standingDeposits?(input: StandingDepositsInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingDeposit[]>
+  standingAccount?(input: StandingAccountInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingAccountResult>
+  standingDeposits?(input: StandingDepositsInput | StandingAccountDepositsInput, ctx: Pick<AdapterContext, 'fetch' | 'log' | 'shared'>): Promise<StandingDeposit[]>
   quote(input: QuoteInput, ctx: AdapterContext): Promise<LegQuote>
   prepareDeposit?(input: { leg: PathwayLeg; amountIn?: Amount }, ctx: AdapterContext):
     Promise<{ address: string; ref?: string; data?: Record<string, unknown> }>
@@ -60,11 +61,12 @@ interface Adapter {
 | `sourceTokens` | `GET /sessions/:id/sources`, with `{ chains, method }`. Return the tokens the user can pay with, most popular first. The server checks and caches them. |
 | `routes` | Any request to `/adapters/:adapterId/*` |
 | `standingAddress` | `depositAddresses.get()`, the first time for a user and route. Return the same address for the same input, and keep it in `shared` with no TTL or a very long one. |
-| `standingDeposits` | `sweep()`, for each standing address that is due, with the `ref` from `standingAddress` and `since` (ms). Return every deposit seen since then. The server makes one session per new `id`. |
+| `standingAccount` | `depositAddresses.get()` with a fiat origin (`origin: { currency }`), the first time for a user and route. Return a standing bank account: its main identifier, a `ref`, and the bank details. |
+| `standingDeposits` | `sweep()`, for each standing address that is due, with the `ref` from `standingAddress` (or `standingAccount`) and `since` (ms). Return every deposit seen since then. The server makes one session per new `id`. |
 
 An adapter with standing addresses needs both methods, `status()` (the server polls each deposit with its `legRef`), and a leg with the method `transfer` (the deposit sessions use it). `checkAdapterShape` checks this. See [Standing deposit addresses](../guide/deposit-addresses.md).
 
-`standingRoutes` (optional) says which routes the addresses serve. `['convert']` is the default: the origin is another token or chain, and the provider converts each deposit. `['same']`: the origin is the destination token on the destination chain. Then `standingAddress` must return the destination address itself (the server refuses another address with `502`), and the adapter reports the transfers it sees on chain. The server picks, for each route, the first adapter that serves it. The [chain-watch adapter](../adapters/chain-watch.md) serves `same`.
+`standingRoutes` (optional) says which routes the addresses serve. `['convert']` is the default: the origin is another token or chain, and the provider converts each deposit. `['same']`: the origin is the destination token on the destination chain. Then `standingAddress` must return the destination address itself (the server refuses another address with `502`), and the adapter reports the transfers it sees on chain. `['bank']`: the origin is a fiat currency paid by bank transfer. The adapter then needs `standingAccount`, and `standingDeposits` gets a `StandingAccountDepositsInput`. The server picks, for each route, the first adapter that serves it. The [chain-watch adapter](../adapters/chain-watch.md) serves `same`. The [Bridge adapter](../adapters/bridge.md#standing-deposit-addresses) serves `convert` and `bank` with the option `standing: true`.
 
 ```ts
 type StandingAddressInput = {
@@ -73,15 +75,25 @@ type StandingAddressInput = {
   destination: Extract<Destination, { type: 'crypto' }> // where each deposit goes
 }
 
-type StandingRoute = 'convert' | 'same' // Adapter.standingRoutes?: StandingRoute[]
+type StandingRoute = 'convert' | 'same' | 'bank' // Adapter.standingRoutes?: StandingRoute[]
 
 type StandingDepositsInput = { ref: string; address: string; origin: { chain: string; token: string }; since: number }
+
+// A standing bank account (route `bank`)
+type StandingAccountInput = { userId: string; origin: { currency: string }; destination: Extract<Destination, { type: 'crypto' }> }
+type StandingAccountResult = {
+  address: string // the main account identifier (account number, IBAN, CLABE or Pix code)
+  ref: string
+  bank: { fields: Array<{ label: string; value: string; copy: boolean }> }
+  data?: Record<string, unknown>
+}
+type StandingAccountDepositsInput = { ref: string; address: string; origin: { currency: string }; since: number }
 
 type StandingDeposit = {
   id: string      // the same for one deposit on every call: a provider request id, or the deposit tx hash
   legRef: string  // a ref that status() understands for this one deposit
   at: number      // when the provider saw the deposit (ms)
-  input?: Amount  // the deposit amount, when known
+  input?: Amount  // the deposit amount, when known (for a bank account: in the origin currency)
 }
 ```
 
