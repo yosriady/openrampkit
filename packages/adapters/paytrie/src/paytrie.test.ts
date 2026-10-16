@@ -500,9 +500,10 @@ describe('paytrie adapter', () => {
       expect(all.filter((r) => r.status === 'fulfilled')).toHaveLength(L.sendsPerEmail)
       expect(posts(s.calls, '/v2/auth/login-codes')).toHaveLength(L.sendsPerEmail)
       // Code checks: other spellings share the tries of the account
-      const legs = all.flatMap((r) => (r.status === 'fulfilled' ? [r.value.step.ref!] : []))
-      for (let i = 0; i < L.triesPerEmail; i++) await expect(guess(sessions[i]!, legs[i]!, `000${i}`)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
-      await expect(guess(sessions[0]!, legs[0]!, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
+      // Keep each leg with its own session: the refused send can be any one of the concurrent starts.
+      const legs = all.flatMap((r, i) => (r.status === 'fulfilled' ? [{ x: sessions[i]!, ref: r.value.step.ref! }] : []))
+      for (let i = 0; i < L.triesPerEmail; i++) await expect(guess(legs[i]!.x, legs[i]!.ref, `000${i}`)).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      await expect(guess(legs[0]!.x, legs[0]!.ref, '1234')).rejects.toMatchObject({ error: { code: 'RATE_LIMITED' } })
       expect(posts(s.calls, '/verify')).toHaveLength(L.triesPerEmail)
     })
 
