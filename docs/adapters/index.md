@@ -39,6 +39,7 @@ For withdrawals, three adapters have legs today: Relay (`wallet`, to any address
 | [Transak](./transak.md) | `@openrampkit/adapter-transak` | `card`, `apple_pay`, `google_pay`, `bank_transfer`, `upi`, `faster_payments`, `open_banking`, `pse` (live catalog) | card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE and more | Per fiat currency, from the catalog | `IFRAME` (or `REDIRECT`) | Yes | Working; several details TO VERIFY |
 | [MoonPay](./moonpay.md) | `@openrampkit/adapter-moonpay` | `card`, `apple_pay`, `google_pay`, `ach`, `sepa`, `gbp_bank`, `gbp_open_banking`, `pix`, `paypal`, `venmo`, `revolut_pay`, `interac` | Same; `gbp_bank` is Faster Payments, `gbp_open_banking` is pay by bank | Where MoonPay allows buying (live catalog) | `REDIRECT` (or `IFRAME`) | Yes | New; some details TO VERIFY |
 | [Banxa](./banxa.md) | `@openrampkit/adapter-banxa` | `card`, `apple_pay`, `google_pay`, `sepa`, `gbp_bank`, `payid`, `npp`, `ideal`, `klarna`, `paypal`, `interac`, `spei`, `khipu`, `zar_bank`, `vietqr`, `upi` (live catalog) | Same; `gbp_bank` is Faster Payments, `npp` and `zar_bank` are bank transfers | Where Banxa serves (live catalog) | `REDIRECT` (or `IFRAME`) | Yes (partner account) | Unverified; built from the docs; some details TO VERIFY |
+| [PayTrie](./paytrie.md) | `@openrampkit/adapter-paytrie` | `interac` | Interac e-Transfer (CAD to USDC) | CA | `OTP`, `FORM`, `REDIRECT` (sign-up and KYC), `BANK_FIELDS` | Yes (PayTrie account and KYC per user) | Unverified; built from the docs; some details TO VERIFY |
 | [Stripe](./stripe.md) | `@openrampkit/adapter-stripe` | `card`, `apple_pay`, `google_pay`, `ach` | Same | US (not HI) and EU | `PROVIDER_SDK` (or `REDIRECT`) | Yes, with onramp approval | New; some details TO VERIFY |
 | [Stripe Link](./stripe-link.md) | `@openrampkit/adapter-stripe-link` | `card`, `apple_pay`, `google_pay`, `ach` | Same | US (not NY) | `PROVIDER_SDK` | Yes, with Stripe private preview onboarding | Unverified; some details TO VERIFY |
 | [Xendit](./xendit.md) | `@openrampkit/adapter-xendit` | One per country and channel, e.g. `id-qris` | QRIS, DANA, OVO, ShopeePay, QR Ph, GCash, Maya, GrabPay, PromptPay, TrueMoney, Touch 'n Go, MoMo, ZaloPay, PayNow | ID, PH, TH, MY, VN, SG | `QR`, `REDIRECT`, `DEEPLINK` | Yes | Working (merchant destination only) |
@@ -67,6 +68,7 @@ Each quote says how firm its output is (`guarantee`). The server uses the weakes
 | Transak | `estimate` | none | Transak order id |
 | MoonPay | `estimate` | none | MoonPay transaction id |
 | Banxa | `estimate` | the Banxa spread in the rate | Banxa order id |
+| PayTrie | `estimate` | none | PayTrie transaction id |
 | Stripe | `estimate` | none | the onramp session id (also the leg ref) |
 | Xendit | `firm` | none | the payment request id (also the leg ref) |
 | Mock | `firm` for fiat legs and plain transfers; `min_output` (50 bps) for bridge and swap legs | none | the leg ref |

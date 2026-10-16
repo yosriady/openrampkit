@@ -92,6 +92,7 @@ export default withMermaid(
               { text: 'Transak', link: '/adapters/transak' },
               { text: 'MoonPay', link: '/adapters/moonpay' },
               { text: 'Banxa', link: '/adapters/banxa' },
+              { text: 'PayTrie', link: '/adapters/paytrie' },
               { text: 'Stripe', link: '/adapters/stripe' },
               { text: 'Stripe Link (headless)', link: '/adapters/stripe-link' },
               { text: 'Meld', link: '/adapters/meld' },

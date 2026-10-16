@@ -30,6 +30,7 @@ The times are estimates for the first sandbox key. Production access can take lo
 | [Stripe Link](#stripe-link) | Private preview; Stripe onboards the account | Secret key, publishable key, Link OAuth client id, webhook signing secret, optional token key | Days to weeks (Stripe onboarding) |
 | [Swapped](#swapped) | Application (business onboarding) | Public key, secret key | Days |
 | [Banxa](#banxa) | Partner onboarding (sandbox first; production after Banxa approves the integration) | Partner reference, v2 API key, HMAC key pair | Days |
+| [PayTrie](#paytrie) | Email support@paytrie.com for a developer API key; no documented sandbox | API key, webhook signing secret, optional token key | Days (estimate; PayTrie answers email within 24 hours) |
 | [Meld](#meld) | Sales (contact form) | API key, webhook secret | Days to weeks |
 | [Bridge](#bridge) | Sales | API key, webhook public key | Days to weeks |
 | [Binance](#binance) | Partner approval; no sandbox | API URL, client id, access token, RSA key pair, Binance public key | Weeks |
@@ -485,6 +486,45 @@ banxa({
 - If the dashboard shows only a v2 API key, ask your Banxa account manager for the HMAC key pair.
 - Sandbox allows 120 requests per minute per merchant. Prefer webhooks over polling.
 - Before go-live, Banxa requires a disclaimer that Banxa processes the payment as merchant of record ([required disclaimer](https://docs.banxa.com/products/hosted-checkout/docs/getting-started/required-disclaimer)).
+
+## PayTrie {#paytrie}
+
+**Access type:** request by email. Register a PayTrie account at [app.paytrie.com/SignupEmail](https://app.paytrie.com/SignupEmail), then email [support@paytrie.com](mailto:support@paytrie.com) with your registered email, your use case and your expected volume, and ask for a developer API key ([Using the Platform API](https://docs.paytrie.com/v2/using-the-platform-api)).
+
+**Get the keys:**
+
+| Value | Where | Adapter option | Env var |
+|---|---|---|---|
+| Developer API key (`x-api-key`) | From PayTrie support | `apiKey` | `PAYTRIE_API_KEY` |
+| Webhook signing secret (`whsec_...`) | The answer to the first `PUT /v2/webhook-configurations` (below) | `webhookSecret` | `PAYTRIE_WEBHOOK_SECRET` |
+| Token key (32 characters or more, optional) | You make it, for example `openssl rand -base64 32` | `tokenKey` | `PAYTRIE_TOKEN_KEY` |
+
+```ts
+paytrie({
+  apiKey: process.env.PAYTRIE_API_KEY!,
+  webhookSecret: process.env.PAYTRIE_WEBHOOK_SECRET,
+  tokenKey: process.env.PAYTRIE_TOKEN_KEY,
+})
+```
+
+**Sandbox and production:** PayTrie documents only `https://api.paytrie.com`. The adapter defaults to `env: 'production'`. Ask PayTrie support for a test host; to use one, set `env: 'sandbox'` and `apiUrl`.
+
+**Webhooks:** register your URL once with the API. The first call returns the signing secret, and only the first call:
+
+```bash
+curl -X PUT "https://api.paytrie.com/v2/webhook-configurations" \
+  -H "x-api-key: $PAYTRIE_API_KEY" -H "Content-Type: application/json" \
+  -d '{ "url": "https://your-app.example/api/openramp/webhooks/paytrie" }'
+```
+
+To get a new secret later, call `POST /v2/webhook-configurations/signing-secret/rotate`. To send a test event, call `POST /v2/webhook-configurations/test`.
+
+**Gotchas:**
+
+- PayTrie sends each webhook once and does not retry. The adapter also polls with the user's access token (1 hour). After that, only the webhook reports the result.
+- One webhook URL per integration: use one OpenRampKit server per API key.
+- The adapter never stores KYC data. Users sign up and do KYC on PayTrie pages.
+- If you had v1 webhooks, turn them off after v2 works (`PATCH /webhooks` with every flag `false`).
 
 ## Meld {#meld}
 

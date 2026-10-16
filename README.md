@@ -298,6 +298,7 @@ Each provider is an adapter, like a wagmi connector. Pass the configured adapter
 | `transak` | [`adapter-transak`](packages/adapters/transak) | Card, Apple Pay, Google Pay, bank transfer, SEPA, UPI, Faster Payments, pay by bank, PSE | Working. Some details TO VERIFY |
 | `moonpay` | [`adapter-moonpay`](packages/adapters/moonpay) | Card, Apple Pay, Google Pay, ACH, SEPA, Faster Payments, pay by bank (UK), Pix, PayPal, Venmo, Revolut Pay, Interac | New. Some details TO VERIFY |
 | `banxa` | [`adapter-banxa`](packages/adapters/banxa) | Card, Apple Pay, Google Pay, SEPA, Faster Payments, PayID, iDEAL, Klarna, PayPal, Interac, SPEI, Khipu, VietQR and more, direct (no aggregator margin) | Unverified. Built from the Banxa docs; no sandbox order yet. Some details TO VERIFY |
+| `paytrie` | [`adapter-paytrie`](packages/adapters/paytrie) | Interac e-Transfer in Canada (CAD to USDC), headless: sign-in code, KYC and payment details in your own UI | Unverified. Built from the PayTrie v2 docs; no live order yet (PayTrie documents no sandbox). Some details TO VERIFY |
 | `stripe` | [`adapter-stripe`](packages/adapters/stripe) | Stripe Crypto Onramp: card, Apple Pay, Google Pay, ACH (US and EU) | New. Needs onramp approval |
 | `stripe-link` | [`adapter-stripe-link`](packages/adapters/stripe-link) | Stripe Link headless onramp: the user signs in to Link, and the purchase runs in your own screens. Card, Apple Pay, Google Pay, ACH (US, not NY) | Unverified. Needs Stripe private preview onboarding and a client renderer |
 | `xendit` | [`adapter-xendit`](packages/adapters/xendit) | QRIS, QR Ph, PromptPay, PayNow and e-wallets into your own merchant account | Working. Merchant destination only |
@@ -343,7 +344,7 @@ The method vocabulary is in `packages/core/src/codes.ts`. Which methods a user s
 | United Kingdom | Faster Payments, pay by bank | MoonPay, Transak, Meld, Onramper |
 | Poland | BLIK | Meld, Swapped |
 | United States | ACH, Venmo, Cash App, Zelle, Chime, PayPal | Coinbase, MoonPay, Stripe, Meld, Onramper (ACH); MoonPay (PayPal, Venmo); Peer, opt-in |
-| Canada | Interac | MoonPay, Meld, Onramper |
+| Canada | Interac | MoonPay, Meld, Onramper, PayTrie (headless) |
 | Mexico | SPEI | Meld, Onramper, Swapped |
 | Colombia | PSE, Bancolombia | Transak, Meld (PSE); Onramper (Bancolombia) |
 | Chile | Khipu | Meld, Onramper |

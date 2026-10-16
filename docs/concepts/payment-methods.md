@@ -46,7 +46,7 @@ Adapters with a live catalog (Transak, Meld, Onramper, Swapped, Coinbase, MoonPa
 | ACH | `ach` | US | Coinbase, MoonPay, Stripe, Meld, Onramper | Coinbase `ACH`, Onramper `iach` |
 | Venmo | `venmo` | US | MoonPay, Peer; Meld, Onramper (catalog) | |
 | Cash App, Zelle, Chime | `cash_app`, `zelle`, `chime` | US | Peer; Meld (Cash App, Zelle, catalog) | |
-| Interac e-Transfer | `interac` | CA | MoonPay, Meld, Onramper | Swapped has Interac for payouts (withdraw) |
+| Interac e-Transfer | `interac` | CA | MoonPay, Meld, Onramper, PayTrie | Swapped has Interac for payouts (withdraw) |
 | SPEI | `spei` | MX | Meld, Onramper; Swapped (catalog) | Meld also maps `STP` |
 | PSE | `pse` | CO | Transak, Meld | Transak `pm_pse` is TO VERIFY per partner account |
 | Bancolombia | `bancolombia` | CO | Onramper | |
