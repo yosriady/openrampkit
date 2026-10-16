@@ -25,7 +25,7 @@ import { adminRoute } from './admin.js'
 import { addTimeline } from './timeline.js'
 import { scopedKV } from './store.js'
 import type { SessionRecord, StoredQuote } from './store.js'
-import { CAIP2, checkAllowed, isValidToken, parseTarget, screenTarget, targetDestination } from './withdraw.js'
+import { CAIP2, balanceError, checkAllowed, isValidToken, parseTarget, readSourceBalance, screenTarget, targetDestination } from './withdraw.js'
 
 const RETURN_PAGE =
   '<!doctype html><meta charset="utf-8"><title>Payment</title><body style="font-family:system-ui;padding:32px">You can close this tab and go back to the app.<script>setTimeout(()=>window.close(),800)</script>'
@@ -253,6 +253,11 @@ async function selectRoute(rt: Runtime, req: Request, rec: SessionRecord): Promi
   if (bounds) return errorResponse(bounds, 422)
   const walletAddress = walletAddressOf(body.walletAddress)
   if (walletAddress) rec.walletAddress = walletAddress
+  if (rec.direction === 'withdraw') {
+    // `withdraw.checkBalance`: read the balance again before the first leg starts (it can change after the quote).
+    const low = balanceError(await readSourceBalance(rt, rec), stored.quote.input)
+    if (low) return errorResponse(low, 422)
+  }
   await screenDepositWallet(rt, rec, stored)
   await startWithFailover(rt, rec, body.quoteId, stored)
   await saveSession(rt, rec)

@@ -1,7 +1,8 @@
 // Withdraw sessions: validate the source at creation, and the target the user picks.
 
-import { CHAINS, OpenRampException, isUsdc, nativeDecimals, normalizeToken, openRampError } from '@openrampkit/core'
-import type { Destination, WithdrawSource, WithdrawDestination } from '@openrampkit/core'
+import { erc20BalanceOfData, evmRpc } from '@openrampkit/adapter'
+import { CHAINS, OpenRampException, cmp, fromBaseUnits, isUsdc, nativeDecimals, normalizeToken, openRampError, sameToken } from '@openrampkit/core'
+import type { Amount, Destination, OpenRampError, WithdrawSource, WithdrawDestination } from '@openrampkit/core'
 import type { Runtime } from './runtime.js'
 import type { SessionRecord } from './store.js'
 
@@ -119,4 +120,56 @@ export function withdrawSender(rt: Runtime, rec: SessionRecord): { chain: string
   if (!src) return undefined
   const address = src.custody === 'app' ? rt.config.treasury?.address : rec.walletAddress
   return { chain: src.chain, token: src.token, ...(address ? { address } : {}) }
+}
+
+/** Default timeout of the balance RPC call (`withdraw.checkBalance.timeoutMs`) */
+export const BALANCE_CHECK_TIMEOUT_MS = 3000
+
+/** The user's balance of the session source, as a decimal string in the source token. */
+export type SourceBalance = { chain: string; token: string; value: string; symbol?: string }
+
+/**
+ * `withdraw.checkBalance`: read the balance of the session source in the user's wallet. Returns
+ * undefined when the check does not apply: it is off, the custody is not `user_wallet`, there is no
+ * wallet address yet, the chain is not EVM or has no RPC URL, or the decimals of the token are not
+ * known. An RPC error or timeout also returns undefined (fail open), with a warning in the log.
+ */
+export async function readSourceBalance(rt: Runtime, rec: SessionRecord): Promise<SourceBalance | undefined> {
+  const cfg = rt.config.withdraw?.checkBalance
+  const src = rec.source
+  const owner = rec.walletAddress
+  if (!cfg || !src || src.custody !== 'user_wallet' || !owner) return undefined
+  // EVM only. Other chains (Solana, for example) have no check yet, so the wallet rejects a low balance.
+  if (!src.chain.startsWith('eip155:') || !isValidAddress(src.chain, owner)) return undefined
+  const url = cfg.rpcUrls?.[src.chain]
+  if (!url || src.decimals === undefined) return undefined
+  const timeoutMs = cfg.timeoutMs ?? BALANCE_CHECK_TIMEOUT_MS
+  try {
+    // A native source (ETH, POL, ...) has no contract: read the account balance instead of balanceOf.
+    const hex =
+      src.token === 'native'
+        ? await evmRpc<string>(rt.fetch, url, 'eth_getBalance', [owner, 'latest'], { timeoutMs })
+        : await evmRpc<string>(rt.fetch, url, 'eth_call', [{ to: src.token, data: erc20BalanceOfData(owner) }, 'latest'], { timeoutMs })
+    if (typeof hex !== 'string' || !/^0x[0-9a-fA-F]{1,64}$/.test(hex)) throw new Error(`unexpected RPC result: ${String(hex).slice(0, 80)}`)
+    return { chain: src.chain, token: src.token, value: fromBaseUnits(BigInt(hex).toString(), src.decimals), ...(src.symbol ? { symbol: src.symbol } : {}) }
+  } catch (e) {
+    rt.log.warn('withdraw balance check failed; continuing without it', { sessionId: rec.id, chain: src.chain, error: e instanceof Error ? e.message : String(e) })
+    return undefined
+  }
+}
+
+/** `AMOUNT_TOO_HIGH` when `amount` of the source token is above the balance, else undefined. */
+export function balanceError(balance: SourceBalance | undefined, amount: string | Amount): OpenRampError | undefined {
+  if (!balance) return undefined
+  let value: string
+  if (typeof amount === 'string') value = amount
+  else {
+    // Only an amount of the source token can be compared with the balance.
+    const a = amount.asset
+    if (a.kind !== 'crypto' || a.chain !== balance.chain || !sameToken(balance.chain, a.token, balance.token)) return undefined
+    value = amount.value
+  }
+  if (cmp(value, balance.value) <= 0) return undefined
+  const has = `${balance.value}${balance.symbol ? ` ${balance.symbol}` : ''}`
+  return openRampError('AMOUNT_TOO_HIGH', { message: `Your wallet has ${has}. Enter a lower amount.`, recovery: 'requote' })
 }

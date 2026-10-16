@@ -150,6 +150,8 @@ export type OpenRampConfig = {
    * stores have it). Default `false`: the route answers `404`, and the widget hides its History link.
    */
   history?: boolean
+  /** Withdraw options. See `WithdrawConfig`. */
+  withdraw?: WithdrawConfig
   /** Standing deposit addresses (see `openramp.depositAddresses`) */
   depositAddresses?: {
     /**
@@ -158,6 +160,22 @@ export type OpenRampConfig = {
      * session's destination. Default `false`.
      */
     widget?: boolean
+  }
+}
+
+export type WithdrawConfig = {
+  /**
+   * Withdraw with `custody: 'user_wallet'` on an EVM chain: read the wallet balance of the source token
+   * (ERC-20 `balanceOf`, or `eth_getBalance` for `native`) before the server quotes and before it starts
+   * the first leg. An amount above the balance gets `AMOUNT_TOO_HIGH`. Off by default. A chain without an
+   * entry in `rpcUrls` is not checked. An RPC error or timeout does not block the withdrawal (the check
+   * fails open), and the server logs a warning.
+   */
+  checkBalance?: {
+    /** JSON-RPC URL per CAIP-2 chain id, e.g. `{ 'eip155:8453': 'https://mainnet.base.org' }` */
+    rpcUrls: Record<string, string>
+    /** Timeout of one RPC call in ms (default 3000) */
+    timeoutMs?: number
   }
 }
 

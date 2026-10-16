@@ -18,17 +18,22 @@ export function erc20TransferData(to: string, amountBase: string): string {
   return `0xa9059cbb${addr}${amt}`
 }
 
+/** ERC-20 balanceOf(address) calldata */
+export function erc20BalanceOfData(owner: string): string {
+  return `0x70a08231${owner.toLowerCase().replace(/^0x/, '').padStart(64, '0')}`
+}
+
 /** The fields of `eth_getTransactionReceipt` that the checks read */
 export type EvmReceipt = { status?: string; blockNumber?: string; logs?: Array<{ address: string; topics: string[]; data: string }> }
 
 /**
  * One JSON-RPC call. Network and HTTP errors become PROVIDER_UNAVAILABLE (502, or 504 on a timeout),
- * and so does an RPC error in the response.
+ * and so does an RPC error in the response. `timeoutMs` overrides the default timeout of `fetchJson`.
  */
-export async function evmRpc<T>(f: typeof fetch, url: string, method: string, params: unknown[], opts: { log?: Logger } = {}): Promise<T> {
+export async function evmRpc<T>(f: typeof fetch, url: string, method: string, params: unknown[], opts: { log?: Logger; timeoutMs?: number } = {}): Promise<T> {
   let res: { result?: T; error?: { message?: string } }
   try {
-    res = await fetchJson(f, url, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }) })
+    res = await fetchJson(f, url, { method: 'POST', body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }), ...(opts.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}) })
   } catch (e) {
     throw httpErrorToOpenRamp(e, 'The chain RPC', { what: 'check this transfer', ...(opts.log ? { log: opts.log } : {}) })
   }

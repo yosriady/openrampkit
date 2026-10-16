@@ -7,7 +7,7 @@ import type { Runtime } from './runtime.js'
 import { scopedKV } from './store.js'
 import { depositAddressMethod } from './standing.js'
 import type { SessionRecord, StoredQuote } from './store.js'
-import { withdrawSender } from './withdraw.js'
+import { balanceError, readSourceBalance, withdrawSender } from './withdraw.js'
 import { breakerError, breakerGate, breakerProbeResult, isProviderFailure, recordHealth, routingOptions, successRates } from './health.js'
 import type { HealthCounts } from './health.js'
 
@@ -239,6 +239,11 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
       : body.source
         ? { ...body.source, ...(rec.walletAddress ? { address: rec.walletAddress } : {}) }
         : undefined
+  // `withdraw.checkBalance`: an amount of the source token above the wallet balance gets no quotes
+  // (no provider call). A destination amount is checked on each quote's input below.
+  const balance = rec.direction === 'withdraw' ? await readSourceBalance(rt, rec) : undefined
+  const low = (body.amountSide ?? 'source') === 'source' ? balanceError(balance, body.amount) : undefined
+  if (low) throw new OpenRampException(low, 422)
   const timeout = rt.config.timeouts?.quote ?? 9000
   const errors: OpenRampError[] = []
   // The circuit breaker: skip pathways with an adapter that fails too often now (no network call).
@@ -277,7 +282,7 @@ export async function quotes(rt: Runtime, rec: SessionRecord, body: QuotesBody):
   const out: Quote[] = []
   for (const s of settled) {
     if (s.status === 'fulfilled') {
-      const bounds = boundsError(rec, s.value.stored.quote.input)
+      const bounds = boundsError(rec, s.value.stored.quote.input) ?? balanceError(balance, s.value.stored.quote.input)
       if (bounds) {
         errors.push(bounds)
         continue

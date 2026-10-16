@@ -9,6 +9,9 @@ import type { LegStep, PlanResult, PublicSession, Quote, WithdrawSource } from '
 import { TreasuryRefusedError, createOpenRamp, isValidAddress } from './index.js'
 import type { CreateSessionInput, OpenRampConfig, TreasurySendInput } from './index.js'
 import { eventStep, mergeLegStep } from './legs.js'
+import type { Runtime } from './runtime.js'
+import type { SessionRecord } from './store.js'
+import { readSourceBalance } from './withdraw.js'
 
 const BASE = 'https://app.test/api/openramp'
 const HOOK = 'https://app.test/hooks'
@@ -636,5 +639,132 @@ describe('withdraw sessions: locked target', () => {
     expect(screenAddress).toHaveBeenCalledWith(OTHER, 'eip155:42161')
     // No session was stored for a refused target: no webhook either.
     expect(t.hooks.filter((h) => h.type === 'session.created')).toHaveLength(0)
+  })
+})
+
+describe('withdraw.checkBalance (custody: user_wallet)', () => {
+  const RPC = 'https://rpc.test/base'
+  type Rpc = { method: string; params: unknown[] }
+  type Mode = { balance: bigint; fail?: 'http' | 'rpc' | 'hang' | 'garbage' }
+
+  /** A fake fetch: webhooks answer `{}`, the RPC URL answers `balanceOf` / `eth_getBalance` from `mode`. */
+  function rpcFetch(mode: Mode, calls: Rpc[]): typeof fetch {
+    return async (input, init) => {
+      if (String(input) !== RPC) return new Response('{}')
+      const req = JSON.parse(String(init?.body)) as Rpc & { id: number }
+      calls.push({ method: req.method, params: req.params })
+      if (mode.fail === 'http') return new Response('bad gateway', { status: 502 })
+      if (mode.fail === 'rpc') return Response.json({ jsonrpc: '2.0', id: req.id, error: { code: -32000, message: 'header not found' } })
+      if (mode.fail === 'garbage') return Response.json({ jsonrpc: '2.0', id: req.id, result: '0x' })
+      if (mode.fail === 'hang') {
+        return new Promise<Response>((_, reject) => init?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))))
+      }
+      return Response.json({ jsonrpc: '2.0', id: req.id, result: `0x${mode.balance.toString(16)}` })
+    }
+  }
+
+  function setup(mode: Mode, extra: Partial<OpenRampConfig> = {}) {
+    const calls: Rpc[] = []
+    const warn = vi.fn()
+    const t = make({ fetch: rpcFetch(mode, calls), logger: { ...quiet, warn }, withdraw: { checkBalance: { rpcUrls: { 'eip155:8453': RPC }, timeoutMs: 50 } }, ...extra })
+    return { ...t, calls, warn }
+  }
+
+  const target = async (t: ReturnType<typeof make>, s: { id: string; clientSecret: string }) =>
+    expect((await t.call(`/sessions/${s.id}/target`, s.clientSecret, { ...TO_ARB, walletConnected: true, walletAddress: USER })).status).toBe(200)
+
+  it('is off by default: no RPC call, the quote goes on', async () => {
+    const calls: Rpc[] = []
+    const t = make({ fetch: rpcFetch({ balance: 0n }, calls) })
+    const s = await t.create()
+    const { session } = await run(t, s, TO_ARB, 'wallet')
+    expect(session.step.state).toBe('PAYMENT')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('an amount above the USDC balance gets 422 AMOUNT_TOO_HIGH before any provider quote', async () => {
+    const t = setup({ balance: 10_500_000n })
+    const s = await t.create()
+    await target(t, s)
+    const q = await t.call(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '25' })
+    expect(q.status).toBe(422)
+    expect(q.body.error).toMatchObject({ code: 'AMOUNT_TOO_HIGH', message: 'Your wallet has 10.5 USDC. Enter a lower amount.' })
+    // One ERC-20 balanceOf(USER) call on the source token.
+    expect(t.calls).toEqual([
+      { method: 'eth_call', params: [{ to: USDC['eip155:8453']!.toLowerCase(), data: `0x70a08231${'0'.repeat(24)}${USER.slice(2)}` }, 'latest'] },
+    ])
+    // The balance is enough: quotes as usual, and select reads the balance again.
+    const ok = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '10.5' })
+    expect(ok.status).toBe(200)
+    expect(ok.body.quotes.length).toBeGreaterThan(0)
+    const sel = await t.call<PublicSession>(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: ok.body.quotes[0]!.id })
+    expect(sel.status).toBe(200)
+    expect(sel.body.step).toMatchObject({ state: 'PAYMENT', surface: { kind: 'WALLET_TX' } })
+    expect(t.calls).toHaveLength(3)
+  })
+
+  it('refuses to start the first leg when the balance dropped after the quote', async () => {
+    const mode: Mode = { balance: 30_000_000n }
+    const t = setup(mode)
+    const s = await t.create()
+    await target(t, s)
+    const q = await t.call<{ quotes: Quote[] }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '25' })
+    expect(q.status).toBe(200)
+    mode.balance = 1_000_000n
+    const sel = await t.call(`/sessions/${s.id}/select`, s.clientSecret, { quoteId: q.body.quotes[0]!.id })
+    expect(sel.status).toBe(422)
+    expect(sel.body.error).toMatchObject({ code: 'AMOUNT_TOO_HIGH', message: 'Your wallet has 1 USDC. Enter a lower amount.' })
+    const pub = (await t.ramp.sessions.retrieve(s.id))!
+    expect(pub.step.state).not.toBe('PAYMENT')
+    expect(t.hooks.map((h) => h.type)).not.toContain('session.requires_action')
+  })
+
+  it('a destination amount is checked on each quote input: too high quotes become errors', async () => {
+    const t = setup({ balance: 5_000_000n })
+    const s = await t.create()
+    await target(t, s)
+    const q = await t.call<{ quotes: Quote[]; errors: Array<{ code: string }> }>(`/sessions/${s.id}/quotes`, s.clientSecret, { method: 'wallet', amount: '25', amountSide: 'destination' })
+    expect(q.status).toBe(200)
+    expect(q.body.quotes).toHaveLength(0)
+    expect(q.body.errors.map((e) => e.code)).toContain('AMOUNT_TOO_HIGH')
+  })
+
+  it.each(['http', 'rpc', 'hang', 'garbage'] as const)('fails open on an RPC failure (%s) and logs it', async (fail) => {
+    const t = setup({ balance: 0n, fail })
+    const s = await t.create()
+    const { session } = await run(t, s, TO_ARB, 'wallet')
+    expect(session.step.state).toBe('PAYMENT')
+    expect(t.calls.length).toBeGreaterThan(0)
+    expect(t.warn).toHaveBeenCalledWith('withdraw balance check failed; continuing without it', expect.objectContaining({ sessionId: s.id, chain: 'eip155:8453' }))
+  })
+
+  it('does not apply to app custody or to a chain without an RPC URL', async () => {
+    const t = setup({ balance: 0n }, { treasury: { address: USER, send: async () => ({ hash: TX }) } })
+    const app = await t.create({ source: SRC_APP })
+    expect((await t.call(`/sessions/${app.id}/target`, app.clientSecret, TO_ARB)).status).toBe(200)
+    expect((await t.call(`/sessions/${app.id}/quotes`, app.clientSecret, { method: 'wallet', amount: '25' })).status).toBe(200)
+    const u = setup({ balance: 0n }, { withdraw: { checkBalance: { rpcUrls: { 'eip155:1': RPC } } } })
+    const s = await u.create()
+    await run(u, s, TO_ARB, 'wallet')
+    expect(t.calls).toHaveLength(0)
+    expect(u.calls).toHaveLength(0)
+  })
+
+  it('a native source reads eth_getBalance (18 decimals)', async () => {
+    const calls: Rpc[] = []
+    const warn = vi.fn()
+    const rt = {
+      config: { withdraw: { checkBalance: { rpcUrls: { 'eip155:8453': RPC } } } },
+      fetch: rpcFetch({ balance: 1_500_000_000_000_000_000n }, calls),
+      log: { ...quiet, warn },
+    } as unknown as Runtime
+    const rec = { id: 'sess_1', walletAddress: USER, source: { chain: 'eip155:8453', token: 'native', symbol: 'ETH', decimals: 18, custody: 'user_wallet' } } as unknown as SessionRecord
+    expect(await readSourceBalance(rt, rec)).toEqual({ chain: 'eip155:8453', token: 'native', value: '1.5', symbol: 'ETH' })
+    expect(calls).toEqual([{ method: 'eth_getBalance', params: [USER, 'latest'] }])
+    // Unknown decimals or a wallet address that is not EVM: no check (and no RPC call).
+    expect(await readSourceBalance(rt, { ...rec, source: { ...rec.source!, decimals: undefined } } as SessionRecord)).toBeUndefined()
+    expect(await readSourceBalance(rt, { ...rec, walletAddress: 'not-an-evm-address' } as SessionRecord)).toBeUndefined()
+    expect(calls).toHaveLength(1)
+    expect(warn).not.toHaveBeenCalled()
   })
 })

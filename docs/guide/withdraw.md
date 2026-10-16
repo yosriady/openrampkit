@@ -118,6 +118,29 @@ Adapters with offramp legs:
 
 The funds are in the user's own wallet. The modal shows the `WALLET_TX` step and the user signs it. The user must connect a wallet: without one, every method is in "Not available" with "Connect your wallet to withdraw." The server passes the connected address to providers as the sender.
 
+#### Check the balance on the server
+
+The modal reads the wallet balance in the browser. The server does not, unless you turn on `withdraw.checkBalance`. Then the server reads the balance of the source token in the connected wallet over JSON-RPC (ERC-20 `balanceOf`, or `eth_getBalance` for `token: 'native'`):
+
+```ts
+createOpenRamp({
+  // ...
+  withdraw: {
+    checkBalance: {
+      rpcUrls: { 'eip155:8453': 'https://mainnet.base.org', 'eip155:42161': 'https://arb1.arbitrum.io/rpc' },
+      timeoutMs: 3000, // per RPC call (default 3000)
+    },
+  },
+})
+```
+
+- `POST /sessions/:id/quotes`: when the amount (in the source token) is above the balance, the server answers `422 AMOUNT_TOO_HIGH` with the message "Your wallet has 10.5 USDC. Enter a lower amount." and calls no provider. With `amountSide: 'destination'`, each quote whose input is above the balance becomes an `AMOUNT_TOO_HIGH` item in `errors`.
+- `POST /sessions/:id/select`: the server reads the balance again before it starts the first leg, because the balance can change after the quote. Too low gives the same `422 AMOUNT_TOO_HIGH`, and no payment starts.
+- The check fails open: an RPC error, an HTTP error or a timeout does not block the withdrawal. The server logs a warning ("withdraw balance check failed") and goes on.
+- The check applies only to `custody: 'user_wallet'` on EVM chains (`eip155:*`) with an entry in `rpcUrls`, and only when the source decimals are known (USDC, native tokens, or `source.decimals`). Other sessions are not checked.
+
+The method stays in the list: the balance is compared with an amount, and the plan has no amount yet. So a low balance is an error on the amount (like the `amountBounds` maximum), not a "Not available" method.
+
 ### custody: 'app'
 
 Your app holds the funds (for example in a hot wallet or a custodial account). The user never signs. When the leg shows a `WALLET_TX` that waits for the user, the server calls your `treasury.send()` hook instead:
