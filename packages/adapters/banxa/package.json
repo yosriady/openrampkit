@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-banxa",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Banxa adapter",
   "keywords": [
     "adapter",

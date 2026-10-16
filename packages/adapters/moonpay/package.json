@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-moonpay",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit MoonPay adapter",
   "keywords": [
     "adapter",

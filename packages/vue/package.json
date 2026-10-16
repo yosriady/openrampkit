@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/vue",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "Vue 3 wrapper for OpenRampKit: provider, Deposit and Withdraw buttons, composables (SSR-safe, works with Nuxt)",
   "keywords": [
     "nuxt",

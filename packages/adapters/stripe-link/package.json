@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-stripe-link",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Stripe Link headless crypto onramp adapter",
   "keywords": [
     "adapter",

@@ -1,6 +1,6 @@
 {
   "name": "@openrampkit/adapter-flashnet",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "OpenRampKit Flashnet Orchestra adapter (experimental): Cash App and Lightning onramp and payouts, Bitcoin and Tron deposits",
   "keywords": [
     "adapter",
