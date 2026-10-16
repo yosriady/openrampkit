@@ -99,6 +99,22 @@ pnpm --filter sveltekit-demo dev  # http://localhost:3000
 | `src/routes/api/deposit-session/+server.ts` | Creating a session in your backend |
 | `src/routes/+page.svelte` | `setOpenRamp` and `use:depositButton` |
 
+## SolidStart (Solid)
+
+[`examples/solidstart-demo`](https://github.com/yosriady/openrampkit/tree/main/examples/solidstart-demo) is a minimal SolidStart 2 app with [`@openrampkit/solid`](../api/solid.md). It has the server, a session route and a deposit button, with mock providers only. SolidStart 2 needs Node.js 24 or later.
+
+```bash
+pnpm install && pnpm build         # from the repository root, once
+pnpm --filter solidstart-demo dev  # http://localhost:3000
+```
+
+| File | Shows |
+|---|---|
+| `src/lib/openramp.server.ts` | `createOpenRamp` with the mock adapter |
+| `src/routes/api/openramp/[...path].ts` | Mounting the handler with `openramp.handle(event.request)` |
+| `src/routes/api/deposit-session.ts` | Creating a session in your backend |
+| `src/routes/index.tsx` | `OpenRampProvider` and `DepositButton` |
+
 ## Cloudflare Worker
 
 [`examples/cloudflare-worker`](https://github.com/yosriady/openrampkit/tree/main/examples/cloudflare-worker) runs the server as a standalone Worker with a Durable Object session store (`durableObjectStore`). Your app backend creates sessions over HTTP with a shared API key, through the `authorize` hook. See [Deploy on Cloudflare Workers](../deploy/cloudflare-workers.md).

@@ -1,0 +1,25 @@
+{
+  "name": "solidstart-demo",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite dev --port 3000",
+    "build": "vite build",
+    "start": "node .output/server/index.mjs"
+  },
+  "dependencies": {
+    "@openrampkit/adapter-mock": "workspace:*",
+    "@openrampkit/client": "workspace:*",
+    "@openrampkit/core": "workspace:*",
+    "@openrampkit/server": "workspace:*",
+    "@openrampkit/solid": "workspace:*",
+    "@solidjs/router": "^1.0.0",
+    "@solidjs/start": "^2.0.5",
+    "nitro": "^3.0.260903-beta",
+    "solid-js": "^1.9.15",
+    "vite": "^8.3.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

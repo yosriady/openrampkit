@@ -1,0 +1,5 @@
+.output/
+.nitro/
+.vinxi/
+dist/
+.env

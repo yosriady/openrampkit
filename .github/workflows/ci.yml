@@ -36,6 +36,8 @@ jobs:
           pnpm --filter next-demo exec tsc --noEmit -p .
           pnpm --filter cloudflare-worker-example exec tsc --noEmit -p .
           pnpm --filter playground typecheck
+      - name: Build framework examples (Nuxt, SvelteKit, SolidStart)
+        run: pnpm --filter nuxt-demo --filter sveltekit-demo --filter solidstart-demo build
       - name: Package smoke test (pack, install, ESM, CJS, SSR, TypeScript)
         run: pnpm smoke
       - name: Bundle size budget (browser packages, min+gzip)
