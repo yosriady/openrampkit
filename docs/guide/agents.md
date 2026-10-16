@@ -90,24 +90,52 @@ Put the guardrails in a JSON file. Keep secrets (the URL and the app key) in env
 }
 ```
 
+This table lists every field of `OpenRampMcpConfig`. The CLI reads the same fields from the JSON file, except the fields marked "library only".
+
 | Field | Default | Description |
 |---|---|---|
+| `connection` | required (library) | How the MCP server reaches your OpenRampKit server: `{ baseUrl, appKey, appKeyHeader?, fetch? }` or `{ openramp }`. See [Library](#library). The CLI builds it from `OPENRAMP_URL` (or `baseUrl` in the file), `OPENRAMP_APP_KEY` and `appKeyHeader`. The CLI ignores a `connection` field in the file. |
 | `maxAmounts` | required | The largest amount per session, by currency code or token symbol. The agent can use only these currencies. |
-| `deposit.destinations` | none | The only wallets that the agent can fund. The agent picks one by `name`. Without `deposit`, the deposit tool is off. |
-| `deposit.allowCustomAddress` | off | `{ chains, tokens? }`: let the agent give its own address, on these chains and tokens only. |
-| `withdraw.source` | none | The asset that leaves and who holds it. For agent payouts, use `custody: 'app'` and a server [`treasury`](./withdraw.md#custody-app). Without `withdraw`, the payout tool is off. |
-| `withdraw.allowedDestinations` | cash only | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
+| `deposit` | none | Turns on deposits (`create_deposit_session`). Without `deposit`, the deposit tool is off. |
+| `deposit.destinations` | required in `deposit` | The only wallets that the agent can fund. The agent picks one by `name`. See [Named destinations](#named-destinations). |
+| `deposit.allowCustomAddress` | off | `{ chains, tokens? }`: let the agent give its own address, on these chains and tokens only. `tokens` maps a chain to the allowed token addresses. Without `tokens`, the tokens of `deposit.destinations` on that chain are allowed. |
+| `withdraw` | none | Turns on payouts (`create_withdraw_session`). Without `withdraw`, the payout tool is off. |
+| `withdraw.source` | required in `withdraw` | The asset that leaves and who holds it. For agent payouts, use `custody: 'app'` and a server [`treasury`](./withdraw.md#custody-app). |
+| `withdraw.allowedDestinations` | cash only (`{ fiat: {} }`) | Where the person can receive the funds on a pay link. See [Allowed targets](./withdraw.md#allowed-targets). |
 | `withdraw.targets` | none | Bound payout wallets, in the same form as `deposit.destinations`. The agent picks one by `name`. The MCP server sets the target and starts the payout. No pay link is made. Needs `custody: 'app'`. |
 | `withdraw.requireBoundTarget` | `false` in the library, `true` in the CLI | Refuse payouts without a bound target. Then the agent cannot make a payout pay link. |
+| `limits` | none | Limits across sessions. The counters are in `registry`. Set them for any agent that can make payouts. |
 | `limits.maxTotalPerDay` | none | The largest total per UTC day, by currency. When set, it must list each currency of `maxAmounts`. Each session counts its largest amount. Payouts and deposits have separate totals. |
 | `limits.maxSessionsPerHour` | none | The most sessions (deposits and payouts together) that the agent can create in one UTC hour |
 | `approve` | none | Library only. `async (request) => boolean`. It runs before each payout session. See [Operator approval](#operator-approval). |
-| `registry` | `memoryRegistry()` | Keeps client secrets and the `limits` counters. See [Library](#library). |
+| `registry` | `memoryRegistry()` | Library only. Keeps client secrets and the `limits` counters. See [Library](#library). |
 | `allowedMethods` | all | Only these methods, for example `["vietqr", "qris"]` |
 | `userId` | `agent` | The `userId` of each session |
-| `sessionTtlMinutes` | `30` | The longest session life. The agent can ask for less. |
-| `maxWaitSeconds` | `120` | The longest time of one `wait_for_completion` call (at most 600) |
-| `pollIntervalMs` | `3000` | The poll interval of `wait_for_completion` |
+| `sessionTtlMinutes` | `30` | The longest session life, in minutes. The agent can ask for less. |
+| `maxWaitSeconds` | `120` | The longest time of one `wait_for_completion` call, in seconds (at most 600) |
+| `pollIntervalMs` | `3000` | The poll interval of `wait_for_completion`, in milliseconds |
+| `serverInfo` | `{ name: 'openrampkit', version: <package version> }` | `{ name, version }`: the name and version in the MCP handshake |
+
+The JSON file of the CLI can also have these fields. They are not part of `OpenRampMcpConfig`:
+
+| Field | Default | Description |
+|---|---|---|
+| `baseUrl` | none | The base URL of your OpenRampKit server. `OPENRAMP_URL` wins when both are set. |
+| `appKeyHeader` | `x-app-key` | The header that carries the app key |
+
+### Named destinations
+
+Each entry of `deposit.destinations` and `withdraw.targets` has these fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | The short name that the agent uses, for example `treasury`. Names must be unique. |
+| `description` | no | Shown to the agent, for example "Team wallet on Base" |
+| `chain` | yes | CAIP-2 chain id, for example `eip155:8453` |
+| `token` | yes | The token address, or `native` |
+| `address` | yes | The wallet address. It must be valid for `chain`. |
+| `symbol` | no | The token symbol, for example `USDC` |
+| `decimals` | no | The token decimals, for example `6` |
 
 The MCP server checks the config when it starts. It stops with an error when:
 
@@ -182,16 +210,7 @@ Clients connect to `http://127.0.0.1:3333/mcp`. Each request must have `Authoriz
 
 The CLI listens on `127.0.0.1` only. To listen on other interfaces, set `--host 0.0.0.0` (or `HOST`). Do this only behind a proxy with TLS. A request body larger than 1 MB gets `413`.
 
-The CLI reads these environment variables:
-
-| Variable | Description |
-|---|---|
-| `OPENRAMP_URL` | The `baseUrl` of your OpenRampKit server. It can also be `baseUrl` in the config file. |
-| `OPENRAMP_APP_KEY` | The key that your `authorize` hook checks (header `x-app-key`). |
-| `OPENRAMP_MCP_CONFIG` | The path to the JSON file with the guardrails. `--config <path>` also works. |
-| `MCP_HTTP_TOKEN` | With `--http` only: the bearer token that clients send. |
-| `PORT` | With `--http` only: the port. The default is `3333`. |
-| `HOST` | With `--http` only: the interface. The default is `127.0.0.1`. |
+For all the environment variables and flags, see [CLI reference](#cli-reference).
 
 On Cloudflare Workers, Deno or Bun, use the web-standard handler:
 
@@ -203,6 +222,60 @@ export default { fetch: (req: Request) => handler(req) }
 ```
 
 The handler is stateless. It keeps the session registry in memory for the life of the process. For many instances, give a shared `registry` (see [Library](#library)). Each instance with its own memory registry has its own `limits` counters. The handler refuses a body larger than `maxBodyBytes` (default 1 MB) with `413`.
+
+## CLI reference
+
+```bash
+openrampkit-mcp [--config <path>] [--http] [--port <port>] [--host <host>]
+```
+
+Without `--http`, the CLI uses stdio. The CLI writes its messages to stderr. On an error, it writes `openrampkit-mcp: <message>` and exits with code 1.
+
+### Flags
+
+| Flag | Description |
+|---|---|
+| `--config <path>` | The path to the JSON file with the guardrails. It wins over `OPENRAMP_MCP_CONFIG`. |
+| `--http` | Use Streamable HTTP in place of stdio. Clients connect to `http://<host>:<port>/mcp`. Needs `MCP_HTTP_TOKEN`. |
+| `--port <port>` | With `--http` only: the port. It wins over `PORT`. The default is `3333`. |
+| `--host <host>` | With `--http` only: the interface. It wins over `HOST`. The default is `127.0.0.1`. Set `0.0.0.0` only behind a proxy with TLS. |
+
+### Environment variables
+
+| Variable | Required | Description |
+|---|---|---|
+| `OPENRAMP_URL` | yes, unless the file has `baseUrl` | The base URL of your OpenRampKit server. It wins over `baseUrl` in the config file. |
+| `OPENRAMP_APP_KEY` | yes | The key that your `authorize` hook checks. The CLI sends it in `x-app-key`, or in the header that `appKeyHeader` sets. The config file cannot set the key. |
+| `OPENRAMP_MCP_CONFIG` | yes, unless you give `--config` | The path to the JSON file with the guardrails |
+| `MCP_HTTP_TOKEN` | with `--http` | The bearer token that clients send. It must have at least 16 characters. |
+| `PORT` | no | With `--http` only: the port. The default is `3333`. |
+| `HOST` | no | With `--http` only: the interface. The default is `127.0.0.1`. |
+
+### Which value wins
+
+When a flag, an environment variable and the config file set the same value, the CLI uses the first one in this order:
+
+| Value | Order |
+|---|---|
+| Config file path | `--config`, then `OPENRAMP_MCP_CONFIG` |
+| Server URL | `OPENRAMP_URL`, then `baseUrl` in the file |
+| App key | `OPENRAMP_APP_KEY` only |
+| App key header | `appKeyHeader` in the file, then `x-app-key` |
+| HTTP port | `--port`, then `PORT`, then `3333` |
+| HTTP interface | `--host`, then `HOST`, then `127.0.0.1` |
+| HTTP bearer token | `MCP_HTTP_TOKEN` only |
+
+### Checks at start
+
+The CLI stops with an error when:
+
+- There is no config file path.
+- `OPENRAMP_APP_KEY` is not set, or there is no server URL.
+- `--http` is set and `MCP_HTTP_TOKEN` is not set, or it has fewer than 16 characters.
+- `withdraw` is set, `withdraw.targets` is empty, and the file does not set `withdraw.requireBoundTarget`. To allow pay link payouts, set `"requireBoundTarget": false`.
+- The config fails a check in [Configure the guardrails](#configure-the-guardrails).
+
+The CLI writes a warning (and starts) when `withdraw.requireBoundTarget` is `false`, or when payouts are on with no `limits`.
 
 ## Tools
 
