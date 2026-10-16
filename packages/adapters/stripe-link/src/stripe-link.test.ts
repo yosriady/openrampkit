@@ -69,7 +69,22 @@ function provider(over: Partial<{ intent: FakeRoute; customer: () => unknown; wa
   return { ...f, state }
 }
 
-type Run = { a: ReturnType<typeof stripeLink>; ctx: AdapterContext; store: MemoryKV; shared: MemoryKV; quote: LegQuote; step: LegStep; ref: string; go: (name: string, inputs?: Record<string, unknown>) => Promise<LegStep> }
+/** The client key of the client that signs in to Link (see `STRIPE_LINK_CLIENT_KEY`) */
+const KEY = 'k'.repeat(43)
+
+type Run = {
+  a: ReturnType<typeof stripeLink>
+  ctx: AdapterContext
+  store: MemoryKV
+  shared: MemoryKV
+  quote: LegQuote
+  step: LegStep
+  ref: string
+  /** A transition from the client that signs in (it sends `KEY`) */
+  go: (name: string, inputs?: Record<string, unknown>) => Promise<LegStep>
+  /** A transition with exactly these inputs (another client: no key, or another key) */
+  raw: (name: string, inputs?: Record<string, unknown>, ctx?: AdapterContext) => Promise<LegStep>
+}
 
 async function begin(p: ReturnType<typeof provider>, o: { legId?: string; email?: string | null; options?: Partial<Parameters<typeof stripeLink>[0]>; ip?: string } = {}): Promise<Run> {
   const a = stripeLink({ ...opts, ...o.options })
@@ -80,7 +95,8 @@ async function begin(p: ReturnType<typeof provider>, o: { legId?: string; email?
   const quote = await a.quote({ leg: l, amountIn: usd('100') }, ctx)
   const step = await a.start({ leg: l, quote, deliverTo: { address: WALLET } }, ctx)
   const ref = step.ref!
-  return { a, ctx, store, shared, quote, step, ref, go: (name, inputs) => a.transition!({ leg: l, ref, name, ...(inputs ? { inputs } : {}) }, ctx) }
+  const raw = (name: string, inputs?: Record<string, unknown>, c: AdapterContext = ctx) => a.transition!({ leg: l, ref, name, ...(inputs ? { inputs } : {}) }, c)
+  return { a, ctx, store, shared, quote, step, ref, raw, go: (name, inputs) => raw(name, { clientKey: KEY, ...inputs }) }
 }
 
 const sdkStep = (s: LegStep) => (s.action?.surface?.kind === 'PROVIDER_SDK' ? s.action.surface.params.step : undefined)
@@ -296,7 +312,10 @@ describe('stripe-link adapter', () => {
 
   it('checkout: 3DS keeps the payment step with the new client secret; rejected fails', async () => {
     let n = 0
-    const p = provider({ checkout: () => (n++ === 0 ? SESSION('requires_payment', { client_secret: 'cos_123_secret_2' }) : SESSION('rejected')) })
+    const p = provider({
+      wallets: () => ({ data: [{ wallet_address: WALLET, network: 'base' }] }),
+      checkout: () => (n++ === 0 ? SESSION('requires_payment', { client_secret: 'cos_123_secret_2' }) : SESSION('rejected')),
+    })
     const r = await begin(p)
     await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })
     await r.go(T.paymentMethod, { paymentToken: 'cpt_1' })
@@ -358,7 +377,7 @@ describe('stripe-link adapter', () => {
   })
 
   it('KYC rejected fails the leg; an expired token sends the user back to the Link sign-in', async () => {
-    const rej = await begin(provider({ customer: () => ({ kyc_tiers: [{ tier: 'l1', verification_status: 'rejected' }] }) }))
+    const rej = await begin(provider({ customer: () => ({ id: 'crc_1', kyc_tiers: [{ tier: 'l1', verification_status: 'rejected' }] }) }))
     expect(await rej.go(T.authenticated, { cryptoCustomerId: 'crc_1' })).toMatchObject({ status: 'failed', error: { code: 'KYC_REJECTED' } })
 
     vi.useFakeTimers({ now: Date.parse('2030-01-01T00:00:00Z') })
@@ -391,6 +410,157 @@ describe('stripe-link adapter', () => {
     // cancel forgets the token
     await r2.a.cancel!({ leg: leg('card'), ref: r2.ref }, r2.ctx)
     expect(r2.store.data.get(`t:${r2.ref}`)).toBeNull()
+  })
+
+  describe('identity binding and authorization', () => {
+    const onFile = () => ({ data: [{ wallet_address: WALLET, network: 'base' }] })
+
+    it('a crypto customer id that the Link token cannot read (another person) is refused; the token is never stored', async () => {
+      const p = provider({ wallets: onFile })
+      const r = await begin(p)
+      // crc_2 is not the customer of this sign-in: Stripe answers 404 for this token
+      const back = await r.go(T.authenticated, { cryptoCustomerId: 'crc_2' })
+      expect(sdkStep(back)).toBe('authenticate')
+      expect(r.store.data.get(`t:${r.ref}`) ?? null).toBeNull()
+      // The id is never used for a later call: KYC, wallet and payment need a new sign-in first
+      await expect(r.go(T.paymentMethod, { paymentToken: 'cpt_1' })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      expect(p.calls.some((c) => c.method === 'POST' && c.url.endsWith('/v1/crypto/onramp_sessions'))).toBe(false)
+    })
+
+    it('a customer object with another id is refused', async () => {
+      const r = await begin(provider({ customer: () => ({ ...VERIFIED, id: 'crc_other' }) }))
+      expect(sdkStep(await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' }))).toBe('authenticate')
+      expect(r.store.data.get(`t:${r.ref}`) ?? null).toBeNull()
+    })
+
+    it('an auth intent that the account owner did not approve gives no token (403 from Link)', async () => {
+      const p = provider()
+      const routes = { method: 'POST' as const, match: '/v1/link_auth_intent/lai_1/tokens', status: 403, reply: () => ({ error: { message: "LinkAuthIntent hasn't been consented by the user" } }) }
+      const f = fakeFetch([{ method: 'GET', match: '/v1/crypto/onramp_quotes', reply: () => QUOTES }, routes, { method: 'POST', match: /link_auth_intent$/, reply: () => ({ id: 'lai_1' }) }])
+      const r = await begin({ ...p, fetch: f.fetch, calls: f.calls })
+      await expect(r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })).rejects.toMatchObject({ error: { code: 'PROVIDER_UNAVAILABLE' } })
+      expect(r.store.data.get(`t:${r.ref}`) ?? null).toBeNull()
+      expect(f.calls.some((c) => c.url.includes('/v1/crypto/customers'))).toBe(false)
+    })
+
+    it('link_authenticated needs a client key; another client (a pay link, no key or another key) cannot use the token', async () => {
+      const p = provider({ wallets: onFile })
+      const r = await begin(p)
+      await expect(r.raw(T.authenticated, { cryptoCustomerId: 'crc_1' })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      await expect(r.raw(T.authenticated, { cryptoCustomerId: 'crc_1', clientKey: 'short' })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      expect(sdkStep(await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' }))).toBe('collect_payment_method')
+      expect(JSON.stringify([...r.store.data.values()])).not.toContain(KEY)
+      // Another client: no session is created with the owner's token; the token is dropped; a new sign-in starts
+      const before = p.calls.length
+      const other = await r.raw(T.paymentMethod, { paymentToken: 'cpt_9', clientKey: 'x'.repeat(43) })
+      expect(sdkStep(other)).toBe('authenticate')
+      expect(p.calls.slice(before).some((c) => c.url.includes('/v1/crypto/'))).toBe(false)
+      expect(r.store.data.get(`t:${r.ref}`)).toBeNull()
+      // The owner signs in again (one-time code) and goes on
+      expect(sdkStep(await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' }))).toBe('collect_payment_method')
+      expect(sdkStep(await r.raw(T.paymentMethod, { paymentToken: 'cpt_9' }))).toBe('authenticate')
+    })
+
+    it('checkout from another client is refused (403) and keeps the leg; the owner can still pay', async () => {
+      const p = provider({ wallets: onFile })
+      const r = await begin(p)
+      await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })
+      await r.go(T.paymentMethod, { paymentToken: 'cpt_1' })
+      await expect(r.raw(T.checkout)).rejects.toMatchObject({ status: 403 })
+      await expect(r.raw(T.checkout, { clientKey: 'y'.repeat(43) })).rejects.toMatchObject({ status: 403 })
+      expect(p.calls.some((c) => c.url.endsWith('/checkout'))).toBe(false)
+      expect(await r.go(T.checkout)).toMatchObject({ status: 'processing' })
+    })
+
+    it('transitions run only from their own stage (no skipped KYC, wallet or payment method step)', async () => {
+      const p = provider({ customer: () => ({ id: 'crc_1', verifications: [{ type: 'kyc_verified', status: 'not_started' }] }) })
+      const r = await begin(p)
+      await expect(r.go(T.paymentMethod, { paymentToken: 'cpt_1' })).rejects.toMatchObject({ status: 409 })
+      await expect(r.go(T.checkout)).rejects.toMatchObject({ status: 409 })
+      await expect(r.go(T.registered)).rejects.toMatchObject({ status: 409 })
+      expect(sdkStep(await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' }))).toBe('submit_kyc_info')
+      // KYC is not done: the client cannot jump to the wallet, the payment method or a second sign-in
+      await expect(r.go(T.wallet)).rejects.toMatchObject({ status: 409 })
+      await expect(r.go(T.paymentMethod, { paymentToken: 'cpt_1' })).rejects.toMatchObject({ status: 409 })
+      await expect(r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })).rejects.toMatchObject({ status: 409 })
+      await expect(r.go(T.email, { email: 'other@example.com' })).rejects.toMatchObject({ status: 409 })
+      expect(p.calls.some((c) => c.method === 'POST' && c.url.endsWith('/v1/crypto/onramp_sessions'))).toBe(false)
+    })
+
+    it("the app's email is locked: the client cannot sign in with another person's email", async () => {
+      const p = provider()
+      const r = await begin(p)
+      await expect(r.go(T.email, { email: 'victim@example.com' })).rejects.toMatchObject({ status: 409 })
+      const intents = p.calls.filter((c) => c.url.endsWith('/v1/link_auth_intent'))
+      expect(intents.map((c) => (c.body as { email: string }).email)).toEqual(['user@example.com'])
+      // requireSessionEmail: no FORM fallback
+      await expect(begin(provider(), { email: null, options: { requireSessionEmail: true } })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      // A malformed app email is an error, not a reason to ask the client
+      await expect(begin(provider(), { email: 'not-an-email' })).rejects.toMatchObject({ error: { code: 'BAD_REQUEST' } })
+      // With no app email, the FORM email can be fixed before the sign-in, and is locked after it
+      const f = await begin(provider({ wallets: onFile }), { email: null })
+      expect(sdkStep(await f.go(T.email, { email: 'typo@example.com' }))).toBe('authenticate')
+      expect(sdkStep(await f.go(T.email, { email: 'user@example.com' }))).toBe('authenticate')
+      await f.go(T.authenticated, { cryptoCustomerId: 'crc_1' })
+      await expect(f.go(T.email, { email: 'other@example.com' })).rejects.toMatchObject({ status: 409 })
+    })
+
+    it('the leg record and the token are bound to the session and the app user', async () => {
+      const p = provider({ wallets: onFile })
+      const r = await begin(p)
+      await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })
+      // Another session or another user with the same store (and the same ref) gets nothing
+      const otherUser = makeCtx({ fetch: p.fetch, store: r.store, shared: r.shared, session: { userId: 'user_2', email: 'user@example.com' } })
+      const otherSession = makeCtx({ fetch: p.fetch, store: r.store, shared: r.shared, session: { id: 'sess_2', email: 'user@example.com' } })
+      await expect(r.raw(T.paymentMethod, { paymentToken: 'cpt_1', clientKey: KEY }, otherUser)).rejects.toMatchObject({ error: { code: 'SESSION_EXPIRED' } })
+      await expect(r.raw(T.paymentMethod, { paymentToken: 'cpt_1', clientKey: KEY }, otherSession)).rejects.toMatchObject({ error: { code: 'SESSION_EXPIRED' } })
+      await expect(r.a.status!({ leg: leg('card'), ref: r.ref }, otherUser)).rejects.toMatchObject({ error: { code: 'SESSION_EXPIRED' } })
+      // Even with a copied record, the sealed token does not open for another user
+      const recKey = [...r.store.data.keys()].find((k) => k.startsWith('r:'))!
+      const rec = r.store.data.get(recKey) as Record<string, unknown>
+      await r.store.put(recKey, { ...rec, owner: 'sess_1:user_2' })
+      const before = p.calls.length
+      expect(sdkStep(await r.raw(T.paymentMethod, { paymentToken: 'cpt_1', clientKey: KEY }, otherUser))).toBe('authenticate')
+      expect(p.calls.slice(before).some((c) => c.headers.get('stripe-oauth-token') === ACCESS)).toBe(false)
+    })
+
+    it('after a server restart (a new adapter, the same store) the same user and client go on', async () => {
+      const p = provider({ wallets: onFile })
+      const r = await begin(p)
+      await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })
+      const again = stripeLink(opts)
+      const co = await again.transition!({ leg: leg('card'), ref: r.ref, name: T.paymentMethod, inputs: { paymentToken: 'cpt_1', clientKey: KEY } }, r.ctx)
+      expect(co).toMatchObject({ status: 'requires_action', providerRef: 'cos_123' })
+    })
+
+    it('the wallet is always the server-set address; client inputs cannot change it', async () => {
+      const ATTACKER = '0x000000000000000000000000000000000000dead'
+      const p = provider({ wallets: () => ({ data: [{ wallet_address: ATTACKER, network: 'base' }] }) })
+      const r = await begin(p)
+      const w = await r.go(T.authenticated, { cryptoCustomerId: 'crc_1' })
+      expect(w.action?.surface).toMatchObject({ params: { step: 'register_wallet_address', walletAddress: WALLET } })
+      // Only the attacker's address is on file: the wallet step does not pass
+      await expect(r.go(T.wallet, { walletAddress: ATTACKER })).rejects.toMatchObject({ status: 409 })
+      p.state.wallets = () => ({ data: [{ wallet_address: WALLET, network: 'base' }] })
+      await r.go(T.wallet, { walletAddress: ATTACKER })
+      await r.go(T.paymentMethod, { paymentToken: 'cpt_1', walletAddress: ATTACKER, wallet_address: ATTACKER })
+      const post = p.calls.find((c) => c.method === 'POST' && c.url.endsWith('/v1/crypto/onramp_sessions'))!
+      expect(new URLSearchParams(post.raw!).getAll('wallet_address')).toEqual([WALLET])
+    })
+
+    it('webhook: the server index wins; a metadata ref that disagrees with it is ignored', async () => {
+      const a = stripeLink(opts)
+      const shared = memoryKV()
+      const wctx = makeWebhookCtx({ shared })
+      const mine = `slk_${'a'.repeat(24)}`
+      const other = `slk_${'c'.repeat(24)}`
+      const ev = (meta: Record<string, string>) => JSON.stringify({ id: 'evt_9', type: 'crypto.onramp_session.updated', data: { object: SESSION('fulfillment_processing', { metadata: meta }) } })
+      await shared.put('cos:cos_123', mine)
+      expect(await a.webhook!.parse(ev({ ork_ref: other }), wctx)).toEqual([])
+      expect(await a.webhook!.parse(ev({ ork_ref: 'x' }), wctx)).toEqual([])
+      expect(await a.webhook!.parse(ev({ ork_ref: mine }), wctx)).toMatchObject([{ ref: mine }])
+      expect(await a.webhook!.parse(ev({}), wctx)).toMatchObject([{ ref: mine }])
+    })
   })
 
   it('kycState reads both shapes', () => {
@@ -471,9 +641,9 @@ describe('stripe-link adapter', () => {
           quote: { amountIn: usd('100') },
           expect: { start: 'AUTH', status: 'COMPLETED' },
           transitions: [
-            { name: T.authenticated, inputs: { cryptoCustomerId: 'crc_1' } },
-            { name: T.paymentMethod, inputs: { paymentToken: 'cpt_1' } },
-            { name: T.checkout },
+            { name: T.authenticated, inputs: { cryptoCustomerId: 'crc_1', clientKey: KEY } },
+            { name: T.paymentMethod, inputs: { paymentToken: 'cpt_1', clientKey: KEY } },
+            { name: T.checkout, inputs: { clientKey: KEY } },
           ],
         },
         { leg: leg('google_pay'), quote: { amountIn: usd('50') }, expect: { start: 'AUTH' } },

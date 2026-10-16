@@ -47,7 +47,7 @@ import {
   verifyTimestampedHmac,
 } from '@openrampkit/adapter'
 import type { AdapterContext, AdapterEnv, LegEvent, Logger } from '@openrampkit/adapter'
-import { OpenRampException, SOLANA_MAINNET, SOLANA_USDC_MINT, TEMPO_MAINNET, TEMPO_USDC, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
+import { OpenRampException, SOLANA_MAINNET, timingSafeEqual, SOLANA_USDC_MINT, TEMPO_MAINNET, TEMPO_USDC, USDC, isDecimal, openRampError, roundTo } from '@openrampkit/core'
 import type { Amount, Asset, CryptoAsset, Fee, LegSpec, LegStatus, LegStep, PollSpec, StepDetailCode, Surface, Transition } from '@openrampkit/core'
 import { seal, sealKey, unseal } from './seal.js'
 
@@ -66,6 +66,13 @@ export type StripeLinkOptions = {
    * of one key is not enough.
    */
   tokenKey?: string
+  /**
+   * Only the session's own `email` (set by the app at session creation) may sign in to Link. With
+   * true, a session with no email cannot start this leg, and the email FORM never shows. Default
+   * false: a session with no email asks the user for one. A session email is always locked: the
+   * client cannot change it.
+   */
+  requireSessionEmail?: boolean
   /** Limit the legs (card, apple_pay, google_pay, ach) */
   methods?: string[]
   /** Default https://api.stripe.com */
@@ -146,6 +153,8 @@ type Stage = 'email' | 'register' | 'authenticate' | 'kyc' | 'kyc_review' | 'doc
 
 /** What we keep per leg in the session store. No secret: the token is sealed under its own key. */
 type LegRecord = {
+  /** `{session id}:{user id}` of the session that started the leg. Every load checks it. */
+  owner: string
   legId: string
   stage: Stage
   network: Network
@@ -155,7 +164,11 @@ type LegRecord = {
   destinationAmount?: string
   nonce: string
   email?: string
+  /** The email came from the app (the session) or a finished sign-in, so the client cannot change it */
+  emailLocked?: boolean
   authIntentId?: string
+  /** SHA-256 (hex) of the client key that finished the Link sign-in. Later Link calls need the same key. */
+  keyHash?: string
   customerId?: string
   paymentToken?: string
   onrampSessionId?: string
@@ -201,6 +214,21 @@ const STATUS = statusMap<{ status: LegStatus; detail?: StepDetailCode }>('Stripe
 const EMAIL = /^[^\s@]{1,200}@[^\s@]{1,200}\.[^\s@]{2,}$/
 const CUSTOMER_ID = /^crc_[A-Za-z0-9]{1,200}$/
 const PAYMENT_TOKEN = /^cpt_[A-Za-z0-9]{1,200}$/
+/** A client key: 32 to 128 URL-safe characters that the client makes at random and keeps in memory */
+const CLIENT_KEY = /^[A-Za-z0-9_-]{32,128}$/
+
+/**
+ * The input that binds the Link sign-in to one client. The client makes a random key (for example 32
+ * random bytes in base64url), sends it with `link_authenticated`, and sends the same key with every
+ * later transition. The key is never in a step, so another holder of a session credential (a pay link,
+ * another device) cannot use the Link token of the user who signed in.
+ */
+export const STRIPE_LINK_CLIENT_KEY = 'clientKey'
+
+async function sha256Hex(s: string): Promise<string> {
+  const d = new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(s)))
+  return Array.from(d, (b) => b.toString(16).padStart(2, '0')).join('')
+}
 
 /** Names of the transitions the client calls. The renderer calls them from the Stripe SDK callbacks. */
 export const STRIPE_LINK_TRANSITIONS = {
@@ -213,6 +241,18 @@ export const STRIPE_LINK_TRANSITIONS = {
   paymentMethod: 'payment_method_collected',
   checkout: 'checkout',
 } as const
+
+/** The stages from which each transition may run. Anything else is a 409. */
+const TRANSITION_STAGES: Record<string, Stage[]> = {
+  [STRIPE_LINK_TRANSITIONS.email]: ['email', 'register', 'authenticate'],
+  [STRIPE_LINK_TRANSITIONS.registered]: ['register'],
+  [STRIPE_LINK_TRANSITIONS.authenticated]: ['authenticate'],
+  [STRIPE_LINK_TRANSITIONS.kyc]: ['kyc', 'kyc_review'],
+  [STRIPE_LINK_TRANSITIONS.documents]: ['documents', 'kyc_review'],
+  [STRIPE_LINK_TRANSITIONS.wallet]: ['wallet'],
+  [STRIPE_LINK_TRANSITIONS.paymentMethod]: ['payment_method'],
+  [STRIPE_LINK_TRANSITIONS.checkout]: ['checkout'],
+}
 
 function num(s: string | undefined | null): string | undefined {
   return s && isDecimal(s) ? s : undefined
@@ -324,9 +364,17 @@ export function stripeLink(opts: StripeLinkOptions) {
   const recKey = (ref: string) => `r:${ref}`
   const tokKey = (ref: string) => `t:${ref}`
 
+  const ownerOf = (ctx: Pick<AdapterContext, 'session'>) => `${ctx.session.id}:${ctx.session.userId}`
+  const gone = () => new OpenRampException(openRampError('SESSION_EXPIRED', { message: 'This Stripe purchase is no longer open. Start again.' }), 410)
+
   async function loadRecord(ctx: AdapterContext, ref: string): Promise<LegRecord> {
     const rec = await ctx.store.get<LegRecord>(recKey(ref))
-    if (!rec) throw new OpenRampException(openRampError('SESSION_EXPIRED', { message: 'This Stripe purchase is no longer open. Start again.' }), 410)
+    if (!rec) throw gone()
+    // A record of another session or another app user (for example a shared or copied store) is never used.
+    if (rec.owner !== ownerOf(ctx)) {
+      ctx.log.warn('stripe-link: leg record of another session or user; refused', { ref })
+      throw gone()
+    }
     return rec
   }
 
@@ -334,13 +382,20 @@ export function stripeLink(opts: StripeLinkOptions) {
     await ctx.store.put(recKey(ref), rec, RECORD_TTL_SEC)
   }
 
-  async function putToken(ctx: AdapterContext, ref: string, token: string, expiresIn: number | undefined): Promise<void> {
+  /**
+   * The additional data of a sealed token: the session, the app user, the leg ref and the crypto
+   * customer that the token was checked for. A token opens only for that user, leg and customer.
+   */
+  const tokenAad = (ctx: Pick<AdapterContext, 'session'>, ref: string, customerId: string) => `${ctx.session.id}\n${ctx.session.userId}\n${ref}\n${customerId}`
+
+  async function putToken(ctx: AdapterContext, ref: string, customerId: string, token: string, expiresIn: number | undefined): Promise<void> {
     const ttl = Math.max(1, Math.min(3600, Number.isFinite(expiresIn) && expiresIn! > 0 ? expiresIn! : 3600) - TOKEN_MARGIN_SEC)
-    await ctx.store.put(tokKey(ref), await seal(await tokenKey(), token, ref), ttl)
+    await ctx.store.put(tokKey(ref), await seal(await tokenKey(), token, tokenAad(ctx, ref, customerId)), ttl)
   }
 
-  async function getToken(ctx: AdapterContext, ref: string): Promise<string | undefined> {
-    return unseal(await tokenKey(), await ctx.store.get(tokKey(ref)), ref)
+  async function getToken(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<string | undefined> {
+    if (!rec.customerId) return undefined
+    return unseal(await tokenKey(), await ctx.store.get(tokKey(ref)), tokenAad(ctx, ref, rec.customerId))
   }
 
   /** Forget the token as soon as the leg needs it no more. ScopedKV has no delete: overwrite it with a 1 second TTL. */
@@ -471,19 +526,54 @@ export function stripeLink(opts: StripeLinkOptions) {
    * token, so the user signs in again).
    */
   async function tokenOrSignIn(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<{ token: string } | { step: LegStep }> {
-    const token = await getToken(ctx, ref)
+    const token = await getToken(ctx, ref, rec)
     if (token) return { token }
-    if (!rec.email) return { step: stageStep(ref, { ...rec, stage: 'email' }) }
-    return { step: await startAuth(ctx, ref, { ...rec, stage: 'authenticate' }) }
+    return { step: await signInAgain(ctx, ref, rec) }
+  }
+
+  /** Forget the token and the client key, and start a new Link sign-in for the same email. */
+  async function signInAgain(ctx: AdapterContext, ref: string, rec: LegRecord): Promise<LegStep> {
+    await dropToken(ctx, ref)
+    const next: LegRecord = { ...rec }
+    delete next.keyHash
+    delete next.authIntentId
+    if (!next.email) {
+      next.stage = 'email'
+      await saveRecord(ctx, ref, next)
+      return stageStep(ref, next)
+    }
+    return startAuth(ctx, ref, { ...next, stage: 'authenticate' })
+  }
+
+  /**
+   * The token for a transition from the client that finished the sign-in: the client must send the
+   * same `clientKey`. Another client (a pay link, another device) gets a new Link sign-in, which needs
+   * the account owner's one-time code. The old token is dropped, so nobody can use it.
+   */
+  async function clientToken(ctx: AdapterContext, ref: string, rec: LegRecord, key: string): Promise<{ token: string } | { step: LegStep }> {
+    if (!rec.keyHash || !CLIENT_KEY.test(key) || !timingSafeEqual(await sha256Hex(key), rec.keyHash)) {
+      // Once the onramp session exists, a 3DS check may still be open on the right client: refuse, and
+      // keep the leg as it is. Before that, start a new sign-in.
+      if (rec.onrampSessionId) {
+        ctx.log.warn('stripe-link: checkout without the client key of the Link sign-in; refused', { ref })
+        throw bad('Only the device that signed in to Link can pay. To pay here, start the payment again.', 403)
+      }
+      ctx.log.warn('stripe-link: transition without the client key of the Link sign-in; signing in again', { ref })
+      return { step: await signInAgain(ctx, ref, rec) }
+    }
+    return tokenOrSignIn(ctx, ref, rec)
   }
 
   /** After the sign-in, and after each KYC step: the KYC check, then the wallet check. */
-  async function afterAuth(ctx: AdapterContext, ref: string, rec: LegRecord, token: string): Promise<LegStep> {
+  async function afterAuth(ctx: AdapterContext, ref: string, rec: LegRecord, token: string, known?: CryptoCustomer): Promise<LegStep> {
     let customer: CryptoCustomer
-    try {
-      customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(rec.customerId!)}`, { token })
-    } catch (e) {
-      throw toOpenRamp(e, 'check your identity status', ctx.log)
+    if (known) customer = known
+    else {
+      try {
+        customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(rec.customerId!)}`, { token })
+      } catch (e) {
+        throw toOpenRamp(e, 'check your identity status', ctx.log)
+      }
     }
     const kyc = kycState(customer)
     if (kyc === 'rejected') {
@@ -618,8 +708,14 @@ export function stripeLink(opts: StripeLinkOptions) {
       const wallet = input.deliverTo?.address ?? (ctx.destination.type === 'crypto' ? ctx.destination.address : undefined)
       if (!wallet) throw bad('Stripe needs a wallet address to deliver to.')
       const ref = `slk_${randomHex(12)}`
-      const email = ctx.session.email && EMAIL.test(ctx.session.email) ? ctx.session.email : undefined
+      // The app's email is locked: the client cannot replace it. A malformed app email is an error,
+      // never a reason to ask the client for another one.
+      const sessionEmail = ctx.session.email?.trim()
+      if (sessionEmail && !EMAIL.test(sessionEmail)) throw bad('The session email is not valid for Link.')
+      if (!sessionEmail && opts.requireSessionEmail) throw bad('Stripe Link needs the session email. Create the session with an email.')
+      const email = sessionEmail || undefined
       const rec: LegRecord = {
+        owner: ownerOf(ctx),
         legId: input.leg.legId,
         stage: email ? 'authenticate' : 'email',
         network: data.network ?? target.network,
@@ -627,7 +723,7 @@ export function stripeLink(opts: StripeLinkOptions) {
         sourceCurrency: data.sourceCurrency ?? 'usd',
         ...(data.sourceAmount ? { sourceAmount: data.sourceAmount } : { destinationAmount: data.destinationAmount ?? input.quote.output.value }),
         nonce: data.nonce ?? randomHex(8),
-        ...(email ? { email } : {}),
+        ...(email ? { email, emailLocked: true } : {}),
       }
       await saveRecord(ctx, ref, rec)
       return email ? startAuth(ctx, ref, rec) : stageStep(ref, rec)
@@ -637,8 +733,15 @@ export function stripeLink(opts: StripeLinkOptions) {
       const T = STRIPE_LINK_TRANSITIONS
       const rec = await loadRecord(ctx, ref)
       const str = (k: string) => (typeof inputs?.[k] === 'string' ? (inputs[k] as string).trim() : '')
+      const allowed = TRANSITION_STAGES[name]
+      if (!allowed) throw bad(`Unknown transition ${name}.`, 409)
+      // Each transition runs only from its own stage: a client cannot skip the KYC, wallet or payment method step.
+      if (!allowed.includes(rec.stage)) throw bad(`Transition ${name} is not allowed now.`, 409)
+      const key = str(STRIPE_LINK_CLIENT_KEY)
       switch (name) {
         case T.email: {
+          // The app's email (and the email of a finished sign-in) never changes.
+          if (rec.emailLocked || opts.requireSessionEmail) throw bad('The email of this purchase cannot be changed.', 409)
           const email = str('email')
           if (!EMAIL.test(email)) throw bad('Enter a valid email address.')
           return startAuth(ctx, ref, { ...rec, email, stage: 'authenticate' })
@@ -650,8 +753,10 @@ export function stripeLink(opts: StripeLinkOptions) {
           if (!rec.authIntentId) throw bad('Sign in to Link first.', 409)
           const customerId = str('cryptoCustomerId')
           if (!CUSTOMER_ID.test(customerId)) throw bad('Link did not give a customer id.')
+          if (!CLIENT_KEY.test(key)) throw bad(`Send a random \`${STRIPE_LINK_CLIENT_KEY}\` of 32 to 128 URL-safe characters.`)
           let tokens: { access_token?: string; expires_in?: number }
           try {
+            // The exchange works only after the account owner approved this intent in the Link SDK (one-time code and consent).
             tokens = await fetchJson<{ access_token?: string; expires_in?: number }>(ctx.fetch, `${link}/v1/link_auth_intent/${encodeURIComponent(rec.authIntentId)}/tokens`, {
               method: 'POST',
               headers: { authorization: auth },
@@ -662,18 +767,32 @@ export function stripeLink(opts: StripeLinkOptions) {
             throw httpErrorToOpenRamp(e, 'Stripe Link', { what: 'finish the Link sign-in', noQuoteStatuses: [400, 404], log: ctx.log })
           }
           if (!tokens.access_token) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Link did not return an access token.' }), 502)
+          // The client gives the crypto customer id. Before we keep the token or use the id, check that
+          // the token of this sign-in can read that customer, and that Stripe answers with the same id.
+          let customer: CryptoCustomer | undefined
+          try {
+            customer = await stripeCall<CryptoCustomer>(ctx, 'GET', `/v1/crypto/customers/${encodeURIComponent(customerId)}`, { token: tokens.access_token })
+          } catch (e) {
+            const st = httpStatus(e)
+            if (st !== 401 && st !== 403 && st !== 404) throw toOpenRamp(e, 'check your identity status', ctx.log)
+          }
+          if (!customer || customer.id !== customerId) {
+            ctx.log.warn('stripe-link: the crypto customer id does not belong to the Link sign-in; signing in again', { ref })
+            // The intent is used up. Start a new sign-in. The token is never stored.
+            return signInAgain(ctx, ref, rec)
+          }
           // Only the access token: a refresh token in the response is dropped here and never stored.
-          await putToken(ctx, ref, tokens.access_token, tokens.expires_in)
-          // The intent is used up: forget its id.
-          const next: LegRecord = { ...rec, customerId, stage: 'kyc' }
+          await putToken(ctx, ref, customerId, tokens.access_token, tokens.expires_in)
+          // The intent is used up: forget its id. The email is now the one of a signed-in account: lock it.
+          const next: LegRecord = { ...rec, customerId, stage: 'kyc', emailLocked: true, keyHash: await sha256Hex(key) }
           delete next.authIntentId
           await saveRecord(ctx, ref, next)
-          return afterAuth(ctx, ref, next, tokens.access_token)
+          return afterAuth(ctx, ref, next, tokens.access_token, customer)
         }
         case T.kyc:
         case T.documents: {
           if (!rec.customerId) throw bad('Sign in to Link first.', 409)
-          const t = await tokenOrSignIn(ctx, ref, rec)
+          const t = await clientToken(ctx, ref, rec, key)
           if ('step' in t) return t.step
           if (name === T.documents && rec.paymentToken) {
             // After an identity challenge: retry the session when the documents are verified.
@@ -691,14 +810,17 @@ export function stripeLink(opts: StripeLinkOptions) {
               return stageStep(ref, next)
             }
             // Not verified: "call verifyDocuments again"
-            return stageStep(ref, { ...rec, stage: 'documents' })
+            const next: LegRecord = { ...rec, stage: 'documents' }
+            await saveRecord(ctx, ref, next)
+            return stageStep(ref, next)
           }
           return afterAuth(ctx, ref, rec, t.token)
         }
         case T.wallet: {
           if (!rec.customerId) throw bad('Sign in to Link first.', 409)
-          const t = await tokenOrSignIn(ctx, ref, rec)
+          const t = await clientToken(ctx, ref, rec, key)
           if ('step' in t) return t.step
+          // The address is always the leg's own (set by the server at start), never an input.
           const step = await walletCheck(ctx, ref, rec, t.token)
           if (step.action?.transitions[0]?.name === T.wallet) throw bad('Stripe does not list this wallet for your Link account yet. Try again.', 409)
           return step
@@ -707,13 +829,13 @@ export function stripeLink(opts: StripeLinkOptions) {
           if (!rec.customerId) throw bad('Sign in to Link first.', 409)
           const paymentToken = str('paymentToken')
           if (!PAYMENT_TOKEN.test(paymentToken)) throw bad('Stripe did not give a payment token.')
-          const t = await tokenOrSignIn(ctx, ref, rec)
+          const t = await clientToken(ctx, ref, rec, key)
           if ('step' in t) return t.step
           return createSession(ctx, ref, { ...rec, paymentToken }, t.token)
         }
         case T.checkout: {
           if (!rec.onrampSessionId) throw bad('There is no purchase to pay yet.', 409)
-          const t = await tokenOrSignIn(ctx, ref, rec)
+          const t = await clientToken(ctx, ref, rec, key)
           if ('step' in t) return t.step
           // "For users paying with ACH, you also need to pass mandate_data and collect the user's ip address and user agent."
           // TO VERIFY: the mandate_data keys (the guide names the parameter only; these are the usual Stripe keys).
@@ -749,7 +871,7 @@ export function stripeLink(opts: StripeLinkOptions) {
         let s: OnrampSession
         try {
           // TO VERIFY: whether a retrieve needs `Stripe-OAuth-Token`. We send it while we still have it.
-          const token = await getToken(ctx, input.ref)
+          const token = await getToken(ctx, input.ref, rec)
           s = await stripeCall<OnrampSession>(ctx, 'GET', `/v1/crypto/onramp_sessions/${encodeURIComponent(rec.onrampSessionId)}`, token ? { token } : {})
         } catch (e) {
           throw toOpenRamp(e, 'find this purchase', ctx.log)
@@ -820,9 +942,16 @@ export function stripeLink(opts: StripeLinkOptions) {
         if (ev.type !== 'crypto.onramp_session.updated') return []
         const s = ev.data?.object
         if (!s?.id) return []
-        // Only sessions this adapter made: our ref is in the metadata (and in the shared index).
+        // Only sessions this adapter made. Our own index (written when we created the session) wins. The
+        // metadata ref is used only when the index entry has expired; when both exist, they must agree.
         const meta = s.metadata?.ork_ref
-        const ref = meta && /^slk_[0-9a-f]{24}$/.test(meta) ? meta : await ctx.shared.get<string>(`cos:${s.id}`)
+        const metaRef = typeof meta === 'string' && /^slk_[0-9a-f]{24}$/.test(meta) ? meta : undefined
+        const indexed = await ctx.shared.get<string>(`cos:${s.id}`)
+        if (indexed && meta !== undefined && meta !== indexed) {
+          ctx.log.warn('stripe-link: webhook metadata ref does not match the session index; ignored', { onrampSession: s.id })
+          return []
+        }
+        const ref = indexed ?? metaRef
         if (!ref) return []
         const step = sessionStep(s, ref, undefined, ctx.log)
         if (!step) return []

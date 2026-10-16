@@ -1,5 +1,6 @@
 // Encrypt a Link OAuth token before it goes into the session store. AES-256-GCM with a key from
-// HKDF-SHA256. The leg ref is the additional data, so a sealed token only opens for its own leg.
+// HKDF-SHA256. The caller gives the additional data (the session, user, leg and customer), so a
+// sealed token only opens for them.
 // Web-standard APIs only (WebCrypto), so it runs on Cloudflare Workers.
 
 import { base64ToBytes, bytesToBase64 } from '@openrampkit/adapter'
