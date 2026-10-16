@@ -862,13 +862,17 @@ export class RampController {
     return native !== undefined && cmp(native, '0') <= 0
   }
 
-  /** Fire a SUBMIT or SURFACE_RESULT transition from the current step. */
-  async fire(name: string, inputs?: Record<string, unknown>) {
+  /**
+   * Fire a SUBMIT or SURFACE_RESULT transition from the current step. Returns the new session, or
+   * `undefined` when the call failed (the error is then in the snapshot).
+   */
+  async fire(name: string, inputs?: Record<string, unknown>): Promise<PublicSession | undefined> {
     this.set({ busy: true, error: undefined })
     try {
       const session = await this.opts.client.transition(this.opts.clientSecret, name, inputs)
       this.set({ busy: false })
       this.applySession(session)
+      return session
     } catch (e) {
       this.fail(e)
     }

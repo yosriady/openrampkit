@@ -26,6 +26,12 @@
       "limitKb": 2
     },
     {
+      "name": "@openrampkit/web/stripe-link",
+      "package": "packages/web",
+      "entry": "dist/stripe-link.js",
+      "limitKb": 4
+    },
+    {
       "name": "@openrampkit/react",
       "package": "packages/react",
       "entry": "dist/index.js",

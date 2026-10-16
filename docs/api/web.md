@@ -195,6 +195,40 @@ The quote row never says "No fees" when a fee has no stated amount (`amount: nul
 
 Types: `ProviderRenderer`, `ProviderRendererContext`, `ProviderSdkSurface`.
 
+`ProviderRendererContext` has `surface`, `mode`, `completed(detail?)`, `failed(detail?)` and `submit(name, inputs?)`. `submit` calls a transition with inputs and resolves to the next `Step`. It rejects with the `OpenRampError`, which the modal also shows. See [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk).
+
+### `@openrampkit/web/stripe-link`
+
+A separate entry for the [Stripe Link headless flow](../adapters/stripe-link.md#the-renderer). The main entry never imports it.
+
+```bash
+npm install @stripe/crypto   # optional peer dependency, loaded with a dynamic import
+```
+
+```ts
+import { openDeposit } from '@openrampkit/web'
+import { stripeLinkRenderer } from '@openrampkit/web/stripe-link'
+
+openDeposit({ baseUrl: '/api/openramp', clientSecret, providerRenderers: { 'stripe-link': stripeLinkRenderer() } })
+```
+
+| Export | Description |
+|---|---|
+| `stripeLinkRenderer(options?)` | The renderer for `provider: 'stripe-link'` steps. Use one per modal. |
+| `makeClientKey()` | A random client key: 32 bytes from `crypto.getRandomValues`, in base64url |
+| `toE164(phone)` | A phone number in E.164 (a 10 digit US number gets `+1`), or `undefined` |
+| `STRIPE_LINK_TRANSITION_NAMES` | The transition names that the renderer calls |
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `load` | `(publishableKey, options) => Promise<onramp \| null>` | `loadCryptoOnrampAndInitialize` from `@stripe/crypto` | Replace the SDK loader |
+| `appearance` | `object` | none | More `CryptoOnrampInitOptions` (`variables`, `rules`, ...). The theme is `night` in dark mode, else `stripe`. |
+| `collectKyc` | `(container) => Promise<KycInfo>` | a built-in form | Your own KYC form. The data goes to Stripe only. |
+| `collectRegistration` | `(container, { email, country }) => Promise<{ phone, fullName? }>` | a built-in form | Your own Link sign-up form. The data goes to Stripe only. |
+| `text` | `object` | English | Override the renderer's UI text |
+
+Size: about 3.1 kB min+gzip, without `@stripe/crypto`.
+
 ## Constants and other exports
 
 | Export | Description |

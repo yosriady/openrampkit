@@ -87,6 +87,7 @@ Go through this list before real money moves.
 - [ ] You read the TO VERIFY notes on each [adapter page](../adapters/) you use, and tested those paths in sandbox.
 - [ ] Relay has an `apiKey`. Relay requires an API key for quotes (`POST /quote/v2`) under its announced policy from 2 Oct 2026. Some requests without a key may still work today, but Relay can refuse them at any time. Always set `RELAY_API_KEY`. The `/requests/v2` status fallback retires on 2026-11-24.
 - [ ] Stripe: pass `providerRenderers: { stripe: stripeOnrampRenderer() }` to the modal, or set `surface: 'redirect'` on the adapter.
+- [ ] Stripe Link: install `@stripe/crypto` and pass `providerRenderers: { 'stripe-link': stripeLinkRenderer() }` (from `@openrampkit/web/stripe-link`) to the modal. See [the renderer](../adapters/stripe-link.md#the-renderer).
 - [ ] Coinbase users know they need a Coinbase account.
 
 ## UI

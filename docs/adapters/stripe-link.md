@@ -57,7 +57,7 @@ Each step is a `PROVIDER_SDK` surface with `provider: 'stripe-link'`. Its `param
 | Step | Phase | `params` | SDK call on the client | Then call the transition |
 |---|---|---|---|---|
 | Email (a `FORM`, only when the session has no `email`) | AUTH | | | `submit_email` with `{ email }` |
-| `register_link_user` (no Link account for the email) | AUTH | `email`, `country` | `registerLinkUser({ email, phone, country, fullName })` | `link_registered` |
+| `register_link_user` (no Link account for the email) | AUTH | `email`, `country` | `registerLinkUser(email, phone, country, fullName?)` | `link_registered` |
 | `authenticate` | AUTH | `linkAuthIntentId` | `authenticate(linkAuthIntentId, cb)` | `link_authenticated` with `{ cryptoCustomerId, clientKey }` (`cryptoCustomerId` from the callback) |
 | `submit_kyc_info` | KYC | | `submitKycInfo(kycInfo)` with your own form | `kyc_submitted` with `{ clientKey }` |
 | `verify_documents` | KYC | | `verifyDocuments()` | `documents_verified` with `{ clientKey }` |
@@ -69,9 +69,51 @@ Each step is a `PROVIDER_SDK` surface with `provider: 'stripe-link'`. Its `param
 
 The server skips a step when Stripe says it is done: KYC that is already verified, or a wallet that is already on file. While a KYC review runs, the leg waits in `processing` with phase `kyc`, and each status check asks Stripe again.
 
-::: warning Client renderer
-The kit has no `stripe-link` renderer yet. A renderer must call transitions with inputs and read the next step, which `ProviderRendererContext` does not offer today. Without any provider renderer, the planner shows these methods as "Not available" in the modal (`CLIENT_UPGRADE_REQUIRED`). The planner checks the surface kind, not the provider: when you give a renderer for another provider (for example `stripe`), also set `methods` or leave this adapter out until a `stripe-link` renderer exists. A headless app can drive the flow with `client.transition()`.
-:::
+## The renderer
+
+The web modal draws these steps with `stripeLinkRenderer()` from `@openrampkit/web/stripe-link`. It is a separate entry: the main `@openrampkit/web` entry never imports it. It uses Stripe's `@stripe/crypto` (an optional peer dependency, loaded with a dynamic import when the first step mounts).
+
+```bash
+npm install @stripe/crypto
+```
+
+```ts
+import { openDeposit } from '@openrampkit/web'
+import { stripeLinkRenderer } from '@openrampkit/web/stripe-link'
+
+openDeposit({
+  baseUrl: '/api/openramp',
+  clientSecret,
+  providerRenderers: { 'stripe-link': stripeLinkRenderer() },
+})
+```
+
+Use one renderer for each modal. It keeps the Stripe SDK instance and the client key for all the steps of one purchase. The options are in the [web API](../api/web.md#openrampkit-web-stripe-link).
+
+| Step | What the renderer shows |
+|---|---|
+| `register_link_user` | A form for the phone number (E.164; a 10 digit US number gets `+1`) and the full name. Or your `collectRegistration`. |
+| `authenticate` | Stripe's Link sign-in (one-time code and consent). A closed or declined sign-in shows "Try again". |
+| `submit_kyc_info` | A form for the name, SSN, date of birth and US address. Or your `collectKyc`. |
+| `verify_documents` | A "Verify your identity" button. Stripe's document check needs a user gesture. |
+| `register_wallet_address` | Nothing to do: it registers the server's address and network at once. |
+| `collect_payment_method` | Stripe's Payment Element. |
+| `perform_checkout` | A "Pay" button. Stripe runs 3DS. Each checkout attempt calls `checkout`. |
+
+- The modal mounts the renderer again when `params.step` changes. When a transition gives the same sub-step again (a new Link sign-in, or identity documents again), the renderer runs it again with the new params.
+- The modal shows no buttons for the `SUBMIT` transitions of these steps: the renderer calls them with its inputs.
+- `checkout` returns the step with the new `clientSecret`, and the renderer gives it to Stripe. When the answer has no client secret (the purchase is already processing, done or failed), the renderer asks the modal for a status check.
+- Your CSP must allow scripts and frames from `js.stripe.com` (the SDK loads `https://js.stripe.com/crypto-onramp/v1/crypto-onramp.js` as a module script) and the frames of Link and the Payment Element.
+
+Without any provider renderer, the planner shows these methods as "Not available" in the modal (`CLIENT_UPGRADE_REQUIRED`). The planner checks the surface kind, not the provider: when you give a renderer for another provider (for example `stripe`) and not for `stripe-link`, also set `methods` or leave this adapter out. A headless app can drive the flow with `client.transition()`.
+
+### The renderer and your data
+
+- **The client key.** The renderer makes it with `crypto.getRandomValues` (32 bytes, base64url) and sends it as `clientKey` with every transition, only to your OpenRampKit server. It keeps the key in memory only: not in `localStorage` or `sessionStorage`, not in the DOM, not in a log. Each new Link sign-in makes a new key. A page reload loses it, and the server then asks for a new Link sign-in. Storage would not help here: the Stripe SDK keeps its Link sign-in in memory too.
+- **KYC and the phone number.** The form data goes straight to the Stripe SDK (`submitKycInfo`, `registerLinkUser`). It is never sent to your server, never in a transition, a log or an event. The form is emptied when the user submits it.
+- **Card and bank data.** They stay inside Stripe's Payment Element. Only the payment token (`cpt_...`) goes to your server.
+- **The client secret** of the checkout goes from the transition answer to the Stripe SDK only. It is never in the DOM.
+- Stripe SDK errors are shown with their message (Stripe writes them for users). Server errors are shown by the modal.
 
 ## Link tokens
 
@@ -139,3 +181,10 @@ Verified in Stripe's docs (the web integration guide and the API reference, 2026
 - **TO VERIFY**: whether a session retrieve needs `Stripe-OAuth-Token`.
 - **TO VERIFY**: EUR and EU users (the guide says US only, but also shows EU sessions).
 - **TO VERIFY**: the ACH delivery time.
+
+The renderer: verified against the types of `@stripe/crypto` 1.1.3 (the npm package, 2026-10-16): `loadCryptoOnrampAndInitialize(publishableKey, options)` with `theme` `stripe`, `night` or `flat`; `registerLinkUser(email, phone, country, fullName?)` (positional; the guide's example passes one object); `authenticate(id, cb)` resolves to an element or `null`; `collectPaymentMethod(options, cb)` resolves to an element; `verifyDocuments()` resolves to `{ result }` (the guide's example compares a string); `performCheckout(id, checkout)` resolves to `{ successful }`.
+
+- **TO VERIFY**: that Stripe's elements (Link sign-in, Payment Element) work inside the modal's Shadow DOM.
+- **TO VERIFY**: whether `verifyDocuments()` needs a user gesture (the renderer uses a button to be safe).
+- **TO VERIFY**: what `performCheckout` does when the checkout callback throws (the renderer throws when the server answer has no client secret, then asks for a status check).
+- **TO VERIFY**: whether a closed sign-in can call `authenticate` again with the same LinkAuthIntent ("Try again" does this).

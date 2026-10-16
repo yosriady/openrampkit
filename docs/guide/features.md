@@ -56,7 +56,7 @@ See the [withdraw flow](../concepts/flows.md#withdraw).
 | Ten surfaces | `REDIRECT`, `IFRAME`, `PROVIDER_SDK`, `QR`, `DEEPLINK`, `BANK_FIELDS`, `DEPOSIT_ADDRESS`, `WALLET_TX`, `OTP`, `FORM` | [Surfaces](../concepts/surfaces.md) |
 | Popup-safe start URLs | Provider checkouts open from a signed URL on your origin | [Popup-safe start URLs](../concepts/sessions.md#popup-safe-start-urls) |
 | Iframe message protocol | Provider pages can signal completion. The modal checks origin and source. | [Iframe flow](../concepts/flows.md#iframe-message-protocol), [IFRAME](../concepts/surfaces.md#iframe) |
-| Provider SDK renderers | Mount a provider's own UI, for example the Stripe onramp element | [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk), [Stripe](../adapters/stripe.md) |
+| Provider SDK renderers | Mount a provider's own UI, for example the Stripe onramp element, or drive a headless flow (Stripe Link) | [PROVIDER_SDK](../concepts/surfaces.md#provider-sdk), [Stripe](../adapters/stripe.md), [Stripe Link](../adapters/stripe-link.md#the-renderer) |
 | Restart | "Choose another method" leaves a payment that waits for the user | [Transitions](../concepts/flow.md#transitions) |
 | Errors as fields | `OpenRampError` with a code, a safe message and a recovery hint | [Errors as fields](../concepts/flow.md#errors-as-fields) |
 | Web component | `<openramp-modal>` in Shadow DOM, for any framework or none | [Web component](./web-component.md), [@openrampkit/web](../api/web.md) |

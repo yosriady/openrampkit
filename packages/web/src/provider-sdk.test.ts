@@ -4,7 +4,7 @@ import { DepositController } from '@openrampkit/client'
 import type { Surface } from '@openrampkit/core'
 import { fakeClient, session, step, waitFor } from '../../client/src/testctx.js'
 import { OpenRampModal, defineOpenRampModal, loadScript, stripeOnrampRenderer } from './index.js'
-import type { ProviderRenderer } from './index.js'
+import type { ProviderRenderer, ProviderRendererContext } from './index.js'
 
 defineOpenRampModal()
 
@@ -83,6 +83,52 @@ describe('PROVIDER_SDK surfaces', () => {
   })
 })
 
+describe('ProviderRendererContext.submit', () => {
+  const LINK = (s: string, extra: Record<string, unknown> = {}): Surface => ({ kind: 'PROVIDER_SDK', provider: 'stripe-link', params: { publishableKey: 'pk_1', step: s, ...extra } })
+  const linkStep = (s: string, extra: Record<string, unknown> = {}) =>
+    step({ state: 'PAYMENT', surface: LINK(s, extra), transitions: [{ name: 'wallet_registered', kind: 'SUBMIT', label: 'Continue' }] })
+
+  async function mountLink(renderer: ProviderRenderer) {
+    const client = fakeClient({ getSession: vi.fn(async () => session(linkStep('register_wallet_address'))) })
+    const controller = new DepositController({ client, clientSecret: 'ors_1.s' })
+    const el = document.createElement('openramp-modal') as OpenRampModal
+    el.providerRenderers = { 'stripe-link': renderer }
+    el.embedded = true
+    el.controller = controller
+    document.body.appendChild(el)
+    await controller.start()
+    await el.updateComplete
+    await el.updateComplete
+    return { el, client, root: el.shadowRoot! }
+  }
+
+  it('calls the transition with the inputs and resolves to the next step; the renderer owns the SUBMIT buttons', async () => {
+    const ctxs: ProviderRendererContext[] = []
+    const { client, root } = await mountLink((_c, ctx) => void ctxs.push(ctx))
+    await waitFor(() => ctxs.length === 1)
+    // No "Continue" button: a click would call the transition without the renderer's inputs
+    expect([...root.querySelectorAll('button')].map((b) => b.textContent!.trim())).not.toContain('Continue')
+    client.transition.mockResolvedValueOnce(session(linkStep('collect_payment_method')))
+    const next = await ctxs[0]!.submit('wallet_registered', { clientKey: 'k'.repeat(43) })
+    expect(client.transition).toHaveBeenCalledWith('ors_1.s', 'wallet_registered', { clientKey: 'k'.repeat(43) })
+    expect((next.surface as unknown as { params: { step: string } }).params.step).toBe('collect_payment_method')
+    // A new sub-step (params.step) mounts the renderer again, also when the step key is the same
+    await waitFor(() => ctxs.length === 2)
+    expect(ctxs[1]!.surface.params.step).toBe('collect_payment_method')
+  })
+
+  it('rejects with the OpenRampError, which the modal shows too', async () => {
+    const ctxs: ProviderRendererContext[] = []
+    const { client, root, el } = await mountLink((_c, ctx) => void ctxs.push(ctx))
+    await waitFor(() => ctxs.length === 1)
+    client.transition.mockRejectedValueOnce(Object.assign(new Error('Transition wallet_registered is not allowed now.'), { status: 409 }))
+    await expect(ctxs[0]!.submit('wallet_registered', {})).rejects.toMatchObject({ message: expect.stringContaining('not allowed') })
+    await el.updateComplete
+    expect(root.textContent).toContain('not allowed')
+    expect(ctxs).toHaveLength(1)
+  })
+})
+
 describe('stripeOnrampRenderer', () => {
   it('loads the Stripe scripts, creates the session and maps status events', async () => {
     const loaded: string[] = []
@@ -93,7 +139,7 @@ describe('stripeOnrampRenderer', () => {
     const completed = vi.fn()
     const failed = vi.fn()
     const container = document.createElement('div')
-    await stripeOnrampRenderer({ load: async (src) => void loaded.push(src) })(container, { surface: SDK as never, mode: 'dark', completed, failed })
+    await stripeOnrampRenderer({ load: async (src) => void loaded.push(src) })(container, { surface: SDK as never, mode: 'dark', completed, failed, submit: vi.fn() })
     expect(loaded).toEqual(['https://js.stripe.com/v3/', 'https://crypto-js.stripe.com/crypto-onramp-outer.js'])
     expect((globalThis as unknown as { StripeOnramp: ReturnType<typeof vi.fn> }).StripeOnramp).toHaveBeenCalledWith('pk_test_1')
     expect(createSession).toHaveBeenCalledWith({ clientSecret: 'cos_1_secret', appearance: { theme: 'dark' } })
@@ -106,7 +152,7 @@ describe('stripeOnrampRenderer', () => {
   })
 
   it('fails clearly without keys or when the SDK does not load', async () => {
-    const ctx = { mode: 'light' as const, completed: vi.fn(), failed: vi.fn() }
+    const ctx = { mode: 'light' as const, completed: vi.fn(), failed: vi.fn(), submit: vi.fn() }
     const r = stripeOnrampRenderer({ load: async () => {} })
     await expect(r(document.createElement('div'), { ...ctx, surface: { kind: 'PROVIDER_SDK', provider: 'stripe', params: {} } })).rejects.toThrow(/clientSecret/)
     await expect(r(document.createElement('div'), { ...ctx, surface: SDK as never })).rejects.toThrow(/did not load/)

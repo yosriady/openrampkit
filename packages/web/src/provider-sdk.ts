@@ -2,7 +2,7 @@
 // onramp element) into a container inside the modal. The server status stays the source of truth:
 // renderer callbacks only trigger an immediate status check.
 
-import type { Surface } from '@openrampkit/core'
+import type { Step, Surface } from '@openrampkit/core'
 
 export type ProviderSdkSurface = Extract<Surface, { kind: 'PROVIDER_SDK' }>
 
@@ -10,6 +10,11 @@ export type ProviderRendererContext = {
   surface: ProviderSdkSurface
   /** 'light' or 'dark', from the modal theme */
   mode: 'light' | 'dark'
+  /**
+   * Call a transition of the session with inputs (for a headless provider flow). Resolves to the
+   * next step, which the modal also shows. Rejects with the `OpenRampError` (the modal shows it too).
+   */
+  submit(name: string, inputs?: Record<string, unknown>): Promise<Step>
   /** The provider says the user finished: the modal checks the status now */
   completed(detail?: unknown): void
   /** The provider says the payment failed or was closed */

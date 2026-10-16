@@ -228,7 +228,8 @@ export class OpenRampModal extends LitElement {
   private _syncProviderSdk() {
     const surface = this._snap?.session?.step.surface
     const renderer = surface?.kind === 'PROVIDER_SDK' ? this.providerRenderers?.[surface.provider] : undefined
-    const key = surface?.kind === 'PROVIDER_SDK' && renderer ? `${this._stepKey}|${surface.provider}` : undefined
+    // A `params.step` (the provider's own sub-step) mounts the renderer again when it changes.
+    const key = surface?.kind === 'PROVIDER_SDK' && renderer ? `${this._stepKey}|${surface.provider}|${String(surface.params.step ?? '')}` : undefined
     if (key === this._sdkMounted) return
     this._unmountSdk()
     if (!key || !renderer || surface?.kind !== 'PROVIDER_SDK') return
@@ -244,6 +245,11 @@ export class OpenRampModal extends LitElement {
         mode,
         completed: (detail) => c?.notifySurface('completed', detail),
         failed: (detail) => c?.notifySurface('failed', detail),
+        submit: async (name, inputs) => {
+          const next = await c?.fire(name, inputs)
+          if (!next) throw c?.getSnapshot().error
+          return next.step
+        },
       }),
     )
       .then((cleanup) => {
@@ -1186,8 +1192,9 @@ export class OpenRampModal extends LitElement {
     const submits = step.transitions.filter((t): t is Extract<Transition, { kind: 'SUBMIT' }> => t.kind === 'SUBMIT')
     const awaiting = step.transitions.some((t) => t.kind === 'AWAIT')
     const formSurface = surface?.kind === 'FORM' || surface?.kind === 'OTP'
-    // FORM and OTP surfaces use the first SUBMIT transition as their submit button.
-    const extra = formSurface ? submits.slice(1) : submits
+    // FORM and OTP surfaces use the first SUBMIT transition as their submit button. A provider
+    // renderer calls the SUBMIT transitions itself (with its own inputs), so it gets no buttons.
+    const extra = formSurface ? submits.slice(1) : surface?.kind === 'PROVIDER_SDK' && this.providerRenderers?.[surface.provider] ? [] : submits
     const hasPrimary = !!surface && ['REDIRECT', 'DEEPLINK', 'WALLET_TX', 'WALLET_SIGN', 'FORM', 'OTP'].includes(surface.kind)
     const payment = s.session!.payment
     const showProgress = !!payment && (payment.legs.length > 1 || step.state === 'PROCESSING')

@@ -74,7 +74,8 @@ openDeposit({
 `OpenRampProvider` (React, Vue, Solid) and `createOpenRamp()` (Svelte) take the same `providerRenderers` option.
 
 - With at least one renderer, the client adds `PROVIDER_SDK` to the surfaces it sends to `POST /plan`. Without one, the planner shows legs that need only this surface as unavailable (`CLIENT_UPGRADE_REQUIRED`).
-- A renderer is `(container, ctx) => void | cleanup`. `ctx` has `surface`, `mode` (`light` or `dark`), `completed(detail?)` and `failed(detail?)`. The modal mounts it once per step, and calls the cleanup when the step changes.
+- A renderer is `(container, ctx) => void | cleanup`. `ctx` has `surface`, `mode` (`light` or `dark`), `completed(detail?)`, `failed(detail?)` and `submit(name, inputs?)`. The modal mounts it once per step (and again when `params.step` changes), and calls the cleanup when the step changes.
+- `submit(name, inputs?)` calls a transition of the session with inputs and resolves to the next step, for a headless provider flow. It rejects with the `OpenRampError`, which the modal also shows. When a renderer is mounted, the modal shows no buttons for the step's `SUBMIT` transitions: the renderer calls them.
 - `completed()` and `failed()` only start a status check. The server status decides the outcome, as for [iframe messages](./flows.md#iframe-message-protocol).
 - When no renderer matches the surface `provider`, the modal shows a "Continue" link to `params.redirectUrl` when it is a web URL. Else it shows "This step needs the {provider} SDK".
 - `loadScript(src)` loads a provider script once per page, in the document head. `stripeOnrampRenderer()` uses it for `STRIPE_SCRIPTS`. Your CSP must allow scripts and frames from `js.stripe.com` and `crypto-js.stripe.com`.

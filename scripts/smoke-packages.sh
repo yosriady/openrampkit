@@ -136,7 +136,8 @@ import { createOpenRampMcpServer, createMcpHttpHandler, type OpenRampMcpConfig }
 const input: CreateSessionInput = { userId: 'u', destination: { type: 'merchant', currency: 'IDR' } }
 const ramp = createOpenRamp({ secret: 'x'.repeat(40), baseUrl: 'https://a.test/api', adapters: [relay()] })
 export const f = async (): Promise<PublicSession | null> => { await ramp.sessions.create(input); return ramp.sessions.retrieve('x') }
-export const g = () => openDeposit({ baseUrl: '/api', clientSecret: 's', theme: darkTheme(), providerRenderers: { stripe: stripeOnrampRenderer() } })
+import { stripeLinkRenderer } from '@openrampkit/web/stripe-link'
+export const g = () => openDeposit({ baseUrl: '/api', clientSecret: 's', theme: darkTheme(), providerRenderers: { stripe: stripeOnrampRenderer(), 'stripe-link': stripeLinkRenderer() } })
 const mcpConfig: OpenRampMcpConfig = { connection: { openramp: ramp }, maxAmounts: { USDC: '10' } }
 export const h = () => [createOpenRampMcpServer(mcpConfig), createMcpHttpHandler(mcpConfig, { bearerToken: 'x'.repeat(20) })]
 import { OpenRampProvider as VueProvider, provideOpenRamp, useDepositController as useVueController, type OpenRampApi as VueApi } from '@openrampkit/vue'
