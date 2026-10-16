@@ -707,6 +707,12 @@ export function bridge(opts: BridgeOptions) {
   }
 
   async function customerStep(ref: string, rec: LegRec, endorsement: string, ctx: AdapterContext, link?: KycLink): Promise<LegStep | undefined> {
+    // One Bridge customer, one app user (the same binding as standing addresses): a customer id that
+    // another user id already uses is refused, so a mapping bug cannot mix two users' money.
+    if (!(await claimOnce(ctx.shared, `custuser:${rec.customerId}`, rec.userId, 0))) {
+      ctx.log.error('bridge: a Bridge customer id was given for two app users; refused', { customerId: rec.customerId })
+      return failStep(ref, openRampError('PROVIDER_DECLINED', { message: 'This Bridge account belongs to another user. Contact support.', recovery: 'contact_support' }))
+    }
     const c = await call<Customer>(ctx, 'GET', `/customers/${encodeURIComponent(rec.customerId!)}`, 'check your account')
     if (c.status === 'rejected' || c.status === 'offboarded') return failStep(ref)
     if (c.status === 'paused' || c.status === 'deposits_restricted') {
@@ -787,6 +793,15 @@ export function bridge(opts: BridgeOptions) {
       if (!created.id || !created.source_deposit_instructions) throw new OpenRampException(openRampError('PROVIDER_UNAVAILABLE', { message: 'Bridge did not return bank details.' }), 502)
       va = { id: created.id, instructions: created.source_deposit_instructions }
       await ctx.shared.put(vaKey, va, REC_TTL_SEC)
+    }
+    // One account, one owner: deposit sessions never use a standing account (see standing.ts), so a
+    // deposit to it is never taken by a session. The claim is atomic: only one side can win it.
+    if (!(await claimOnce(ctx.shared, `vaowner:${va.id}`, 'session', 0))) {
+      ctx.log.error('bridge: this virtual account is a standing account; a deposit session cannot use it', { virtualAccountId: va.id })
+      throw new OpenRampException(
+        openRampError('CONFLICT', { message: 'This bank account is your permanent deposit account. Send to it directly; this payment cannot use it.', recovery: 'choose_other' }),
+        409,
+      )
     }
     rec.vaId = va.id
     rec.instructions = va.instructions

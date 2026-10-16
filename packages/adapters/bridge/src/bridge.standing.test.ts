@@ -20,21 +20,25 @@ const DEST = { type: 'crypto' as const, chain: BASE, token: BASE_USDC, address: 
 const LA_ADDR = '0x00000000000000000000000000000000000000la'.replace('la', '11')
 
 const USD_INSTRUCTIONS = { currency: 'usd', bank_name: 'Lead Bank', bank_routing_number: '101019644', bank_account_number: '900123456789', bank_beneficiary_name: 'Jane Doe', payment_rails: ['ach_push', 'wire'] }
-const vaObj = (over: Record<string, unknown> = {}) => ({ id: 'va_1', status: 'activated', customer_id: 'cust_1', source_deposit_instructions: USD_INSTRUCTIONS, destination: { currency: 'usdc', payment_rail: 'base', address: WALLET }, ...over })
-const laObj = (over: Record<string, unknown> = {}) => ({ id: 'la_1', customer_id: 'cust_1', chain: 'arbitrum', currency: 'usdc', address: LA_ADDR, state: 'active', destination_payment_rail: 'base', destination_currency: 'usdc', destination_address: WALLET, ...over })
+const vaObj = (over: Record<string, unknown> = {}) => ({ id: 'va_1', status: 'activated', customer_id: 'cust_1', created_at: new Date().toISOString(), source_deposit_instructions: USD_INSTRUCTIONS, destination: { currency: 'usdc', payment_rail: 'base', address: WALLET }, ...over })
+const laObj = (over: Record<string, unknown> = {}) => ({ id: 'la_1', customer_id: 'cust_1', created_at: new Date().toISOString(), chain: 'arbitrum', currency: 'usdc', address: LA_ADDR, state: 'active', destination_payment_rail: 'base', destination_currency: 'usdc', destination_address: WALLET, ...over })
 const active = { id: 'cust_1', status: 'active', endorsements: [{ name: 'base', status: 'approved' }, { name: 'sepa', status: 'approved' }] }
 
 const opts = (over: Partial<BridgeOptions> = {}): BridgeOptions => ({ apiKey: 'sk-live-x', webhookPublicKey: 'pem', standing: true, customer: async () => ({ customerId: 'cust_1' }), ...over })
 
 const iso = (ms = Date.now()) => new Date(ms).toISOString()
 const vaEv = (type: string, over: Record<string, unknown> = {}) => ({ id: `e_${type}_${String(over.deposit_id ?? 'dep_1')}`, type, customer_id: 'cust_1', virtual_account_id: 'va_1', deposit_id: 'dep_1', amount: '100', currency: 'usd', created_at: iso(), ...over })
-const drain = (over: Record<string, unknown> = {}) => ({ id: 'drn_1', customer_id: 'cust_1', liquidation_address_id: 'la_1', amount: '25', currency: 'usdc', state: 'funds_received', created_at: iso(), deposit_tx_hash: '0xdep', ...over })
+/** A deposit transaction hash per drain id (one transaction, one drain) */
+const txOf = (id: string) => `0x${[...id].map((ch) => ch.charCodeAt(0).toString(16)).join('').padEnd(64, '0').slice(0, 64)}`
+const drain = (over: Record<string, unknown> = {}) => ({ id: 'drn_1', customer_id: 'cust_1', liquidation_address_id: 'la_1', amount: '25', currency: 'usdc', state: 'funds_received', created_at: iso(), deposit_tx_hash: txOf(String(over.id ?? 'drn_1')), ...over })
+const DEP_TX = txOf('drn_1')
 
-type State = { vas: unknown[]; las: unknown[]; history: unknown[]; drains: unknown[]; customer: Record<string, unknown>; created?: Record<string, unknown> }
+type State = { vas: unknown[]; las: unknown[]; history: unknown[]; drains: unknown[]; customer: Record<string, unknown>; created?: Record<string, unknown>; vaNow?: Record<string, unknown> }
 
 function routes(st: State): FakeRoute[] {
   return [
     { method: 'GET', match: /\/customers\/cust_\w+$/, reply: () => st.customer },
+    { method: 'GET', match: /\/virtual_accounts\/va_1$/, reply: () => st.vaNow ?? vaObj() },
     { method: 'GET', match: /\/virtual_accounts\/va_1\/history/, reply: () => ({ count: st.history.length, data: st.history }) },
     { method: 'GET', match: /\/virtual_accounts\?/, reply: () => ({ count: st.vas.length, data: st.vas }) },
     { method: 'POST', match: /\/virtual_accounts$/, reply: (c) => st.created ?? vaObj({ destination: (c.body as { destination: unknown }).destination }) },
@@ -314,7 +318,7 @@ describe('bridge standing: liquidation addresses (USDC in)', () => {
     expect(await t.a.status!({ leg, ref: legRef }, t.ctx)).toMatchObject({ status: 'processing', providerRef: 'drn_1' })
     t.st.drains = [drain({ state: 'payment_processed', destination: { payment_rail: 'base', currency: 'usdc', to_address: WALLET }, destination_tx_hash: '0xout', receipt: { outgoing_amount: '24.9' } })]
     const done = await t.a.status!({ leg, ref: legRef }, t.ctx)
-    expect(done).toMatchObject({ status: 'succeeded', output: { value: '24.9', asset: { chain: BASE, token: BASE_USDC } }, transactions: [{ role: 'source', chain: ARB, hash: '0xdep' }, { role: 'destination', chain: BASE, hash: '0xout' }] })
+    expect(done).toMatchObject({ status: 'succeeded', output: { value: '24.9', asset: { chain: BASE, token: BASE_USDC } }, transactions: [{ role: 'source', chain: ARB, hash: DEP_TX }, { role: 'destination', chain: BASE, hash: '0xout' }] })
     expect(checkLegStep(done)).toEqual([])
     t.st.drains = [drain({ state: 'payment_processed', destination: { payment_rail: 'base', currency: 'usdc', to_address: '0x0000000000000000000000000000000000000bad' } })]
     expect(await t.a.status!({ leg, ref: legRef }, t.ctx)).toMatchObject({ status: 'failed', error: { code: 'DELIVERY_FAILED' } })
@@ -332,9 +336,112 @@ describe('bridge standing: liquidation addresses (USDC in)', () => {
     expect(await t.a.webhook!.parse(body('liquidation_address.drain', drain()), t.w)).toEqual([])
     expect((await laDeps(t, ref)).map((d) => d.id)).toEqual(['drn_1'])
     const ev = await t.a.webhook!.parse(body('liquidation_address.drain', drain({ state: 'payment_submitted' }), 'wh_9'), t.w)
-    expect(ev).toEqual([{ ref: 'bsd|la|la_1|drn_1', eventId: 'wh_9', providerRef: 'drn_1', status: 'processing', detail: { code: 'settling', providerStatus: 'payment_submitted' }, transactions: [{ role: 'source', chain: ARB, hash: '0xdep' }] }])
+    expect(ev).toEqual([{ ref: 'bsd|la|la_1|drn_1', eventId: 'wh_9', providerRef: 'drn_1', status: 'processing', detail: { code: 'settling', providerStatus: 'payment_submitted' }, transactions: [{ role: 'source', chain: ARB, hash: DEP_TX }] }])
     expect(await t.a.webhook!.parse(body('liquidation_address.drain', drain({ customer_id: 'cust_evil', state: 'payment_processed' })), t.w)).toEqual([])
     expect(await t.a.webhook!.parse(body('liquidation_address.drain', drain({ liquidation_address_id: 'la_9' })), t.w)).toEqual([])
     expect(await t.a.webhook!.parse(body('liquidation_address.drain', drain({ id: 'drn_x|evil' })), t.w)).toEqual([])
+  })
+})
+
+describe('bridge standing: each deposit has one owner', () => {
+  const depositLeg: PathwayLeg = { adapterId: 'bridge', legId: 'usd-ach', from: { asset: { kind: 'fiat', currency: 'USD' }, location: { kind: 'user_account' } }, to: { asset: { kind: 'crypto', chain: BASE, token: BASE_USDC }, location: { kind: 'address', address: WALLET } } }
+  /** A deposit session to the same destination (the session flow) */
+  async function startSession(t: ReturnType<typeof setup>, userId = 'u1', a = t.a) {
+    const ctx = makeCtx({ fetch: fakeFetch(routes(t.st)).fetch, shared: t.shared, destination: DEST, session: { userId } })
+    const q = await a.quote({ leg: depositLeg, amountIn: { value: '100', asset: { kind: 'fiat', currency: 'USD' } } }, ctx)
+    return a.start({ leg: depositLeg, quote: q }, ctx)
+  }
+
+  it('(1) a standing account never shares a Bridge account with deposit sessions, in either order', async () => {
+    // A session showed va_1 first; Bridge answers the standing create with the same account: refused.
+    const t = setup()
+    const s = await startSession(t)
+    expect(s.action?.surface?.kind).toBe('BANK_FIELDS')
+    await expect(account(t)).rejects.toMatchObject({ status: 409, error: { code: 'CONFLICT' } })
+    expect(await t.shared.get('sacct:va_1')).toBeUndefined()
+    // The standing account took va_1 first; a session that Bridge gives the same account is refused.
+    const u = setup()
+    await account(u)
+    await expect(startSession(u)).rejects.toMatchObject({ status: 409, error: { code: 'CONFLICT' } })
+    expect(await u.shared.get('vaowner:va_1')).toMatch(/^standing:/)
+  })
+
+  it("(2) the customer fallback is keyed by the server user id, and never gives another user's customer", async () => {
+    const t = setup({ customer: undefined })
+    // Only u1 has a customer from an earlier KYC: u2 gets none.
+    await t.shared.put('user:u1', { customerId: 'cust_1' })
+    expect((await account(t, 'u1')).ref).toBe('bsa|va|va_1')
+    await expect(account(t, 'u2')).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/no Bridge customer/) } })
+    // A record of u2 that names u1's customer is refused too (one customer, one user).
+    await t.shared.put('user:u2', { customerId: 'cust_1' })
+    await expect(account(t, 'u2')).rejects.toMatchObject({ status: 409, error: { message: expect.stringMatching(/another user/) } })
+    // The session flow applies the same binding: another user id cannot use u1's customer.
+    expect(await startSession(t, 'user_9', bridge(opts()))).toMatchObject({ status: 'failed', error: { code: 'PROVIDER_DECLINED' } })
+  })
+
+  it('(3) a listed account or address that this adapter did not make for the route is never reused', async () => {
+    const old = new Date(Date.now() - 86_400_000).toISOString()
+    // An older virtual account (made by the app or a session): not reused, a new one is made.
+    const t = setup()
+    t.st.vas = [vaObj({ id: 'va_old', created_at: old })]
+    expect((await account(t)).ref).toBe('bsa|va|va_1')
+    expect(t.calls.some((c) => c.method === 'POST')).toBe(true)
+    // An older liquidation address for the route: Bridge refuses a duplicate, so the adapter refuses.
+    const u = setup()
+    u.st.las = [laObj({ id: 'la_old', created_at: old })]
+    await expect(liq(u)).rejects.toMatchObject({ status: 409 })
+    expect(u.calls.some((c) => c.method === 'POST')).toBe(false)
+    // A liquidation address that another route owns: refused.
+    const v = setup()
+    await v.shared.put('laowner:la_1', 'standing:another-route')
+    await expect(liq(v)).rejects.toMatchObject({ status: 409 })
+    expect(await v.shared.get('sacct:la_1')).toBeUndefined()
+  })
+
+  it('(4) a virtual account whose destination changed lists no deposit, and its processed deposit fails', async () => {
+    const t = setup()
+    const { ref } = await account(t)
+    t.st.history = [vaEv('funds_received')]
+    const [d] = await vaDeps(t, ref)
+    t.st.vaNow = vaObj({ destination: { currency: 'usdc', payment_rail: 'base', address: '0x0000000000000000000000000000000000000bad' } })
+    t.st.history = [vaEv('funds_received', { deposit_id: 'dep_2' })]
+    await expect(vaDeps(t, ref)).rejects.toThrow(/no longer delivers/)
+    t.st.history = [vaEv('funds_received'), vaEv('payment_processed', { currency: 'usdc', amount: '99' })]
+    expect(await t.a.status!({ leg, ref: d!.legRef }, t.ctx)).toMatchObject({ status: 'failed', error: { code: 'DELIVERY_FAILED' } })
+  })
+
+  it('(5) a drain is a deposit only with its own deposit transaction: none, or a second drain for one transaction, is skipped', async () => {
+    const t = setup()
+    const { ref } = await liq(t)
+    t.st.drains = [drain(), drain({ id: 'drn_retry', deposit_tx_hash: DEP_TX }), drain({ id: 'drn_notx', deposit_tx_hash: undefined }), drain({ id: 'drn_badtx', deposit_tx_hash: 'fee' })]
+    expect((await laDeps(t, ref)).map((d) => d.id)).toEqual(['drn_1'])
+    expect(await t.shared.get('drain:drn_retry')).toBeUndefined()
+    // A webhook of the retry drain gives no event.
+    expect(await t.a.webhook!.parse(body('liquidation_address.drain', drain({ id: 'drn_retry', deposit_tx_hash: DEP_TX, state: 'payment_processed' })), t.w)).toEqual([])
+    // status() of a drain whose transaction another drain holds: failed.
+    await t.shared.put('drain:drn_retry', 'standing:la_1')
+    t.st.drains = [drain({ id: 'drn_retry', deposit_tx_hash: DEP_TX, state: 'payment_processed', destination: { payment_rail: 'base', currency: 'usdc', to_address: WALLET } })]
+    expect(await t.a.status!({ leg, ref: 'bsd|la|la_1|drn_retry' }, t.ctx)).toMatchObject({ status: 'failed' })
+  })
+
+  it('(6) the webhook buffer of an account holds only its own events, and only they reach its poll', async () => {
+    const t = setup()
+    const { ref } = await account(t)
+    // Items with no account id or customer (or another one) in the buffer are never used.
+    await t.shared.put('sinbox:va_1', [
+      { ...vaEv('funds_received', { deposit_id: 'no_cust' }), customer_id: undefined },
+      { ...vaEv('funds_received', { deposit_id: 'no_va' }), virtual_account_id: undefined },
+      vaEv('funds_received', { deposit_id: 'other_va', virtual_account_id: 'va_9' }),
+      vaEv('funds_received', { deposit_id: 'ok' }),
+    ])
+    expect((await vaDeps(t, ref)).map((d) => d.id)).toEqual(['ok'])
+    // A webhook event with no customer is not buffered.
+    expect(await t.a.webhook!.parse(body('virtual_account.activity', { ...vaEv('funds_received', { deposit_id: 'w1' }), customer_id: undefined }), t.w)).toEqual([])
+    expect(((await t.shared.get<unknown[]>('sinbox:va_1')) ?? []).some((e) => (e as { deposit_id: string }).deposit_id === 'w1')).toBe(false)
+    // A liquidation address buffer with a drain of another address, or with no customer: not listed.
+    const u = setup()
+    const la = await liq(u)
+    await u.shared.put('sinbox:la_1', [drain({ id: 'drn_other', liquidation_address_id: 'la_9' }), { ...drain({ id: 'drn_nocust' }), customer_id: undefined }])
+    expect(await laDeps(u, la.ref)).toEqual([])
   })
 })

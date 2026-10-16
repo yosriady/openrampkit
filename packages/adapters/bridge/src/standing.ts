@@ -15,9 +15,16 @@
 // - The destination is the one the server passed. Bridge's echo of the account (its `destination`) must
 //   match it, or the call fails (502). A drain or a deposit that Bridge reports as delivered somewhere
 //   else fails its session.
+// - One Bridge resource, one owner: a virtual account or liquidation address belongs to one standing
+//   route (`vaowner:` / `laowner:`, an atomic claim) and is never shared with the session flow (which
+//   claims `vaowner:` for itself). A resource that Bridge lists but this adapter did not make for the
+//   route (made before the route's first create attempt) is never reused.
 // - One deposit, one owner: a virtual account deposit is claimed with `dep:{deposit_id}` (the same key
-//   as the session flow, so a session and a standing account never both take one deposit), a drain with
-//   `drain:{drain_id}`. Both use `claimOnce`, one atomic step on stores with `putIfAbsent`.
+//   as the session flow), a drain with `drain:{drain_id}`, and the drain's deposit transaction with
+//   `ladeptx:` (a second drain id for the same transaction is not a new deposit). All use `claimOnce`,
+//   one atomic step on stores with `putIfAbsent`.
+// - The virtual account must still deliver to the destination at each poll (Bridge lets an account's
+//   destination change): else the poll lists nothing and a processed deposit fails.
 // - Webhooks find the account by the server-side index (`sacct:{id}`), never by a ref in the body, and
 //   the event's customer must be the account's customer. An event becomes a leg event only for a
 //   deposit that this account already claimed; the server maps its leg ref to the session.
@@ -175,8 +182,8 @@ const MAX_PAGES = 5
 const PAGE = 100
 /** A minute of slack for clock skew between Bridge and this server */
 const SKEW_MS = 60_000
-/** The session flow's virtual account cache lifetime (see `ensureVirtualAccount` in index.ts) */
-const VA_CACHE_TTL_SEC = 30 * 24 * 60 * 60
+/** A deposit transaction hash (EVM hex, or Solana base58) */
+const TX_HASH = /^(0x[0-9a-fA-F]{64}|[1-9A-HJ-NP-Za-km-z]{64,90})$/
 
 const ID = /^[A-Za-z0-9_-]{1,64}$/
 
@@ -292,6 +299,43 @@ export function bridgeStanding(rt: StandingRuntime) {
 
   const inbox = async <T>(id: string, ctx: Ctx) => ((await ctx.shared.get<T[]>(inboxKey(id))) ?? []) as T[]
 
+  // ---------- resource ownership ----------
+
+  /**
+   * The start of the first create attempt of a route (ms), kept with no TTL. A Bridge resource that was
+   * made before it was not made by this adapter for this route, so it is never reused.
+   */
+  async function attemptStart(routeHash: string, ctx: Ctx): Promise<number> {
+    const key = `sattempt:${routeHash}`
+    const now = Date.now()
+    if (ctx.shared.putIfAbsent) {
+      if (await ctx.shared.putIfAbsent(key, now, 0)) return now
+    }
+    const cur = await ctx.shared.get<number>(key)
+    if (typeof cur === 'number' && Number.isFinite(cur)) return cur
+    await ctx.shared.put(key, now)
+    return now
+  }
+
+  const madeSince = (createdAt: string | undefined, start: number) => {
+    const t = Date.parse(createdAt ?? '')
+    return Number.isFinite(t) && t >= start - SKEW_MS
+  }
+
+  /**
+   * Take a Bridge resource for one standing route, as one atomic claim. False when the session flow or
+   * another route has it: then it is never used here (one resource, one owner).
+   */
+  async function takeResource(kind: 'va' | 'la', id: string, routeHash: string, ctx: Ctx): Promise<boolean> {
+    // A virtual account that a deposit session showed before ownership claims existed.
+    if (kind === 'va' && (await ctx.shared.get(`vaRef:${id}`)) != null) return false
+    return claimOnce(ctx.shared, `${kind}owner:${id}`, `standing:${routeHash}`, 0)
+  }
+
+  /** Inbox items only of this account and customer: an item with no account id or customer is not used. */
+  const strictVa = (rec: AccountRec) => (ev: VaEvent) => ev?.virtual_account_id === rec.id && ev.customer_id === rec.customerId
+  const strictDrain = (rec: AccountRec) => (x: Drain) => x?.liquidation_address_id === rec.id && x.customer_id === rec.customerId
+
   // ---------- fiat in: virtual accounts ----------
 
   /** True when a Bridge virtual account delivers this route: USDC on `rail` to `address`, from `currency` */
@@ -326,9 +370,10 @@ export function bridgeStanding(rt: StandingRuntime) {
     if (kept?.kind === 'va' && kept.instructions && kept.userId === input.userId) return accountView(kept, kept.instructions)
     await checkCustomer(customerId, r.endorsement, ctx)
     const base = `/customers/${encodeURIComponent(customerId)}/virtual_accounts`
-    // An account for this route that exists already (made by a session, or by an earlier call that
-    // stopped half way): Bridge keeps one account per customer, currency and destination.
-    let va = (await pages<VirtualAccount & { created_at?: string }>(ctx, base, 'find your bank account', 0)).find((x) => vaMatches(x, currency, c.rail, d.address))
+    const start = await attemptStart(routeHash, ctx)
+    // Only an account that an earlier attempt of this route made (it stopped half way). An older one
+    // (a session's account, or one that the app made) is never reused: this makes a new one.
+    let va = (await pages<VirtualAccount & { created_at?: string }>(ctx, base, 'find your bank account', 0)).find((x) => vaMatches(x, currency, c.rail, d.address) && madeSince(x.created_at, start))
     if (!va) {
       va = await call<VirtualAccount>(
         ctx,
@@ -351,11 +396,15 @@ export function bridgeStanding(rt: StandingRuntime) {
     }
     const instructions = va.source_deposit_instructions
     if (!instructions || !mainId(instructions)) throw unavailable('Bridge did not return bank details.')
+    // One account, one owner: never an account that deposit sessions use (Bridge may answer a create
+    // with an account it has already), and never one of another route.
+    if (!(await takeResource('va', va.id, routeHash, ctx))) {
+      ctx.log.error('bridge: the virtual account belongs to deposit sessions or another route; refused', { virtualAccountId: va.id })
+      throw conflict('Bridge gave a bank account that deposit sessions already use. A standing account needs its own account.')
+    }
     const asset: CryptoAsset = { kind: 'crypto', chain: c.chain, token: c.usdc, symbol: 'USDC', decimals: 6 }
     const rec: AccountRec & { instructions: DepositInstructions } = { kind: 'va', id: va.id, userId: input.userId, customerId, currency, asset, rail: c.rail, address: d.address, createdAt: Date.now(), instructions }
     await saveAccount(rec, routeKey, ctx)
-    // The session flow reuses the same account (its cache key, see `ensureVirtualAccount`).
-    await ctx.shared.put(`va:${customerId}:${currency}:${c.rail}:${d.address}`, { id: va.id, instructions }, VA_CACHE_TTL_SEC)
     return accountView(rec, instructions)
   }
 
@@ -398,6 +447,15 @@ export function bridgeStanding(rt: StandingRuntime) {
     return { at: Number.isFinite(at) ? at : Date.now(), ...(input ? { input } : {}), best, received }
   }
 
+  /** True when the account still delivers to the destination (Bridge lets its destination change) */
+  async function vaStillOurs(rec: AccountRec, ctx: Ctx): Promise<boolean> {
+    // TO VERIFY: GET /customers/{id}/virtual_accounts/{va} returns the same object as the list.
+    const va = await call<VirtualAccount>(ctx, 'GET', `/customers/${encodeURIComponent(rec.customerId)}/virtual_accounts/${encodeURIComponent(rec.id)}`, 'check your bank account')
+    const ok = va?.id === rec.id && vaMatches(va, rec.currency!, rec.rail, rec.address) && (va.customer_id === undefined || va.customer_id === rec.customerId)
+    if (!ok) ctx.log.error('bridge: a standing virtual account no longer delivers to its destination', { virtualAccountId: rec.id })
+    return ok
+  }
+
   /** The events of this account only, and of this customer only */
   const ownVaEvent = (rec: AccountRec) => (ev: VaEvent) =>
     !!ev && typeof ev.deposit_id === 'string' && ID.test(ev.deposit_id) && (ev.virtual_account_id === undefined || ev.virtual_account_id === rec.id) && (ev.customer_id === undefined || ev.customer_id === rec.customerId)
@@ -405,7 +463,9 @@ export function bridgeStanding(rt: StandingRuntime) {
   async function vaDeposits(rec: AccountRec, since: number, ctx: Ctx): Promise<StandingDeposit[]> {
     const floor = Math.max(since, rec.createdAt - SKEW_MS)
     const path = `/customers/${encodeURIComponent(rec.customerId)}/virtual_accounts/${encodeURIComponent(rec.id)}/history`
-    const events = [...(await pages<VaEvent>(ctx, path, 'check your deposits', floor)), ...(await inbox<VaEvent>(rec.id, ctx))].filter(ownVaEvent(rec))
+    // Fail closed: an account whose destination changed lists no deposit (its deposits may go elsewhere).
+    if (!(await vaStillOurs(rec, ctx))) throw new Error('bridge: the standing virtual account no longer delivers to its destination')
+    const events = [...(await pages<VaEvent>(ctx, path, 'check your deposits', floor)), ...(await inbox<VaEvent>(rec.id, ctx)).filter(strictVa(rec))].filter(ownVaEvent(rec))
     const byDeposit = new Map<string, VaEvent[]>()
     for (const ev of events) (byDeposit.get(ev.deposit_id!) ?? byDeposit.set(ev.deposit_id!, []).get(ev.deposit_id!)!).push(ev)
     const out: StandingDeposit[] = []
@@ -482,9 +542,16 @@ export function bridgeStanding(rt: StandingRuntime) {
     // TO VERIFY: the endorsement that a crypto-to-crypto liquidation address needs. This checks that the customer is active.
     await checkCustomer(customerId, undefined, ctx)
     const base = `/customers/${encodeURIComponent(customerId)}/liquidation_addresses`
+    const start = await attemptStart(routeHash, ctx)
     // Bridge refuses a second liquidation address with the same source chain, currency and destination:
-    // look for one first (an earlier call may have made it and stopped).
-    let la = (await pages<LiquidationAddress & { created_at?: string }>(ctx, base, 'find your deposit address', 0)).find((x) => laMatches(x, src.rail, c.rail, d.address))
+    // look for one first. Only one that an earlier attempt of this route made is reused. An older one
+    // (made by the app, or for another purpose) is refused: its deposits may be credited elsewhere too.
+    const listed = (await pages<LiquidationAddress & { created_at?: string }>(ctx, base, 'find your deposit address', 0)).filter((x) => laMatches(x, src.rail, c.rail, d.address))
+    let la: LiquidationAddress | undefined = listed.find((x) => madeSince(x.created_at, start))
+    if (!la && listed.length) {
+      ctx.log.error('bridge: a liquidation address for this route exists that this adapter did not make; refused', { customerId })
+      throw conflict('Bridge already has a deposit address for this route that OpenRampKit did not make. Use another destination, or remove that address at Bridge.')
+    }
     if (!la) {
       la = await call<LiquidationAddress>(
         ctx,
@@ -506,6 +573,10 @@ export function bridgeStanding(rt: StandingRuntime) {
     if (!la?.id || !ID.test(la.id) || typeof la.address !== 'string' || !la.address || !laMatches(la, src.rail, c.rail, d.address) || (la.customer_id !== undefined && la.customer_id !== customerId)) {
       ctx.log.error('bridge: the liquidation address does not drain to the destination that was asked; refused', { customerId })
       throw unavailable('Bridge returned a deposit address for another destination.')
+    }
+    if (!(await takeResource('la', la.id, routeHash, ctx))) {
+      ctx.log.error('bridge: the liquidation address belongs to another route; refused', { liquidationAddressId: la.id })
+      throw conflict('Bridge gave a deposit address that another route already uses.')
     }
     const asset: CryptoAsset = { kind: 'crypto', chain: c.chain, token: c.usdc, symbol: 'USDC', decimals: 6 }
     const rec: AccountRec & { depositAddress: string } = { kind: 'la', id: la.id, userId: input.userId, customerId, srcChain: src.chain, srcRail: src.rail, asset, rail: c.rail, address: d.address, createdAt: Date.now(), depositAddress: la.address }
@@ -540,7 +611,7 @@ export function bridgeStanding(rt: StandingRuntime) {
     const floor = Math.max(since, rec.createdAt - SKEW_MS)
     const path = `/customers/${encodeURIComponent(rec.customerId)}/liquidation_addresses/${encodeURIComponent(rec.id)}/drains`
     const seen = new Map<string, Drain>()
-    for (const x of [...(await inbox<Drain>(rec.id, ctx)), ...(await pages<Drain>(ctx, path, 'check your deposits', floor))]) if (ownDrain(rec)(x)) seen.set(x.id, x)
+    for (const x of [...(await inbox<Drain>(rec.id, ctx)).filter(strictDrain(rec)), ...(await pages<Drain>(ctx, path, 'check your deposits', floor))]) if (ownDrain(rec)(x)) seen.set(x.id, x)
     const origin: CryptoAsset = { kind: 'crypto', chain: rec.srcChain!, token: rt.chains.find((c) => c.chain === rec.srcChain)!.usdc, symbol: 'USDC', decimals: 6 }
     const out: StandingDeposit[] = []
     for (const x of seen.values()) {
@@ -550,11 +621,27 @@ export function bridgeStanding(rt: StandingRuntime) {
       const at = Date.parse(x.created_at ?? '')
       if (!Number.isFinite(at) || at < floor) continue
       if (!drainSourceOk(rec, x, ctx.log)) continue
+      // A drain is a deposit only with its on-chain deposit, and one transaction is one deposit: a
+      // second drain id for the same transaction (a retry at Bridge) makes no second session.
+      if (!(await claimDepositTx(rec, x, ctx))) continue
       if (!(await claimOnce(ctx.shared, `drain:${x.id}`, owner(rec.id), CLAIM_TTL_SEC))) continue
       const amount = positive(x.amount)
       out.push({ id: x.id, legRef: `${STANDING_DEPOSIT_REF}la|${rec.id}|${x.id}`, at, ...(amount ? { input: { value: amount, asset: origin } } : {}) })
     }
     return out
+  }
+
+  /** Claim the drain's deposit transaction for this drain. False: no transaction, or another drain has it. */
+  async function claimDepositTx(rec: AccountRec, x: Drain, ctx: Ctx): Promise<boolean> {
+    const h = x.deposit_tx_hash
+    if (typeof h !== 'string' || !TX_HASH.test(h)) {
+      ctx.log.warn('bridge: a drain with no deposit transaction is not a deposit; skipped', { drainId: x.id })
+      return false
+    }
+    const key = `ladeptx:${rec.srcChain}:${h.startsWith('0x') ? h.toLowerCase() : h}`
+    if (await claimOnce(ctx.shared, key, x.id, CLAIM_TTL_SEC)) return true
+    ctx.log.error('bridge: a second drain for one deposit transaction; skipped', { liquidationAddressId: rec.id, drainId: x.id })
+    return false
   }
 
   function laLegEvent(ref: string, rec: AccountRec, x: Drain, log?: Pick<Logger, 'warn' | 'error'>): LegEvent | undefined {
@@ -597,6 +684,9 @@ export function bridgeStanding(rt: StandingRuntime) {
     // The route the server polls must be this record's route (a bank account has a currency, an address a chain).
     const o = input.origin as { currency?: string; chain?: string }
     if (rec.kind === 'va' ? o.currency?.toUpperCase() !== rec.currency : o.chain !== rec.srcChain) throw new Error('bridge: the standing address ref does not match its route')
+    const full = rec as AccountRec & { depositAddress?: string; instructions?: DepositInstructions }
+    const shown = rec.kind === 'va' ? (full.instructions ? mainId(full.instructions) : undefined) : full.depositAddress
+    if (shown !== input.address) throw new Error('bridge: the standing address ref does not match its address')
     return rec.kind === 'va' ? vaDeposits(rec, input.since, ctx) : laDeposits(rec, input.since, ctx)
   }
 
@@ -616,15 +706,23 @@ export function bridgeStanding(rt: StandingRuntime) {
     }
     if (r.kind === 'va') {
       const path = `/customers/${encodeURIComponent(rec.customerId)}/virtual_accounts/${encodeURIComponent(rec.id)}/history?deposit_id=${encodeURIComponent(r.depositId)}&limit=${PAGE}`
-      const events = [...list<VaEvent>(await call<unknown>(ctx, 'GET', path, 'check your deposit')), ...(await inbox<VaEvent>(rec.id, ctx))].filter((e) => ownVaEvent(rec)(e) && e.deposit_id === r.depositId)
+      const events = [...list<VaEvent>(await call<unknown>(ctx, 'GET', path, 'check your deposit')), ...(await inbox<VaEvent>(rec.id, ctx)).filter(strictVa(rec))].filter((e) => ownVaEvent(rec)(e) && e.deposit_id === r.depositId)
       const dep = vaDeposit(rec, events, ctx.log)
       if (!dep) return processing
       const ev = vaLegEvent(ref, rec, dep.best)
+      if (ev?.status === 'succeeded' && !(await vaStillOurs(rec, ctx))) {
+        return { status: 'failed', ref, error: openRampError('DELIVERY_FAILED', { message: 'The bank account no longer delivers to this destination. Contact support.', recovery: 'contact_support' }) }
+      }
       return ev ? legStepFromEvent(ev, ref, rt.poll) : processing
     }
     const path = `/customers/${encodeURIComponent(rec.customerId)}/liquidation_addresses/${encodeURIComponent(rec.id)}/drains?drain_id=${encodeURIComponent(r.depositId)}`
-    const found = [...list<Drain>(await call<unknown>(ctx, 'GET', path, 'check your deposit')), ...(await inbox<Drain>(rec.id, ctx))].find((x) => ownDrain(rec)(x) && x.id === r.depositId)
+    const found = [...list<Drain>(await call<unknown>(ctx, 'GET', path, 'check your deposit')), ...(await inbox<Drain>(rec.id, ctx)).filter(strictDrain(rec))].find((x) => ownDrain(rec)(x) && x.id === r.depositId)
     if (!found || !drainSourceOk(rec, found, ctx.log)) return processing
+    // The deposit transaction must still be this drain's (see `claimDepositTx`).
+    const h = found.deposit_tx_hash
+    if (typeof h !== 'string' || (await ctx.shared.get<string>(`ladeptx:${rec.srcChain}:${h.startsWith('0x') ? h.toLowerCase() : h}`)) !== found.id) {
+      return { status: 'failed', ref, error: openRampError('DELIVERY_FAILED', { message: 'This deposit belongs to another payment. Contact support.', recovery: 'contact_support' }) }
+    }
     const ev = laLegEvent(ref, rec, found, ctx.log)
     return ev ? legStepFromEvent(ev, ref, rt.poll) : processing
   }
@@ -641,7 +739,7 @@ export function bridgeStanding(rt: StandingRuntime) {
     if (!rec) return undefined
     // Account events (activation, account_update, ...) and unknown types (logged): no leg event.
     if (!rt.vaMap(ev.type, ctx.log)) return []
-    if (!ownVaEvent(rec)(ev)) {
+    if (!ownVaEvent(rec)(ev) || !strictVa(rec)(ev)) {
       ctx.log.warn('bridge: a virtual account event that does not match its account; ignored', { virtualAccountId: rec.id })
       return []
     }
@@ -660,7 +758,7 @@ export function bridgeStanding(rt: StandingRuntime) {
     if (!x?.liquidation_address_id || !ID.test(x.liquidation_address_id)) return []
     const rec = await loadAccount('la', x.liquidation_address_id, ctx)
     if (!rec) return []
-    if (!ownDrain(rec)(x)) {
+    if (!ownDrain(rec)(x) || !strictDrain(rec)(x)) {
       ctx.log.warn('bridge: a drain event that does not match its address; ignored', { liquidationAddressId: rec.id })
       return []
     }
@@ -668,6 +766,8 @@ export function bridgeStanding(rt: StandingRuntime) {
     await addToInbox(rec.id, x, ctx)
     if ((await ctx.shared.get<string>(`drain:${x.id}`)) !== owner(rec.id)) return []
     if (!drainSourceOk(rec, x, ctx.log)) return []
+    const h = x.deposit_tx_hash
+    if (typeof h !== 'string' || (await ctx.shared.get<string>(`ladeptx:${rec.srcChain}:${h.startsWith('0x') ? h.toLowerCase() : h}`)) !== x.id) return []
     const le = laLegEvent(`${STANDING_DEPOSIT_REF}la|${rec.id}|${x.id}`, rec, x, ctx.log)
     return le ? [{ ...le, ...(eventId ? { eventId } : {}) }] : []
   }

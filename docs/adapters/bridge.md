@@ -195,23 +195,25 @@ Pass `adapterId: 'bridge'` when another adapter (for example Relay) also serves 
 
 Bridge needs a KYC-approved customer for each user. The adapter takes the customer id from the server only: the `customer` hook (`customerId`), else the customer that a Bridge KYC of an earlier deposit session made for the same user id. The browser never gives it. With no customer, `get` throws `409`. The customer must be `active`. For a virtual account, the rail endorsement must be `approved` (for example `base` for USD).
 
-One Bridge customer belongs to one user id. The first user id that gets an address with a customer keeps it, and another user id with the same customer gets `409`. So a bug in your mapping cannot credit one user with another user's deposits.
+One Bridge customer belongs to one user id. The first user id that gets an address with a customer keeps it, and another user id with the same customer gets `409`. So a bug in your mapping cannot credit one user with another user's deposits. Deposit sessions apply the same binding: a session of another user id with that customer fails with `PROVIDER_DECLINED`. The fallback reads only the record of the same app user id (from the server), never a record of another user.
 
 ### Virtual accounts (fiat in)
 
-1. The adapter looks for a virtual account of the customer for this currency and destination (`GET /v0/customers/{id}/virtual_accounts`), else makes one (`POST`, with `source.currency`, `destination: { currency: 'usdc', payment_rail, address }` and the developer fee).
+1. The adapter looks for a virtual account that an earlier attempt of the same route made (`GET /v0/customers/{id}/virtual_accounts`, an account created after the route's first attempt), else makes one (`POST`, with `source.currency`, `destination: { currency: 'usdc', payment_rail, address }` and the developer fee). An older account (made by a deposit session or by your app) is never reused.
 2. Bridge's answer must name the same destination (rail, currency and address) and customer. Else `get` fails with `502`, and no address is kept.
 3. `StandingAddress.address` is the main account identifier, and `StandingAddress.bank.fields` holds the bank details (a Pix account shows its BR Code). The widget does not show bank accounts yet: show `bank.fields` in your app.
 4. Deposits: `GET .../virtual_accounts/{va}/history`, grouped by `deposit_id`. A deposit makes a session once the money arrived (`funds_received` or a later stage; `funds_scheduled` alone is not enough). Its input is the `funds_received` amount in the account currency. Events in another currency, of another account or of another customer are skipped and logged.
 5. Status: `GET .../history?deposit_id={id}`, with the table of [Deposit flow](#deposit-flow). `payment_processed` succeeds only when its currency and rail (when Bridge gives them) are USDC on the destination rail. Else the session fails with `DELIVERY_FAILED`.
 
-The session flow and the standing account share one virtual account for the same customer, currency and destination. Both claim a deposit with the same key (`dep:{deposit_id}`), so one deposit goes to one of them only. An open deposit session of the same user takes the first deposit after it started.
+A standing account and deposit sessions never share a Bridge virtual account. Each account has one owner, taken with one atomic claim (`vaowner:{id}`): the standing route, or the session flow. When Bridge answers a create with an account that the other side owns, the call fails with `409`: a standing `get` after a deposit session to the same destination, or a deposit session to the destination of a standing account. Deposits are also claimed once (`dep:{deposit_id}`).
+
+At each poll, the adapter reads the account again (`GET /v0/customers/{id}/virtual_accounts/{va}`). When its destination is no longer the standing destination (Bridge lets the destination change), the poll lists no deposit, and a processed deposit fails with `DELIVERY_FAILED`.
 
 ### Liquidation addresses (USDC in)
 
-1. The adapter looks for a liquidation address of the customer for this route (`GET /v0/customers/{id}/liquidation_addresses`), else makes one (`POST`, with `chain`, `currency: 'usdc'`, `destination_payment_rail`, `destination_currency: 'usdc'`, `destination_address`, and `custom_developer_fee_percent`). Bridge refuses a second address with the same source chain, currency and destination, so the adapter looks first.
+1. The adapter looks for a liquidation address of the customer for this route (`GET /v0/customers/{id}/liquidation_addresses`), else makes one (`POST`, with `chain`, `currency: 'usdc'`, `destination_payment_rail`, `destination_currency: 'usdc'`, `destination_address`, and `custom_developer_fee_percent`). Bridge refuses a second address with the same source chain, currency and destination, so the adapter looks first. It reuses only an address that an earlier attempt of the same route made. An older address for the route (made by your app) is refused with `409`, because its deposits may also be credited elsewhere. Each address has one owner route (`laowner:{id}`, an atomic claim).
 2. Bridge's answer must name the same source chain and the same destination, with no bank account or Bridge wallet as destination. Else `get` fails with `502`.
-3. Deposits: `GET .../liquidation_addresses/{la}/drains`. A drain makes a session once its state is past `awaiting_funds`. Its input is the drain amount in USDC on the origin chain. A drain in another currency or from another chain is skipped and logged.
+3. Deposits: `GET .../liquidation_addresses/{la}/drains`. A drain makes a session once its state is past `awaiting_funds`, and only with its on-chain deposit transaction (`deposit_tx_hash`). One transaction is one deposit (`ladeptx:` claim): a second drain id for the same transaction makes no session. Its input is the drain amount in USDC on the origin chain. A drain in another currency or from another chain is skipped and logged.
 4. Status: `GET .../drains?drain_id={id}`.
 
 | Drain state | Leg |
@@ -260,6 +262,7 @@ Standing deposit addresses (verified 2026-10-16): the virtual account list, crea
 - **TO VERIFY**: the endorsement that a USDC to USDC liquidation address needs. The adapter checks that the customer is `active`.
 - **TO VERIFY**: the drain `currency` of a USDC address. The API reference shows `usdc` and the guide shows `usd`. The adapter accepts both, and nothing else.
 - **TO VERIFY**: the `currency` of a `payment_processed` virtual account event. The adapter accepts `usdc` or none.
-- **TO VERIFY**: whether Bridge allows two virtual accounts for the same customer, currency and destination. The adapter reuses the one it finds.
+- **TO VERIFY**: whether Bridge allows two virtual accounts for the same customer, currency and destination. When Bridge answers with an account of deposit sessions, the standing `get` fails with `409`.
+- **TO VERIFY**: `GET /v0/customers/{id}/virtual_accounts/{va}` (the docs list "Get a Virtual Account"; the adapter reads `id`, `status`, `customer_id` and `destination` from it, as from the list).
 - **TO VERIFY**: how long Bridge keeps an `Idempotency-Key`. The adapter also looks for an existing account before each create.
 - Not supported yet: payouts in MXN, BRL and GBP (the docs give no external account body for them), COP deposits, and USDT or EURC delivery. Standing addresses: USDT, EURC or multichain (`evm`) liquidation addresses, and bank accounts in the widget.
